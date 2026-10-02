@@ -26,7 +26,7 @@ import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
 import PanelStaleNote from "./PanelStaleNote";
 import PAL from "./palette";
 import { TYPE, WRAP, CARD, STATE } from "assets/theme/base/tokens";
-import { plotlyLayout, REF_LINE } from "views/Reports/figureStyle";
+import { plotlyLayout, REF_LINE, wrapLabel } from "views/Reports/figureStyle";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not reported" : Number(v).toFixed(d));
 
@@ -162,7 +162,8 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
         traces.push({ x: [xb, xb], y: [yLo, yHi], type: "scatter", mode: "lines",
           line: { color: PAL.graphic, dash: "dot", width: 1 }, hoverinfo: "skip", showlegend: false });
       });
-      annotations.push({ x: pooled.auc_hi, y: yHi, xref: "x", yref: "y", yanchor: "bottom",
+      // top left of the figure, clear of the toolbar at the top right (review 2026-10-02)
+      annotations.push({ x: 0, y: 1, xref: "paper", yref: "paper", yanchor: "bottom",
         xanchor: "left", text: "shaded: 95% range, all states together", showarrow: false,
         font: { size: PAL.fs.body, color: PAL.ink3 } });
     }
@@ -220,8 +221,8 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
       return `${STATE_WORDS[r.tag] || r.tag}${n}`;
     });
     const layout = plotlyLayout({
-      margin: { l: 96, r: 16, t: 24, b: 48 }, height: 240,
-      xaxis: { title: { text: "how well it tells high pain from low, with its 95% range (0.5 = coin toss)" },
+      margin: { l: 96, r: 16, t: 32, b: 64 }, height: 264,
+      xaxis: { title: { text: wrapLabel("how well it tells high pain from low, with its 95% range (0.5 = coin toss)", 52) },
         range: [xLeft, 1.02], dtick: 0.1 },
       yaxis: { tickmode: "array", tickvals: rows.map((_, i) => yOf(i)), ticktext: tickText,
         range: [yLo, yHi], showline: false, ticks: "" },

@@ -85,7 +85,8 @@ test("the power-vs-sample-size curve has the restored toolbar; the switching-poi
   expect(Plotly.react).toHaveBeenCalled();
   const calls = Plotly.react.mock.calls;
   // the power curve names its y-axis "chance of detecting a real link with pain (%)"
-  const powerCall = calls.find(([, , layout]) => /chance of detecting a real link/.test(
+  // the y title is wrapped since 2026-10-02 ("chance of detecting a<br>real link…")
+  const powerCall = calls.find(([, , layout]) => /chance of detecting a(<br>| )real link/.test(
     (layout.yaxis && layout.yaxis.title && layout.yaxis.title.text) || ""));
   expect(powerCall).toBeDefined();
   expect(powerCall[3].displayModeBar).not.toBe(false);

@@ -19,12 +19,13 @@ import PropTypes from "prop-types";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import { T, TYPE } from "assets/theme/base/tokens";
+import { fmtDateTime } from "views/Reports/dates";
 
 function whenText(iso) {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return String(iso);
-  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  return fmtDateTime(d.getTime());
 }
 
 export default function CacheStatusLine({ status, loading }) {

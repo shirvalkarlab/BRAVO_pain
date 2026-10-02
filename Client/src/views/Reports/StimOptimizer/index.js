@@ -89,6 +89,7 @@ import StatusLine, { StatusSentence } from "./StatusLine";
 import { gateHeadline } from "./ClosedLoopChecks";
 import { ceilingFromResponse } from "./ceiling";
 import { ControlAnalysesSection } from "views/Reports/ControlAnalyses/ControlAnalysesCard";
+import { fmtDate } from "views/Reports/dates";
 
 /** The page's question, its title (SPEC.md section 5.3). */
 export const PAGE_QUESTION = "Should today's setting change, and can closed loop start?";
@@ -280,7 +281,7 @@ export default function StimOptimizer() {
         <MDBox data-testid="evidence-base-footer" mt={2}>
           <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, lineHeight: "18px", color: T.ink3 }}>
             {`Evidence base: ${dm.n_epochs ?? "—"} stretches of unchanged settings · ${dm.n_reports ?? "—"} pain reports used · `
-              + `${dm.t_first ? String(dm.t_first).slice(0, 10) : "—"} → ${dm.t_last ? String(dm.t_last).slice(0, 10) : "—"} · `
+              + `${dm.t_first ? fmtDate(String(dm.t_first).slice(0, 10)) : "—"} → ${dm.t_last ? fmtDate(String(dm.t_last).slice(0, 10)) : "—"} · `
               + `ratings in the first ${data.washin_min != null ? `${data.washin_min} min` : "—"} after a setting change left out · `
               + `left currents delivered ${dm.amp_mA_Left_range ? `${Number(dm.amp_mA_Left_range[0]).toFixed(1)}–${Number(dm.amp_mA_Left_range[1]).toFixed(1)} mA` : "—"} · `
               + `right ${dm.amp_mA_Right_range ? `${Number(dm.amp_mA_Right_range[0]).toFixed(1)}–${Number(dm.amp_mA_Right_range[1]).toFixed(1)} mA` : "—"} (history, not a proposal). `

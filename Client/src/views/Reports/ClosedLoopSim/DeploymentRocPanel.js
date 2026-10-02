@@ -26,7 +26,7 @@ import PanelStaleNote from "./PanelStaleNote";
 import PAL from "./palette";
 import RocCurrentRemovedLine from "./RocCurrentRemovedLine";
 import { TYPE, WRAP, CARD, STATE } from "assets/theme/base/tokens";
-import { plotlyLayout, REF_LINE, directLabel } from "views/Reports/figureStyle";
+import { plotlyLayout, REF_LINE, directLabel, wrapLabel } from "views/Reports/figureStyle";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not reported" : Number(v).toFixed(d));
 
@@ -305,8 +305,8 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       ? (fh.bin_centers[1] - fh.bin_centers[0]) : (fh.x_max - fh.x_min) || 1;
     const layout = plotlyLayout({
       barmode: "overlay", bargap: 0.04,
-      margin: { l: 56, r: 16, t: 24, b: 48 }, height: 188,
-      xaxis: { title: { text: "band power, standardised (0 = its average; higher goes with more pain)" },
+      margin: { l: 56, r: 16, t: 24, b: 64 }, height: 204,
+      xaxis: { title: { text: wrapLabel("band power, standardised (0 = its average; higher goes with more pain)", 48) },
         range: [fh.x_min - binW, fh.x_max + binW] },
       yaxis: { title: { text: "band-power readings" } },
       shapes: [], annotations: [],
@@ -394,11 +394,14 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       + (forward.held_out_auc_lo != null ? ` (95% range ${fmt(forward.held_out_auc_lo)} to ${fmt(forward.held_out_auc_hi)})` : "")
       + `, against ${fmt(forward.in_sample_auc)} measured on the data it was fitted to (0.5 = coin toss).`);
     const layout = plotlyLayout({
-      margin: { l: 56, r: 72, t: 16, b: 48 }, height: 200,
+      margin: { l: 72, r: 80, t: 16, b: 48 }, height: 220,
       xaxis: { title: { text: "week tested (trained on every earlier week)" }, range: [xlo, xhi] },
-      yaxis: { title: { text: "how well it tells high pain from low" }, range: [-0.02, 1.02] },
-      annotations: [directLabel(xhi, 0.5, "coin toss", PAL.ink3),
-        ...(forward.in_sample_auc != null ? [directLabel(xhi, forward.in_sample_auc, "fitted data", PAL.ink3)] : [])],
+      yaxis: { title: { text: wrapLabel("how well it tells high pain from low", 22) }, range: [-0.02, 1.02] },
+      // "coin toss" below its line and "fitted data" above its own, so the two never meet
+      // (review 2026-10-02: they overlapped when the fitted reading sat near 0.5)
+      annotations: [{ ...directLabel(xhi, 0.5, "coin toss", PAL.ink3), yanchor: "top" },
+        ...(forward.in_sample_auc != null
+          ? [{ ...directLabel(xhi, forward.in_sample_auc, "fitted data", PAL.ink3), yanchor: "bottom" }] : [])],
     });
     Plotly.react(gd, traces, layout, PAL.MODEBAR);
   }, [forward]);  // eslint-disable-line react-hooks/exhaustive-deps

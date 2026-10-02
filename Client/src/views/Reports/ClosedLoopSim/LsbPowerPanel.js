@@ -26,7 +26,7 @@ import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
 import PanelStaleNote from "./PanelStaleNote";
 import PAL from "./palette";
 import { TYPE, WRAP, CARD, STATE } from "assets/theme/base/tokens";
-import { plotlyLayout, REF_LINE } from "views/Reports/figureStyle";
+import { plotlyLayout, REF_LINE, wrapLabel } from "views/Reports/figureStyle";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not reported" : Number(v).toFixed(d));
 
@@ -153,8 +153,9 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
         font: { size: PAL.fs.body, color: PAL.ink3 } },
       // Static "now" annotation so the current marker is self-identifying in a printout / grayscale
       // (audit C7), not only on hover.
-      { x: pw.n_ratings_current, y: pw.power_current * 100, xanchor: "center", yanchor: "top",
-        yshift: -6, text: `${sufficient ? "" : "▲ "}now: ${pw.n_ratings_current}`, showarrow: false,
+      // above its point, so it never meets the "lower end of range" label below (review 2026-10-02)
+      { x: pw.n_ratings_current, y: pw.power_current * 100, xanchor: "center", yanchor: "bottom",
+        yshift: 6, text: `${sufficient ? "" : "▲ "}now: ${pw.n_ratings_current}`, showarrow: false,
         font: { size: PAL.fs.body, color: curTextColor } },
     ];
     // audit C4: label the conservative (CI-lower-bound) end of the power band.
@@ -198,14 +199,16 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
     const deff = pw.design_effect != null ? pw.design_effect : 1.0;
     const xTitle = deff > 1.0 ? "pain ratings collected" : "independent pain ratings";
     if (deff > 1.0) {
-      annotations.push({ x: nMax * 0.5, y: 8, xanchor: "center", yanchor: "bottom",
-        text: `▲ counted as about ${(100 / deff).toFixed(0)}% as many independent ratings, because neighbouring ratings resemble each other`,
+      // above the plot area, wrapped, not across the curve (review 2026-10-02: clipped both sides)
+      annotations.push({ xref: "paper", yref: "paper", x: 0, y: 1, xanchor: "left", yanchor: "bottom",
+        yshift: 4, align: "left",
+        text: wrapLabel(`▲ counted as about ${(100 / deff).toFixed(0)}% as many independent ratings, because neighbouring ratings resemble each other`, 70),
         showarrow: false, font: { size: PAL.fs.body, color: PAL.warnText } });
     }
     const layout = plotlyLayout({
-      margin: { l: 56, r: 16, t: 16, b: 48 }, height: 200,
+      margin: { l: 72, r: 16, t: deff > 1.0 ? 52 : 24, b: 48 }, height: deff > 1.0 ? 268 : 240,
       xaxis: { title: { text: xTitle }, range: [0, nMax * 1.02] },
-      yaxis: { title: { text: "chance of detecting a real link with pain (%)" }, range: [0, 102], dtick: 25 },
+      yaxis: { title: { text: wrapLabel("chance of detecting a real link with pain (%)", 24) }, range: [0, 106], dtick: 25 },
       shapes: [
         // the target line
         { type: "line", x0: 0, x1: nMax * 1.02, y0: tgt * 100, y1: tgt * 100, line: REF_LINE },
@@ -292,12 +295,14 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
     const noteColor = (tm && tm.threshold_usable) ? PAL.ink : PAL.warnText;
 
     const layout = plotlyLayout({
-      margin: { l: 112, r: 16, t: 16, b: modeNote ? 64 : 48 }, height: modeNote ? 150 : 124,
+      // the mode note sits above the plot, wrapped, and the 10th/median/90th labels have room
+      // under it (review 2026-10-02: the note overlapped the x title and was cut at the right)
+      margin: { l: 112, r: 16, t: modeNote ? 52 : 28, b: 48 }, height: modeNote ? 172 : 140,
       xaxis: { title: { text: "band power (device units, LSB)" } },
       yaxis: { fixedrange: true, showline: false, ticks: "" },
       annotations: modeNote ? [{
-        xref: "paper", yref: "paper", x: 0, y: -0.38, xanchor: "left", yanchor: "top",
-        text: modeNote, showarrow: false, font: { size: PAL.fs.body, color: noteColor }, align: "left",
+        xref: "paper", yref: "paper", x: 0, y: 1, xanchor: "left", yanchor: "bottom", yshift: 22,
+        text: wrapLabel(modeNote, 70), showarrow: false, font: { size: PAL.fs.body, color: noteColor }, align: "left",
       }] : [],
     });
     // This gauge has never carried a toolbar (unlike the power curve above it): it is read-only,
