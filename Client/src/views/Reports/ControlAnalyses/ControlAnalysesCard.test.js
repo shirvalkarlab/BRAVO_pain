@@ -72,7 +72,7 @@ describe("the control analyses card", () => {
     const link = screen.getByRole("link", { name: /Synthesis: same current, wash-in/ });
     expect(link.getAttribute("href")).toBe(LIT[0].url);
     expect(link.getAttribute("target")).toBe("_blank");
-    expect(screen.getByText(/feeds no recommendation/)).toBeTruthy();
+    expect(screen.getByText(/Feeds no recommendation/)).toBeTruthy();
   });
 
   it("shows how many 0 mA ratings had a recording, within 60 minutes and the same day", () => {

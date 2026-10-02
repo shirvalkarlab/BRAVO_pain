@@ -238,7 +238,7 @@ describe("6. the matching summary and the controls the heat maps ignore", () => 
   test("the cap, the gap and the TD length each say they apply to the all-band scan, not the heat maps", async () => {
     await renderPage();
     const more = screen.getByTestId("more-matching-options");
-    expect((more.textContent.match(/applies to the all-band scan[^.]*, not the heat maps/g) || []).length).toBe(3);
+    expect((more.textContent.match(/[Aa]pplies to the all-band scan[^.]*; not the heat maps/g) || []).length).toBe(3);
   });
 });
 

@@ -162,11 +162,11 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
     // adjoining sentences, so the reader never sees "0 rows clear q < 0.05" beside a cell called
     // "established" with a q of 0.23 and has to work out that they are different tests.
     const text = lines.join(" ");
-    expect(text).toMatch(/q is the p-value after correcting for having looked at all 22 bands/i);
-    expect(text).toMatch(/“established” is that cell’s own test/i);
-    expect(text).toMatch(/does not clear the allowance for testing 22 bands at once/i);
+    expect(text).toMatch(/q = p corrected for all 22 bands/i);
+    expect(text).toMatch(/“established” = interval clears zero/i);
+    expect(text).toMatch(/q 0\.25 fails the 22-band correction/i);
     // every term the lines use is said in plain words at least once
-    expect(text).toMatch(/reuse on\/off \(whether one stretch of recording may answer more than one report\)/i);
+    expect(text).toMatch(/reuse on\/off \(one recording may answer several reports\)/i);
     // the pair the whole search covers is named in the line that states the negative result
     expect(lines[1]).toMatch(/L 1\u207b3\u207a|L 1⁻3⁺/);
     // A-1's measurement is stated here, on both left pairs, with the switch named

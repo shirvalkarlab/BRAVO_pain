@@ -43,8 +43,8 @@ function linesFor(snap, clinicSheets) {
   return {
     lines: bySwitch[pos] || [],
     note: clinicSheets
-      ? "Showing the run with the clinic-sheet ratings merged in, because this page's clinic-sheet switch is on."
-      : "Showing the run on the home pain surveys alone; the clinic-sheet ratings enter only when this page's clinic-sheet switch is on.",
+      ? "Run with clinic-sheet ratings (page switch on)."
+      : "Run on home pain surveys only (clinic sheets off).",
   };
 }
 
@@ -68,7 +68,7 @@ export default function ControlAnalysesCard({ payload, clinicSheets, plain }) {
         sx={{ fontFamily: "inherit" }}>
         <h3 style={{ ...TYPE.title, color: T.ink, margin: 0 }}>{CARD_TITLE}</h3>
         <p style={{ ...TYPE.body, ...PROSE, color: T.ink2, margin: `${SPACE.xs}px 0 ${SPACE.sm}px` }}>
-          {"Saved, dated results of checks run offline on this participant's data. This card feeds no recommendation, and nothing here is worked out again when the page loads."}
+          {"Saved offline checks on this participant's data. Feeds no recommendation; nothing is recomputed on load."}
         </p>
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: SPACE.xs }}>
           <label htmlFor={SELECT_ID} style={{ ...TYPE.body, color: T.ink2 }}>{"Which check"}</label>

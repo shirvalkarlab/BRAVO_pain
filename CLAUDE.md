@@ -131,6 +131,13 @@ its line about `MEGA_HANDOFF.md`, archived), `jevgrep` (rule 14).
     absent: rules 2, 3, 11) goes to ripgrep: `rg`, installed in both containers (`Docker/Dockerfile.tools`).
     Every `jg` sends the folder's code to Codiv: never `--no-ignore`, never a folder holding patient data.
 
+15. **Page text style** (PI, 2026-10-02; decisions 378-383): titles and fold labels are noun phrases of at
+    most about six words; minimal tokens in every phrase ("n=35", "uncorrected"); prose is 14 px
+    (`TYPE.body`), 12 px only for table heads and figure text; a stat line above a plot is one
+    unclipped line centred over it; every dropdown spreads `promptSelectSx`
+    (`views/Reports/paper/selectStyle.js`). Verdict words belong on the Closed-Loop page. Details:
+    skill `bravo-stimoptimizer-figures`, "House style for every BRAVO page".
+
 ## 8. Read first, and on demand
 
 @HOUSE_RULES_writing_and_claims.md

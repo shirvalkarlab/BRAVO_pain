@@ -94,7 +94,7 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
     // An era whose POINT AUC dipped below 0.5 but whose CI still straddles chance is NOT a reversal
     // (consistent with no stim-state effect) — surface it as a soft caveat, never the hard verdict.
     const dipNote = (!data.any_reversed && data.any_below_half)
-      ? " (One state's reading fell below 0.5, but its 95% range still includes a coin toss, so this is noise, not a confirmed reversal.)"
+      ? " (One state fell below 0.5, but its 95% range includes 0.5: noise, not a confirmed reversal.)"
       : "";
     if (estimable < 2) {
       verdict = { state: "notChecked", text: "Only one stimulation state has enough data, so whether the band holds across states cannot be checked." };

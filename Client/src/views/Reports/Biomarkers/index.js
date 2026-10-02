@@ -599,8 +599,8 @@ function Biomarkers() {
         onChange={(e, v) => { if (v) setIncludeClinicSheetRatings(v === "include"); }}
         sx={TOGGLE_SX}
       >
-        <ToggleButton value="exclude" title="The heat maps pool the home pain surveys (REDCap) only">Home surveys only</ToggleButton>
-        <ToggleButton value="include" title="Also pool the clinic and at-home testing sheets' scores (0–10 verbal; times ten for the VAS scores). Those were taken while current was being stepped on purpose, one a minute inside a session, so treat the larger count with care">+ clinic titration sessions</ToggleButton>
+        <ToggleButton value="exclude" title="Home pain surveys (REDCap) only">Home surveys only</ToggleButton>
+        <ToggleButton value="include" title="Also pool clinic and at-home sheet scores (verbal 0–10; ×10 for VAS). Taken while current was stepped, so treat the larger n with care">+ clinic titration sessions</ToggleButton>
       </ToggleButtonGroup>
       <MDTypography component="span" sx={{ ...NOTE_SX, mt: 0.5 }}>
         {includeClinicSheetRatings
@@ -627,9 +627,9 @@ function Biomarkers() {
         </MDBox>
         <MDTypography component="span" sx={NOTE_SX}>
           {maxPerRating > 1
-            ? "A rating's value is the median of its closest readings, counted once."
-            : "Each rating keeps its one closest reading per contact pair."}
-          {" This applies to the all-band scan, the high / low preview and, from the last run, the Closed-Loop page's summary and stability card, not the heat maps."}
+            ? "Rating value: median of its closest readings."
+            : "One closest reading per pair."}
+          {" Applies to the all-band scan, high/low preview and Closed-Loop summary; not the heat maps."}
         </MDTypography>
       </MDBox>
 
@@ -647,11 +647,11 @@ function Biomarkers() {
         </MDBox>
         <MDTypography component="span" sx={NOTE_SX}>
           {matchDirection === "pro_first"
-            ? "Not used when each report picks its recordings: no reading counts twice."
+            ? "Unused when each report picks its recordings."
             : maxPerRating <= 1
-            ? "Not used while one reading per rating is kept."
-            : "Keeps a burst of readings around one report from dominating its value."}
-          {" This applies to the all-band scan, the high / low preview and, from the last run, the Closed-Loop page's summary and stability card, not the heat maps."}
+            ? "Unused at one reading per rating."
+            : "Stops a burst of readings dominating a rating."}
+          {" Applies to the all-band scan, high/low preview and Closed-Loop summary; not the heat maps."}
         </MDTypography>
       </MDBox>
 
@@ -669,7 +669,7 @@ function Biomarkers() {
             onChange={(e, v) => setMatchExtentSec(v)} />
         </MDBox>
         <MDTypography component="span" sx={NOTE_SX} title={liveMatchCaption}>
-          {"How much signal each rating uses, not how far to search. This applies to the all-band scan, not the heat maps."}
+          {"Signal used per rating, not search range. Applies to the all-band scan; not the heat maps."}
         </MDTypography>
       </MDBox>
 
@@ -683,8 +683,8 @@ function Biomarkers() {
           onChange={(e, v) => { if (v) setAllowWindowReuse(v === "reuse"); }}
           sx={TOGGLE_SX}
         >
-          <ToggleButton value="none" title="Each stretch of signal serves its nearest rating only, so every rating is an independent observation">No</ToggleButton>
-          <ToggleButton value="reuse" title="Each stretch of signal serves every rating whose match window covers it: more ratings, but ratings that share signal are no longer independent">Yes</ToggleButton>
+          <ToggleButton value="none" title="One recording serves its nearest rating only: independent ratings">No</ToggleButton>
+          <ToggleButton value="reuse" title="One recording serves every rating whose window covers it: more ratings, not independent">Yes</ToggleButton>
         </ToggleButtonGroup>
         <MDTypography component="span" sx={{ ...NOTE_SX, mt: 0.5 }}>
           {allowWindowReuse
@@ -910,7 +910,7 @@ function Biomarkers() {
               {!data && !alert ? (
                 <MDBox mt={2}>
                   <MDTypography variant="button" sx={{ ...TYPE.body, color: T.ink2 }}>
-                    {"The timeline and the matching preview follow the controls at once; the heat maps show the settings they were computed with and say when those have changed. Click "}
+                    {"Timeline and matching preview follow the controls; heat maps show the settings they were computed with and flag changes. Click "}
                     <strong>Recompute</strong>{" above to run the all-band scan."}
                   </MDTypography>
                 </MDBox>
@@ -922,7 +922,7 @@ function Biomarkers() {
                     {data.message}
                   </MDTypography>
                   <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink2, m: 0 }}>
-                    {"Upload a Percept session for this participant and configure REDCap (REDCAP_API_URL / REDCAP_API_TOKEN), then reload."}
+                    {"Upload a Percept session and configure REDCap (REDCAP_API_URL / REDCAP_API_TOKEN), then reload."}
                   </MDTypography>
                 </MDBox>
               ) : null}

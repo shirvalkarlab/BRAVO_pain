@@ -90,9 +90,8 @@ export default function BandCandidateIdentity({ bc, envelope }) {
         </MDBox>
         <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body, color: PAL.ink3,
           mb: 1 }}>
-          The first verdict here is the one this band was chosen with, when it was found. It is a different
-          quantity from the verdict at the top of the page, which is about whether the device will
-          accept the configuration and whether the evidence supports it.
+          First verdict: the one this band was chosen with, when found. Differs from the verdict at the
+          top of the page (device acceptance and evidence).
         </MDTypography>
 
         <Grid container spacing={3}>

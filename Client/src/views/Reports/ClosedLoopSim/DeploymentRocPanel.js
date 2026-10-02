@@ -423,7 +423,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
               when it is asked for. */}
           <ToggleButtonGroup size="small" exclusive value={matchDir}
             onChange={(e, v) => { if (v) setMatchDir(v); }}
-            title="Each recording picks the next report after it: the question the device faces, and the default. Each report picks its nearest recordings: exploratory. Switching does not refit on its own; the curve already computed stays on screen and is marked, and Recompute refits it.">
+            title="Next report after each recording: the device's question, and the default. Nearest recordings per report: exploratory. Switching does not refit; the current curve stays, marked; Recompute refits.">
             <ToggleButton value="prior" sx={{ ...TYPE.body, textTransform: "none", py: 0.5, borderColor: PAL.graphic }}>
               Next report after each recording (default)
             </ToggleButton>

@@ -476,15 +476,13 @@ function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen
 
       <Fold show="Reading guide, limits" hide="Hide how to read this" mt={2}>
         <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, maxWidth: "68ch" }}>
-          Each colour cell is the strongest of {countWord(nLengthsForChannel(sw, rows))} lengths of signal for that band, so it is
-          optimistic by construction; hover a cell for its 95% range, the length it came from and
-          the number of pain reports. The colours stop at ±0.5 for the correlation and at 0.25 and
-          0.75 for telling high pain from low; a stronger value draws at the end colour and prints
-          its true number. Every band is selectable, including one that is not clear after allowing
-          for the 22 bands tested: the marks are labels, not checks that can refuse. The device&apos;s
-          own rule check needs a stimulation current, pulse width, rate and impedance reading,
-          none of which a band alone carries, so no refused or allowed mark is shown on a band here:
-          that check runs, live, on the band you tick, in the sections below.
+          Each colour cell is the strongest of {countWord(nLengthsForChannel(sw, rows))} lengths of signal for that band, so
+          optimistic by construction; hover for its 95% range, length and number of reports. Colours
+          stop at ±0.5 (correlation) and 0.25/0.75 (AUC); stronger values draw at the end colour and
+          print their true number. Every band is selectable, including those failing the 22-band
+          correction: marks are labels, not refusals. The device rule check needs current, pulse width,
+          rate and impedance, which a band alone lacks, so no allowed or refused mark is shown here; it
+          runs on the band you tick, in the sections below.
         </MDTypography>
       </Fold>
     </Card>

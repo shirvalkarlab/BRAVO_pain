@@ -60,12 +60,9 @@ export const TWO_STAGE_CARD_TITLE = "Closed loop at frozen rate and pulse width"
 //: the other two hold 55 Hz alone; in the clinic stream's 60/60 us fit the three stretches share
 //: one rate between them. So the table says the currents are not checked, and why, and no dagger.
 export const ACROSS_RATES_NOT_CHECKED =
-  "The best currents in this table are read from one fit per combination of left and right pulse widths, pooled across every "
-  + "stimulation rate, for reference, and are not checked for movement between blocks of time. That "
-  + "check holds one stretch of time out and predicts it from the rest; because rates are tried in "
-  + "different periods, a stretch held out of this fit is also a set of rates held out, and a miss "
-  + "could not be told apart from a rate the fit had not learnt. The current this page recommends is "
-  + "read from each rate's own map, which is checked (the current map card).";
+  "Best currents here come from one fit per left/right pulse-width pair, pooled across rates; reference only, "
+  + "not checked across blocks of time (rates were tried in different periods, so a held-out stretch is also a "
+  + "held-out rate). The recommended current comes from each rate's own map, which is checked (current map card).";
 
 // An empty cell reads "not given", never "—" (TASTE_AUDIT.md C9).
 const fmt = (v, d = 1) => (num(v) === null ? EMPTY : num(v).toFixed(d));

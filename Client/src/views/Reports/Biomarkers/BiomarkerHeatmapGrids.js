@@ -145,43 +145,33 @@ function heatmapHeight(rows) {
 // "Reading guide" drawer, for RCS08 only: they are a finding about one record, not a rule.
 export const L13_SEARCH_UID = "2e3c75c00d7f4f37b53a048d195f11da";
 /** The one plain sentence the search's fold opens on (SPEC.md section 5.1, Background). */
-export const L13_SEARCH_LEAD = "In short: across 252 ways of pairing reports with recordings on L 1\u207b3\u207a, no band "
-  + "rose with Left Leg VAS pain clearly enough to survive the allowance for testing 22 bands at once.";
+export const L13_SEARCH_LEAD = "Across 252 ways of pairing reports with recordings on L 1\u207b3\u207a, no band "
+  + "rose with Left Leg VAS pain enough to survive the 22-band correction.";
 export const L13_SEARCH_LINES = [
-  "Exploratory search, 2026-09-21, counts re-run 2026-09-26, L 1\u207b3\u207a on Left Leg VAS: 252 settings \u2014 windows 2, 5, 10, 20, 30, 60, "
-    + "120 min; three ways of pairing (each report picks its nearest recordings; each recording picks its nearest "
-    + "report; each recording picks the next report after it); cap 1, 3, 10 per rating (how many stretches of "
-    + "recording one report may claim); reuse on/off (whether one stretch of recording may answer more than one "
-    + "report); clinic sheets on/off.",
-  "No band on L 1\u207b3\u207a rises with pain past the allowance for testing 22 bands at once under any of them: 0 positive rows with q < 0.05 "
-    + "out of 5,544. Here q is the p-value after correcting for having looked at all 22 bands; a cell with q above "
-    + "0.05 has not cleared that correction, whatever its own numbers say.",
-  // THE WHOLE SEARCH'S ANSWER (panel A item 2, 2026-09-22): the measured proxy, published once,
-  // beside the per-setting line above. The full shuffle of the whole 252-setting search is not run
-  // (about 33 min per shuffle); it is built only if a cell ever clears the per-setting bar and a
-  // calibrated family-wide p is wanted.
-  "Taken as a whole: a positive cell with p < 0.05 turned up in none of the 252 settings, where about 106 would "
-    + "if the settings were independent tests of 22 bands each (they are not: neighbouring settings share most of "
-    + "their data, so the true expected count is lower, but not near 0). With the sheets off, 4.1% of cells fall "
-    + "under p 0.05 against the 5% chance alone gives; with them on, 23% do, every one on the negative side. The "
-    + "search finds fewer positive cells than chance would. This is a count, not a calibrated p-value for the "
-    + "search as a whole.",
-  "Sheets off (home pain surveys only): no cell reaches the grid\u2019s \u201cestablished\u201d verdict. The nearest is 24.5 Hz "
-    + "at 60 s, 120-min window, each recording picking the next report after it: r 0.32 (0.16 to 0.46), n 61, q 0.25. \u201cEstablished\u201d is "
-    + "that cell\u2019s own test (its interval clears zero and it beats the shuffled best of nine lengths); this cell "
-    + "passes only the first half, and q 0.25 means it does not clear the allowance for testing 22 bands at once either. "
-    + "21.5\u201325.5 Hz (mostly 23.5) come out \u201csupported\u201d in 0\u20138 settings per window, the same count "
-    + "the negative side reaches by chance.",
-  "Sheets on (+ clinic titration scores): the positive cluster vanishes and 10\u201322 of 22 bands per setting fall "
-    + "with pain, 72 rows with q < 0.05 on the negative side, all with the sheets in. The titration scores carry a "
-    + "strong negative pain\u2013power relationship that the chronic record does not.",
-  "The current in force explains much of what is left (2026-09-22). With the stimulation current running at each "
-    + "report taken out of both the band power and the score \u2014 the \u201cadjust for the current in force\u201d "
-    + "switch \u2014 every positive reading on the left shrinks: on L 0\u207b3\u207a, the pair the exploratory ladder "
-    + "will sense, 22.5\u201327.5 Hz goes from +0.08 to +0.20 down to +0.01 to +0.12 against NRS, and on L 1\u207b3\u207a "
-    + "the negative readings get stronger (\u22120.13 to \u22120.18 becomes \u22120.23 to \u22120.28). The plain value "
-    + "still selects every band and sets every verdict; the adjusted one is reported beside it.",
-  "Read as a lead for the next titration session (24.5 Hz, 60 s), not a band to program.",
+  "Exploratory search, 2026-09-21 (counts re-run 2026-09-26), L 1\u207b3\u207a, Left Leg VAS: 252 settings \u2014 windows 2, 5, 10, 20, 30, 60, "
+    + "120 min; pairing (report picks nearest recordings; recording picks nearest report; recording picks next report); "
+    + "cap 1, 3, 10 per rating; reuse on/off (one recording may answer several reports); clinic sheets on/off.",
+  "No positive band survives the 22-band correction on L 1\u207b3\u207a: 0 positive rows with q < 0.05 out of 5,544 "
+    + "(q = p corrected for all 22 bands).",
+  // THE WHOLE SEARCH'S ANSWER (panel A item 2, 2026-09-22): the measured proxy, published once.
+  // The full shuffle of the whole 252-setting search is not run (about 33 min per shuffle).
+  "Whole search: a positive cell with p < 0.05 appeared in none of the 252 settings; about 106 would if the settings "
+    + "were independent (they are not, so fewer). Sheets off: 4.1% of cells under p 0.05 against the 5% chance gives; "
+    + "sheets on: 23%, all negative. A count, not a calibrated p-value for the search as a whole.",
+  "Sheets off (home surveys only): no cell reaches the grid\u2019s \u201cestablished\u201d verdict. Nearest: 24.5 Hz "
+    + "at 60 s, 120-min window, each recording picking the next report after it: r 0.32 (0.16 to 0.46), n 61, q 0.25. "
+    + "\u201cEstablished\u201d = interval clears zero and beats the shuffled best of nine lengths; this cell meets only "
+    + "the first, and q 0.25 fails the 22-band correction. 21.5\u201325.5 Hz are \u201csupported\u201d in 0\u20138 settings "
+    + "per window, as chance gives on the negative side.",
+  "Sheets on (+ clinic titration scores): positive cluster vanishes; 10\u201322 of 22 bands per setting fall "
+    + "with pain, 72 rows with q < 0.05 on the negative side, all with sheets in. Titration scores carry a "
+    + "strong negative pain\u2013power link the chronic record lacks.",
+  "Current in force explains much of the rest (2026-09-22). With the current at each report removed from band power "
+    + "and score (the \u201cadjust for the current in force\u201d switch), positive readings shrink: L 0\u207b3\u207a, "
+    + "22.5\u201327.5 Hz, +0.08 to +0.20 becomes +0.01 to +0.12 (NRS); L 1\u207b3\u207a negatives strengthen "
+    + "(\u22120.13 to \u22120.18 becomes \u22120.23 to \u22120.28). The plain value still selects bands and sets "
+    + "verdicts; the adjusted one is shown beside it.",
+  "Lead for the next titration session (24.5 Hz, 60 s), not a band to program.",
 ];
 
 // ---- THE STATUS AT THE HEAD OF THE HEAT MAPS (decision 304; the review's B3, and the Closed-Loop

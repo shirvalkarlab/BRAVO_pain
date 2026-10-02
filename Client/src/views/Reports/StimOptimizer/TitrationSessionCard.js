@@ -703,7 +703,7 @@ function TitrationSessionCard({ plan, participantUid, homeSchedule = null }) {
               <MDBox mt={3} pt={3} sx={{ borderTop: HAIRLINE }}>
                 <MDTypography variant="h6" component="h3" sx={{ ...HEADING, fontSize: TYPE.lead }}>{EXPLORATORY_TITLE}</MDTypography>
                 <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, mb: 1, mt: 0.5, maxWidth: "68ch" }}>
-                  {"The readiness check's best sensing pair on this side needs other stimulating contacts than today's; this ladder runs them. A separate visit, or the end of the ordinary session; its rows are at the end of the sheet."}
+                  {"Best sensing pair on this side needs other stimulating contacts than today's; this ladder runs them. Separate visit, or end of the session; rows at the end of the sheet."}
                 </MDTypography>
                 <MDBox sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", md: proposedSides.length > 1 ? "repeat(2, minmax(0, 1fr))" : "minmax(0, 1fr)" }, columnGap: "48px", rowGap: "24px" }}>
                   {proposedSides.map((side) => <ProposedColumn key={side} p={proposed[side]} />)}

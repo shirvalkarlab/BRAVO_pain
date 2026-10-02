@@ -92,7 +92,7 @@ describe("absolute numbers on the squares, colour centred on today (the PI, 2026
   it("the intro says light grey is today's predicted rating, not that zero is the score", () => {
     rtlRender(wrap(<CurrentMapCard plan={plan} />));
     fireEvent.click(screen.getByRole("button", { name: /Show explanations/ }));   // PIN CHANGED 2026-09-26, as above
-    expect(screen.getAllByText(/light grey is the predicted rating at the setting programmed today/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/light grey = predicted rating at today.s setting/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText(/zero, on the colour scale/)).toBeNull();
   });
 });

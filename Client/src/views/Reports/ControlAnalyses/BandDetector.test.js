@@ -71,7 +71,7 @@ describe("the band detector on the control-analysis card", () => {
     render(<ControlAnalysesCard payload={PAYLOAD} clinicSheets={false} />);
     expect(screen.getByText(/REDCAP-ONLY LINE/)).toBeTruthy();
     expect(screen.queryByText(/SHEETS-MERGED LINE/)).toBeNull();
-    expect(screen.getByText(/the home pain surveys alone;/)).toBeTruthy();
+    expect(screen.getByText(/home pain surveys only/)).toBeTruthy();
     // the row names are the figure's y-axis labels
     const rowNames = (plotsIn(screen.getByTestId("figure-band_detector_research"))[0] || {}).layout.yaxis.ticktext;
     expect(rowNames.join("|")).toMatch(/R 0-3/);
@@ -81,7 +81,7 @@ describe("the band detector on the control-analysis card", () => {
     render(<ControlAnalysesCard payload={PAYLOAD} clinicSheets />);
     expect(screen.getByText(/SHEETS-MERGED LINE/)).toBeTruthy();
     expect(screen.queryByText(/REDCAP-ONLY LINE/)).toBeNull();
-    expect(screen.getByText(/clinic-sheet ratings merged in/)).toBeTruthy();
+    expect(screen.getByText(/with clinic-sheet ratings/)).toBeTruthy();
     const rowNames = plotsIn(screen.getByTestId("figure-band_detector_research"))[0].layout.yaxis.ticktext;
     expect(rowNames.join("|")).not.toMatch(/R 0-3/);
   });

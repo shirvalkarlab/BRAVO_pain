@@ -404,7 +404,7 @@ describe("5. the current map's colour scale is colour-blind safe", () => {
   it("the legend says so in words, and no longer says green and red", () => {
     const { container } = renderPage(newResponse);
     const legend = container.querySelector('[data-testid="current-map-legend"]').textContent;
-    expect(legend).toMatch(/blue is better than today and orange worse/);
+    expect(legend).toMatch(/blue better, orange\s+worse/);
     expect(legend).not.toMatch(/\b(green|red|yellow)\b/i);
   });
 });

@@ -608,14 +608,11 @@ export default function EvidenceTrianglePanel({ report }) {
           ) : null}
           <SignTestMethod coherence={data.coherence} />
           <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 2, maxWidth: "68ch" }}>
-            How to read the strips: each link has its own scale and its own units, because the three
-            quantities are not comparable in size; only zero is lined up, which is what makes the
-            signs comparable by eye. A filled dot means the 95% range stays on one side of zero; a
-            hollow dot means it crosses zero, so the sign rests on the point value alone. An open
-            arrow at an end means that end of the range is unbounded. A finely dotted range on
-            current → band power marks a screening reading, read off the whole history where
-            current and time move together; it is replaced by the stepped-current measurement once
-            one is stored for the band.
+            Strips: each link has its own scale and units; only zero is aligned, so signs compare by
+            eye. Filled dot: 95% range on one side of zero; hollow: it crosses zero, so the sign rests
+            on the point value. Open arrow: unbounded end. Fine dotted range on current → band power:
+            screening reading from the whole history, replaced by the stepped-current measurement
+            once stored for the band.
           </MDTypography>
         </Fold>
       </MDBox>

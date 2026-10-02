@@ -24,14 +24,14 @@ const wrap = (ui) => (
 );
 
 describe("the table of fits pooled across rates", () => {
-  it("says its best currents are not checked for movement between blocks of time, and why", () => {
+  it("says its best currents are not checked across blocks of time, and why", () => {
     const { container } = rtlRender(wrap(<TwoStagePlanCard plan={response.two_stage} loading={false} err={null} />));
     const t = container.textContent;
     expect(t).toContain("The fit for each pulse width and side");
     expect(t).toMatch(/best left current \(mA\)/i);   // PIN CHANGED 2026-09-26: headers are sentence case (SPEC.md section 7, WP5)
-    expect(ACROSS_RATES_NOT_CHECKED).toMatch(/not checked for movement between blocks of time/);
-    expect(ACROSS_RATES_NOT_CHECKED).toMatch(/pooled across every stimulation rate/);
-    expect(ACROSS_RATES_NOT_CHECKED).toMatch(/rate the fit had not learnt/);
+    expect(ACROSS_RATES_NOT_CHECKED).toMatch(/not checked across blocks of time/);
+    expect(ACROSS_RATES_NOT_CHECKED).toMatch(/pooled across rates/);
+    expect(ACROSS_RATES_NOT_CHECKED).toMatch(/held-out stretch is also a held-out rate/);
     expect(ACROSS_RATES_NOT_CHECKED).toMatch(/each rate's own map/);
     expect(t).toContain(ACROSS_RATES_NOT_CHECKED);
     expect(container.querySelectorAll('[data-testid="block-of-time-mark"]')).toHaveLength(0);
@@ -41,6 +41,6 @@ describe("the table of fits pooled across rates", () => {
     const plan = JSON.parse(JSON.stringify(response.two_stage));
     plan.stage1.strata = [];
     const { container } = rtlRender(wrap(<TwoStagePlanCard plan={plan} loading={false} err={null} />));
-    expect(container.textContent).not.toContain("not checked for movement between blocks of time");
+    expect(container.textContent).not.toContain("not checked across blocks of time");
   });
 });

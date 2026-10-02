@@ -30,14 +30,14 @@ The PI is asleep (back in a few hours). Work autonomously, front end IN SEQUENCE
 - [ ] O. Read CI result for 94f6672b; fix anything left.
 
 ## Round 2 (PI, 2026-10-02 after the build): "Keep a system going to tell you more things to change"
-- [ ] R2-1. Cell title "L 1⁻3⁺ (Left GPi) · 24.5 Hz · 1m of signal": centre over the scatter and violin plots.
-- [ ] R2-2. Run-on text "TD values: R −0.24 (−0.56 to +0.07), 35 reports · PSD values: R −0.05 (−0.49 to +0.48), 15 reports": use n=X not "X reports"; keep "R −0.24 (interval)" style; PSD on a NEW LINE below TD.
-- [ ] R2-3. Bold q-value text for each graph: order = report q 0.XX (FDR, 22 bands); then the report interval; REMOVE "established / across settings / cannot tell" etc. (that belongs on the Closed-Loop page). Same for scatter and violin; make them complementary.
-- [ ] R2-4. AUC stats line: n for Low is cut off, shows "..." — fix.
+- [x] R2-1. Cell title "L 1⁻3⁺ (Left GPi) · 24.5 Hz · 1m of signal": centre over the scatter and violin plots.
+- [x] R2-2. Run-on text "TD values: R −0.24 (−0.56 to +0.07), 35 reports · PSD values: R −0.05 (−0.49 to +0.48), 15 reports": use n=X not "X reports"; keep "R −0.24 (interval)" style; PSD on a NEW LINE below TD.
+- [x] R2-3. Bold q-value text for each graph: order = report q 0.XX (FDR, 22 bands); then the report interval; REMOVE "established / across settings / cannot tell" etc. (that belongs on the Closed-Loop page). Same for scatter and violin; make them complementary.
+- [x] R2-4. AUC stats line: n for Low is cut off, shows "..." — fix.
 (Add every later request here first, then do it, one commit each with a decision row.)
 
 ## Round 3 (PI, 2026-10-02, going to sleep; autonomous)
-- [ ] R3-1. ALL pages: every metric / settings dropdown gets a clear blue border (Closed-Loop pain-score select, Biomarkers metric select, "Adjust matching parameters" selects incl. the high/low split select). One shared style.
-- [ ] R3-2. Fold "Each lead's contacts and the pair it allows" (now "Contacts and allowed pair"): content far too verbose/redundant -> concise.
-- [ ] R3-3. Go through ALL module pages with a fine-toothed comb: concise text, noun-phrase titles, body-size captions (the style of decisions 380/381).
-- [ ] R3-4. Commit this style to memory (feedback memory) AND to the BRAVO visualization skill (~/.claude/skills: bravo-stimoptimizer-figures / bravo-timeline-layout / bravo-session-rules: add a style section; maybe a new skill bravo-ui-style).
+- [x] R3-1. ALL pages: every metric / settings dropdown gets a clear blue border (Closed-Loop pain-score select, Biomarkers metric select, "Adjust matching parameters" selects incl. the high/low split select). One shared style.
+- [x] R3-2. Fold "Each lead's contacts and the pair it allows" (now "Contacts and allowed pair"): content far too verbose/redundant -> concise.
+- [~] R3-3 (first pass done, decision 383; continue with the dense card bodies: TitrationSessionCard, ClosedLoopChecks, DeploymentRocPanel, ClosedLoopSimulationPanel, LsbPowerPanel, template strings with numbers). Go through ALL module pages with a fine-toothed comb: concise text, noun-phrase titles, body-size captions (the style of decisions 380/381).
+- [x] R3-4. Commit this style to memory (feedback memory) AND to the BRAVO visualization skill (~/.claude/skills: bravo-stimoptimizer-figures / bravo-timeline-layout / bravo-session-rules: add a style section; maybe a new skill bravo-ui-style).

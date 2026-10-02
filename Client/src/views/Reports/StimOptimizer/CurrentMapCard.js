@@ -451,10 +451,8 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
           onChange={(open) => setPoolOpen((s) => ({ ...s, [g.key]: open || s[g.key] }))}>
           {showDescriptions && (
           <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, mb: 1, maxWidth: "68ch" }}>
-            The surface below pools every rate together through one shared, pinned rate axis.
-            It is shown for reference only: reading a current off it draws confidence from
-            OTHER rates, not the one being asked about, which is exactly why the surfaces above
-            are fitted one rate at a time.
+            Pools every rate on one shared rate axis; reference only: a current read here borrows
+            confidence from OTHER rates, which is why the surfaces above are fitted one rate at a time.
           </MDTypography>
           )}
           <MDBox sx={{ display: "flex", flexWrap: "wrap", columnGap: "32px", rowGap: "16px" }}>
@@ -763,16 +761,12 @@ function CurrentMapCard({ plan }) {
       )}>
         <MDTypography variant="caption" component="div" data-testid="current-map-legend"
           sx={{ fontSize: TYPE.body, color: T.ink2, mt: 2, mb: 1.5, maxWidth: "80ch" }}>
-          Each square below is one stimulation rate: the left current runs along the bottom, the
-          right current up the side, and the colour is the predicted pain rating at that combination
-          (plus a fixed cost where a side effect was reported), which the search is trying to make
-          as small as possible. Light grey is the predicted rating at the setting programmed today,
-          so blue is better than today and orange worse, deeper the further from today, on one
-          scale for every square; &quot;today ×&quot; marks that setting; the dots are combinations
-          this participant has actually been rated on, sized by how many ratings back them;
-          &quot;best ★&quot; appears only when the record can tell currents apart well enough to trust
-          it, per the three checks printed under each square. The dashed line labelled &quot;safe
-          ceiling&quot; marks the safe current ceiling; nothing beyond it is offered.
+          Each square below is one stimulation rate: left current along the bottom, right current up the
+          side, colour = predicted pain rating (plus a fixed cost where a side effect was reported), which
+          the search minimises. Light grey = predicted rating at today&apos;s setting, blue better, orange
+          worse, one scale for every square; &quot;today ×&quot; marks it; dots = rated combinations, sized
+          by number of ratings; &quot;best ★&quot; appears only when the record can tell currents apart
+          (three checks under each square). Dashed &quot;safe ceiling&quot;: nothing beyond it is offered.
         </MDTypography>
         <ColorKey scale={CURRENT_MAP_COLORSCALE} range={[-Number(half.toFixed(2)), Number(half.toFixed(2))]}
           title="Predicted rating minus today's, on the 0-10 scale (same for every square)"
