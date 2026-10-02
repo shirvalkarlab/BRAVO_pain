@@ -32,7 +32,7 @@
  * fold; the sentence pointing at the titration card is gone.
  *
  * THE MINIMALIST REDESIGN OF 2026-09-26 (SPEC.md section 5.3, §3): no longer a card of its own. It
- * is the second part of the page's "Can closed loop start?" section, below the readiness blocks and
+ * is the second part of the page's "Closed-loop readiness" section, below the readiness blocks and
  * a hairline, so there is no card inside a card; its heading is the plain question "Can closed loop
  * start on the rate and pulse width locked in beforehand?". Colours and sizes from the shared tokens.
  */
@@ -47,7 +47,7 @@ import ExcludedSettingsChart, { ExcludedSettingsSummary } from "./ExcludedSettin
 import { num, EMPTY } from "./stimFormat";
 import { T, TYPE, HEAD, MONO, SUBHEAD, HEADING, HAIRLINE, Placeholder, SizedFold as Fold } from "./typeScale";
 
-export const TWO_STAGE_CARD_TITLE = "Can closed loop start on the rate and pulse width locked in beforehand?";
+export const TWO_STAGE_CARD_TITLE = "Closed loop at frozen rate and pulse width";
 
 //: The folded table's "best left / right current" is read from ONE fit per pulse-width pairing
 //: pooled across every stimulation rate (reference only; the page's recommended current is read

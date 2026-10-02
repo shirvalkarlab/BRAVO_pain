@@ -219,13 +219,30 @@ function gridBuiltText(gs) {
   return `built ${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })} `
     + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
+/** The grid's settings in a few words (2026-10-02, minimalist: the long form stays in the signed
+ *  record, `gridSettingsLine`). The build time is in the hover. */
+export function gridSettingsShort(gs) {
+  if (!gs) return null;
+  const lo = gs.percentile_low != null ? fmtNum(gs.percentile_low, 0) : "?";
+  const hi = gs.percentile_high != null ? fmtNum(gs.percentile_high, 0) : "?";
+  const dir = { pro_first: "report picks nearest", prior: "next report", nearest: "nearest" };
+  const split = { tertile: `tertile ${lo}/${hi}%`, percentile: `split ${lo}/${hi}%`, median: "median split",
+    kmeans: "2-cluster split", cutoff: "fixed cut-off" };
+  const parts = [gs.metric_label || gs.sweep_metric || "pain score ?",
+    gs.match_tolerance_min != null ? `\u00b1${fmtNum(gs.match_tolerance_min, 0)} min` : "same day",
+    dir[gs.match_direction] || `${gs.match_direction || "?"}`];
+  if (gs.allow_window_reuse) parts.push("reuse");
+  if (gs.include_clinic_sheet_ratings) parts.push("clinic sheets in");
+  parts.push(split[gs.label_strategy] || `${gs.label_strategy || "?"} split`);
+  return parts.join(" \u00b7 ");
+}
 function SettingsFinePrint({ gs }) {
-  const line = gridSettingsLine(gs);
+  const line = gridSettingsShort(gs);
   if (!line) return null;
   const built = gridBuiltText(gs);
   return (
-    <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3, maxWidth: "68ch", mt: 1 }}>
-      {`Grid built on: ${line}${built ? `; ${built}` : ""}.`}
+    <MDTypography title={built || undefined} sx={{ ...TYPE.body, color: PAL.ink2, maxWidth: "68ch", mt: 1 }}>
+      {`Grid: ${line}`}
     </MDTypography>
   );
 }
@@ -378,7 +395,7 @@ function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen
       {!grid.cross_setting_stability_included ? (
         <MDTypography sx={{ ...TYPE.body, color: PAL.warnText, mt: 1 }}>
           <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>
-          Whether each band behaves the same at every setting has not been computed for this grid yet.
+          Per-setting consistency not computed yet.
         </MDTypography>
       ) : null}
       {/* The pain score and the matching and split settings this grid was built under, and when --
@@ -399,7 +416,7 @@ function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen
       <MDBox display="flex" gap={4} flexWrap="wrap" mb={2}>
         <ColorKey scale={DIVERGING} range={RANGE.correlation} title="Correlation with pain"
           lowLabel="falls with pain" midLabel="0 no relationship" highLabel="rises with pain" width={300} />
-        <ColorKey scale={DIVERGING} range={RANGE.areaUnderCurve} title="Tells high pain from low"
+        <ColorKey scale={DIVERGING} range={RANGE.areaUnderCurve} title="AUC"
           lowLabel="pain lower when power high" midLabel="0.5 no relationship"
           highLabel="pain higher when power high" width={300} />
       </MDBox>
@@ -410,8 +427,8 @@ function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen
         columnGap: "8px", rowGap: "4px", alignItems: "center", overflowX: "auto" }}>
         <MDTypography variant="caption" sx={{ ...HEAD, justifyContent: "flex-end" }}>Band centre</MDTypography>
         <MDTypography variant="caption" sx={HEAD}>Correlation with pain</MDTypography>
-        <MDTypography variant="caption" sx={HEAD}>Tells high pain from low</MDTypography>
-        <MDTypography variant="caption" sx={HEAD}>Clear after allowing for 22 bands</MDTypography>
+        <MDTypography variant="caption" sx={HEAD}>AUC</MDTypography>
+        <MDTypography variant="caption" sx={HEAD}>Corrected, 22 bands</MDTypography>
         <MDTypography variant="caption" sx={HEAD}>Same at every setting</MDTypography>
         <MDTypography variant="caption" sx={HEAD}>Use this band</MDTypography>
         {rows.map((row) => {
@@ -452,9 +469,9 @@ function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen
         })}
       </MDBox>
 
-      <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3, mt: 2 }}>
-        {"✓ clear after allowing for 22 bands, or the same at every setting · – not clear after "
-          + "that allowance · ✕ behaves differently across settings · ? cannot tell · ○ not tested"}
+      <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 2 }}>
+        {"✓ passes (corrected, or same at every setting) · – fails correction · ✕ differs across "
+          + "settings · ? unknown · ○ not tested"}
       </MDTypography>
 
       <Fold show="How to read this, and what it cannot tell you" hide="Hide how to read this" mt={2}>

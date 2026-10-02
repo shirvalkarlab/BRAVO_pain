@@ -50,36 +50,31 @@ export function matchingRequestKeys(inherited, keys = MATCHING_KEYS) {
   return out;
 }
 
-const DIRECTION_WORDS = {
-  nearest: "each recording paired with the nearest report",
-  pro_first: "each report picking its nearest recordings",
-  prior: "each recording paired with the next report after it",
-};
-const SPLIT_WORDS = { tertile: "lowest and highest thirds", median: "median split",
-  kmeans: "two clusters" };
+const DIRECTION_WORDS = { nearest: "nearest", pro_first: "report picks nearest", prior: "next report" };
+const SPLIT_WORDS = { tertile: "tertile split", median: "median split", kmeans: "2-cluster split" };
 const truthy = (v) => v === true || ["1", "true", "yes", "on"].includes(String(v).toLowerCase());
 
-/** The one line the page prints: which settings it inherited, and from when. */
+/** The one line the page prints: which settings it inherited (terse, 2026-10-02: the PI wants
+ *  minimal words; the run's time is in the head). */
 export function inheritedMatchingLine(inherited) {
   const s = (inherited && inherited.settings) || {};
   const tol = Number(s.MatchToleranceMin);
   const parts = [
-    Number.isFinite(tol) && tol > 0 ? `±${tol} min` : "no time window",
+    Number.isFinite(tol) && tol > 0 ? `±${tol} min` : "no window",
     DIRECTION_WORDS[s.MatchDirection] || String(s.MatchDirection || ""),
-    `at most ${s.MaxPerRating} per report, ${s.RefractoryMin} min apart`,
-    truthy(s.AllowWindowReuse) ? "a recording may answer several reports" : "no reuse",
-    truthy(s.IncludeClinicSheetRatings) ? "clinic-sheet ratings in" : "clinic-sheet ratings out",
+    `≤${s.MaxPerRating} per report, ${s.RefractoryMin} min apart`,
+    truthy(s.AllowWindowReuse) ? "reuse" : "no reuse",
+    truthy(s.IncludeClinicSheetRatings) ? "clinic sheets in" : "clinic sheets out",
     s.LabelStrategy === "percentile"
-      ? `split at the ${Number(Number(s.PercentileLow).toFixed(1))}th and ${Number(Number(s.PercentileHigh).toFixed(1))}th percentiles`
+      ? `split ${Number(Number(s.PercentileLow).toFixed(1))}/${Number(Number(s.PercentileHigh).toFixed(1))} percentiles`
       : (SPLIT_WORDS[s.LabelStrategy] || String(s.LabelStrategy || "")),
-    `grid pain score ${painScoreLabel(s.LabelMetric)}`,
+    painScoreLabel(s.LabelMetric),
   ];
   const src = inherited && inherited.source;
   const when = inherited && inherited.ranAt
     ? new Date(inherited.ranAt).toISOString().slice(0, 16).replace("T", " ") + " UTC" : null;
-  const head = src === "defaults"
-    ? "Matching: the defaults (the Biomarkers page has not been run for this participant in this browser)"
-    : `Matching inherited from the Biomarkers page's last run${when ? ` (${when})` : ""}`;
+  const head = src === "defaults" ? "Matching, defaults"
+    : `Matching from Biomarkers${when ? `, ${when}` : ""}`;
   return `${head}: ${parts.join(", ")}.`;
 }
 

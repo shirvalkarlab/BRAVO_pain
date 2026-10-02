@@ -44,7 +44,7 @@ function asymmetricPlan() {
 
 // The map's section starts closed and its squares are drawn only once it has been opened (speed-up
 // item C5, 2026-10-01), so each test opens it the way a reader does before reading the drawing.
-const openMap = () => fireEvent.click(screen.getByRole("button", { name: /Where have currents been tried/ }));
+const openMap = () => fireEvent.click(screen.getByRole("button", { name: /Sampled currents/ }));
 
 describe("CurrentMapCard: the predicted rating is drawn at its own left and right current", () => {
   beforeEach(() => Plotly.react.mockClear());

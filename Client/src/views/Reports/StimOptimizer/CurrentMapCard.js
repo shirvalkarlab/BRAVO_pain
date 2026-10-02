@@ -46,7 +46,7 @@
  *   - "stretches of unchanged settings", never "epochs"; "rate", never "speed".
  *
  * THE MINIMALIST REDESIGN OF 2026-09-26 (SPEC.md section 5.3, §2): the card is the page section
- * "Where have currents been tried, and what does the fit predict?". Small multiples, one row per
+ * "Sampled currents, predicted pain". Small multiples, one row per
  * stream (the home pain surveys; the clinic sheets), squares of about 240 px, with ONE shared colour
  * range and ONE colour key for the whole card: each square is coloured by its predicted rating minus
  * today's, on the nine-stop blue - light grey - orange scale, so the same colour means the same
@@ -742,7 +742,7 @@ function CurrentMapCard({ plan }) {
   );
 
   return (
-    <Section id="current-map" question="Where have currents been tried, and what does the fit predict?" collapsible
+    <Section id="current-map" question="Sampled currents, predicted pain" collapsible
       answer={answer} actions={actions}
       // The out-of-sample caveat stays in the open even while the section is closed (decision 235).
       // The card draws pain against the two currents, so it is where a reader could take the pooled

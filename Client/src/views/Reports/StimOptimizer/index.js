@@ -239,7 +239,7 @@ export default function StimOptimizer() {
 
         {/* ---------- 1. is any setting proven better than today's? The answer is COMPUTED from the
             per-side verdicts in the same render, never a fixed description of the method. -------- */}
-        <Section id="decision" question="Is any setting proven better than today's?"
+        <Section id="decision" question="Candidate vs. current setting"
           answer={`${decisionHeadline(twoStage.data, data.in_force_by_side || null)}.`}>
           <DecisionStrip arms={NO_ARMS} plan={twoStage.data} planLoading={twoStage.loading}
             planErr={twoStage.err} inForce={data.in_force_by_side || null} />
@@ -251,7 +251,7 @@ export default function StimOptimizer() {
         {/* ---------- 3. can closed loop start? The allowed sensing pairs as sentence blocks, the
             other combinations folded, then the four checks and what closed loop ruled out. ---------- */}
         {/* The answer stays in view while the section is closed (2026-09-26): the checks' count. */}
-        <Section id="closed-loop" question="Can closed loop start?" collapsible
+        <Section id="closed-loop" question="Closed-loop readiness" collapsible
           answer={twoStage.data ? `${gateHeadline(twoStage.data)}.`
             : (twoStage.loading ? "Still being checked: the two-stage plan is computing." : null)}>
           {data.closed_loop && <SensingEvidenceTable closedLoop={data.closed_loop} />}
@@ -271,7 +271,7 @@ export default function StimOptimizer() {
         <NextBlocksCard nextBlocks={((((twoStage.data || {}).stage1) || {}).clinic_stream || {}).next_blocks || null} />
         {/* No titration plan on the response: the home schedule still shows, as its own section. */}
         {!data.titration_plan && data.current_map_schedule && (
-          <Section id="next-visit" question="What must the next visit deliver?">
+          <Section id="next-visit" question="Next-visit requirements">
             <CurrentMapScheduleCard schedule={data.current_map_schedule} />
           </Section>
         )}

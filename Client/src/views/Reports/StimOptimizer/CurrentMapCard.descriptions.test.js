@@ -64,7 +64,7 @@ describe("the card's prose folds behind one push-button, except the legend", () 
     rtlRender(wrap(<CurrentMapCard plan={plan} />));
     // PIN CHANGED 2026-09-26 (the design review, the PI's "yes to all six"): "stretches", never "epochs"
     expect(screen.getAllByText(/stretches · \d+ reports/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Where have currents been tried, and what does the fit predict\?/)).toBeInTheDocument();   // PIN CHANGED 2026-09-26: the title is the section question (SPEC.md section 5.3)
+    expect(screen.getByText(/Sampled currents, predicted pain/)).toBeInTheDocument();   // PIN CHANGED 2026-09-26: the title is the section question (SPEC.md section 5.3)
   });
 });
 

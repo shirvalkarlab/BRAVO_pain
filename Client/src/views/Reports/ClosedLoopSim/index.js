@@ -532,10 +532,10 @@ function ClosedLoopSim() {
             </MDBox>
           </MDBox>
           {/* Which matching settings this page took from the Biomarkers page (decision 331). */}
-          <MDTypography data-testid="inherited-matching" sx={{ ...TYPE.caption, color: PAL.ink, mt: 1 }}>
+          <MDTypography data-testid="inherited-matching" sx={{ ...TYPE.body, color: PAL.ink2, mt: 1.5 }}>
             {inheritedMatchingLine(inherited)
               + (includeSheets !== inheritedSheets
-                ? ` The clinic-sheet button is changed here for the summary: ${includeSheets ? "in" : "out"}.`
+                ? ` Clinic sheets ${includeSheets ? "in" : "out"} for the summary.`
                 : "")}
           </MDTypography>
           {bc ? <ContentsRow /> : null}

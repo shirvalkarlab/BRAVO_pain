@@ -1,5 +1,5 @@
 /**
- * "Can closed loop start?" starts closed (the PI, 2026-09-26), so its answer must be in view while
+ * "Closed-loop readiness" starts closed (the PI, 2026-09-26), so its answer must be in view while
  * it is: the same count of the four checks the checks card prints ("No: 2 of 4 checks block, 1 not
  * assessed"), read from the two-stage plan's gate. Before 2026-09-26 the closed section showed its
  * title alone.

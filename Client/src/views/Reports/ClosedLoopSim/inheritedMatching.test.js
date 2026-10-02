@@ -101,13 +101,13 @@ describe("4. a result computed under other matching settings is withheld", () =>
 describe("5. the page says which settings it inherited", () => {
   test("the defaults, said as defaults", () => {
     expect(inheritedMatchingLine(inheritedMatching(UID))).toMatch(
-      /^Matching: the defaults .*±15 min, each recording paired with the nearest report, at most 3 per report, 2 min apart, no reuse, clinic-sheet ratings out, lowest and highest thirds/);
+      /^Matching, defaults: ±15 min, nearest, ≤3 per report, 2 min apart, no reuse, clinic sheets out, tertile split/);
   });
   test("a run, with when it ran", () => {
     run({ LabelMetric: "left_leg_vas", MatchToleranceMin: 30, MatchDirection: "nearest",
       IncludeClinicSheetRatings: true, LabelStrategy: "median" });
     const line = inheritedMatchingLine(inheritedMatching(UID));
-    expect(line).toMatch(/^Matching inherited from the Biomarkers page's last run \(2026-09-26 21:05 UTC\): ±30 min/);
-    expect(line).toMatch(/clinic-sheet ratings in, median split, grid pain score Left Leg VAS\.$/);
+    expect(line).toMatch(/^Matching from Biomarkers, 2026-09-26 21:05 UTC: ±30 min/);
+    expect(line).toMatch(/clinic sheets in, median split, Left Leg VAS\.$/);
   });
 });

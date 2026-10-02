@@ -98,7 +98,7 @@ const words = (s) => (String(s).trim().match(/\S+/g) || []).length;
 const CARD_SELECTOR = "section[data-paper='section'], .MuiCard-root";
 const cardWithTitle = (container, title) => Array.from(container.querySelectorAll(CARD_SELECTOR))
   .find((c) => c.textContent.includes(title));
-const NEXT_VISIT = "What must the next visit deliver?";
+const NEXT_VISIT = "Next-visit requirements";
 
 // ---------------------------------------------------------------------------------------------
 describe("1. the status line", () => {

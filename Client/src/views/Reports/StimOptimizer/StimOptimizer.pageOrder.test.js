@@ -31,7 +31,7 @@ jest.mock("plotly.js-dist", () => ({
 // The current map is drawn with Plotly through the project's graphing utility, which jsdom cannot
 // host. Its drawing is not what this test is about -- its place on the page is -- so it stands in
 // as its own title, which is what the order is read from.
-jest.mock("./CurrentMapCard", () => () => <div>Where have currents been tried, and what does the fit predict?</div>);
+jest.mock("./CurrentMapCard", () => () => <div>Sampled currents, predicted pain</div>);
 jest.mock("views/Reports/RecomputeBar", () => () => <div>recompute bar</div>);
 jest.mock("views/Reports/CacheStatusLine", () => () => null);
 // The page's own response and the two-stage plan, both from the fixture. The hook is the PI's
@@ -69,10 +69,10 @@ describe("the page's order", () => {
     };
     const status = at("Keep today's setting on both sides; closed loop cannot start.");
     const decision = at("No side has a setting proven better than today's");
-    const map = at("Where have currents been tried");
+    const map = at("Sampled currents");
     const readiness = at("contact-and-rate combinations usable for closed loop");
-    const checks = text.lastIndexOf("Can closed loop start on the rate and pulse width locked in beforehand?");
-    const next = at("What must the next visit deliver?");
+    const checks = text.lastIndexOf("Closed loop at frozen rate and pulse width");
+    const next = at("Next-visit requirements");
     const footer = at("Evidence base:");
     expect(status).toBeLessThan(decision);
     expect(decision).toBeLessThan(map);

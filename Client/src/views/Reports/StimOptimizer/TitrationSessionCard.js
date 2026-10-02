@@ -93,7 +93,7 @@ function filenameFromDisposition(disposition, fallback) {
 }
 
 /** The section's question (SPEC.md section 5.3, §4). */
-export const TITRATION_CARD_TITLE = "What must the next visit deliver?";
+export const TITRATION_CARD_TITLE = "Next-visit requirements";
 /** The exploratory ladder's own heading (the PI, 2026-09-21): a second ladder for the stimulation
  *  configuration the readiness screen's best sensing pair needs, when it is not the one in force. */
 export const EXPLORATORY_TITLE = "Exploratory ladder for the pair the readiness check prefers";
