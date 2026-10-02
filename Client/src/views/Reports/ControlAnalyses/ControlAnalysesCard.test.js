@@ -10,6 +10,20 @@ import theme from "assets/theme";
 import { PlatformContextProvider } from "context";
 
 import ControlAnalysesCard from "./ControlAnalysesCard";
+import { plotlyMock, resetPlots, plotsIn, markColours, hoverTexts, allX } from "./plotTestUtils";
+
+jest.mock("plotly.js-dist", () => require("./plotTestUtils").plotlyMock());
+beforeEach(() => resetPlots());
+
+const HEX = /^#[0-9A-Fa-f]{3,8}$/;
+const expectCleanFigure = (plot) => {
+  markColours(plot).forEach((c) => expect(c).toMatch(HEX));
+  hoverTexts(plot).forEach((t) => expect(t).not.toMatch(/undefined|NaN/));
+  // text on a figure is 12 px: no axis, tick or annotation font under 11
+  const fonts = [plot.layout.xaxis, plot.layout.yaxis].flatMap((a) => [a.tickfont && a.tickfont.size, a.title && a.title.font && a.title.font.size]);
+  [...fonts, ...(plot.layout.annotations || []).map((a) => a.font && a.font.size)]
+    .filter((f) => f != null).forEach((f) => expect(f).toBeGreaterThanOrEqual(11));
+};
 
 const render = (ui) => rtlRender(
   <ThemeProvider theme={theme}>
@@ -76,15 +90,32 @@ describe("the control analyses card", () => {
     expect(screen.getByText(/bands without the current 0.683/)).toBeTruthy();
   });
 
-  it("draws every mark in a real colour, never an undefined one", () => {
+  it("draws every mark in a real colour, never an undefined one, with a hover on every mark", () => {
     const { container } = render(<ControlAnalysesCard payload={PAYLOAD} />);
-    const marks = [...container.querySelectorAll("circle, line, polyline")];
-    expect(marks.length).toBeGreaterThan(0);
-    // React leaves an undefined colour out altogether, so a missing attribute is the failure.
-    marks.forEach((m) => {
-      const a = m.tagName === "circle" ? "fill" : "stroke";
-      expect(m.getAttribute(a)).toMatch(/^#[0-9A-Fa-f]{3,8}$/);
-    });
+    const plots = plotsIn(container);
+    expect(plots.length).toBe(1);
+    expectCleanFigure(plots[0]);
+    expect(hoverTexts(plots[0]).length).toBe(3);
+  });
+
+  it("hovering a band prints its own numbers, all read off the saved row: centre, stretch, correlation, 95% range, q, p, ratings, days", () => {
+    const { container } = render(<ControlAnalysesCard payload={PAYLOAD} />);
+    const [plot] = plotsIn(container);
+    const first = hoverTexts(plot)[0];
+    expect(first).toBe([
+      "21.5 Hz \u00b7 both off, 2025-07-16 to 2025-08-22",
+      "correlation with pain +0.38 (95% range +0.18 to +0.58)",
+      "q 0.04 (after allowing for the bands tested) \u00b7 p 0.01",
+      "75 ratings on 25 days"].join("<br>"));
+  });
+
+  it("the x axis ends on a labelled tick: the last band centre has a number at or beyond it", () => {
+    const { container } = render(<ControlAnalysesCard payload={PAYLOAD} />);
+    const [plot] = plotsIn(container);
+    const { range, tickvals, ticktext } = plot.layout.xaxis;
+    expect(range[1]).toBe(tickvals[tickvals.length - 1]);
+    expect(ticktext[ticktext.length - 1]).toBe(String(range[1]));
+    expect(range[1]).toBeGreaterThanOrEqual(Math.max(...allX(plot)));
   });
 
   it("draws the on/off switches as a table of mean pain around each switch", () => {
@@ -120,9 +151,10 @@ describe("the control analyses card", () => {
     const fig = screen.getByTestId("figure-carry_over_ladder");
     expect(fig.textContent).toMatch(/every fall came after its rise/i);
     expect(fig.textContent).toMatch(/left -0\.75 \(4 currents\)/);
-    const marks = [...fig.querySelectorAll("circle")];
-    expect(marks.length).toBe(2);
-    marks.forEach((m) => expect(m.getAttribute("fill")).toMatch(/^#[0-9A-Fa-f]{3,8}$/));
+    const [plot] = plotsIn(fig);
+    expect(allX(plot).length).toBe(2);
+    expectCleanFigure(plot);
+    expect(hoverTexts(plot).join("|")).toMatch(/Left side, 0\.5 mA<br>down minus up \u22121\.50 \(up 5\.0, down 3\.5\)<br>the fall came after the rise<br>39 min apart/);
     expect(screen.getByTestId("carry-over-holds").textContent).toMatch(/-0\.06/);
     expect(screen.getByTestId("carry-over-holds").textContent).toMatch(/62/);
     const ladder = screen.getByTestId("carry-over-ladder-power");
@@ -151,20 +183,15 @@ describe("the control analyses card", () => {
         } } }] };
     const { container } = render(<ControlAnalysesCard payload={payload} />);
     const fig = screen.getByTestId("figure-regression_to_mean");
-    expect(fig.textContent).toMatch(/1\.6\/1\.2 mA/);
+    // the series are named by a label at their right end, now an annotation of the Plotly figure
+    expect(plotsIn(fig)[0].layout.annotations.map((a) => a.text)).toContain("1.6/1.2 mA (8 stretches)");
     expect(fig.textContent).toMatch(/2\.0% of splits/);
     const table = screen.getByTestId("regression-to-mean-comparisons");
     expect(table.textContent).toMatch(/8\.0% of runs elsewhere/);
     expect(table.textContent).toMatch(/\+3\.4 standard errors/);
-    const marks = [...fig.querySelectorAll("circle, line, polyline")];
-    expect(marks.length).toBeGreaterThan(0);
-    marks.forEach((m) => {
-      const a = m.tagName === "circle" ? "fill" : "stroke";
-      expect(m.getAttribute(a)).toMatch(/^#[0-9A-Fa-f]{3,8}$/);
-    });
-    [...fig.querySelectorAll("text")].forEach((t) => {
-      expect(Number(t.getAttribute("font-size"))).toBeGreaterThanOrEqual(11);
-    });
+    const [plot] = plotsIn(fig);
+    expectCleanFigure(plot);
+    expect(hoverTexts(plot)[0]).toBe("1.6/1.2 mA (8 stretches) \u00b7 block 1<br>average +1.51<br>\u00b1 1 standard error 0.12<br>3 stretches");
     [...container.querySelectorAll("[style]")].forEach((el) => {
       const fs = el.style && el.style.fontSize;
       if (fs) expect(parseFloat(fs)).toBeGreaterThanOrEqual(11);
@@ -214,13 +241,9 @@ describe("the control analyses card", () => {
     expect(table.textContent).toMatch(/87/);             // 52 / 0.6 rounded
     fireEvent.change(screen.getByLabelText("Pain score"), { target: { value: "nrs" } });
     expect(screen.getByTestId("rating-persistence-targets").textContent).not.toMatch(/both off, 2025-07-16/);
-    const marks = [...fig.querySelectorAll("circle, line, polyline")];
-    expect(marks.length).toBeGreaterThan(0);
-    marks.forEach((m) => {
-      const a = m.tagName === "circle" ? "fill" : "stroke";
-      expect(m.getAttribute(a)).toMatch(/^#[0-9A-Fa-f]{3,8}$/);
-    });
-    [...fig.querySelectorAll("text")].forEach((t) => expect(Number(t.getAttribute("font-size"))).toBeGreaterThanOrEqual(11));
+    const [plot] = plotsIn(fig);
+    expectCleanFigure(plot);
+    expect(hoverTexts(plot)[0]).toMatch(/^NRS \(0\u201310\) \u00b7 1 day apart<br>correlation \+0\.30<br>179 pairs of days/);
     [...container.querySelectorAll("[style]")].forEach((el) => {
       const fs = el.style && el.style.fontSize;
       if (fs) expect(parseFloat(fs)).toBeGreaterThanOrEqual(11);
@@ -247,13 +270,12 @@ describe("the control analyses card", () => {
     expect(fig.textContent).toMatch(/ratio \(far over family\) 0\.81/);
     const table = screen.getByTestId("stepped-current-ratios");
     expect(table.textContent).toMatch(/0\.81/);
-    const marks = [...fig.querySelectorAll("circle, line, polyline")];
-    expect(marks.length).toBeGreaterThan(0);
-    marks.forEach((m) => {
-      const a = m.tagName === "circle" ? "fill" : "stroke";
-      expect(m.getAttribute(a)).toMatch(/^#[0-9A-Fa-f]{3,8}$/);
-    });
-    [...fig.querySelectorAll("text")].forEach((t) => expect(Number(t.getAttribute("font-size"))).toBeGreaterThanOrEqual(11));
+    const [plot] = plotsIn(fig);
+    expectCleanFigure(plot);
+    expect(hoverTexts(plot).join("|")).toMatch(/24\.5 Hz \u00b7 21\.5\u201327\.5 Hz family<br>change per mA 10\.0% of the band's settled power<br>95% range 8\.0% to 12\.0%<br>20 points in 5 ladder runs/);
+    // the band axis ends on a labelled tick at or beyond the last band (45.5 Hz): 50
+    expect(plot.layout.xaxis.range).toEqual([0, 50]);
+    expect(plot.layout.xaxis.ticktext[plot.layout.xaxis.ticktext.length - 1]).toBe("50");
     [...container.querySelectorAll("[style]")].forEach((el) => {
       const fs = el.style && el.style.fontSize;
       if (fs) expect(parseFloat(fs)).toBeGreaterThanOrEqual(11);

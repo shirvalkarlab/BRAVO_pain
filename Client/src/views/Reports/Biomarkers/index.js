@@ -347,7 +347,12 @@ function Biomarkers() {
    * control, and the drift case is worded as a full sentence in the same register as the store's own
    * reasons so that a reader is not left to work out which of two vocabularies they are reading.
    */
-  const controlsDrifted = !!(requestParams && dirty);
+  // THE PAIN SCORE IS NOT A REASON TO RECOMPUTE (the PI, 2026-10-02): every score's heat maps are
+  // fetched and kept, and the last scan's settings fold names the score it ran for, so the Recompute
+  // control compares everything EXCEPT the score. `dirty` above still includes it, for the
+  // binarization preview, whose live numbers are for the score on screen.
+  const withoutScore = (o) => JSON.stringify({ ...o, LabelMetric: undefined });
+  const controlsDrifted = !!(requestParams && withoutScore(requestParams) !== withoutScore(snapshot()));
   // The heat maps are a second result on this page, rebuilt by the same Recompute. The grid says
   // when the one on screen was computed under other settings (or before a server restart), so the
   // control turns for it too, even before any all-band scan has been run (review of 2026-09-26).
@@ -357,7 +362,7 @@ function Biomarkers() {
     ...(heatmapStale.stale ? heatmapStale.reasons : []),
     ...(controlsDrifted
       ? ["the controls on this page have been changed since this analysis was computed, so what is "
-         + "shown still describes the previous metric, high / low split or matching window"]
+         + "shown still describes the previous high / low split or matching settings"]
       : []),
   ]));
 
@@ -803,7 +808,6 @@ function Biomarkers() {
                 pageMetric={metric}
                 onStatus={setGridStatus}
                 onStale={setHeatmapStale}
-                onRecompute={compute}
                 metricLabel={(DEFAULT_METRIC_OPTIONS.find((m) => m.key === metric) || {}).label}
                 onOpenInClosedLoop={() => {
                   // Take the reader to the grid on the page that can act on it. Nothing is

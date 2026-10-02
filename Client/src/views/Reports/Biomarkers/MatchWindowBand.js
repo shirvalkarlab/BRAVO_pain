@@ -98,7 +98,13 @@ export default function MatchWindowBand({
       {coverage && coverage.n_reports > 0 ? (
         <MDTypography component="div" data-testid="report-coverage"
                       sx={{ ...TYPE.lead, color: T.ink, maxWidth: "68ch" }} aria-live="polite">
-          <b style={{ fontWeight: 600 }}>{`${coverage.n_within_window.toLocaleString()} of ${coverage.n_reports.toLocaleString()} ${score} reports have a band-power reading within ±${coverage.tolerance_min} min; ${coverage.n_within_10.toLocaleString()} within ±10 min; ${coverage.n_within_60.toLocaleString()} within ±60 min.`}</b>
+          {/* One clause per line (the PI, 2026-10-02). The first clause counts the match window set on
+              the slider; the other two are the fixed 10 and 60 minute windows. */}
+          <b style={{ fontWeight: 600 }}>
+            <span data-coverage-line="window" style={{ display: "block" }}>{`${coverage.n_within_window.toLocaleString()} of ${coverage.n_reports.toLocaleString()} ${score} reports have a band-power reading within ±${coverage.tolerance_min} min`}</span>
+            <span data-coverage-line="10" style={{ display: "block" }}>{`${coverage.n_within_10.toLocaleString()} within ±10 min`}</span>
+            <span data-coverage-line="60" style={{ display: "block" }}>{`${coverage.n_within_60.toLocaleString()} within ±60 min`}</span>
+          </b>
         </MDTypography>
       ) : null}
 

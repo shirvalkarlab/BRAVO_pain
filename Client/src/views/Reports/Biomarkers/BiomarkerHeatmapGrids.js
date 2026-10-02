@@ -54,6 +54,8 @@ import { useCachedResult } from "database/useCachedResult";
 // Read only (the PI's file, not edited): the settings the shown grid was computed under.
 import { getResult, settingsKey } from "database/resultCache";
 import { biomarkerHeatmapSlot, prefetchBiomarkerHeatmapMetric } from "views/Reports/moduleCacheKeys";
+import { cellKey, getCell, putCell } from "./heatmapCellCache";
+import { PLOT_MARGIN, plotMargin, panelBoxStyle } from "./panelLayout";
 import { T, TYPE, LAYOUT } from "assets/theme/base/tokens";
 import { DIVERGING, RANGE, textInk } from "assets/theme/base/dataColors";
 import { PLOTLY_LAYOUT, PLOTLY_CONFIG, FONT_FAMILY, FIGURE_TEXT_PX, directLabel, mergeDeep } from "views/Reports/figureStyle";
@@ -317,8 +319,7 @@ export function bulletsFor(sw) {
       + "allowance for testing 22 bands at once \u2014 a research finding, not a device-ready setting.",
     "The left grid ignores the high / low cuts (a continuous score has no split); the right grid "
       + "recomputes and flashes.",
-    "Clicking a square shows its own R (Pearson) and rank-test p (Mann-Whitney), not allowing for "
-      + "the 22 bands tested.",
+    "Clicking a square shows its own R (Pearson) and rank-test p (Mann-Whitney), uncorrected.",
     "The colours saturate at \u22120.5 and +0.5 for R and at 0.25 and 0.75 for the area "
       + "(0.5 is a coin toss); the hover prints the true value.",
     // P-19 (the PI, 2026-09-25): the two sources, named here once in full and TD / PSD everywhere else.
@@ -460,7 +461,7 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
     // and cut the hover label off mid-word. Left unset, Plotly draws at the box's width; `width`
     // stays below as the box's own upper limit, so a wide screen draws it no larger than before.
     fig.setLayoutProps({
-      height, margin: { l: 56, r: 8, t: 8, b: 44 },
+      height, margin: plotMargin(44),
       font: PLOTLY_LAYOUT.font, paper_bgcolor: T.surface, plot_bgcolor: T.surface,
       // The heat maps' hover is three lines; set smaller than the figure text (the PI, 2026-09-26).
       hoverlabel: HEATMAP_HOVERLABEL,
@@ -682,7 +683,7 @@ function PlotlyViolin({ divId, highVals, lowVals, side }) {
       hovertemplate: "%{y:.1f} device units (LSB)<extra>Low pain</extra>",
     });
     fig.setLayoutProps({
-      height: side, width: side, margin: { l: 56, r: 8, t: 8, b: 36 },
+      height: side, margin: plotMargin(36),
       font: PLOTLY_LAYOUT.font, paper_bgcolor: T.surface, plot_bgcolor: T.surface,
       hoverlabel: PLOTLY_LAYOUT.hoverlabel,
       // The two groups are named on the axis itself ("High pain", "Low pain"): a direct label.
@@ -712,7 +713,7 @@ function PlotlyViolin({ divId, highVals, lowVals, side }) {
 
   // A true square: width 100% up to `side`, height locked to match via aspect-ratio, so the panel
   // itself is square and Plotly's own responsive resize fills exactly that square.
-  return <div id={divId} style={{ width: "100%", maxWidth: side, aspectRatio: "1 / 1" }} />;
+  return <div id={divId} style={panelBoxStyle(side)} />;
 }
 
 /** The shared title line for both persistent side panels: channel, band centre, length of signal. */
@@ -727,10 +728,12 @@ function PlotlyViolin({ divId, highVals, lowVals, side }) {
 function CaptionBullets({ items, color }) {
   if (!items || !items.length) return null;
   return (
-    <MDBox component="ul" sx={{ m: 0, mb: 0.5, pl: 2.2 }}>
+    <MDBox component="ul" sx={{ m: 0, mb: 0.5, pl: 2.5 }}>
       {items.map((line) => (
+        // Body-size type, left-aligned, one bullet per line (the PI, 2026-10-02: the notes were
+        // small caption type, 12 px / 18 px; now 14 px / 22 px, the page's body size).
         <MDTypography key={line} component="li"
-          sx={{ ...TYPE.caption, display: "list-item", color: color || T.ink3 }}>
+          sx={{ ...TYPE.body, display: "list-item", textAlign: "left", color: color || T.ink2 }}>
           {line}
         </MDTypography>
       ))}
@@ -781,12 +784,27 @@ function PanelTitle({ pinnedCell, channelLabel }) {
   );
 }
 
+/** The box a statistics line sits in: the same centred box and left inset as the plot below it, so
+ *  the line starts where the plot area starts (the PI, 2026-10-02: the lines were offset). */
+const statsBoxSx = (side) => ({ maxWidth: side || "none", mx: "auto", pl: `${PLOT_MARGIN.l}px`, minWidth: 0 });
+
+/** ONE line, never wrapped: the headline statistic above a plot. */
+function HeadlineLine({ testId, title, children }) {
+  return (
+    <MDTypography component="p" data-testid={testId} title={title}
+      style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+      sx={{ ...TYPE.body, color: T.ink, display: "block", mb: 0.25, mt: 0 }}>
+      {children}
+    </MDTypography>
+  );
+}
+
 /**
  * The clicked square's two statistics lines. Since the redesign of 2026-09-26 the two large maps sit
  * side by side and the clicked square's title (`PanelTitle`), these lines and the two plots sit in
  * the row under them: the scatter under the correlation map, the violin under the area map.
  */
-export function ScatterStatsLine({ cell, pinnedCell, sw }) {
+export function ScatterStatsLine({ cell, pinnedCell, sw, side }) {
   if (!pinnedCell) {
     return (
       <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3 }}>
@@ -811,18 +829,20 @@ export function ScatterStatsLine({ cell, pinnedCell, sw }) {
   // other cell the readout says so rather than leaving the reader to assume the plain r is it.
   const readout = (sw && pinnedCell)
     ? bestCellReadout(sw, "corr", pinnedCell.col, pinnedCell.row, { includeN: false }) : null;
+  const nSheet = cell.points.filter((pt) => pt.from_clinic_sheet).length;
   return (
-    <MDBox>
-      <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink, display: "block", mb: 0.25, mt: 0 }}>
-        {`R = ${num(r, 2)}, ${pEquals(p)}, n = ${n}, not allowing for the 22 bands tested`}
-        {(() => {
-          // The scatter and the line below are fitted to these same n pairs; the clinic-sheet
-          // ratings among them (decision 186) are drawn hollow and counted here.
-          const nSheet = cell.points.filter((pt) => pt.from_clinic_sheet).length;
-          return nSheet ? <span style={{ ...TYPE.caption, color: T.ink3 }}>{` · ${nSheet} of them clinic-sheet scores (hollow points)`}</span> : null;
-        })()}
-      </MDTypography>
-      {readout ? (
+    <MDBox sx={statsBoxSx(side)}>
+      <HeadlineLine testId="scatter-headline" title="p is uncorrected">
+        {`r = ${num(r, 2)}, ${pEquals(p)}, n = ${n}`}
+      </HeadlineLine>
+      {/* The scatter and the line below are fitted to these same n pairs; the clinic-sheet ratings
+          among them (decision 186) are drawn hollow and counted here, under the headline. */}
+      {nSheet ? (
+        <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3, display: "block", mb: 0.5 }}>
+          {`${nSheet} of them clinic-sheet scores (hollow points)`}
+        </MDTypography>
+      ) : null}
+      {readout && readout.text ? (
         <MDTypography variant="caption" sx={{ ...TYPE.caption, display: "block", mb: 0.5,
           color: readout.isBest ? T.ink : T.ink3, fontWeight: readout.isBest ? 600 : 400 }}>
           {readout.text}
@@ -909,7 +929,9 @@ function PlotlyScatter({ divId, cell, pinnedCell, side, metricLabel }) {
     })();
     const annotations = [];
     if (rVal != null) {
-      annotations.push(directLabel(xhi, intercept + slope * xhi, `r = ${num(rVal, 2)}`, T.ink));
+      // Inside the plot, above the line's end: the right margin is the small shared gap now.
+      annotations.push({ ...directLabel(xhi, intercept + slope * xhi, `r = ${num(rVal, 2)}`, T.ink),
+        xanchor: "right", xshift: -4, yanchor: "bottom", yshift: 4 });
     }
     const named = [];
     if (groups.high.length) named.push(["high pain", textInk(BIN_HI)]);
@@ -921,7 +943,7 @@ function PlotlyScatter({ divId, cell, pinnedCell, side, metricLabel }) {
     }));
 
     fig.setLayoutProps({
-      height: side, width: side, margin: { l: 56, r: 40, t: 8, b: 44 },
+      height: side, margin: plotMargin(44),
       font: PLOTLY_LAYOUT.font, paper_bgcolor: T.surface, plot_bgcolor: T.surface,
       hoverlabel: PLOTLY_LAYOUT.hoverlabel,
       xaxis: axisStyle({ title: { text: "Band power (device units, LSB)" } }),
@@ -949,7 +971,7 @@ function PlotlyScatter({ divId, cell, pinnedCell, side, metricLabel }) {
   // A true square: width 100% up to `side`, height locked to match via aspect-ratio, so the panel
   // itself is square and Plotly's own responsive resize fills exactly that square -- rather than
   // filling a rectangular column at a fixed height (the previous, non-square "fill the panel" fix).
-  return <div id={divId} style={{ width: "100%", maxWidth: side, aspectRatio: "1 / 1" }} />;
+  return <div id={divId} style={panelBoxStyle(side)} />;
 }
 
 /** Persistent panel next to the AUC grid: two violins (high/low pain) and the cell's own AUC with
@@ -981,18 +1003,18 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw, par
   const { p, nHigh, nLow } = cellNP(sw, "auc", pinnedCell.col, pinnedCell.row);
 
   const statsBlock = (
-    <MDBox>
+    <MDBox sx={statsBoxSx(height)}>
       {/* No title here -- it duplicated the scatter panel's own title exactly (both describe the
           same pinned cell); that one copy, above the scatter panel, is now the only one. */}
-      <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink, display: "block", mb: 0.5, mt: 0 }}>
-        {`How well it tells high pain from low (0.5 = coin toss, 1 = perfect): ${num(aucValue, 2)}; rank test ${pEquals(p)}; ${nHigh} high-pain and ${nLow} low-pain reports`}
-      </MDTypography>
+      <HeadlineLine testId="violin-headline" title="p is uncorrected">
+        {`AUC = ${num(aucValue, 2)}, ${pEquals(p)}, n = ${nHigh} high, n = ${nLow} low`}
+      </HeadlineLine>
       {/* The grid's own corrected statistic for this cell, the same small line in the same ink as
           beside the scatter (the PI, 2026-09-15); the plot below moves down by its height. */}
       {(() => {
         const readout = (sw && pinnedCell)
           ? bestCellReadout(sw, "auc", pinnedCell.col, pinnedCell.row, { includeN: false }) : null;
-        return readout ? (
+        return readout && readout.text ? (
           <MDTypography variant="caption" sx={{ ...TYPE.caption, display: "block", mb: 0.5,
             color: readout.isBest ? T.ink : T.ink3, fontWeight: readout.isBest ? 600 : 400 }}>
             {readout.text}
@@ -1081,8 +1103,19 @@ export function heatmapCellRequest({ participantUid, shownSettings, requestParam
   };
 }
 
+/** The settings one pain score's grid is filed under (its slot's key). The page's own score is NOT
+ *  part of another score's key: every score's grid carries its own `LabelMetric` and `SweepMetric`
+ *  (the server reads `SweepMetric` first, `sweep_metric_param`), so a grid fetched in the background
+ *  while another score was on screen is the same entry as the one fetched on the switch. Before
+ *  this, the background fetch carried the page's score and the switch looked for its own, so every
+ *  switch said "the settings on this page have changed" (the PI, 2026-10-02). Only matching and
+ *  split settings can differ between two keys of one score. */
+export function gridSettingsFor(requestParams, metricKey) {
+  return { ...requestParams, LabelMetric: metricKey, SweepMetric: metricKey };
+}
+
 function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics, pageMetric,
-  metricLabel, onOpenInClosedLoop, onStatus, onStale, onRecompute }) {
+  metricLabel, onOpenInClosedLoop, onStatus, onStale }) {
   const options = useMemo(() => (
     (availableMetrics && availableMetrics.length ? availableMetrics : [])
   ), [availableMetrics]);
@@ -1104,7 +1137,8 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   const [hoveredCell, setHoveredCell] = useState(null);       // { row, col } | null
   const [pinnedCell, setPinnedCell] = useState(null);         // { row, col, channel, center, seconds }
   const [pinnedCellData, setPinnedCellData] = useState(null);
-  const cellCacheRef = useRef(new Map());
+  // The fetched squares live at module scope (`heatmapCellCache.js`), so they survive a switch of
+  // pain score, a remount and leaving the page (the PI, 2026-10-02).
 
   const reqKey = requestParams ? JSON.stringify(requestParams) : null;
 
@@ -1118,7 +1152,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   // shared slot, because `resultCache` holds exactly one entry per slot and marks it stale (not a
   // second entry) on a settings change -- one slot per metric is what lets six pain scores stay
   // simultaneously cached instead of each switch evicting the last one.
-  const cur = useMemo(() => ({ ...requestParams, SweepMetric: metric }),
+  const cur = useMemo(() => gridSettingsFor(requestParams, metric),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [reqKey, metric]);
   const cachedGrid = useCachedResult({
@@ -1190,7 +1224,6 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
     const sweeps = (d && d.band_time_sweep) || {};
     const keys = Object.keys(sweeps);
     if (keys.length && (!channel || !sweeps[channel])) setChannel(keys[0]);
-    cellCacheRef.current = new Map();
     setPinnedCell(null); setPinnedCellData(null); setHoveredCell(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cachedGrid.data]);
@@ -1215,7 +1248,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
       // eslint-disable-next-line no-restricted-syntax
       for (const o of others) {
         if (cancelled || prefetchGenRef.current !== gen) return;
-        const otherCur = { ...requestParams, SweepMetric: o.key };
+        const otherCur = gridSettingsFor(requestParams, o.key);
         // eslint-disable-next-line no-await-in-loop
         await prefetchBiomarkerHeatmapMetric(participantUid, o.key, otherCur, () =>
           SessionController.query("/api/queryBiomarkerAnalysis",
@@ -1253,14 +1286,15 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   };
 
   const fetchCell = (ch, center, seconds) => {
-    const key = `${ch}|${center}|${seconds}`;
-    if (cellCacheRef.current.has(key)) return Promise.resolve(cellCacheRef.current.get(key));
+    const key = cellKey(participantUid, metric, shownKey, ch, center, seconds);
+    const held = getCell(key);
+    if (held !== undefined) return Promise.resolve(held);
     const body = heatmapCellRequest({ participantUid, shownSettings, requestParams, metric,
       channel: ch, center, seconds });
     return SessionController.query("/api/queryBiomarkerAnalysis", body).then((response) => {
       const d = (response && response.data) || {};
       const cell = d.band_time_sweep_cell || { points: [], message: d.message };
-      cellCacheRef.current.set(key, cell);
+      putCell(key, cell);
       return cell;
     });
   };
@@ -1321,7 +1355,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   const aucKey = (
     <ColorKey scale={DIVERGING} range={RANGE.areaUnderCurve} lowLabel="lower in high pain"
       midLabel="0.5 coin toss" highLabel="higher in high pain"
-      title="how well band power tells high pain from low" />
+      title="AUC" />
   );
   const subhead = { ...TYPE.body, fontWeight: 600, color: T.ink, display: "block", mb: 0, mt: 0 };
   const aucCellValue = (pinnedCell && aucSw && aucSw.auc_grid && aucSw.auc_grid[pinnedCell.row])
@@ -1341,21 +1375,15 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
 
         {/* THE HEAT MAPS SAY WHEN THEY ARE OUT OF DATE (review of 2026-09-26, finding 1): a changed
             matching or split setting does not rebuild them; this line names what moved, above the
-            maps, and offers the page's Recompute. */}
+            maps, and points to the page's one Recompute button (the PI, 2026-10-02: two buttons were redundant). */}
         {staleSentence ? (
           <MDBox data-testid="heatmaps-out-of-date" role="status" mt={1}
             display="flex" flexDirection="row" alignItems="center" flexWrap="wrap" gap={1.5}>
             <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink, m: 0, maxWidth: LAYOUT.proseMax }}>
               <span aria-hidden="true" style={{ color: T.caution, marginRight: 6 }}>{"\u25b2"}</span>
               {staleSentence}
-              {onRecompute ? "" : " Press Recompute at the top of the page to rebuild them."}
+              {" Press Recompute at the top of the page to rebuild them."}
             </MDTypography>
-            {onRecompute ? (
-              <MDButton variant="outlined" color="dark" size="small" onClick={onRecompute}
-                sx={{ textTransform: "none", ...TYPE.body, borderColor: T.caution, color: T.ink }}>
-                {"Recompute"}
-              </MDButton>
-            ) : null}
           </MDBox>
         ) : null}
 
@@ -1422,7 +1450,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
                 <PanelTitle pinnedCell={pinnedCell} channelLabel={channelLabel} />
               </MDBox>
               <MDBox sx={{ gridArea: "s1" }}>
-                <ScatterStatsLine cell={pinnedCellData} pinnedCell={pinnedCell} sw={corrSw} />
+                <ScatterStatsLine cell={pinnedCellData} pinnedCell={pinnedCell} sw={corrSw} side={panelHeight} />
               </MDBox>
               <MDBox sx={{ gridArea: "g1", minWidth: 0 }}>
                 <PlotlyScatter divId="biomarker-scatter-panel" cell={pinnedCellData}

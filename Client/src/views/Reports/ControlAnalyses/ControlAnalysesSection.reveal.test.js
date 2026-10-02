@@ -19,6 +19,7 @@ import theme from "assets/theme";
 import { PlatformContextProvider } from "context";
 import { SectionRevealedContext } from "views/Reports/paper/Section";
 
+jest.mock("plotly.js-dist", () => require("./plotTestUtils").plotlyMock());
 jest.mock("database/session-control", () => ({ SessionController: { query: jest.fn() } }));
 
 // eslint-disable-next-line import/first

@@ -145,10 +145,17 @@ describe("2. the page's Recompute control and the heat maps agree", () => {
     expect(screen.getByTestId("heatmaps-out-of-date")).toHaveTextContent(/the match window was changed/);
   });
 
-  test("the heat maps' Recompute rebuilds the selected score's grid under the settings on screen", async () => {
+  test("only one Recompute button is on the page, even when the heat maps are out of date", async () => {
     await renderPage({ gridSettings: { ...GRID_REQ, MatchToleranceMin: 30 } });
-    const line = screen.getByTestId("heatmaps-out-of-date");
-    await act(async () => { fireEvent.click(within(line).getByRole("button", { name: "Recompute" })); });
+    await waitFor(() => expect(barState()).toBe("stale"), { timeout: 10000 });
+    expect(screen.getByTestId("heatmaps-out-of-date")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /Recompute/ })).toHaveLength(1);
+    expect(within(screen.getByTestId("heatmaps-out-of-date")).queryByRole("button")).toBeNull();
+  });
+
+  test("the page's one Recompute rebuilds the selected score's grid under the settings on screen", async () => {
+    await renderPage({ gridSettings: { ...GRID_REQ, MatchToleranceMin: 30 } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Recompute( anyway)?$/ })); });
     await waitFor(() => expect(gridCalls().some(([, b]) => b.SweepMetric === "nrs" && b.MatchToleranceMin === 15)).toBe(true), { timeout: 10000 });
   });
 });
@@ -253,11 +260,65 @@ describe("7. the run the Closed-Loop page inherits (decision 331)", () => {
     await renderPage({ controls, gridSettings: { ...GRID_REQ, MatchToleranceMin: 15 } });
     // nothing has run at 30 minutes yet: the grid on screen is the 15-minute one, marked stale
     expect(biomarkerGridSettings(UID).MatchToleranceMin).not.toBe(30);
-    // the page's own Recompute (the first; the heat maps' out-of-date line draws a second)
-    await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: /^Recompute( anyway)?$/ })[0]); });
+    // the page's one Recompute control
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Recompute( anyway)?$/ })); });
     await waitFor(() => expect(loadMatchingRun(UID).settings.MatchToleranceMin).toBe(30), { timeout: 10000 });
     expect(loadMatchingRun(UID).settings).toMatchObject({ MaxPerRating: 1, IncludeClinicSheetRatings: true });
     expect(biomarkerGridSettings(UID)).toMatchObject({ MatchToleranceMin: 30,
       IncludeClinicSheetRatings: "1", SweepMetric: "nrs" });
+  });
+});
+
+describe("8. the pain-score dropdown is not a reason to recompute (the PI, 2026-10-02)", () => {
+  const SCAN_CONTROLS = {
+    metric: "nrs", strategy: "tertile", percentileLow: 25, percentileHigh: 75, matchTolerance: 60,
+    maxPerRating: 3, refractoryMin: 2, matchDirection: "pro_first", matchExtentSec: 30,
+    allowWindowReuse: false, includeClinicSheetRatings: false, requestParams: SCAN_REQ,
+  };
+  const answerSweeps = () => SessionController.query.mockImplementation((url, body) => Promise.resolve(
+    { data: body && body.BandTimeSweep === "1" ? sweep : { boot_token: "boot-1" } }));
+  const pickScore = async (label) => {
+    const trigger = document.querySelector('[data-testid="pain-score-select"] .MuiSelect-select');
+    await act(async () => { fireEvent.mouseDown(trigger); });
+    await act(async () => { fireEvent.click(screen.getByRole("option", { name: label })); });
+  };
+  const gridCallsFor = (m) => gridCalls().filter(([, b]) => b.SweepMetric === m);
+  const noStaleNote = () => {
+    expect(screen.queryByTestId("heatmaps-out-of-date")).toBeNull();
+    expect(document.body.textContent).not.toMatch(/the settings on this page have changed/);
+    expect(document.body.textContent).not.toMatch(/the controls on this page have been changed/);
+  };
+
+  test("switching to a score whose grid was already fetched in the background says nothing is out of date and fetches nothing", async () => {
+    await renderPage();
+    answerSweeps();
+    await waitFor(() => expect(gridCallsFor("vas").length).toBe(1), { timeout: 10000 });
+    await waitFor(() => expect(barState()).toBe("current"));
+    await pickScore("Overall VAS");
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(barState()).toBe("current");
+    noStaleNote();
+    expect(gridCallsFor("vas").length).toBe(1);          // the background fetch; none after the switch
+  });
+
+  test("with an all-band scan on screen, switching the score does not turn the Recompute control", async () => {
+    // the grid seeded under the very settings the saved controls give, so the page starts up to date
+    await renderPage({ scan: true, controls: SCAN_CONTROLS,
+      gridSettings: { ...GRID_REQ, PercentileLow: 25, PercentileHigh: 75, MatchToleranceMin: 60,
+        MatchDirection: "pro_first" } });
+    answerSweeps();
+    await waitFor(() => expect(barState()).toBe("current"));
+    await pickScore("Overall VAS");
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(barState()).toBe("current");
+    noStaleNote();
+  });
+
+  test("a matching setting still turns it: the clinic-sheet switch says so", async () => {
+    await renderPage();
+    await waitFor(() => expect(barState()).toBe("current"));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /\+ clinic titration sessions/, hidden: true })); });
+    await waitFor(() => expect(barState()).toBe("stale"), { timeout: 10000 });
+    expect(screen.getByTestId("heatmaps-out-of-date")).toHaveTextContent(/clinic sheet scores/);
   });
 });

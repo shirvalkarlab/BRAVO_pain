@@ -47,11 +47,10 @@ describe("bestCellReadout (B1)", () => {
     expect(r.isBest).toBe(true);
     expect(r.text).toBe("117 ratings · interval −0.66 to −0.40 · q < 0.01 (fdr 22 bands) · established");
   });
-  test("a cell that is not its column's best points at the circled best cell, in the PI's own words", () => {
-    // The PI, 2026-09-15: replace the sentence with "best cell corrected (1m circled)".
+  test("a cell that is not its column's best prints nothing (the PI, 2026-10-02: the sentence pointing at the circled square is gone)", () => {
     const r = bestCellReadout(SW, "corr", 1, 2);   // 12.5 Hz, 9 s; the column's best is at 300 s = 5m
     expect(r.isBest).toBe(false);
-    expect(r.text).toBe("the allowance for 22 bands is given for the circled square (5m)");
+    expect(r.text).toBe("");
   });
   test("the panel lines drop the ratings count, which the plain line beside them already carries", () => {
     // The PI, 2026-09-15: "no reason to say '96 ratings' again".
@@ -67,8 +66,8 @@ describe("bestCellReadout (B1)", () => {
     expect(r.isBest).toBe(true);
     expect(r.text).toBe("174 ratings · q 0.03 (fdr 22 bands) · established");
   });
-  test("a column with no best row says so rather than printing nothing", () => {
-    expect(bestCellReadout(SW, "auc", 0, 0).text).toBe("no allowance for 22 bands is computed for this column");
+  test("a column with no best row prints nothing (the older sentence about the allowance is gone)", () => {
+    expect(bestCellReadout(SW, "auc", 0, 0).text).toBe("");
   });
 });
 
@@ -101,7 +100,7 @@ describe("hoverReadout -- the hover's third line (the PI, 2026-09-16)", () => {
   });
   test("a best cell whose q was not assessed falls back to its raw p", () => {
     const noQ = { ...withN, best_correlation_rows: withN.best_correlation_rows.map((r) => ({ ...r, family_wise_q_8_to_30hz: null })) };
-    expect(hoverReadout(noQ, "corr", 1, 9)).toBe("117 ratings · p < 0.01, not allowing for the 22 bands");
+    expect(hoverReadout(noQ, "corr", 1, 9)).toBe("117 ratings · p < 0.01, uncorrected");
   });
   test("a cell with no count prints nothing rather than a dash", () => {
     expect(hoverReadout(SW, "corr", 1, 2)).toBe("");
@@ -140,8 +139,8 @@ describe("row labels and tier bullets (B4)", () => {
   test("the caption is short bullets: which rows the device can average, which it can only hold, no sources spelled out", () => {
     const b = tierBullets(RANGES, [3, 6, 9, 15, 21, 24, 30, 45, 60]);
     expect(b.length).toBe(2);
-    expect(b[0]).toBe("Rows to 30s: an averaging window the device can be set to (0-30 s on the tablet).");
-    expect(b[1]).toBe("Rows 45s-1m: one averaging window plus an onset hold (each \u226430 s); the device holds a level there, it does not average.");
+    expect(b[0]).toBe("Rows \u226430 s: device averaging window (0\u201330 s on tablet)");
+    expect(b[1]).toBe("Rows 45 s\u20131 min: one averaging window + onset hold (each \u226430 s); device holds level, no averaging");
     b.forEach((line) => expect(line.split(" ").length).toBeLessThanOrEqual(24));
   });
   test("no ranges on the response, no bullets", () => {
@@ -155,8 +154,8 @@ describe("deviceSpectrumBullets", () => {
     const b = deviceSpectrumBullets(sw);
     expect(b).toEqual([
       // The PI's vocabulary on the heat maps (2026-09-25): TD and PSD, one word each, everywhere.
-      "358 of 451 matched reports (79%) had no TD in the match window and were read from PSD: a row of N s uses the nearest ceil(N/30) PSDs, or nothing.",
-      "Matching uses the match window set under Adjust matching parameters.",
+      "358 of 451 matched reports (79%) had no TD in match window; read from PSD (N s row = nearest ceil(N/30) PSDs, else none)",
+      "Match window defined under \"Adjust matching parameters\"",
     ]);
     expect(deviceSpectrumBullets({ n_pain_reports_from_device_spectrum: 0 })).toEqual([]);
     expect(deviceSpectrumBullets(null)).toEqual([]);
@@ -194,7 +193,7 @@ describe("cross-setting stability on the grid (B3, decision 185)", () => {
     const line = stabilityBullet();
     expect(line).toMatch(/\u2713/);
     expect(line).toMatch(/\u2715/);
-    expect(line).toMatch(/\? cannot tell/);
+    expect(line).toBe("Circle: \u2713 band tracks pain equally at every stimulation setting; \u2715 differently; ? unknown");
     expect(line).not.toMatch(/green|red|amber/);
     expect(line.split(" ").length).toBeLessThanOrEqual(24);
   });
@@ -204,8 +203,7 @@ describe("clinic-sheet ratings on the heat maps (B5, decision 186)", () => {
   test("off: one bullet says the heat maps pool the chronic REDCap ratings only", () => {
     const b = clinicSheetBullets({ ...SW, clinic_sheet_ratings: { included: false, n_added: 0 } });
     expect(b).toHaveLength(1);
-    expect(b[0]).toMatch(/home pain surveys only/);
-    expect(b[0]).toMatch(/switch/i);
+    expect(b[0]).toBe("Heat maps use home pain surveys only; clinic titration sessions toggled off");
   });
   test("on: the bullet counts the sheet ratings this contact pair uses and says the scale", () => {
     const sw = { ...SW, clinic_sheet_ratings: { included: true, n_added: 152, sheet_column: "left_leg", scale: 10 },

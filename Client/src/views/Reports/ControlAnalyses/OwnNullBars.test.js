@@ -9,9 +9,17 @@ import React from "react";
 import { render } from "@testing-library/react";
 
 import { CurrentExplainsFigure, BandDetectorResearchFigure } from "./figures";
+import { resetPlots, plotsIn } from "./plotTestUtils";
 
+jest.mock("plotly.js-dist", () => require("./plotTestUtils").plotlyMock());
+beforeEach(() => resetPlots());
+
+// The short bar beside a dot is a trace named "null:<reading>"; its x is that reading's own level.
 const bars = (container) => Object.fromEntries(
-  [...container.querySelectorAll("[data-null-for]")].map((b) => [b.getAttribute("data-null-for"), b]),
+  plotsIn(container)[0].data.filter((t) => t.name.startsWith("null:")).map((t) => [t.name.slice(5), t]),
+);
+const dots = (container) => Object.fromEntries(
+  plotsIn(container)[0].data.filter((t) => !t.name.startsWith("null:")).map((t) => [t.name, t]),
 );
 
 describe("each reading is drawn against its own shuffled-data 95th percentile", () => {
@@ -22,16 +30,13 @@ describe("each reading is drawn against its own shuffled-data 95th percentile", 
     const { container } = render(<CurrentExplainsFigure result={result} />);
     const b = bars(container);
     expect(Object.keys(b).sort()).toEqual(["bands", "bands_without_current"]);
-    expect(b.bands.getAttribute("data-null-value")).toBe("0.673");
-    expect(b.bands_without_current.getAttribute("data-null-value")).toBe("0.61");
+    expect(b.bands.x).toEqual([0.673]);
+    expect(b.bands_without_current.x).toEqual([0.61]);
     // each bar sits on its own dot's row and in its dot's colour
-    const dots = Object.fromEntries([...container.querySelectorAll("circle[data-reading]")]
-      .map((c) => [c.getAttribute("data-reading"), c]));
+    const d = dots(container);
     ["bands", "bands_without_current"].forEach((k) => {
-      const y1 = Number(b[k].getAttribute("y1")); const y2 = Number(b[k].getAttribute("y2"));
-      const cy = Number(dots[k].getAttribute("cy"));
-      expect(y1 < cy && cy < y2).toBe(true);
-      expect(b[k].getAttribute("stroke")).toBe(dots[k].getAttribute("fill"));
+      expect(b[k].y).toEqual(d[k].y);
+      expect(b[k].marker.color).toBe(d[k].marker.line.color);
     });
     expect(container.textContent).toMatch(/its own shuffled data/);
   });
@@ -51,9 +56,9 @@ describe("each reading is drawn against its own shuffled-data 95th percentile", 
     const { container } = render(<BandDetectorResearchFigure result={result} clinicSheets={false} />);
     const b = bars(container);
     expect(Object.keys(b).sort()).toEqual(["bands", "bands_without_current"]);
-    expect(b.bands.getAttribute("data-null-value")).toBe("0.18");
-    expect(b.bands_without_current.getAttribute("data-null-value")).toBe("0.16");
-    expect(b.bands_without_current.getAttribute("stroke")).not.toBe(b.bands.getAttribute("stroke"));
+    expect(b.bands.x).toEqual([0.18]);
+    expect(b.bands_without_current.x).toEqual([0.16]);
+    expect(b.bands_without_current.marker.color).not.toBe(b.bands.marker.color);
     expect(container.textContent).toMatch(/its own rotated ratings/);
   });
 });

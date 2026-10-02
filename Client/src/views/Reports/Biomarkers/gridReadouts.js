@@ -83,11 +83,12 @@ function ratingsPhrase(row) {
 /** The corrected statistics for one cell, or the sentence that says why there are none. */
 export function bestCellReadout(sw, kind, colIndex, rowIndex, { includeN = true } = {}) {
   const best = bestRowFor(sw, kind, colIndex);
-  if (!best) return { isBest: false, text: "no allowance for 22 bands is computed for this column" };
+  if (!best) return { isBest: false, text: "" };
   const bestRow = rowIndexOf(sw, best.integration_seconds_delivered);
   if (bestRow !== rowIndex) {
-    // The PI's wording, 2026-09-15: point at the circled best cell and stop.
-    return { isBest: false, text: `the allowance for 22 bands is given for the circled square (${secondsLabel(best.integration_seconds_delivered)})` };
+    // Nothing for a cell that is not its column's best (the PI, 2026-10-02: the sentence pointing at
+    // the circled square is gone).
+    return { isBest: false, text: "" };
   }
   // `includeN`: the hover carries the count (nothing else on a hover does); the panel lines beside
   // the scatter and the violin leave it out, since the plain line above them already has it.
@@ -128,7 +129,7 @@ export function stabilityMark(stab) {
 
 /** One caption bullet for the symbols, under 24 words like the tier bullets. */
 export function stabilityBullet() {
-  return "Inside a circle: \u2713 the band tracks pain the same at every stimulation setting; \u2715 differently; ? cannot tell.";
+  return "Circle: \u2713 band tracks pain equally at every stimulation setting; \u2715 differently; ? unknown";
 }
 
 /** A p or q at most two decimals (the PI, 2026-09-26: "max 2 digits after the decimal"): "0.03",
@@ -161,7 +162,7 @@ export function hoverReadout(sw, kind, colIndex, rowIndex) {
     const q = best.family_wise_q_8_to_30hz == null ? NaN : Number(best.family_wise_q_8_to_30hz);
     if (Number.isFinite(q)) return `${n} \u00b7 ${qWords(q)}`;
     const p = best.p_selection_aware == null ? NaN : Number(best.p_selection_aware);
-    return Number.isFinite(p) ? `${n} \u00b7 p ${fmtP(p)}, not allowing for the 22 bands` : n;
+    return Number.isFinite(p) ? `${n} \u00b7 p ${fmtP(p)}, uncorrected` : n;
   }
   const { n, p } = cellNP(sw, kind, colIndex, rowIndex);
   if (!(n > 0)) return "";
@@ -195,6 +196,11 @@ function holdHorizon(ranges) {
   return Number.isFinite(avg) && Number.isFinite(onset) ? avg + onset : null;
 }
 
+/** "30 s", "1 min": the length of signal with a spaced unit, for the notes under the maps. */
+function spacedSeconds(s) {
+  return Number(s) >= 60 ? `${Math.round(Number(s) / 60)} min` : `${Number(s).toFixed(0)} s`;
+}
+
 export function rowTier(seconds, ranges) {
   const s = Number(seconds);
   const avg = ranges && Array.isArray(ranges.averaging_s) ? Number(ranges.averaging_s[1]) : null;
@@ -215,16 +221,17 @@ export function tierBullets(ranges, secondsList) {
   const onsetRows = rows.filter((s) => rowTier(s, ranges).tier === "onset");
   const beyondRows = rows.filter((s) => rowTier(s, ranges).tier === "beyond");
   const out = [];
+  // Minimal words, a spaced unit ("30 s", "1 min"), the PI's own forms (2026-10-02).
   if (avgRows.length) {
-    out.push(`Rows to ${secondsLabel(Math.max(...avgRows))}: an averaging window the device can be set to `
-      + `(${ranges.averaging_s[0]}-${ranges.averaging_s[1]} s on the tablet).`);
+    out.push(`Rows \u2264${spacedSeconds(Math.max(...avgRows))}: device averaging window `
+      + `(${ranges.averaging_s[0]}\u2013${ranges.averaging_s[1]} s on tablet)`);
   }
   if (onsetRows.length) {
-    out.push(`Rows ${secondsLabel(Math.min(...onsetRows))}-${secondsLabel(Math.max(...onsetRows))}: one averaging window plus `
-      + `an onset hold (each \u2264${ranges.onset_dual_s[1]} s); the device holds a level there, it does not average.`);
+    out.push(`Rows ${spacedSeconds(Math.min(...onsetRows))}\u2013${spacedSeconds(Math.max(...onsetRows))}: one averaging window + `
+      + `onset hold (each \u2264${ranges.onset_dual_s[1]} s); device holds level, no averaging`);
   }
   if (beyondRows.length) {
-    out.push(`Rows from ${secondsLabel(Math.min(...beyondRows))}: beyond anything the device can be set to.`);
+    out.push(`Rows from ${spacedSeconds(Math.min(...beyondRows))}: beyond any device setting`);
   }
   return out;
 }
@@ -239,9 +246,9 @@ export function deviceSpectrumBullets(sw) {
   const share = tot > 0 ? ` (${Math.round((100 * n) / tot)}%)` : "";
   const ofTot = tot > 0 ? ` of ${tot}` : "";
   return [
-    `${n}${ofTot} matched reports${share} had no TD in the match window and were read from PSD: `
-      + "a row of N s uses the nearest ceil(N/30) PSDs, or nothing.",
-    "Matching uses the match window set under Adjust matching parameters.",
+    `${n}${ofTot} matched reports${share} had no TD in match window; `
+      + "read from PSD (N s row = nearest ceil(N/30) PSDs, else none)",
+    "Match window defined under \"Adjust matching parameters\"",
   ];
 }
 
@@ -252,16 +259,16 @@ export function clinicSheetBullets(sw) {
   const cs = sw && sw.clinic_sheet_ratings;
   if (!cs) return [];
   if (!cs.included) {
-    return ["The heat maps use the home pain surveys only; the clinic titration sessions' scores are off (a switch under Adjust matching parameters)."];
+    return ["Heat maps use home pain surveys only; clinic titration sessions toggled off"];
   }
   if (!cs.n_added) {
-    return [cs.reason ? `Sheet scores on, but ${cs.reason}.` : "Sheet scores on, but none carried this score."];
+    return [cs.reason ? `Sheet scores on, but ${cs.reason}` : "Sheet scores on, but none carried this score"];
   }
   const n = sw.n_pain_reports_from_clinic_sheet;
   const tot = sw.n_pain_reports;
   const scale = Number(cs.scale) === 1 ? "as scored (0–10)" : `times ${Number(cs.scale)}`;
   const head = (n != null && tot != null) ? `${n} of the ${tot} ratings here` : `${cs.n_added} ratings`;
-  return [`${head} are the clinic titration sessions' scores, ${scale}, taken while current was being stepped.`];
+  return [`${head} are clinic titration sessions' scores, ${scale}, taken while current was stepped`];
 }
 
 

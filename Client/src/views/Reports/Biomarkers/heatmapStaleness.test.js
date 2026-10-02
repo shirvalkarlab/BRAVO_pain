@@ -85,20 +85,20 @@ beforeEach(() => {
 });
 
 describe("1. the heat maps say when they are out of date, and which settings moved", () => {
-  test("a grid computed under another window and split names both above the maps and offers Recompute", async () => {
+  test("a grid computed under another window and split names both above the maps and points to the page's one Recompute", async () => {
     seed(SHOWN);
-    const onRecompute = jest.fn();
-    await renderGrid({ ...SHOWN, MatchToleranceMin: 30, LabelStrategy: "median" }, { onRecompute });
+    await renderGrid({ ...SHOWN, MatchToleranceMin: 30, LabelStrategy: "median" });
     const line = screen.getByTestId("heatmaps-out-of-date");
     expect(line).toHaveTextContent("▲");
     expect(line).toHaveTextContent(/computed before the match window and the high \/ low split were changed/);
-    fireEvent.click(screen.getByRole("button", { name: "Recompute" }));
-    expect(onRecompute).toHaveBeenCalledTimes(1);
+    expect(line).toHaveTextContent(/Press Recompute at the top of the page/);
+    // no second Recompute button of its own (the PI, 2026-10-02)
+    expect(screen.queryByRole("button", { name: /Recompute/ })).toBeNull();
   });
 
   test("a grid computed under the settings on screen carries no out-of-date line", async () => {
     seed(SHOWN);
-    await renderGrid(SHOWN, { onRecompute: () => {} });
+    await renderGrid(SHOWN);
     expect(screen.queryByTestId("heatmaps-out-of-date")).toBeNull();
   });
 

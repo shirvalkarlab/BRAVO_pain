@@ -11,6 +11,10 @@ import theme from "assets/theme";
 import { PlatformContextProvider } from "context";
 
 import ControlAnalysesCard from "./ControlAnalysesCard";
+import { resetPlots, plotsIn, markColours, hoverTexts, allX } from "./plotTestUtils";
+
+jest.mock("plotly.js-dist", () => require("./plotTestUtils").plotlyMock());
+beforeEach(() => resetPlots());
 
 const render = (ui) => rtlRender(
   <ThemeProvider theme={theme}>
@@ -68,7 +72,9 @@ describe("the band detector on the control-analysis card", () => {
     expect(screen.getByText(/REDCAP-ONLY LINE/)).toBeTruthy();
     expect(screen.queryByText(/SHEETS-MERGED LINE/)).toBeNull();
     expect(screen.getByText(/the home pain surveys alone;/)).toBeTruthy();
-    expect(screen.getByTestId("figure-band_detector_research").textContent).toMatch(/R 0-3/);
+    // the row names are the figure's y-axis labels
+    const rowNames = (plotsIn(screen.getByTestId("figure-band_detector_research"))[0] || {}).layout.yaxis.ticktext;
+    expect(rowNames.join("|")).toMatch(/R 0-3/);
   });
 
   it("shows the sheets-merged run only when the switch is on, and says so", () => {
@@ -76,14 +82,17 @@ describe("the band detector on the control-analysis card", () => {
     expect(screen.getByText(/SHEETS-MERGED LINE/)).toBeTruthy();
     expect(screen.queryByText(/REDCAP-ONLY LINE/)).toBeNull();
     expect(screen.getByText(/clinic-sheet ratings merged in/)).toBeTruthy();
-    expect(screen.getByTestId("figure-band_detector_research").textContent).not.toMatch(/R 0-3/);
+    const rowNames = plotsIn(screen.getByTestId("figure-band_detector_research"))[0].layout.yaxis.ticktext;
+    expect(rowNames.join("|")).not.toMatch(/R 0-3/);
   });
 
   it("draws the device-shaped version per band with its interval, and follows the switch", () => {
     const { rerender } = render(<ControlAnalysesCard payload={PAYLOAD} clinicSheets={false} />);
     fireEvent.change(screen.getByLabelText("Which check"), { target: { value: "band_detector_device" } });
     const fig = screen.getByTestId("figure-band_detector_device");
-    expect(fig.querySelectorAll("[data-band]").length).toBe(2);
+    // one dot per band in each of the two readings: 2 bands, plain and with the current taken out
+    const bandsDrawn = (c) => plotsIn(c)[0].data.filter((t) => t.name === "band")[0].x.length;
+    expect(bandsDrawn(fig)).toBe(2);
     expect(screen.getByText(/DEVICE REDCAP LINE/)).toBeTruthy();
     rerender(
       <ThemeProvider theme={theme}>
@@ -93,19 +102,31 @@ describe("the band detector on the control-analysis card", () => {
       </ThemeProvider>,
     );
     expect(screen.getByText(/DEVICE SHEETS LINE/)).toBeTruthy();
-    expect(screen.getByTestId("figure-band_detector_device").querySelectorAll("[data-band]").length).toBe(1);
+    expect(bandsDrawn(screen.getByTestId("figure-band_detector_device"))).toBe(1);
   });
 
   it("draws every mark of both figures in a real colour", () => {
     const { container } = render(<ControlAnalysesCard payload={PAYLOAD} clinicSheets={false} />);
     fireEvent.change(screen.getByLabelText("Which check"), { target: { value: "band_detector_device" } });
-    const marks = container.querySelectorAll("circle, line, rect, path");
-    expect(marks.length).toBeGreaterThan(0);
-    marks.forEach((m) => {
-      ["fill", "stroke"].forEach((a) => {
-        const v = m.getAttribute(a);
-        if (v !== null) expect(v).not.toMatch(/undefined|null/);
-      });
+    const plots = plotsIn(container);
+    expect(plots.length).toBeGreaterThan(0);
+    plots.forEach((plot) => {
+      markColours(plot).forEach((c) => expect(c).toMatch(/^#[0-9A-Fa-f]{3,8}$/));
+      hoverTexts(plot).forEach((t) => expect(t).not.toMatch(/undefined|NaN/));
     });
+  });
+
+  it("hovering a band of the device-shaped figure prints its AUC, 95% range, q, p, and the ratings; the y axis is named AUC", () => {
+    const { container } = render(<ControlAnalysesCard payload={PAYLOAD} clinicSheets={false} />);
+    fireEvent.change(screen.getByLabelText("Which check"), { target: { value: "band_detector_device" } });
+    const [plot] = plotsIn(container);
+    expect(plot.layout.yaxis.title.text).toBe("AUC");
+    expect(plot.data.find((t) => t.name === "band").hovertext[1]).toBe([
+      "24.5 Hz \u00b7 the band", "area under the curve 0.66 (95% range 0.56 to 0.76)",
+      "q 0.04 (after allowing for the bands tested) \u00b7 p 0.03",
+      "carries a folded multiple of the rate in force (advisory)", "120 ratings in the two pain groups"].join("<br>"));
+    // the x axis ends on a labelled tick at or beyond the last band
+    expect(plot.layout.xaxis.ticktext[plot.layout.xaxis.ticktext.length - 1]).toBe(String(plot.layout.xaxis.range[1]));
+    expect(plot.layout.xaxis.range[1]).toBeGreaterThanOrEqual(Math.max(...allX(plot)));
   });
 });

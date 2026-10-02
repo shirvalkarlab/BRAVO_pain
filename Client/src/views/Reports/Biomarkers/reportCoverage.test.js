@@ -68,10 +68,14 @@ describe("reportCoverage", () => {
         matchDirection="prior" setMatchDirection={() => {}} scanIndex={scanIndex} painSeries={painSeries} />));
     const el = container.querySelector('[data-testid="report-coverage"]');
     expect(el).not.toBeNull();
-    const bold = el.querySelector("b");
-    // Worded "band-power reading" since the redesign of 2026-09-26 (SPEC.md section 6: "neural sample(s)").
-    expect(bold.textContent).toBe("1 of 5 Left Leg VAS reports have a band-power reading within ±2 min; 2 within ±10 min; 3 within ±60 min.");
-    expect(el.textContent.trim()).toBe(bold.textContent);   // the bold clause alone (the PI, 2026-09-21)
+    // Three stacked lines, one per clause (the PI, 2026-10-02); the first clause is the window set
+    // on the slider (here 2 min), the other two are fixed at 10 and 60 min.
+    const lines = [...el.querySelectorAll("[data-coverage-line]")].map((l) => l.textContent);
+    expect(lines).toEqual([
+      "1 of 5 Left Leg VAS reports have a band-power reading within ±2 min",
+      "2 within ±10 min",
+      "3 within ±60 min"]);
+    expect(el.textContent.trim()).toBe(lines.join(""));
     const all = container.textContent;
     expect(all.indexOf("reports have a band-power reading")).toBeLessThan(all.indexOf("Match window"));
     expect(all.indexOf("Match window")).toBeLessThan(all.indexOf("Split into high and low pain"));
