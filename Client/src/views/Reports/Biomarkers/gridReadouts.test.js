@@ -136,11 +136,10 @@ describe("row labels and tier bullets (B4)", () => {
     expect(rowTier(300, RANGES).tier).toBe("beyond");
     expect(rowTier(300, null).tier).toBe("unknown");
   });
-  test("the caption is short bullets: which rows the device can average, which it can only hold, no sources spelled out", () => {
+  test("with no report read from PSD, the caption is one short bullet: the rows the device can average", () => {
     const b = tierBullets(RANGES, [3, 6, 9, 15, 21, 24, 30, 45, 60]);
-    expect(b.length).toBe(2);
+    expect(b.length).toBe(1);
     expect(b[0]).toBe("Rows \u226430 s: device averaging window (0\u201330 s on tablet)");
-    expect(b[1]).toBe("Rows 45 s\u20131 min: one averaging window + onset hold (each \u226430 s); no device setting averages this long");
     b.forEach((line) => expect(line.split(" ").length).toBeLessThanOrEqual(24));
   });
   test("no ranges on the response, no bullets", () => {
@@ -165,10 +164,9 @@ describe("deviceSpectrumBullets", () => {
 describe("rows that need two or more PSDs (asterisk)", () => {
   const sw = { n_pain_reports_from_device_spectrum: 104, device_spectrum_total_grid: [[139]],
     integration_seconds_delivered: [3, 6, 9, 15, 21, 24, 30, 45, 60] };
-  test("with PSD-read reports, the 45 s\u20131 min bullet is starred and says those rows need 2 PSDs", () => {
+  test("with PSD-read reports, the over-30 s bullet is only the starred 2-PSD note", () => {
     expect(tierBullets(RANGES, sw.integration_seconds_delivered, sw)[1]).toBe(
-      "*Rows 45 s\u20131 min: one averaging window + onset hold (each \u226430 s); no device setting averages this long. "
-      + "45 s and 1 min rows need 2 PSDs (ceil(window/30 s))");
+      "*45 s and 1 min rows need 2 PSDs (ceil(window/30 s))");
     expect(deviceSpectrumBullets(sw)[0]).toBe("104 of 139 matched reports (75%) had no TD in match window; read from PSD");
   });
   test("a row is starred only above 30 s, and only when some report was read from PSD", () => {

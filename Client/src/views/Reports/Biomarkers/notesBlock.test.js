@@ -79,7 +79,7 @@ const SIX = [
   "Match window defined under \"Adjust matching parameters\"",
   "Heat maps use home pain surveys only; clinic titration sessions toggled off",
   "Rows ≤30 s: device averaging window (0–30 s on tablet)",
-  "*Rows 45 s–1 min: one averaging window + onset hold (each ≤30 s); no device setting averages this long. 45 s and 1 min rows need 2 PSDs (ceil(window/30 s))",
+  "*45 s and 1 min rows need 2 PSDs (ceil(window/30 s))",
   "Circle: ✓ band tracks pain equally at every stimulation setting; ✕ differently; ? unknown",
 ];
 

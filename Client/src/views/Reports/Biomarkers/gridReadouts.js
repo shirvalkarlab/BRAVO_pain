@@ -223,12 +223,10 @@ export function tierBullets(ranges, secondsList, sw) {
     out.push(`Rows \u2264${spacedSeconds(Math.max(...avgRows))}: device averaging window `
       + `(${ranges.averaging_s[0]}\u2013${ranges.averaging_s[1]} s on tablet)`);
   }
-  if (onsetRows.length) {
-    // The asterisk and the PSD count only when some report was read from PSD (the starred rows).
-    const starred = onsetRows.some((s) => needsMultiplePsds(sw, s));
-    const psd = starred ? `. ${multiPsdRows({ integration_seconds_delivered: onsetRows }).join("; ")} (ceil(window/30 s))` : "";
-    out.push(`${starred ? "*" : ""}Rows ${spacedSeconds(Math.min(...onsetRows))}\u2013${spacedSeconds(Math.max(...onsetRows))}: one averaging window + `
-      + `onset hold (each \u2264${ranges.onset_dual_s[1]} s); no device setting averages this long${psd}`);
+  // Rows over 30 s: only the PSD count, starred, and only when some report was read from PSD.
+  const starred = onsetRows.filter((s) => needsMultiplePsds(sw, s));
+  if (starred.length) {
+    out.push(`*${multiPsdRows({ integration_seconds_delivered: starred }).join("; ")} (ceil(window/30 s))`);
   }
   if (beyondRows.length) {
     out.push(`Rows from ${spacedSeconds(Math.min(...beyondRows))}: beyond any device setting`);
