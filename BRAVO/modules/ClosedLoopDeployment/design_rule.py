@@ -307,11 +307,14 @@ def _two_component_runner(Y: np.ndarray):
 # for its per-step sum over stretches -- the same argument applies unchanged, one state per stretch
 # instead of two.
 # `tests/test_design_rule_compiled_filter.py` holds the two loops equal for both filters. COMPILED_FILTER
-# False forces the numpy loop (the proof compares the two). NO ON-DISK CACHE (decision 269): the summation
-# called itself, and a cached function that calls itself crashed the process when loaded under the
-# server's libraries (measured 2026-09-25: segmentation fault from the cache, none when compiled in
-# the process). Since 2026-10-02 `_pairwise_sum` walks the same pairwise tree with an explicit stack
-# instead, adding the same numbers in the same order (`tests/test_design_rule_disk_cache.py`).
+# False forces the numpy loop (the proof compares the two). ON-DISK CACHE since 2026-10-02 (the PI:
+# "fix that problem where the design rule shouldn't call itself"). Until then the summation called
+# itself, and a cached function that calls itself crashed the process when loaded under the server's
+# libraries (decision 269, measured 2026-09-25: segmentation fault from the cache, none when compiled
+# in the process), so each web worker compiled these loops on its first fit (2.3 s on Jetstream2).
+# `_pairwise_sum` now walks the same pairwise tree with an explicit stack, adding the same numbers in
+# the same order; `tests/test_design_rule_disk_cache.py` holds it to np.sum and to the old recursive
+# sum bit for bit, and a second process loading the filters from the cache to the same answers.
 try:
     import math as _math
     from numba import njit as _njit
@@ -319,7 +322,7 @@ try:
     # worker wrote 38,760 lines of it (measured 2026-09-25). Its warnings and errors still show.
     logging.getLogger("numba").setLevel(logging.WARNING)
 
-    @_njit(cache=False)
+    @_njit(cache=True)
     def _pairwise_sum(a, lo, n):                      # numpy's DOUBLE_pairwise_sum, stride 1
         # numpy's tree: below 8 numbers a plain sum; up to 128, eight running sums; above 128, the
         # left half (its size rounded down to a multiple of 8) plus the right half. The halves are
@@ -376,7 +379,7 @@ try:
                     top -= 1
         return ret
 
-    @_njit(cache=False)
+    @_njit(cache=True)
     def _filter_2comp_kernel(Y, ok, phi_s, phi_f, q_s, q_f, m, r0, vs, vf, log2pi):
         s, l = Y.shape
         xs = np.zeros(s); xf = np.zeros(s)
@@ -443,7 +446,7 @@ try:
     # nothing else calls it. Splitting stretches across threads was tried (numba prange): no
     # faster than this at 16 threads, slower at 64, and it would start a thread pool in every
     # web worker.
-    @_njit(cache=False)
+    @_njit(cache=True)
     def _filter_2comp_active_kernel(Yp, okp, pos, n_active, phi_s, phi_f, q_s, q_f, m, r0, vs, vf,
                                     log2pi):
         l, s = Yp.shape
@@ -496,7 +499,7 @@ try:
             ll += _pairwise_sum(term, 0, s)
         return ll
 
-    @_njit(cache=False)
+    @_njit(cache=True)
     def _filter_1state_kernel(Y, ok, phi, m, q, r0, log2pi):
         # SPEED-UP ITEM 6 (the PI, 2026-09-25). The same pattern as `_filter_2comp_kernel` above,
         # one state per stretch instead of two: started at the raw first reading of every row

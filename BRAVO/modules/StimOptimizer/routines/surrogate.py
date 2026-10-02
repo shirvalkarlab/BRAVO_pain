@@ -491,7 +491,7 @@ class ObjectiveGP:
             try:
                 from joblib import Parallel, delayed
                 proto = self._clone()
-                out = Parallel(n_jobs=k, backend="loky")(
+                out = Parallel(n_jobs=k, backend=_POOL.loky_backend())(
                     delayed(_refit_fold)(proto, self.X_[tr], self.y_[tr], self.y_var_[tr],
                                          self.X_[te])
                     for _s, te, tr in folds)

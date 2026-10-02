@@ -214,10 +214,15 @@ def _run_controller_loop_numpy(bank, p, a_obs, alpha, dt, upper, lower, amp_low,
 # the numpy loop on constructed series exercising every curve kind (none, linear, the quadratic
 # both sides of its peak), gaps in the power and the amplitude, and every controller branch (onset
 # suppression, blanking, both transition directions), and holds `simulate_series` and `run_models`
-# equal too. `COMPILED_CONTROLLER = False` forces the numpy loop. NO ON-DISK CACHE, as decision 269
-# ruled for the design rule's filter (a cached recursive function crashed the process under the
-# server's libraries); this loop is not recursive, but the choice is kept the same here rather than
-# assumed safe for an untested case. Each worker compiles once, on its first simulation.
+# equal too. `COMPILED_CONTROLLER = False` forces the numpy loop.
+# ON-DISK CACHE (`cache=True`, speed-up item B9, 2026-10-02). Decision 269 kept the design rule's
+# filter out of numba's disk cache because a cached RECURSIVE function crashed the process when
+# loaded under the server's libraries; this loop was first kept uncached too, "rather than assumed
+# safe for an untested case". It is now tested: it calls nothing compiled, reads only constants
+# defined in this file (so editing the file invalidates the cache), and on the Jetstream2 BRAVO a
+# second process loaded it from the cache and returned the identical bits
+# (`tests/test_worker_warmup.py`). It matters most in the simulation's worker processes: each one
+# compiled the loop on its first segment (700 segments: 2.7 s on the first call, 0.42 s warm).
 try:
     from numba import njit as _njit
     # numba logs its own type checking at DEBUG, and the server logs at DEBUG (decision 269: 38,760
@@ -226,7 +231,7 @@ try:
     # module compiles first.
     logging.getLogger("numba").setLevel(logging.WARNING)
 
-    @_njit(cache=False)
+    @_njit(cache=True)
     def _run_controller_loop_kernel(kind, slope, a_coef, b_coef, peak, post, p, a_obs, alpha, dt,
                                     upper, lower, amp_low, amp_high, amp_init, rate_up, rate_down,
                                     onset_steps, blank_steps, target_hi, target_lo):
@@ -629,7 +634,11 @@ def _simulate_all(segs, plan, curves, tau_s, params):
         chunks = [segs[bounds[i]:bounds[i + 1]] for i in range(n_chunks)]
         try:
             import joblib
-            parts = joblib.Parallel(n_jobs=k, backend="loky")(
+            try:                                # the shared pool settings (decision 368)
+                from modules.DecodeCommon import parallel as _PAR
+            except ImportError:
+                from DecodeCommon import parallel as _PAR
+            parts = joblib.Parallel(n_jobs=k, backend=_PAR.loky_backend())(
                 joblib.delayed(_simulate_chunk)(c, plan, curves, tau_s, params) for c in chunks)
             return [r for part in parts for r in part]
         except Exception as exc:                        # noqa: BLE001 -- no pool: run them here

@@ -87,3 +87,55 @@ def test_the_sum_matches_the_old_sum_far_above_numpys_buffer():
     for n in (8193, 20011, 65536):
         a = rng.normal(0.0, 1.0, n)
         assert DR._pairwise_sum(a, 0, n) == _old_recursive_pairwise_sum(a, 0, n), n
+
+
+def test_every_compiled_loop_in_the_design_rule_is_cached_on_disk():
+    not_cached = [name for name in KERNELS
+                  if type(getattr(DR, name)._cache).__name__ == "NullCache"]
+    assert not_cached == []
+
+
+CACHED_RUN = r"""
+import hashlib, json, sys
+import numpy as np
+sys.path.insert(0, %r)
+from ClosedLoopDeployment import design_rule as DR
+rng = np.random.default_rng(366)
+s, l = 366, 400                                   # more stretches than one 128-number block
+Y = np.full((s, l), np.nan)
+for i in range(s):
+    n = int(rng.integers(3, l))
+    Y[i, :n] = 100 + np.cumsum(rng.normal(0, 3, n)) + rng.normal(0, 5, n)
+    gaps = rng.random(n) < 0.15
+    gaps[0] = False                                # a first reading, so the answer is a number
+    Y[i, :n][gaps] = np.nan
+kw2 = dict(phi_s=0.97, phi_f=0.4, q_s=0.8, q_f=3.0, m=100.0, r0=20.0)
+kw1 = dict(phi=0.99, m=100.0, q=1.2, r0=20.0)
+out = {"two": DR.filter_2comp(Y, **kw2), "one": DR.filter_1state(Y, **kw1)}
+DR.COMPILED_FILTER = False
+ref = {"two": DR.filter_2comp(Y, **kw2), "one": DR.filter_1state(Y, **kw1)}
+# The two loops the filters call; the sum is compiled into each of them, not loaded on its own.
+st = {k: getattr(DR, k).stats for k in ("_filter_2comp_active_kernel", "_filter_1state_kernel")}
+print(json.dumps({"out": {k: [float(v["loglik"]).hex(), v["n"]] for k, v in out.items()},
+                  "ref": {k: [float(v["loglik"]).hex(), v["n"]] for k, v in ref.items()},
+                  "hits": {k: sum(v.cache_hits.values()) for k, v in st.items()},
+                  "misses": {k: sum(v.cache_misses.values()) for k, v in st.items()}}))
+""" % (str(MODULES_ROOT),)
+
+
+def _run(code, cache_dir):
+    env = dict(os.environ, NUMBA_CACHE_DIR=str(cache_dir))
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
+                         timeout=300, cwd=str(MODULES_ROOT))
+    assert out.returncode == 0, (out.returncode, out.stdout[-3000:], out.stderr[-3000:])
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def test_a_second_process_loads_the_filters_from_the_disk_cache_with_identical_answers(tmp_path):
+    first = _run(CACHED_RUN, tmp_path)
+    second = _run(CACHED_RUN, tmp_path)
+    assert all(v >= 1 for v in first["misses"].values()), first          # compiled and saved
+    assert all(v == 0 for v in second["misses"].values()), second        # loaded, not compiled
+    assert all(v >= 1 for v in second["hits"].values()), second
+    assert second["out"] == first["out"] == first["ref"]
+    assert "nan" not in json.dumps(first["out"])

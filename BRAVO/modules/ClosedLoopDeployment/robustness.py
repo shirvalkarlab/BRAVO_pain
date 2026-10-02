@@ -170,6 +170,11 @@ _ABOVE, _BETWEEN, _BELOW = 1, 0, -1
 # NOTHING here is summed ACROSS configurations inside the loop -- every one of the K configurations
 # is an independent scalar time series, so the compiled loop below needs no ``_pairwise_sum``: each
 # config's own running counts and sums are unaffected by the order the K configs are visited in.
+# ON-DISK CACHE (`cache=True`, speed-up item B9, 2026-10-02): unlike the design rule's filters
+# (decision 269: a cached recursive function crashed the server), this loop calls nothing compiled
+# and uses only literal constants, so editing this file invalidates the cache; a second process
+# loads it and returns the identical bits (`tests/test_worker_warmup.py`). Compiling it cost the
+# first Closed-Loop request in each web worker 1.0 s.
 try:
     from numba import njit as _njit
     import logging as _logging
@@ -177,7 +182,7 @@ try:
     # at DEBUG, and the server logs at DEBUG.
     _logging.getLogger("numba").setLevel(_logging.WARNING)
 
-    @_njit(cache=False)
+    @_njit(cache=True)
     def _run_stretch_kernel(p, upper, lower, onset_steps, blank_steps, rate_up, rate_down,
                             amp_low, amp_high, amp_init, tol, dt):
         """One scalar power series ``p``, replayed once for every one of the K configurations named

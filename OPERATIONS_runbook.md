@@ -103,6 +103,23 @@ the first is the master. **Read the parent process identifiers before counting.*
 
 ---
 
+## 3a. The Jetstream2 BRAVO's parallel and memory budget (decisions 359, 364, 369)
+
+Set only in Jetstream2's `docker-compose.override.yml` (not in git; backup in
+`/media/volume/pnlstore/backups/`), applied by recreating the `bravo-server` container. The Mac sets none.
+
+| Setting | Jetstream2 | What it bounds |
+|---|---|---|
+| gunicorn `-w` | 16 | web workers (each ~0.5 GB once warmed) |
+| `BRAVO_POOL_JOBS` | 31 | worker processes in each web worker's one pool (~0.24 GB each) |
+| `BRAVO_WARMUP_POOL` | auto | start that pool when the web worker starts (`BRAVO/warmup.py`) |
+| `BRAVO_POOL_IDLE_SECONDS` | 86400 | an idle pool stays a day (joblib's default is 300 s) |
+| `BRAVO_RECORDING_CACHE_MB` | 3000 | unpacked recordings kept per web worker |
+
+Held when idle: 16 x (0.5 + 31 x 0.24) GB ~ 127 GB; recording caches at most 48 GB more; ~175 GB of
+245 GB in the worst case, leaving room for requests (the heaviest peaked at 10.8 GB). To change the
+budget, keep `web workers x (0.5 + pool x 0.24) + web workers x cache` under ~200 GB.
+
 ## 4. Making a frontend change actually take effect
 
 **The repository commits the compiled bundle and the web server serves the mounted build. A

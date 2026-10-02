@@ -102,7 +102,11 @@ def check_all(evidence, response_fn):
             import joblib
             # n_jobs is the pool's count however few chunks there are, and nothing else is passed:
             # any other count or argument makes joblib replace the pool the folds are using.
-            parts = joblib.Parallel(n_jobs=k, backend="loky")(
+            try:                                # the shared pool settings (decision 368)
+                from modules.DecodeCommon import parallel as _PAR
+            except ImportError:
+                from DecodeCommon import parallel as _PAR
+            parts = joblib.Parallel(n_jobs=k, backend=_PAR.loky_backend())(
                 joblib.delayed(_check_cells)(response_fn, cells[bounds[i]:bounds[i + 1]], threads)
                 for i in range(n_chunks))
             out = [r for part in parts for r in part]
