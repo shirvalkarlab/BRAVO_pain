@@ -190,6 +190,18 @@ def rank_blocks(rate_rows, *, in_force, contacts_used, rates, ceilings, prior_sd
                 borrowed[c] = (BorrowedSurfaceGP().fit(fr), n_own)
             except (ValueError, np.linalg.LinAlgError):
                 pass
+    # PER RATE (the PI, 2026-10-02): the count a block shows is its own clinic stretches at its
+    # rate with the Left current on, read from the contact's frame; the borrowed fit's total, which
+    # the table used to print on every rate row (L C+1-: 31 at 85, 125 and 145 Hz alike), travels as
+    # `n_stretches_borrowed_fit`. The ranking still sorts on the count it always used (`_n_sort`).
+    def _per_rate(c, rate):
+        fr = (contact_frames or {}).get(c)
+        if fr is None or not len(fr) or "freq_hz" not in fr or "amp_mA_Left" not in fr:
+            return None
+        on = fr["amp_mA_Left"].astype(float).to_numpy() > 0
+        at = np.abs(fr["freq_hz"].astype(float).to_numpy() - float(rate)) < 1e-6
+        return int((on & at).sum())
+
     blocks = []
     for c in contacts:
         for rate in kept:
@@ -213,8 +225,17 @@ def rank_blocks(rate_rows, *, in_force, contacts_used, rates, ceilings, prior_sd
                 blocks.append(dict(left_contact=c, rate_hz=rate, n_stretches=n, basis=PRIOR_BASIS,
                                    optimistic_improvement=prior, predicted_improvement=0.0,
                                    amp_mA_left=None, amp_mA_right=None))
-    blocks.sort(key=lambda b: (-round(b["optimistic_improvement"], 9), b["n_stretches"],
+    for b in blocks:
+        b["_n_sort"] = b["n_stretches"]
+        pr = _per_rate(b["left_contact"], b["rate_hz"])
+        if b["basis"] == BORROWED_BASIS:
+            b["n_stretches_borrowed_fit"] = b["n_stretches"]
+        if pr is not None:
+            b["n_stretches"] = pr
+    blocks.sort(key=lambda b: (-round(b["optimistic_improvement"], 9), b["_n_sort"],
                                b["left_contact"], b["rate_hz"]))
+    for b in blocks:
+        b.pop("_n_sort", None)
     for k, b in enumerate(blocks, start=1):
         b["rank"] = k
 

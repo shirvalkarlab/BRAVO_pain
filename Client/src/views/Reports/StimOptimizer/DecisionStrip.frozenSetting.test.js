@@ -110,3 +110,27 @@ describe("a gain the server discarded is not drawn", () => {
     expect(t).toMatch(/Predicted change in pain against today's setting: no difference could be formed/);
   });
 });
+
+describe("a flat fit says so beside its predicted change (the PI, 2026-10-02)", () => {
+  // RCS08 L C+2- 60/160 us: the fitted effect of current sat at the kernel's smallest value, so the
+  // "+0.00 ± 1.24" on both sides was no effect of current and the scatter of the ratings.
+  const withFlat = (flag) => {
+    const plan = clone(response.two_stage);
+    plan.stage1.strata = plan.stage1.strata.map((r) => (r.joint_stratum_key === "60_160"
+      ? { ...r, current_effect_at_minimum: flag } : r));
+    return plan;
+  };
+  it("names the ± as rating scatter when the fit found no effect of current", () => {
+    const { container } = rtlRender(wrap(<DecisionStrip arms={{}} plan={withFlat(true)} inForce={inForce} />));
+    const sides = Array.from(container.querySelectorAll('[data-testid="decision-side"]'));
+    sides.forEach((el) => {
+      expect(el.textContent).toMatch(/No effect of current found on these stretches; ± \d+\.\d\d is the scatter of the pain ratings\./);
+      expect(el.textContent).not.toMatch(/with an uncertainty of/);
+    });
+  });
+  it("keeps the uncertainty wording when the fit found an effect", () => {
+    const { container } = rtlRender(wrap(<DecisionStrip arms={{}} plan={withFlat(false)} inForce={inForce} />));
+    expect(container.textContent).toMatch(/with an uncertainty of/);
+    expect(container.textContent).not.toMatch(/No effect of current found/);
+  });
+});

@@ -313,3 +313,21 @@ def test_output_records_which_item_and_scale_were_used(epochs):
     assert d["left_leg_vas"].max() <= 10.0
     d_nrs = OBJ.build_objective(epochs, incumbent_epoch=1, cfg={"primary_item": "nrs"})
     assert d_nrs["primary_scale_factor"].iloc[0] == pytest.approx(1.0)
+
+
+def test_objective_gp_says_when_its_fitted_current_effect_sits_at_the_smallest_value_allowed(grid):
+    """2026-10-02 (the PI: the gauge should say "no effect of current found; the ± is the rating
+    scatter"). On RCS08's L C+2- group (60/160 us, 8 stretches) the fitted effect variance landed on
+    the kernel's lower limit, 0.0316^2 = 0.001 (`_make_kernel`: ConstantKernel bounds 1e-3 to 1e3),
+    beside a noise level of 0.881: a flat surface. The GP now reports that, from its own fit, with
+    no cut-off chosen for it. Flat ratings land there; a clear fall with current does not."""
+    rng = np.random.default_rng(3)
+    amps = np.tile(np.linspace(0.5, 4.0, 10), 3)
+    X = np.column_stack([np.full(amps.size, 55.0), amps])
+    var = np.full(amps.size, 0.05)
+    flat = ObjectiveGP(grid, random_state=0).fit(X, rng.normal(0.0, 1.0, amps.size), var)
+    slope = ObjectiveGP(grid, random_state=0).fit(X, -1.5 * amps + rng.normal(0.0, 0.2, amps.size), var)
+    hf, hs = flat.hyperparameters, slope.hyperparameters
+    assert hf["current_effect_at_minimum"] is True
+    assert hs["current_effect_at_minimum"] is False
+    assert hs["effect_variance"] > hf["effect_variance"] and hf["noise_variance"] > 0

@@ -193,8 +193,20 @@ def test_a_contact_tried_only_at_other_pulse_widths_gets_a_borrowed_surface():
                          ceilings={"Left": 4.5, "Right": 4.5}, prior_sd=1.0, contact_frames=frames)
     b = _block(out, "L C+1-")
     assert b["basis"] == BC.BORROWED_BASIS
-    assert b["n_stretches"] == 12
+    assert b["n_stretches_borrowed_fit"] == 12
     assert np.isfinite(b["optimistic_improvement"]) and b["amp_mA_left"] is not None
+
+
+def test_each_block_counts_its_own_stretches_at_its_rate_not_the_contacts_total():
+    """Page review 2026-10-02 (the PI: "per rate"): the ranked table printed L C+1-'s 31 in-clinic
+    stretches on every rate row, 85, 125 and 145 Hz included, though in the clinic it was tested at
+    55 Hz 24 times, 110 Hz 9, 165 Hz 3. A block's count is now its own stretches at its rate with
+    the Left current on; the borrowed fit's total travels beside it; the ranking is unchanged."""
+    frames = {"L C+1-": _contact_frame(better=2.0, n=12)}          # 6 at 55 Hz, 6 at 110 Hz
+    out = BC.rank_blocks([], in_force=IN_FORCE, contacts_used=["L C+1-"], rates=[55.0, 85.0, 110.0],
+                         ceilings={"Left": 4.5, "Right": 4.5}, prior_sd=1.0, contact_frames=frames)
+    assert [_block(out, "L C+1-", r)["n_stretches"] for r in (55.0, 85.0, 110.0)] == [6, 0, 6]
+    assert all(_block(out, "L C+1-", r)["n_stretches_borrowed_fit"] == 12 for r in (55.0, 85.0, 110.0))
 
 
 def test_a_contact_with_too_few_stretches_keeps_the_prior_bound():
@@ -232,7 +244,7 @@ def test_the_service_hands_each_contact_its_own_clinic_stretches_for_borrowing()
     out = BS._next_blocks_block([], s1c, in_force=IN_FORCE,
                                 ceilings={"Left": (4.5, "PI"), "Right": (4.5, "PI")})
     b = _block(out, "L C+1-")
-    assert b["basis"] == BC.BORROWED_BASIS and b["n_stretches"] == 12
+    assert b["basis"] == BC.BORROWED_BASIS and b["n_stretches_borrowed_fit"] == 12
     assert _block(out, "L C+1-2-")["basis"] == BC.PRIOR_BASIS
 
 
