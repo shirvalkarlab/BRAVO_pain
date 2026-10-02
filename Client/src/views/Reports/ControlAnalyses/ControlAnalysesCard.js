@@ -5,7 +5,7 @@
  * one outlined select, the reading in body text, no literal colour or size of its own. The card draws what the server saved and nothing more; a
  * new run adds a result and keeps the old ones, and nothing here is recomputed on a page load.
  */
-import React, { useEffect, useState } from "react";
+import React, { useContext, useEffect, useState } from "react";
 import PropTypes from "prop-types";
 
 import Card from "@mui/material/Card";
@@ -13,6 +13,7 @@ import Select from "@mui/material/Select";
 import MDBox from "components/MDBox";
 import { SessionController } from "database/session-control";
 import { T, TYPE, SPACE, CARD, LAYOUT } from "assets/theme/base/tokens";
+import { SectionRevealedContext } from "views/Reports/paper/Section";
 
 import { FIGURES } from "./figures";
 
@@ -122,23 +123,38 @@ ControlAnalysesCard.propTypes = { payload: PropTypes.shape({ analyses: PropTypes
 ControlAnalysesCard.defaultProps = { payload: null, clinicSheets: false, plain: false };
 
 /** Fetches the page's saved control analyses once per participant and draws the card; a failed
- * request says so in one line rather than hiding the section. */
+ * request says so in one line rather than hiding the section.
+ *
+ * ASKED FOR WHEN ITS FOLD IS FIRST OPENED (speed-up item C8, 2026-10-02). Both pages hold this
+ * section in a closed fold, and its request was sent on page load, beside the page's own heavy
+ * requests, for a card nobody had opened. It now reads whether the enclosing fold has ever been
+ * opened (`SectionRevealedContext`, which the page sets around it) and asks only from then on.
+ * Outside any fold the answer is "yes", so it loads at once as before. While the request is out
+ * it says so in one line, so an opened fold is never blank. */
 export function ControlAnalysesSection({ participantUid, page, clinicSheets, plain }) {
-  const [state, setState] = useState({ payload: null, err: null });
+  const revealed = useContext(SectionRevealedContext);
+  const [state, setState] = useState({ payload: null, err: null, answered: false });
   useEffect(() => {
     let live = true;
-    if (!participantUid) return undefined;
+    if (!participantUid || !revealed) return undefined;
     Promise.resolve(SessionController.query(ENDPOINT, { ParticipantId: participantUid, Page: page }))
-      .then((res) => { if (live) setState({ payload: res && res.data, err: null }); })
-      .catch((e) => { if (live) setState({ payload: null, err: String((e && e.message) || e) }); });
+      .then((res) => { if (live) setState({ payload: res && res.data, err: null, answered: true }); })
+      .catch((e) => { if (live) setState({ payload: null, err: String((e && e.message) || e), answered: true }); });
     return () => { live = false; };
-  }, [participantUid, page]);
+  }, [participantUid, page, revealed]);
   if (state.err) {
     return (
       <p style={{ ...TYPE.body, color: T.ink2, margin: 0, padding: `0 ${SPACE.xs}px` }}>
         {`The saved checks could not be read: ${state.err}`}
       </p>
     );
+  }
+  if (!state.answered) {
+    return revealed && participantUid ? (
+      <p style={{ ...TYPE.body, color: T.ink2, margin: 0, padding: `0 ${SPACE.xs}px` }}>
+        {"Reading the saved checks…"}
+      </p>
+    ) : null;
   }
   return <ControlAnalysesCard payload={state.payload} clinicSheets={clinicSheets} plain={plain} />;
 }

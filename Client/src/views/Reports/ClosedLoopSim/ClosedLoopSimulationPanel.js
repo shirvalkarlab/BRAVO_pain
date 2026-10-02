@@ -29,7 +29,7 @@
  * unmount only, with a constant uirevision; every figure is drawn from the stored payload and no
  * number is recomputed here. The card is dashed because everything in it is modelled.
  */
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import Plotly from "plotly.js-dist";
 import { Card } from "@mui/material";
 import MDBox from "components/MDBox";
@@ -38,6 +38,7 @@ import MDTypography from "components/MDTypography";
 import { PAL } from "./palette";
 import { TYPE, WRAP, CARD } from "assets/theme/base/tokens";
 import { plotlyLayout, directLabel } from "views/Reports/figureStyle";
+import { SectionRevealedContext } from "views/Reports/paper/Section";
 import { fmtNum, fmtPct } from "./deployFormat";
 import Fold from "./Fold";
 import PanelStaleNote from "./PanelStaleNote";
@@ -357,13 +358,17 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
   const run = runs[effective];
 
   const trajRef = useRef(null); const cmpRef = useRef(null); const distRef = useRef(null);
+  // Drawn only once the page's Background fold, which holds this panel, has been opened (or the
+  // sign-off record asks for its pictures): it starts closed, and these three figures were drawn on
+  // page load for nobody to see (speed-up item C5, 2026-10-02). Once drawn they stay drawn.
+  const revealed = useContext(SectionRevealedContext);
 
   useEffect(() => {
-    if (!run || run.refused || !run.models || !run.models.M0) return;
+    if (!revealed || !run || run.refused || !run.models || !run.models.M0) return;
     if (trajRef.current) drawTrajectory(trajRef.current, run, hemisphere);
     if (cmpRef.current) drawComparison(cmpRef.current, run);
     if (distRef.current) drawDistributionAndCurve(distRef.current, run);
-  }, [run, hemisphere]);
+  }, [revealed, run, hemisphere]);
   // purge on unmount only: cleanup on every redraw would destroy the figures the reader is looking at
   useEffect(() => () => {
     [trajRef, cmpRef, distRef].forEach((r) => { if (r.current) Plotly.purge(r.current); });

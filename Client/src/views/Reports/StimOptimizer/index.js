@@ -43,6 +43,7 @@
 * spacing come from the shared tokens; the page no longer borrows the Closed-Loop page's palette.
 */
 
+import { useState } from "react";
 import { useParams } from "react-router-dom";
 
 import MDBox from "components/MDBox";
@@ -57,7 +58,7 @@ import { LAYOUT } from "assets/theme/base/tokens";
 import RecomputeBar from "views/Reports/RecomputeBar";
 import CacheStatusLine from "views/Reports/CacheStatusLine";
 import { recomputeSlots, STIM_OPTIMIZER_SLOTS } from "views/Reports/moduleCacheKeys";
-import Section from "views/Reports/paper/Section";
+import Section, { SectionRevealedContext } from "views/Reports/paper/Section";
 import CeilingLine from "views/Reports/paper/CeilingLine";
 import PageHead from "views/Reports/paper/PageHead";
 import { JumpRow } from "views/Reports/paper/links";
@@ -116,6 +117,11 @@ function primaryPainScore(plan) {
 
 // The request this view sends is written out in full in `optimizerRequest.js`.
 
+// The decision strip's per-side arms: the page has passed none since both stimulators were
+// modelled together (commit 542dc353). It is given this one empty object rather than a new `{}` on
+// every render, which made the strip rebuild each time the page re-rendered (speed-up item C6).
+const NO_ARMS = {};
+
 export default function StimOptimizer() {
   const { participant_uid } = useParams();
   // The tab's title is the page's question in the PI's words, from the first paint on, the
@@ -149,6 +155,10 @@ export default function StimOptimizer() {
   // The de-identified study code for the line under the title (SPEC section 4 rule 1); null when
   // the participant record carries none.
   const participantCode = useStudyCode(participant_uid);
+  // Whether the research-checks fold at the foot of the page has ever been opened: the checks are
+  // asked for from then on, not on page load (speed-up item C8, 2026-10-02). Here, before any early
+  // return, because a hook must run on every render.
+  const [checksOpened, setChecksOpened] = useState(false);
 
   // A spinner is shown while a request is in flight AND on the very first paint before the hook's
   // effect has started one. Without that second condition the page would show its "no parameter
@@ -231,7 +241,7 @@ export default function StimOptimizer() {
             per-side verdicts in the same render, never a fixed description of the method. -------- */}
         <Section id="decision" question="Is any setting proven better than today's?"
           answer={`${decisionHeadline(twoStage.data, data.in_force_by_side || null)}.`}>
-          <DecisionStrip arms={{}} plan={twoStage.data} planLoading={twoStage.loading}
+          <DecisionStrip arms={NO_ARMS} plan={twoStage.data} planLoading={twoStage.loading}
             planErr={twoStage.err} inForce={data.in_force_by_side || null} />
         </Section>
 
@@ -279,9 +289,13 @@ export default function StimOptimizer() {
         </MDBox>
 
         {/* ---------- the research checks: saved, dated, run offline; they feed nothing above.
-            Folded, still mounted, so it loads. ---------- */}
-        <SizedFold show="Checks against chance and against the current (run offline)" hide="Hide the research checks" mt={3}>
-          <ControlAnalysesSection participantUid={participant_uid} page="stim_optimizer" />
+            Folded and still mounted; their request goes out the first time the fold is opened
+            (speed-up item C8, 2026-10-02). ---------- */}
+        <SizedFold show="Checks against chance and against the current (run offline)" hide="Hide the research checks" mt={3}
+          onChange={(open) => { if (open) setChecksOpened(true); }}>
+          <SectionRevealedContext.Provider value={checksOpened}>
+            <ControlAnalysesSection participantUid={participant_uid} page="stim_optimizer" />
+          </SectionRevealedContext.Provider>
         </SizedFold>
       </MDBox>
     </DatabaseLayout>

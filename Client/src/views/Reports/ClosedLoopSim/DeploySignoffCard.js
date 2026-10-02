@@ -10,12 +10,12 @@
  * print-and-export logic (`useSignoffActions`), the stale-inputs notice and the figure pictures.
  * Every number here is one the page already shows elsewhere, gathered for the signed sheet.
  */
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { Grid } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import { captureFigureSnapshots } from "./figureSnapshots";
+import { captureFigureSnapshots, FigureRecordContext } from "./figureSnapshots";
 import PAL from "./palette";
 import { STATE } from "assets/theme/base/tokens";
 import ProvisionalNote from "./ProvisionalNote";
@@ -281,10 +281,13 @@ export function useSignoffActions({ participantUid, bandCandidate, summary, cutp
   const [snapshots, setSnapshots] = useState(null);
   const [capturing, setCapturing] = useState(false);
   const [printPending, setPrintPending] = useState(false);
+  // Asks the page to draw the figures its closed Background fold has not drawn yet (C5).
+  const drawFiguresForRecord = useContext(FigureRecordContext);
 
   const takeSnapshots = async () => {
     setCapturing(true);
     try {
+      await drawFiguresForRecord();
       const snap = await captureFigureSnapshots();
       setSnapshots(snap);
       return snap;

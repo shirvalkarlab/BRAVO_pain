@@ -26,7 +26,7 @@
  * THIS PANEL GATES NOTHING; the payload says so and no verdict reads it.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import Plotly from "plotly.js-dist";
 import {
   Card, CardContent, Typography, Box, Stack, Divider, ToggleButton, ToggleButtonGroup, Chip,
@@ -38,6 +38,7 @@ import Fold from "./Fold";
 import FoldArrow from "../paper/FoldArrow";
 import { TYPE, WRAP, CARD } from "assets/theme/base/tokens";
 import { plotlyLayout } from "views/Reports/figureStyle";
+import { SectionRevealedContext } from "views/Reports/paper/Section";
 
 /** One colour per route, matching the static picture in the report exactly. */
 // Each route's own mark colour; orange is the right side on every page, so it is not used here.
@@ -113,6 +114,10 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
     [showSpectrum, spectrumRevealed]);
   const topRef = useRef(null);
   const specRef = useRef(null);
+  // Drawn only once the page's Background fold, which holds this panel, has been opened (or the
+  // sign-off record asks for its picture): it starts closed, and this figure was drawn on page load
+  // for nobody to see (speed-up item C5, 2026-10-02). Once drawn it stays drawn.
+  const revealed = useContext(SectionRevealedContext);
 
   // Which side, then which contact on it: the committed band's when it has runs, else the first.
   const side = useMemo(() => {
@@ -151,7 +156,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
   // --- TOP ROW: every run's points at the drawn centre, one marker per run, pooled line on TD ---
   useEffect(() => {
     const gd = topRef.current;
-    if (!gd) return;
+    if (!gd || !revealed) return;
     if (!contactObj || centre == null) { Plotly.purge(gd); return; }
     const traces = [];
     const layout = threeColumnLayout(ROUTES.map((r) => ROUTE_TITLE[r]),
@@ -214,7 +219,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
       });
     }
     Plotly.react(gd, traces, layout, PAL.MODEBAR);
-  }, [contactObj, centre, pooledRow, side]);
+  }, [revealed, contactObj, centre, pooledRow, side]);
 
   // --- THE FOLD: the pooled slope at every band centre for this contact, with its uncertainty ---
   useEffect(() => {

@@ -54,7 +54,7 @@
  * hairline, not in a box; one "Why this design" fold for both sides. Colours and sizes from the
  * shared tokens; the PI's harmonic wording is kept word for word.
  */
-import React, { useState } from "react";
+import React, { memo, useState } from "react";
 import { Button, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip } from "@mui/material";
 
 import MDBox from "components/MDBox";
@@ -501,7 +501,7 @@ function ProposedColumn({ p }) {
   );
 }
 
-export default function TitrationSessionCard({ plan, participantUid, homeSchedule = null }) {
+function TitrationSessionCard({ plan, participantUid, homeSchedule = null }) {
   const [sessionDate, setSessionDate] = useState(nextWednesdayISO);
   // status: "idle" | "working" | "error" | "xlsx" | "drive"
   const [exportState, setExportState] = useState({ status: "idle" });
@@ -791,3 +791,8 @@ export default function TitrationSessionCard({ plan, participantUid, homeSchedul
     </Section>
   );
 }
+
+// Rebuilt only when one of its inputs changes (speed-up item C6, 2026-10-02). The page re-renders
+// several times while it loads and every card below it was rebuilt each time with the same inputs;
+// the next-visit card (its clinic sheet is hundreds of table cells, folded but mounted) took about a quarter of a second per rebuild in the page test.
+export default memo(TitrationSessionCard);

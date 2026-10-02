@@ -45,7 +45,7 @@
  * them is the first question at a programming visit, so they sit below the evidence behind one
  * fold.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { Card, Grid } from "@mui/material";
@@ -84,6 +84,8 @@ import useClosedLoopSimulation from "./useClosedLoopSimulation";
 import PAL from "./palette";
 import { TYPE, WRAP, CARD, LAYOUT } from "assets/theme/base/tokens";
 import PageHead from "views/Reports/paper/PageHead";
+import { SectionRevealedContext } from "views/Reports/paper/Section";
+import { FigureRecordContext } from "./figureSnapshots";
 import CeilingLine from "views/Reports/paper/CeilingLine";
 import { useStudyCode } from "views/Reports/paper/studyCode";
 import "./deployPrint.css";
@@ -278,6 +280,19 @@ function ClosedLoopSim() {
   }, []);
 
   const bc = envelope && envelope.band_candidate;
+  // THE CHOSEN BAND AS THE GRID AND THE THREE-SOURCE PANEL READ IT, built once per band rather than
+  // as a new object on every render (speed-up item C6, 2026-10-02): a new object each time made the
+  // grid rebuild on every re-render of the page although the band had not changed.
+  const hasBand = !!bc;
+  const bandContact = bc ? bc.contact : null;
+  const bandCentreHz = bc ? bc.center_freq_hz : null;
+  const committedBand = useMemo(
+    () => (hasBand ? { contact: bandContact, centerHz: bandCentreHz } : null),
+    [hasBand, bandContact, bandCentreHz]);
+  // The grid's two callbacks, the same functions from render to render for the same reason.
+  const onGridCandidateChosen = useCallback(
+    () => setEnvelope(loadBandCandidate(participant_uid)), [participant_uid]);
+  const onGridChoiceRecorded = useCallback(({ status }) => setBandRecord(status), []);
 
   // THE PAIN SCORE EVERY BAND-TO-PAIN READING ON THIS PAGE IS COMPUTED ON (the PI, 2026-09-25
   // night). Starts on the band's own (its grid's, decision 254), NRS when it carries none; a choice
@@ -359,11 +374,12 @@ function ClosedLoopSim() {
     bandCandidate: reportCandidate, afterReport: deploymentReport.data,
     reportStamp: deploymentReport.computedAt });
   // Medtronic labels for sensing contacts, from the grid's own sweeps (server-built, decision 86).
-  const contactLabel = (ch) => {
-    const sw = bandSweepGrid.grid && bandSweepGrid.grid.band_time_sweep
-      && bandSweepGrid.grid.band_time_sweep[ch];
+  // The same function until the grid changes (C6).
+  const gridSweeps = bandSweepGrid.grid && bandSweepGrid.grid.band_time_sweep;
+  const contactLabel = useCallback((ch) => {
+    const sw = gridSweeps && gridSweeps[ch];
     return (sw && sw.display_short) || String(ch || "").replace(/_/g, " ");
-  };
+  }, [gridSweeps]);
 
   // ARRIVING FROM THE BIOMARKERS PAGE'S "Open this grid in Closed-Loop" BUTTON. That button
   // navigates here with the fragment `#cl-grid`, naming the anchor already on the grid panel's own
@@ -410,6 +426,35 @@ function ClosedLoopSim() {
   const onRecomputePage = () => recomputeClosedLoop(participant_uid);
 
   const analystRevealed = useRevealedOnce(showAnalyst);
+
+  /**
+   * THE BACKGROUND'S TWO MOUNTED FIGURES ARE DRAWN THE FIRST TIME THE FOLD IS OPENED (speed-up item
+   * C5, 2026-10-02, as decision 354 did for the Stim Optimizer's current map). The three-source and
+   * simulation panels stay mounted inside the closed fold, so their figures were drawn on page load
+   * for nobody to see. They now read `SectionRevealedContext` and draw once it is true.
+   *
+   * THE PRINTED RECORD STILL GETS THEM. "Sign and print" and "Export JSON" take pictures of the
+   * figures drawn on the page (`figureSnapshots.js`), and both of these were always drawn, opened or
+   * not. So before taking pictures the record calls `drawFiguresForRecord` (through
+   * `FigureRecordContext`): the figures are drawn, without opening the fold, and the promise
+   * resolves in the page's own effect below, which React runs after the panels' drawing effects of
+   * the same commit (a child's effects run before its parent's). The switching-point panels are
+   * not drawn for the record: they send requests of their own and were never on a record unless
+   * the fold had been opened, exactly as before.
+   */
+  const [recordRequests, setRecordRequests] = useState(0);
+  const recordWaiters = useRef([]);
+  const drawFiguresForRecord = useCallback(() => new Promise((resolve) => {
+    recordWaiters.current.push(resolve);
+    setRecordRequests((n) => n + 1);
+  }), []);
+  useEffect(() => {
+    if (!recordWaiters.current.length) return;
+    const waiting = recordWaiters.current;
+    recordWaiters.current = [];
+    waiting.forEach((resolve) => resolve());
+  }, [recordRequests]);
+  const backgroundFiguresRevealed = analystRevealed || recordRequests > 0;
 
   const onUpload = (e) => {
     const file = e.target.files && e.target.files[0];
@@ -515,10 +560,12 @@ function ClosedLoopSim() {
                 caution bullets worded as the rule table words them, the values to enter only when
                 the device allows them, "Sign and print", and one Details fold. */}
             <MDBox id="cl-decision" mb={8}>
-              <DecisionCard participantUid={participant_uid} bandCandidate={bc} summary={summaryForBand}
-                deploymentReport={report} chosenBand={envelope} bandRecord={bandRecord}
-                cutpoint={cutpoint} mode={thresholdMode} onMode={setThresholdMode}
-                onRecompute={onRecomputePage} />
+              <FigureRecordContext.Provider value={drawFiguresForRecord}>
+                <DecisionCard participantUid={participant_uid} bandCandidate={bc} summary={summaryForBand}
+                  deploymentReport={report} chosenBand={envelope} bandRecord={bandRecord}
+                  cutpoint={cutpoint} mode={thresholdMode} onMode={setThresholdMode}
+                  onRecompute={onRecomputePage} />
+              </FigureRecordContext.Provider>
             </MDBox>
           </>
         ) : null}
@@ -530,9 +577,9 @@ function ClosedLoopSim() {
           <BandSweepGridPanel
             grid={bandSweepGrid.grid}
             participantUid={participant_uid}
-            committed={bc ? { contact: bc.contact, centerHz: bc.center_freq_hz } : null}
-            onCandidateChosen={() => setEnvelope(loadBandCandidate(participant_uid))}
-            onChoiceRecorded={({ status }) => setBandRecord(status)}
+            committed={committedBand}
+            onCandidateChosen={onGridCandidateChosen}
+            onChoiceRecorded={onGridChoiceRecorded}
           />
         </MDBox>
 
@@ -583,8 +630,9 @@ function ClosedLoopSim() {
                 and the switching point, device units and month-by-month check. None of it gates
                 anything. The three-source and simulation panels stay MOUNTED inside the fold (it
                 collapses to zero height without hiding the width, so their Plotly figures measure
-                the right width). The three switching-point panels are mounted on the fold's first
-                opening, as before, because they send their own requests. */}
+                the right width), and draw their figures on the fold's first opening or when the
+                record asks for them (C5, above). The three switching-point panels are mounted on
+                the fold's first opening, as before, because they send their own requests. */}
             <Card id="cl-background" sx={{ ...CARD, p: 3 }}>
               <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Background</MDTypography>
               <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 1, maxWidth: "68ch" }}>
@@ -593,20 +641,22 @@ function ClosedLoopSim() {
               <Fold show="Show the background (current and band power; simulated closed loop; switching point and month-by-month check)"
                 hide="Hide the background" mt={2}
                 onChange={(open) => { if (open) setShowAnalyst(true); }}>
-                <MDBox id="cl-three-source" mt={2}>
-                  <ThreeSourceResponsePanel report={report} pooled={threeSourcePooled}
-                    committed={{ contact: bc.contact, centerHz: bc.center_freq_hz }}
-                    contactLabel={contactLabel} />
-                </MDBox>
-                <MDBox id="cl-simulation" mt={4}>
-                  {/* Withheld when computed for another band, as the report and summary are; and
-                      the controller's switching values and limits print only when the device
-                      allows the configuration, as on the decision card. */}
-                  <ClosedLoopSimulationPanel sim={withheldIfOtherBand(closedLoopSim, bc, "simulation")}
-                    hemisphere={report?.data?.manifest?.hemisphere}
-                    deviceAllows={report?.data?.verdict_detail?.device_eligible === true}
-                    contactLabel={contactLabel} bandCandidate={bc} />
-                </MDBox>
+                <SectionRevealedContext.Provider value={backgroundFiguresRevealed}>
+                  <MDBox id="cl-three-source" mt={2}>
+                    <ThreeSourceResponsePanel report={report} pooled={threeSourcePooled}
+                      committed={committedBand}
+                      contactLabel={contactLabel} />
+                  </MDBox>
+                  <MDBox id="cl-simulation" mt={4}>
+                    {/* Withheld when computed for another band, as the report and summary are; and
+                        the controller's switching values and limits print only when the device
+                        allows the configuration, as on the decision card. */}
+                    <ClosedLoopSimulationPanel sim={withheldIfOtherBand(closedLoopSim, bc, "simulation")}
+                      hemisphere={report?.data?.manifest?.hemisphere}
+                      deviceAllows={report?.data?.verdict_detail?.device_eligible === true}
+                      contactLabel={contactLabel} bandCandidate={bc} />
+                  </MDBox>
+                </SectionRevealedContext.Provider>
                 {analystRevealed ? (
                   <Grid container spacing={3} mt={1}>
                     <Grid item xs={12} md={6} id="cl-roc">

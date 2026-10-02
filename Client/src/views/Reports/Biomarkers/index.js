@@ -46,7 +46,7 @@ import CalibrationInEffectPanel from "./CalibrationInEffectPanel";
 // Colours, type sizes and card style: the shared tokens (the redesign of 2026-09-26).
 import { T, TYPE, LAYOUT } from "assets/theme/base/tokens";
 import PageHead from "views/Reports/paper/PageHead";
-import Section from "views/Reports/paper/Section";
+import Section, { SectionRevealedContext } from "views/Reports/paper/Section";
 import useDocumentTitle from "views/Reports/paper/useDocumentTitle";
 import { useStudyCode } from "views/Reports/paper/studyCode";
 
@@ -184,6 +184,9 @@ function Biomarkers() {
   // current match window (matched-and-included = vermillion/blue, everything else dimmed light grey),
   // so the user sees exactly which samples feed the binarized biomarker. Toggle sits on the timeline.
   const [timelineColorMode, setTimelineColorMode] = useState(P.timelineColorMode || "multimodal");
+  // Whether the research-checks fold at the foot of the page has ever been opened: the checks are
+  // asked for from then on, not on page load (speed-up item C8, 2026-10-02).
+  const [checksOpened, setChecksOpened] = useState(false);
   const slidingWindow = false;   // sliding-window analysis removed — always all-data, one threshold
   // The biomarker is EXPENSIVE (full-resolution detector over ~300k rows), so it is computed only
   // when the user clicks "Compute biomarker now" — never automatically on a settings change. This
@@ -996,15 +999,19 @@ function Biomarkers() {
               </MDBox>
 
               {/* Control analyses: saved, dated checks run offline (the PI, 2026-09-24); they feed
-                  nothing on this page. Folded, still mounted, so it loads. */}
+                  nothing on this page. Folded and still mounted; their request goes out the first
+                  time the fold is opened (speed-up item C8, 2026-10-02). */}
               <MDBox mt={4} pt={3} pb={2} data-paper="background-row"
                 sx={{ borderTop: `1px solid ${T.rule}` }}>
                 {/* The spec's plain title (SPEC 2026-09-26 section 6, "Control analyses"), set by
                     WP7 with the pin in `foldedDeveloperLines.source.test.js`. */}
                 <Fold show="Checks against chance and against the current (run offline)"
                   inside="saved research checks; nothing on this page reads them"
-                  hide="Hide the checks against chance and against the current">
-                  <ControlAnalysesSection participantUid={participant_uid} page="biomarkers" clinicSheets={includeClinicSheetRatings} plain />
+                  hide="Hide the checks against chance and against the current"
+                  onChange={(open) => { if (open) setChecksOpened(true); }}>
+                  <SectionRevealedContext.Provider value={checksOpened}>
+                    <ControlAnalysesSection participantUid={participant_uid} page="biomarkers" clinicSheets={includeClinicSheetRatings} plain />
+                  </SectionRevealedContext.Provider>
                 </Fold>
               </MDBox>
             </Grid>

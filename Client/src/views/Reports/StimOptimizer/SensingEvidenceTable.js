@@ -38,6 +38,7 @@
  * "Why not usable" fold; the other combinations stay in a folded table with sentence-case headers
  * whose two technical columns are defined once above it. Colours and sizes from the shared tokens.
  */
+import { memo } from "react";
 import { Tooltip } from "@mui/material";
 
 import MDBox from "components/MDBox";
@@ -245,7 +246,7 @@ function StillPositiveLines({ still, labelFor }) {
   );
 }
 
-export default function SensingEvidenceTable({ closedLoop }) {
+function SensingEvidenceTable({ closedLoop }) {
   const cl = closedLoop || {};
   if (!cl.available) {
     return (
@@ -382,3 +383,8 @@ export default function SensingEvidenceTable({ closedLoop }) {
     </MDBox>
   );
 }
+
+// Rebuilt only when one of its inputs changes (speed-up item C6, 2026-10-02). The page re-renders
+// several times while it loads and every card below it was rebuilt each time with the same inputs;
+// the readiness table rebuilt every row each time.
+export default memo(SensingEvidenceTable);

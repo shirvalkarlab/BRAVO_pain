@@ -57,7 +57,7 @@
  * | pooled" is a segmented control in the section header, beside a "Show explanations" text link.
  */
 
-import { useContext, useEffect, useMemo, useState } from "react";
+import { memo, useContext, useEffect, useMemo, useState } from "react";
 
 import { Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
 
@@ -674,7 +674,7 @@ function PulseWidthToggle({ pooled, onChange }) {
   );
 }
 
-export default function CurrentMapCard({ plan }) {
+function CurrentMapCard({ plan }) {
   const stage1 = (plan && plan.stage1) || {};
   const rawRateStrata = stage1.rate_strata;
   const rateStrata = useMemo(() => (Array.isArray(rawRateStrata) ? rawRateStrata : []), [rawRateStrata]);
@@ -810,3 +810,8 @@ export default function CurrentMapCard({ plan }) {
     </Section>
   );
 }
+
+// Rebuilt only when one of its inputs changes (speed-up item C6, 2026-10-02). The page re-renders
+// several times while it loads and every card below it was rebuilt each time with the same inputs;
+// the current map rebuilt every group of squares each time.
+export default memo(CurrentMapCard);

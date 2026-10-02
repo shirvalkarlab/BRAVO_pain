@@ -36,6 +36,7 @@
  * a hairline, so there is no card inside a card; its heading is the plain question "Can closed loop
  * start on the rate and pulse width locked in beforehand?". Colours and sizes from the shared tokens.
  */
+import { memo } from "react";
 import { Table, TableBody, TableCell, TableHead, TableRow } from "@mui/material";
 
 import MDBox from "components/MDBox";
@@ -150,7 +151,7 @@ const POLICY_COLUMNS = [
   ["threshold_single", "Single switching value"], ["thresholds_determined", "Switching values set"],
 ];
 
-export default function TwoStagePlanCard({ plan, loading, err }) {
+function TwoStagePlanCard({ plan, loading, err }) {
   const stage1 = (plan && plan.stage1) || {};
   const frozen = stage1.frozen_configuration || {};
   const envelope = frozen.adaptive_envelope || stage1.adaptive_envelope || {};
@@ -324,3 +325,8 @@ export default function TwoStagePlanCard({ plan, loading, err }) {
     </MDBox>
   );
 }
+
+// Rebuilt only when one of its inputs changes (speed-up item C6, 2026-10-02). The page re-renders
+// several times while it loads and every card below it was rebuilt each time with the same inputs;
+// the two-stage card rebuilt its record tables each time.
+export default memo(TwoStagePlanCard);

@@ -37,7 +37,7 @@
  * The stability symbol is real only when the server has computed it for that point; until then
  * the row shows the dashed "not tested" mark rather than a fabricated answer.
  */
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { Card, Tooltip } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -255,7 +255,7 @@ const HEAD = { ...TYPE.caption, fontWeight: 600, color: PAL.ink3, backgroundColo
   alignItems: "flex-end", justifyContent: "center" };
 const CELL_H = 22;
 
-export default function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen,
+function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen,
   onChoiceRecorded }) {
   // Memoised, because a fresh `{}` on every render (when there is no grid yet) would make every
   // memo below it recompute on every render.
@@ -473,3 +473,8 @@ export default function BandSweepGridPanel({ grid, participantUid, committed, on
     </Card>
   );
 }
+
+// Rebuilt only when one of its inputs changes (speed-up item C6, 2026-10-02). The page re-renders on
+// every answer and cache event while it loads, and this grid of 22 rows of coloured cells was
+// rebuilt each time with the same inputs; the page now hands it the same objects between changes.
+export default memo(BandSweepGridPanel);

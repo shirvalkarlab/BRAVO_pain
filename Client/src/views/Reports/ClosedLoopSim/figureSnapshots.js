@@ -19,6 +19,7 @@
  * A figure that fails to render to an image is reported by name rather than dropped, for the same
  * reason.
  */
+import { createContext } from "react";
 import Plotly from "plotly.js-dist";
 
 // WHICH FIGURES GO ON THE PRINTED RECORD, AND WHAT EACH IS CALLED ON PAPER. The PI's choice,
@@ -33,6 +34,16 @@ export const SNAPSHOT_SECTIONS = [
   { id: "cl-evidence", title: "The three links of evidence: current to power, power to pain, current to pain" },
   { id: "cl-simulation", title: "What the automatic adjustment would have done (simulated)" },
 ];
+
+/**
+ * HOW THE RECORD GETS FIGURES THE PAGE HAS NOT DRAWN YET (speed-up item C5, 2026-10-02). The two
+ * figures kept mounted in the closed "Background" fold (`cl-three-source`, `cl-simulation`) are
+ * drawn the first time that fold is opened, no longer on page load. So before taking pictures, the
+ * sign-off card calls the function this context holds: the page draws those figures (without
+ * opening the fold) and the promise resolves once they are drawn. Outside the page the function
+ * resolves at once and the pictures are taken from whatever is drawn, as before.
+ */
+export const FigureRecordContext = createContext(() => Promise.resolve());
 
 // Pixels per CSS pixel. 2 keeps axis text legible on paper without making the JSON export enormous.
 const SCALE = 2;

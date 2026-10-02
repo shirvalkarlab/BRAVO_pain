@@ -46,6 +46,7 @@
  * point in the accent blue, "worse" and "better" at its ends, in pain points). Colours and sizes
  * come from the shared tokens; the verdict carries its glyph (✓ ▲ ○) as well as its words.
  */
+import { memo } from "react";
 import { Tooltip } from "@mui/material";
 
 import MDBox from "components/MDBox";
@@ -376,7 +377,7 @@ export function DecisionStripLoading() {
   );
 }
 
-export default function DecisionStrip({ arms, plan, planLoading, planErr, inForce }) {
+function DecisionStrip({ arms, plan, planLoading, planErr, inForce }) {
   const rows = sideRows(arms, plan, inForce);
   const halfRange = Math.max(2, ...rows.map((r) => {
     const { gain: g, sd } = sideGain(r);
@@ -458,3 +459,8 @@ export default function DecisionStrip({ arms, plan, planLoading, planErr, inForc
     </MDBox>
   );
 }
+
+// Rebuilt only when one of its inputs changes (speed-up item C6, 2026-10-02). The page re-renders
+// several times while it loads and every card below it was rebuilt each time with the same inputs;
+// the decision strip rebuilt each time.
+export default memo(DecisionStrip);
