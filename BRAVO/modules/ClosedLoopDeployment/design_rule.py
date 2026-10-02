@@ -307,10 +307,11 @@ def _two_component_runner(Y: np.ndarray):
 # for its per-step sum over stretches -- the same argument applies unchanged, one state per stretch
 # instead of two.
 # `tests/test_design_rule_compiled_filter.py` holds the two loops equal for both filters. COMPILED_FILTER
-# False forces the numpy loop (the proof compares the two). NO ON-DISK CACHE: the summation calls itself, and a
-# cached recursive function crashed the process when loaded under the server's libraries (measured
-# 2026-09-25: segmentation fault from the cache, none when compiled in the process); each worker
-# compiles once on its first fit, about a second.
+# False forces the numpy loop (the proof compares the two). NO ON-DISK CACHE (decision 269): the summation
+# called itself, and a cached function that calls itself crashed the process when loaded under the
+# server's libraries (measured 2026-09-25: segmentation fault from the cache, none when compiled in
+# the process). Since 2026-10-02 `_pairwise_sum` walks the same pairwise tree with an explicit stack
+# instead, adding the same numbers in the same order (`tests/test_design_rule_disk_cache.py`).
 try:
     import math as _math
     from numba import njit as _njit
@@ -320,28 +321,60 @@ try:
 
     @_njit(cache=False)
     def _pairwise_sum(a, lo, n):                      # numpy's DOUBLE_pairwise_sum, stride 1
-        if n < 8:
-            res = 0.0
-            for i in range(n):
-                res += a[lo + i]
-            return res
-        elif n <= 128:
-            r0 = a[lo]; r1 = a[lo + 1]; r2 = a[lo + 2]; r3 = a[lo + 3]
-            r4 = a[lo + 4]; r5 = a[lo + 5]; r6 = a[lo + 6]; r7 = a[lo + 7]
-            i = 8
-            while i < n - (n % 8):
-                r0 += a[lo + i]; r1 += a[lo + i + 1]; r2 += a[lo + i + 2]; r3 += a[lo + i + 3]
-                r4 += a[lo + i + 4]; r5 += a[lo + i + 5]; r6 += a[lo + i + 6]; r7 += a[lo + i + 7]
-                i += 8
-            res = ((r0 + r1) + (r2 + r3)) + ((r4 + r5) + (r6 + r7))
-            while i < n:
-                res += a[lo + i]
-                i += 1
-            return res
-        else:
-            n2 = n // 2
-            n2 -= n2 % 8
-            return _pairwise_sum(a, lo, n2) + _pairwise_sum(a, lo + n2, n - n2)
+        # numpy's tree: below 8 numbers a plain sum; up to 128, eight running sums; above 128, the
+        # left half (its size rounded down to a multiple of 8) plus the right half. The halves are
+        # walked with an explicit stack instead of the function calling itself (see above): a frame
+        # is visited first to go left, then with the left half's sum to go right, then with the
+        # right half's sum to add the two, so every addition happens as the recursion made it.
+        st_lo = np.empty(64, np.int64)
+        st_n = np.empty(64, np.int64)
+        st_step = np.zeros(64, np.int64)
+        st_left = np.zeros(64)
+        top = 1
+        st_lo[0] = lo
+        st_n[0] = n
+        st_step[0] = 0
+        ret = 0.0
+        while top > 0:
+            f = top - 1
+            b_lo = st_lo[f]
+            b_n = st_n[f]
+            if b_n < 8:
+                res = 0.0
+                for i in range(b_n):
+                    res += a[b_lo + i]
+                ret = res
+                top -= 1
+            elif b_n <= 128:
+                r0 = a[b_lo]; r1 = a[b_lo + 1]; r2 = a[b_lo + 2]; r3 = a[b_lo + 3]
+                r4 = a[b_lo + 4]; r5 = a[b_lo + 5]; r6 = a[b_lo + 6]; r7 = a[b_lo + 7]
+                i = 8
+                while i < b_n - (b_n % 8):
+                    r0 += a[b_lo + i]; r1 += a[b_lo + i + 1]; r2 += a[b_lo + i + 2]; r3 += a[b_lo + i + 3]
+                    r4 += a[b_lo + i + 4]; r5 += a[b_lo + i + 5]; r6 += a[b_lo + i + 6]; r7 += a[b_lo + i + 7]
+                    i += 8
+                res = ((r0 + r1) + (r2 + r3)) + ((r4 + r5) + (r6 + r7))
+                while i < b_n:
+                    res += a[b_lo + i]
+                    i += 1
+                ret = res
+                top -= 1
+            else:
+                n2 = b_n // 2
+                n2 -= n2 % 8
+                if st_step[f] == 0:                   # go left
+                    st_step[f] = 1
+                    st_lo[top] = b_lo; st_n[top] = n2; st_step[top] = 0
+                    top += 1
+                elif st_step[f] == 1:                 # left done (in ret): keep it, go right
+                    st_left[f] = ret
+                    st_step[f] = 2
+                    st_lo[top] = b_lo + n2; st_n[top] = b_n - n2; st_step[top] = 0
+                    top += 1
+                else:                                 # right done (in ret): left + right
+                    ret = st_left[f] + ret
+                    top -= 1
+        return ret
 
     @_njit(cache=False)
     def _filter_2comp_kernel(Y, ok, phi_s, phi_f, q_s, q_f, m, r0, vs, vf, log2pi):
