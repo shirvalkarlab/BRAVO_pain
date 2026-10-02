@@ -16,18 +16,21 @@ def test_daily_mean_series_fills_a_gap_with_nan_so_a_lag_is_a_fixed_number_of_ca
     assert daily[0] == 5.0 and np.isnan(daily[1]) and daily[2] == 9.0
 
 
-def test_lag_corr_finds_a_planted_lag_one_relationship_and_ignores_a_gap_pair():
-    rng = np.random.default_rng(0)
-    x = rng.normal(0, 1, 60)
-    y = np.empty(60)
-    y[0] = rng.normal()
-    y[1:] = 0.8 * x[:-1] + rng.normal(0, 0.2, 59)                  # y[t] depends on x[t-1]
+# Split 2026-10-02 from `test_lag_corr_finds_a_planted_lag_one_relationship_and_ignores_a_gap_pair`,
+# whose name claimed two things its body never checked: the relationship it planted ran from one
+# series to ANOTHER, which `lag_corr` (a series against its own later self) cannot see, and its input
+# had no gap. The two tests below check what the name said, and the one thing the body did check.
+def test_lag_corr_counts_only_the_day_pairs_where_both_days_were_rated():
+    y = np.random.default_rng(0).normal(0, 1, 60)
     r, n = RP.lag_corr(y, 1)
-    # correlate y[t] with y[t-1] is not what we planted; check x-vs-y cross relationship directly
-    assert n == 59
-    r2, n2 = RP.lag_corr(x, 1)
-    assert n2 == 59
-    # a genuinely autocorrelated series: lag-1 much stronger than lag-7
+    assert n == 59 and np.isfinite(r)                              # 60 days, 59 one-day pairs
+    y[30] = np.nan                                                 # one unrated day
+    r_gap, n_gap = RP.lag_corr(y, 1)
+    assert n_gap == 57 and np.isfinite(r_gap)                      # days 29-30 and 30-31 are gone
+
+
+def test_lag_corr_of_a_slowly_wandering_series_is_stronger_at_one_day_than_at_seven():
+    rng = np.random.default_rng(0)
     z = np.cumsum(rng.normal(0, 1, 200)) * 0.05 + rng.normal(0, 0.05, 200)
     r_lag1, _ = RP.lag_corr(z, 1)
     r_lag7, _ = RP.lag_corr(z, 7)

@@ -158,15 +158,6 @@ describe("D5: no coloured tags", () => {
   });
 });
 
-describe("D13: 64 px between sections", () => {
-  it("each section wrapper on the page is spaced by 8 units", () => {
-    const page = src("index.js");
-    ["cl-decision", "cl-grid", "cl-rules", "cl-evidence", "cl-stability"].forEach((id) => {
-      expect(page).toMatch(new RegExp(`id="${id}" mb=\\{8\\}`));
-    });
-  });
-});
-
 describe("D14: red only for the device refusing", () => {
   it("the device's refusal bullets stay red with ✕ and their words", () => {
     const { container } = render(

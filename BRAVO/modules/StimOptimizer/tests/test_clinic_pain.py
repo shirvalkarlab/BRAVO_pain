@@ -332,7 +332,12 @@ def _clinic_epoch_frame(*, slope_per_mA=0.0, noise_sd=0.3, n_reps=3, seed=0):
     return d
 
 
-def test_clinic_stream_fit_resolves_a_real_current_effect(monkeypatch):
+# THE CALIBRATION CHECK IS SWITCHED OFF in the two fits below (2026-10-02), for the reason
+# `test_stage1.py` gives above its own end-to-end fits: it is a warning that changes no
+# recommendation (decision 233, ruling 6), held by `test_stratum_calibration.py`, and these tests
+# assert only the verdict. Measured on Jetstream2, one thread: 77.3 s with it and 7.3 s without for
+# the first fit, 80.5 s and 7.2 s for the second, each with the same verdict and the same currents.
+def test_clinic_stream_fit_resolves_a_real_current_effect():
     # n_reps=6: `n` is 1 per clinic step (real clinic steps, not pooled REDCap epochs), and the
     # honest-current coverage check sums `n` per (left, right) current pair, requiring at least 5
     # -- so each of the 25 current combinations needs at least 5 repeated clinic steps behind it.
@@ -340,7 +345,7 @@ def test_clinic_stream_fit_resolves_a_real_current_effect(monkeypatch):
     incumbent = float(d.iloc[0]["epoch"])
     res = S1.run_stage1(d, hemispheres=("Left", "Right"), primary_item="left_leg",
                         incumbent_epoch=incumbent, pooled_var_override=1.0,
-                        min_tolerated_h=CP.CLINIC_MIN_TOLERATED_H)
+                        min_tolerated_h=CP.CLINIC_MIN_TOLERATED_H, calibration_check=False)
     ((_key, sl),) = res.slices.items()
     rs = sl.rate_strata[55.0]
     assert rs.fitted is True
@@ -352,7 +357,7 @@ def test_clinic_stream_fit_does_not_resolve_with_no_current_effect():
     incumbent = float(d.iloc[0]["epoch"])
     res = S1.run_stage1(d, hemispheres=("Left", "Right"), primary_item="left_leg",
                         incumbent_epoch=incumbent, pooled_var_override=1.0,
-                        min_tolerated_h=CP.CLINIC_MIN_TOLERATED_H)
+                        min_tolerated_h=CP.CLINIC_MIN_TOLERATED_H, calibration_check=False)
     ((_key, sl),) = res.slices.items()
     rs = sl.rate_strata[55.0]
     assert rs.fitted is True

@@ -138,8 +138,8 @@ def test_adding_the_check_moves_no_recommendation_verdict_or_value(s1, s1_unchec
         assert a == b
 
 
-def test_the_per_pairing_maps_check_is_unchanged_by_the_pooled_one():
-    on = S1.run_stage1(_matrix_two_pairings(), data_horizon="test", washin_min=1.0)
+def test_the_per_pairing_maps_check_is_unchanged_by_the_pooled_one(s1):
+    on = s1                                   # the same fit, with pooling and the check on
     off = S1.run_stage1(_matrix_two_pairings(), data_horizon="test", washin_min=1.0,
                         pool_pulse_widths=False)
     for key, sl in on.slices.items():

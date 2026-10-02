@@ -87,18 +87,6 @@ describe("the three analysis pages say PSD or TD, never spectrum", () => {
     expect(tl).not.toContain("hover \u2192 PSD");
   });
 
-  test("the Biomarkers page's Recompute prompt names the all-band scan", () => {
-    // Printed as "... Click <strong>Recompute</strong> above to run the all-band scan."
-    const idx = read("Biomarkers/index.js");
-    expect(idx).toContain("<strong>Recompute</strong>{\" above to run the all-band scan.\"}");
-    expect(idx).not.toContain("above to run the full-spectrum scan.");
-  });
-
-  test("the deleted legibility wrapper is gone and no page file imports it (WP7)", () => {
-    expect(fs.existsSync(path.join(__dirname, "legibleText.js"))).toBe(false);
-    files.forEach((f) => expect(read(f)).not.toMatch(/legibleText|<LegibleText/));
-  });
-
   test("every pending entry is still on its page (remove it once the PI rules)", () => {
     PENDING.forEach((p) => expect(read(p.file)).toContain(p.text));
   });

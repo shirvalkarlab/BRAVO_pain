@@ -138,18 +138,12 @@ def test_no_dated_settings_is_a_stated_refusal_not_a_number():
     assert "no current per sample" in out["why"]
 
 
-def test_a_current_that_never_moves_is_a_stated_refusal():
-    detail, stream = _record("own", constant_current=2.0)
-    _roc, out = _read(detail, stream)
-    assert out["available"] is False and out["auc"] is None
-    assert "constant" in out["why"], out["why"]
-
-
 def test_the_constant_current_refusal_is_in_plain_words_and_names_no_column():
     """Decision 313. The Closed-Loop ROC panel printed "current_mA is constant at 2 ..." -- a column
     name where a clinician reads a sentence. The refusal names the quantity and its unit."""
     detail, stream = _record("own", constant_current=2.0)
     _roc, out = _read(detail, stream)
+    assert out["available"] is False and out["auc"] is None
     assert "current_mA" not in out["why"], out["why"]
     assert out["why"].startswith("the stimulation current is constant at 2 mA across every one of "), \
         out["why"]

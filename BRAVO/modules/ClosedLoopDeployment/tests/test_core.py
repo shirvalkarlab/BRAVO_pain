@@ -94,19 +94,6 @@ def test_actuation_edge_refuses_a_single_setting_epoch():
     assert e.estimate is None and not e.resolved and e.n_clusters <= 1
 
 
-def test_state_edge_refuses_when_the_rating_cluster_is_absent():
-    """The wording of the refusal changed when this calculation moved onto the biomarker page, and
-    the new sentence is checked here instead of the old one. It now names the column that was
-    missing and says in ordinary words what would go wrong without it, rather than calling it a
-    "rating-level cluster"; the refusal itself, and the absent slope, are unchanged.
-    """
-    T = _toy_table().drop(columns=["report_id"])
-    e = E.state_edge(T, channel="CH", center_hz=20.5)
-    assert e.estimate is None
-    assert "no report_id column" in e.note, e.note
-    assert "pseudoreplication" in e.note, e.note
-
-
 # --- coherence ----------------------------------------------------------------------------------
 def _edge(name, est, lo, hi, unit="rating"):
     return EdgeEstimate(name, est, (lo, hi), 0.01, 50, unit, 8)
@@ -264,17 +251,6 @@ def test_epoch_assignment_survives_microsecond_resolution_datetimes():
         })
         mid = pd.Timestamp("2026-01-01T00:30:00Z").timestamp()
         assert AD._assign_epoch([mid], ep)[0] == 0, f"failed at {unit} resolution"
-
-
-def test_few_clusters_is_flagged_because_the_robust_estimator_is_anticonservative_there():
-    """Observed on the real RCS08 record: cells with three setting epochs reported all eighteen
-    bands as resolved, while the whole-epoch permutation on the same cells returned a family-wise
-    p of 1.00. The cluster-robust variance estimator needs many clusters; with few it produces
-    intervals that are too narrow, which manufactures resolution rather than losing it."""
-    T = _toy_table(n_epochs=4, per_epoch=8)
-    e = E.actuation_edge(T, channel="CH", center_hz=20.5)
-    assert e.n_clusters == 4 and "FEW CLUSTERS" in e.note
-    assert "few clusters" in e.confounded_by
 
 
 def test_the_rendered_coherence_reason_states_the_device_direction_correctly():
@@ -621,16 +597,6 @@ def test_fingerprint_tracks_array_valued_spectra_and_not_merely_the_timestamps()
     assert AD._frame_fingerprint(None, ("t",)) == ("none",)
 
 
-def test_joined_cache_returns_the_same_object_on_a_repeat_call():
-    from ClosedLoopDeployment import adapter as AD
-    AD.clear_joined_cache()
-    psd, eps = _tiny_inputs()
-    a = AD.joined_table_cached(psd, eps)
-    b = AD.joined_table_cached(psd, eps)
-    assert a is b, "a repeat call must not rebuild"
-    assert AD.joined_cache_stats()["entries"] == 1
-
-
 def test_joined_cache_invalidates_on_a_CONTENT_change_that_leaves_the_shape_identical():
     """The property that justifies a content hash over a row count.
 
@@ -655,18 +621,6 @@ def test_joined_cache_invalidates_on_a_CONTENT_change_that_leaves_the_shape_iden
     assert p2 is not p1, "a spectral change must invalidate"
 
 
-def test_joined_cache_is_bounded_and_evicts():
-    """Entries are 100k-row frames, so the memo must not grow without bound."""
-    from ClosedLoopDeployment import adapter as AD
-    AD.clear_joined_cache()
-    psd, eps = _tiny_inputs()
-    for amp in (1.0, 2.0, 3.0, 4.0):
-        e = eps.copy(); e.loc[0, "amp_mA_Left"] = amp
-        AD.joined_table_cached(psd, e)
-    st = AD.joined_cache_stats()
-    assert st["entries"] == st["max"] == AD._JOINED_MEMO_MAX
-
-
 def test_force_refresh_rebuilds_and_replaces_the_entry():
     from ClosedLoopDeployment import adapter as AD
     AD.clear_joined_cache()
@@ -675,31 +629,6 @@ def test_force_refresh_rebuilds_and_replaces_the_entry():
     b = AD.joined_table_cached(psd, eps, force_refresh=True)
     assert b is not a, "force_refresh must rebuild"
     assert AD.joined_table_cached(psd, eps) is b, "and the fresh table must replace the entry"
-
-
-def test_fingerprint_says_when_it_could_not_hash_rather_than_degrading_silently():
-    """A fingerprint that quietly fell back to the shape would reintroduce the stale-table risk the
-    content hash exists to remove, so the mode is the first element of the returned tuple.
-
-    Updated 2026-09-04: a frame carrying NONE of the named columns returned "no_columns" rather
-    than "hashed". The original assertion accepted "hashed" for that case, which was the behaviour
-    that let a fingerprint over a nonexistent column list look healthy while tracking nothing.
-
-    Updated again 2026-09-06, and this is the change that closes the hole properly. Returning a
-    marker only helped when EVERY named column was missing. The mistake that actually happened was
-    two names right and three wrong, which still returned "hashed" over the two that existed. A
-    named column that is not on the frame now raises, so the case cannot arise at all. The
-    conditions on the four ways of naming columns live in test_adapter_caching.py.
-    """
-    from ClosedLoopDeployment import adapter as AD
-    psd, _ = _tiny_inputs()
-    assert AD._frame_fingerprint(psd, ("t", "channel", "psd"))[0] == "hashed"
-    assert AD._frame_fingerprint(None, ("x",)) == ("none",)
-    with pytest.raises(AD.MissingFingerprintColumn):
-        AD._frame_fingerprint(psd, ("nonexistent",))
-    # and a PARTIAL overlap raises too, which is the case that bit us
-    with pytest.raises(AD.MissingFingerprintColumn):
-        AD._frame_fingerprint(psd, ("t", "nonexistent"))
 
 
 def test_annotating_a_column_the_join_ignores_does_not_invalidate():

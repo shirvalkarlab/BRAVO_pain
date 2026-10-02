@@ -1,4 +1,10 @@
-"""Regression tests for _match_to_pro, covering the three direction modes.
+"""Regression tests for _match_to_pro, the reference matcher the shared one is proven equal to.
+
+Since 2026-10-02 the plain direction checks (prior, nearest, the per-channel cap, the fallback to
+nearest) live only in `DecodeCommon/tests/test_matching.py`, on the matcher every page uses, which
+also proves it equal to this one field for field on 600 random cases. What stays here is what no
+other test pins: the PRO-first coverage case, the signed offset under PRO-first, and the full
+pooled pipeline's no-lookahead invariant.
 
 The PRO-first mode is the new discovery default — it walks PROs (the units of independence) and
 claims up to max_per_rating closest PSDs per channel within tolerance, so a PRO with sparse PSD
@@ -20,28 +26,6 @@ except Exception:
 
 import numpy as np
 from modules.Biomarkers.routines.streaming_psd import _match_to_pro
-
-
-def test_prior_direction_requires_psd_before_pro():
-    """A PSD that comes AFTER the PRO must not match under direction='prior' (forecasting)."""
-    psd_t = np.array([100.0, 300.0])         # PSD at t=100 and t=300
-    pro_t = np.array([200.0])                # single PRO at t=200, value=5
-    pro_v = np.array([5.0])
-    lab, dt, idx = _match_to_pro(psd_t, pro_t, pro_v, tolerance_min=10, direction="prior")
-    # Only the PSD at t=100 precedes the PRO and is within tolerance (200-100 = 100s = 1.67 min).
-    assert np.isnan(lab[1]), "PSD after PRO must NOT match under prior"
-    assert np.isfinite(lab[0]) and lab[0] == 5.0
-
-
-def test_nearest_direction_matches_either_side():
-    """Direction='nearest' matches the closest PRO in either time direction."""
-    psd_t = np.array([100.0, 300.0])
-    pro_t = np.array([200.0])
-    pro_v = np.array([7.0])
-    lab, dt, idx = _match_to_pro(psd_t, pro_t, pro_v, tolerance_min=10, direction="nearest")
-    # Both PSDs are 100s = 1.67 min from the PRO; both should match.
-    assert np.all(np.isfinite(lab)), f"nearest must match both, got {lab}"
-    assert np.allclose(lab, 7.0)
 
 
 def test_pro_first_maximizes_pro_coverage_over_psd_first():
@@ -78,31 +62,6 @@ def test_pro_first_maximizes_pro_coverage_over_psd_first():
     lab_nr, dt_nr, idx_nr = _match_to_pro(psd_t, pro_t, pro_v, tolerance_min=10, direction="nearest")
     matched_pros_nr = set(idx_nr[idx_nr >= 0].tolist())
     assert 1 in matched_pros_nr, "nearest must still cover PRO #2 in the easy case"
-
-
-def test_pro_first_enforces_per_channel_cap():
-    """PRO-first caps PSDs PER CHANNEL per PRO. A burst on channel A shouldn't crowd out channel B."""
-    psd_t = np.array([100.0, 100.0, 100.0, 100.0, 100.0])
-    channels = np.array(["A", "A", "A", "B", "B"], dtype=object)
-    pro_t = np.array([100.0])
-    pro_v = np.array([3.0])
-    lab, dt, idx = _match_to_pro(psd_t, pro_t, pro_v, tolerance_min=10,
-                                  direction="pro_first", channels=channels, max_per_rating=2)
-    # Channel A: 3 candidates, cap 2 -> 2 matched. Channel B: 2 candidates, cap 2 -> 2 matched.
-    assert int((idx >= 0).sum()) == 4, f"expected 4 matched (2 per channel), got {int((idx>=0).sum())}"
-    # Channel B's PSDs (indices 3,4) must both be matched -- not crowded out by channel A's burst.
-    assert np.all(idx[3:5] >= 0), f"channel B PSDs must claim despite A's burst, got idx={idx}"
-
-
-def test_pro_first_falls_back_to_nearest_on_misuse():
-    """Calling pro_first without channels/max_per_rating shouldn't silently return zero matches."""
-    psd_t = np.array([100.0, 200.0])
-    pro_t = np.array([150.0])
-    pro_v = np.array([9.0])
-    lab, dt, idx = _match_to_pro(psd_t, pro_t, pro_v, tolerance_min=10, direction="pro_first")
-    # No channels supplied -> falls back to nearest. Both PSDs are 50s = 0.83min from the PRO,
-    # within tolerance -> both must match.
-    assert np.all(idx >= 0), f"pro_first misuse must fall back to nearest, got idx={idx}"
 
 
 def test_pro_first_dt_sign_convention_unchanged():

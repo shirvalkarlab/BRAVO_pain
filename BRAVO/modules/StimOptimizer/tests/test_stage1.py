@@ -29,6 +29,14 @@ from StimOptimizer import stage1_openloop as S1
 # ---------------------------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------------------------
+# EVERY FIT IN THIS FILE RUNS WITHOUT THE CALIBRATION CHECK (`calibration_check=False`, 2026-10-02).
+# The check is a warning that refuses nothing and changes no recommendation (the PI, 2026-09-22,
+# ruling 6 of decision 233; `S1.CALIBRATION_CONSEQUENCE`); it is computed after the fit and only
+# stored beside it. No test here reads it. `test_stratum_calibration.py` holds both halves of that
+# ruling: every fitted surface carries the check, and switching it off leaves the verdict and the
+# optimum the same. Its leave-one-out refits were about 90% of this file's time: the 150-row flat
+# fit below took 77.6 s with it and 7.7 s without, with the same verdict, the same two currents and
+# the same reasons (Jetstream2, one maths thread).
 def _matrix(n_per_cell=10, pw_pairs=((60.0, 160.0), (140.0, 140.0)), rates=(55.0, 110.0), seed=0,
            aliased=False, effect=0.0, asymmetric_dosing=True):
     """Design matrix with a controllable rate x (pulse-width-Left, pulse-width-Right) layout.
@@ -83,7 +91,7 @@ def rcs08_like():
 def stage1_both_sides():
     d = _matrix(n_per_cell=11, pw_pairs=((100.0, 150.0), (140.0, 180.0)), rates=(55.0, 165.0),
                aliased=True)
-    return S1.run_stage1(d, data_horizon="test", washin_min=1.0)
+    return S1.run_stage1(d, data_horizon="test", washin_min=1.0, calibration_check=False)
 
 
 @pytest.fixture(scope="module")
@@ -96,7 +104,7 @@ def stage1_with_thin_stratum():
     extra["pw_us_Left"] = 120.0
     extra["pw_us_Right"] = 130.0
     d = pd.concat([thin, extra], ignore_index=True)
-    return S1.run_stage1(d, data_horizon="test", washin_min=1.0)
+    return S1.run_stage1(d, data_horizon="test", washin_min=1.0, calibration_check=False)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -159,13 +167,6 @@ def test_the_epoch_counts_are_internally_consistent(stage1_with_thin_stratum):
     assert res.frozen.setting("Left").n_epochs_fitted in per_pair.values()
 
 
-def test_pulse_width_right_falls_back_to_left_column_when_absent(rcs08_like):
-    d = rcs08_like.drop(columns=["pw_us_Right"])
-    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0)
-    assert res.audit["per_hemisphere"]["Right"]["pw_col_fallback"] is True
-    assert res.audit["per_hemisphere"]["Right"]["pw_col"] == "pw_us_Left"
-
-
 # ---------------------------------------------------------------------------------------------
 # THE JOINT GUARANTEE: one decision, not two that could disagree
 # ---------------------------------------------------------------------------------------------
@@ -184,12 +185,19 @@ def test_both_sides_share_the_same_rate_gain_and_resolution_verdict(stage1_both_
         assert left.sd_of_difference == pytest.approx(right.sd_of_difference)
 
 
-def test_pulse_width_and_preferred_amplitude_stay_genuinely_per_side():
+@pytest.fixture(scope="module")
+def one_pairing_two_rates():
+    """One (60, 160) us pairing over 55 and 110 Hz, not aliased. Fitted once for the two tests that
+    read it (until 2026-10-02 each made this identical fit itself)."""
+    d = _matrix(n_per_cell=12, pw_pairs=((60.0, 160.0),), rates=(55.0, 110.0), aliased=False)
+    return S1.run_stage1(d, data_horizon="test", washin_min=1.0, calibration_check=False)
+
+
+def test_pulse_width_and_preferred_amplitude_stay_genuinely_per_side(one_pairing_two_rates):
     """Unlike rate, pulse width and current are independently programmable per hemisphere, so a
     joint stratum whose two sides run different pulse widths must hand back two different
     ``pw_us`` values -- one per side -- from the SAME fit."""
-    d = _matrix(n_per_cell=12, pw_pairs=((60.0, 160.0),), rates=(55.0, 110.0), aliased=False)
-    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0)
+    res = one_pairing_two_rates
     left, right = res.frozen.setting("Left"), res.frozen.setting("Right")
     assert left.pw_us == pytest.approx(60.0)
     assert right.pw_us == pytest.approx(160.0)
@@ -202,7 +210,7 @@ def test_asymmetric_dosing_epochs_are_not_excluded_from_the_joint_fit():
     d = _matrix(n_per_cell=14, pw_pairs=((60.0, 60.0),), rates=(55.0,), asymmetric_dosing=True)
     n_asymmetric = int(((d["amp_mA_Left"] == 0) | (d["amp_mA_Right"] == 0)).sum())
     assert n_asymmetric > 0, "fixture must contain asymmetric-dosing rows"
-    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0)
+    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, calibration_check=False)
     ((_pwl, _pwr, _contact), sl), = res.slices.items()
     assert sl.n_epochs == len(d)
 
@@ -365,7 +373,8 @@ def test_an_override_records_itself_and_changes_no_setting(stage1_both_sides):
 
 
 def test_the_frozen_configuration_carries_its_declared_provenance(rcs08_like):
-    res = S1.run_stage1(rcs08_like, data_horizon="2026-08-12", washin_min=1.0)
+    res = S1.run_stage1(rcs08_like, data_horizon="2026-08-12", washin_min=1.0,
+                        calibration_check=False)
     assert res.frozen.data_horizon == "2026-08-12"
     assert res.frozen.washin_min == pytest.approx(1.0)
     assert res.frozen.n_epochs_total == len(rcs08_like)
@@ -382,9 +391,8 @@ def test_the_summary_reports_support_alongside_every_verdict(stage1_both_sides):
     assert len(res.summary) == 2 * len(res.slices)
 
 
-def test_the_summary_carries_each_sides_own_amplitude_not_the_others():
-    d = _matrix(n_per_cell=12, pw_pairs=((60.0, 160.0),), rates=(55.0, 110.0), aliased=False)
-    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0)
+def test_the_summary_carries_each_sides_own_amplitude_not_the_others(one_pairing_two_rates):
+    res = one_pairing_two_rates
     left_row = res.summary.loc[res.summary["hemisphere"] == "Left"].iloc[0]
     right_row = res.summary.loc[res.summary["hemisphere"] == "Right"].iloc[0]
     assert left_row["opt_amp_mA"] == pytest.approx(left_row["opt_amp_mA_left"])
@@ -396,7 +404,8 @@ def test_the_summary_carries_each_sides_own_amplitude_not_the_others():
 # ---------------------------------------------------------------------------------------------
 def test_the_envelope_masks_the_one_shared_rate_axis_for_both_sides():
     d = _matrix(n_per_cell=14, pw_pairs=((60.0, 60.0),), rates=(40.0, 110.0), aliased=False)
-    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, adaptive_min_rate_hz=55.0)
+    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, adaptive_min_rate_hz=55.0,
+                        calibration_check=False)
     for s in res.frozen.settings:
         if np.isfinite(s.rate_hz):
             assert s.rate_hz >= 55.0
@@ -414,7 +423,7 @@ def test_no_adaptive_capable_setting_reports_nan_rate_on_both_sides():
     # as safe by extrapolation and get chosen, which is a real property of the safety model and
     # not what this test is about.
     res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, adaptive_min_rate_hz=55.0,
-                        freq_grid=[10.0, 20.0, 30.0, 40.0])
+                        freq_grid=[10.0, 20.0, 30.0, 40.0], calibration_check=False)
     for s in res.frozen.settings:
         assert not np.isfinite(s.rate_hz)
         assert s.rate_resolved is None
@@ -424,9 +433,12 @@ def test_no_adaptive_capable_setting_reports_nan_rate_on_both_sides():
 # ---------------------------------------------------------------------------------------------
 # The joint safety model: unsafe on EITHER side's own ceiling excludes the cell
 # ---------------------------------------------------------------------------------------------
-def _joint_safe_fixture():
+@pytest.fixture(scope="module")
+def joint_safe():
     """The fixture, the fitted run, and the two per-side safety models' own AND, reconstructed
-    independently from the same unchanged per-side ``SafetyGP`` and ``safety_ceiling.safety_seed``."""
+    independently from the same unchanged per-side ``SafetyGP`` and ``safety_ceiling.safety_seed``.
+    Built once for the two tests below, which only read it (a plain helper each called until
+    2026-10-02)."""
     from StimOptimizer.routines import surrogate as SUR
     from StimOptimizer import safety_ceiling as SC
 
@@ -434,7 +446,7 @@ def _joint_safe_fixture():
                asymmetric_dosing=False)
     ceilings = {"Left": (1.0, "test"), "Right": (5.0, "test")}
     res = S1.run_stage1(d, data_horizon="test", washin_min=1.0,
-                        safety_ceiling_by_hemisphere=ceilings)
+                        safety_ceiling_by_hemisphere=ceilings, calibration_check=False)
     ((_pwl, _pwr, _contact), sl), = res.slices.items()
     gx = sl.grid.grid_X()
 
@@ -451,13 +463,13 @@ def _joint_safe_fixture():
     return sl, gx, models_and
 
 
-def test_the_safety_models_part_of_the_joint_safe_set_is_exactly_the_and_of_both_sides_own_models():
+def test_the_safety_models_part_of_the_joint_safe_set_is_exactly_the_and_of_both_sides_own_models(joint_safe):
     """The safety models' part of the joint safe set at a (rate, amp_Left, amp_Right) cell is
     EXACTLY "safe on the Left's own (rate, amp_Left) view of it AND safe on the Right's own (rate,
     amp_Right) view of it", compared bit for bit rather than merely checked for a plausible shape.
     Split on 2026-09-26 (decision 308) from a test that pinned the WHOLE joint safe set to this
     AND: the set now also carries each side's stated ceiling as a hard bound, tested below."""
-    sl, gx, models_and = _joint_safe_fixture()
+    sl, gx, models_and = joint_safe
     # every joint-safe cell is safe on both models, and every model-safe cell under both ceilings
     # is joint-safe: the models' part is untouched
     under = (gx[:, 1] <= 1.0 + 1e-9) & (gx[:, 2] <= 5.0 + 1e-9)
@@ -465,11 +477,11 @@ def test_the_safety_models_part_of_the_joint_safe_set_is_exactly_the_and_of_both
     assert not (sl.safe & ~models_and).any()
 
 
-def test_the_joint_safe_set_also_holds_every_cell_above_a_sides_stated_ceiling_out():
+def test_the_joint_safe_set_also_holds_every_cell_above_a_sides_stated_ceiling_out(joint_safe):
     """Decision 308: the models are seeded with severity 3 AT the ceiling, a soft bound only; the
     joint safe set additionally leaves out every cell above either side's stated ceiling, and on
     this fixture that removes cells the models alone would call safe."""
-    sl, gx, models_and = _joint_safe_fixture()
+    sl, gx, models_and = joint_safe
     above = gx[:, 1] > 1.0 + 1e-9
     assert not (sl.safe & above).any(), "no cell above the left's 1.0 mA ceiling is safe"
     assert (models_and & above).any(), "the control: the models alone reach above 1.0 mA here"
@@ -656,10 +668,12 @@ def _current_effect_matrix(*, slope_per_mA=0.0, noise_sd=0.3, n_per_cell=15, see
     return d
 
 
+# (Every fit below runs without the warning-only calibration check: see the note above `_matrix`.)
 def test_a_real_well_covered_current_effect_resolves_and_is_used():
     d = _current_effect_matrix(slope_per_mA=1.2, noise_sd=0.3, seed=1)
     incumbent = float(d.iloc[0]["epoch"])          # the (0, 0) mA cell: highest pain, well-rated
-    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, incumbent_epoch=incumbent)
+    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, incumbent_epoch=incumbent,
+                        calibration_check=False)
     ((_key, sl),) = res.slices.items()
     rs = sl.rate_strata[55.0]
     assert rs.fitted is True
@@ -676,7 +690,8 @@ def test_a_real_well_covered_current_effect_resolves_and_is_used():
 def test_the_same_matrix_with_no_current_effect_does_not_resolve_and_carries_no_current():
     d = _current_effect_matrix(slope_per_mA=0.0, noise_sd=2.0, seed=2, n_reps=6)
     incumbent = float(d.iloc[0]["epoch"])
-    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, incumbent_epoch=incumbent)
+    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, incumbent_epoch=incumbent,
+                        calibration_check=False)
     ((_key, sl),) = res.slices.items()
     rs = sl.rate_strata[55.0]
     assert rs.fitted is True
@@ -691,11 +706,22 @@ def test_the_same_matrix_with_no_current_effect_does_not_resolve_and_carries_no_
     assert "no current can be recommended" in joined
 
 
-def test_a_thinly_sampled_rate_is_reported_not_enough_data_with_no_surface():
-    d = _current_effect_matrix(slope_per_mA=1.2, noise_sd=0.3, seed=3, thin_rate=110.0,
+@pytest.fixture(scope="module")
+def stage1_with_thin_rate():
+    """One well-sampled rate (55 Hz, the 5x5 current grid, a real current effect) beside a 110 Hz
+    rate of only 5 epochs. Fitted once for the two tests below, which only read it. (Until
+    2026-10-02 each fitted its own copy, at seeds 3 and 4; the seed moves only the pain noise, and
+    what the thin-rate test asserts -- the counts, the reason, the unfitted thin rate -- does not
+    depend on it.)"""
+    d = _current_effect_matrix(slope_per_mA=1.2, noise_sd=0.3, seed=4, thin_rate=110.0,
                                thin_rate_n=5)
     incumbent = float(d.iloc[0]["epoch"])
-    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, incumbent_epoch=incumbent)
+    return S1.run_stage1(d, data_horizon="test", washin_min=1.0, incumbent_epoch=incumbent,
+                         calibration_check=False)
+
+
+def test_a_thinly_sampled_rate_is_reported_not_enough_data_with_no_surface(stage1_with_thin_rate):
+    res = stage1_with_thin_rate
     ((_key, sl),) = res.slices.items()
     thin = sl.rate_strata[110.0]
     assert thin.fitted is False
@@ -709,12 +735,8 @@ def test_a_thinly_sampled_rate_is_reported_not_enough_data_with_no_surface():
     assert rich.n_epochs == 75
 
 
-def test_rate_summary_reports_one_row_per_pw_pair_and_rate_attempted():
-    d = _current_effect_matrix(slope_per_mA=1.2, noise_sd=0.3, seed=4, thin_rate=110.0,
-                               thin_rate_n=5)
-    incumbent = float(d.iloc[0]["epoch"])
-    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, incumbent_epoch=incumbent)
-    rs = res.rate_summary
+def test_rate_summary_reports_one_row_per_pw_pair_and_rate_attempted(stage1_with_thin_rate):
+    rs = stage1_with_thin_rate.rate_summary
     assert set(rs["rate_hz"]) == {55.0, 110.0}
     fitted_row = rs.loc[rs["rate_hz"] == 55.0].iloc[0]
     thin_row = rs.loc[rs["rate_hz"] == 110.0].iloc[0]

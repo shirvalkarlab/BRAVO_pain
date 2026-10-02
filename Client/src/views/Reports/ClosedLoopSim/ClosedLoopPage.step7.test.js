@@ -14,7 +14,9 @@
  *     own card and was absent from the one band on the page that tells a reader what to do next.
  *  4. THE BAND-POWER-TO-PAIN READING WITH THE CURRENT TAKEN OUT, printed beside the plain one on
  *     the evidence triangle, replacing the interim sentence that could only say it had not been
- *     measured.
+ *     measured. Its three tests left this file on 2026-10-02: the same renders are pinned, with
+ *     more, by `EvidenceTriangle.currentCaveat.test.js`, `EvidenceTriangle.adjustedInOpen.test.js`
+ *     and `EvidenceTriangle.noColumnNames.test.js`.
  */
 import "@testing-library/jest-dom";
 import { render as rtlRender } from "@testing-library/react";
@@ -35,7 +37,6 @@ jest.mock("database/session-control", () => ({ SessionController: { query: jest.
 import DeploySignoffCard from "./DeploySignoffCard";
 import DecisionCard from "./DecisionCard";
 import WhatWouldChangeThis from "./WhatWouldChangeThis";
-import EvidenceTrianglePanel from "./EvidenceTrianglePanel";
 import payload from "./__fixtures__/rcs08_deployment_payload_2026-09-15.json";
 
 const wrap = (ui) => (
@@ -162,38 +163,3 @@ describe("what would change this answer reads the band-stability answer", () => 
 });
 
 // --- 4. the second reading of E2 on the triangle -----------------------------------------------
-describe("the band-power-to-pain edge carries the reading with the current taken out", () => {
-  const withAdjusted = (adjusted) => {
-    const d = JSON.parse(JSON.stringify(payload));
-    d.candidates = [{ ...(d.candidates || [{}])[0], channel: "ZERO_THREE_LEFT", center_hz: 24.5 }];
-    d.edges.E2.adjusted = adjusted;
-    return { data: d };
-  };
-
-  it("prints the adjusted value and its interval beside the plain one", () => {
-    const { container } = rtlRender(wrap(<EvidenceTrianglePanel report={withAdjusted({
-      available: true, adjusted_for: "amp_mA_Left", auc: 0.521, auc_low: 0.441, auc_high: 0.604,
-      partial_r: -0.052, n_pain_reports: 32, shape: "line",
-    })} />));
-    const text = container.textContent;
-    expect(text).toMatch(/0\.521/);
-    expect(text).toMatch(/0\.441/);
-    expect(text).toMatch(/current in force/i);
-  });
-
-  it("says why it could not be made rather than showing nothing", () => {
-    const { container } = rtlRender(wrap(<EvidenceTrianglePanel report={withAdjusted({
-      available: false, adjusted_for: "amp_mA_Left",
-      why: "this band's power moves almost exactly with the left stimulation current on these samples",
-    })} />));
-    expect(container.textContent).toMatch(/almost exactly with the left stimulation current/);
-  });
-
-  it("falls back to the interim sentence when no second reading was asked for", () => {
-    const d = JSON.parse(JSON.stringify(payload));
-    d.candidates = [{ ...(d.candidates || [{}])[0], channel: "ZERO_THREE_LEFT", center_hz: 24.5 }];
-    delete d.edges.E2.adjusted;
-    const { container } = rtlRender(wrap(<EvidenceTrianglePanel report={{ data: d }} />));
-    expect(container.textContent).toMatch(/stimulation current in force/i);
-  });
-});

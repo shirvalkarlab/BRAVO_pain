@@ -170,16 +170,6 @@ def test_the_serialised_verdict_string_for_the_established_case_is_plain_support
 
 
 # --- D19 and D26 -----------------------------------------------------------------------------------
-def test_d19_facts_carry_the_point_sign_and_the_established_flag_reads_the_interval():
-    e1 = _e("E1", -3.788, (-12.505, 4.929), 0.419)
-    e2 = _e("E2", 0.22, (0.11, 0.33), 0.001)
-    f = PL._facts_for({}, e1, e2, "power_linear")
-    assert f["power_slope_vs_amplitude_sign"] == -1
-    assert f["power_slope_vs_amplitude_sign_established"] is False
-    assert f["power_slope_vs_pain_sign"] == 1
-    assert f["power_slope_vs_pain_sign_established"] is True
-
-
 def test_d26_verdicts_follow_the_sign_and_carry_the_caveat():
     """Right-way slope, interval spanning zero: neither verdict indicated, no alert predicted,
     both sentences carry the caveat with the numbers. Wrong-way slope: inverted, alert predicted,

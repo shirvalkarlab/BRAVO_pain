@@ -22,6 +22,7 @@ import inspect
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from ClosedLoopDeployment import post_ramp as PR
 from StimOptimizer import pipeline as PL
@@ -138,13 +139,20 @@ def _design_above_ceiling(n=24, seed=0):
 CEIL = {"Left": (3.0, "test"), "Right": (3.0, "test")}
 
 
-def _stage1():
+# Stage 1 runs here without its calibration check (`calibration_check=False`, 2026-10-02): a
+# warning that changes no recommendation (decision 233, ruling 6), read by no test in this file,
+# and held by `test_stratum_calibration.py`; its leave-one-out refits were most of each fit's time.
+@pytest.fixture(scope="module")
+def stage1_above_ceiling():
+    """Fitted once for the three tests below, which only read it (each refitted it until
+    2026-10-02)."""
     return S1.run_stage1(_design_above_ceiling(), data_horizon="t", washin_min=1.0,
-                         safety_ceiling_by_hemisphere=CEIL, pool_pulse_widths=True)
+                         safety_ceiling_by_hemisphere=CEIL, pool_pulse_widths=True,
+                         calibration_check=False)
 
 
-def test_stage1_proposes_and_recommends_nothing_above_either_sides_ceiling():
-    s1 = _stage1()
+def test_stage1_proposes_and_recommends_nothing_above_either_sides_ceiling(stage1_above_ceiling):
+    s1 = stage1_above_ceiling
     assert s1.slices, "the fixture fits a joint surface"
     for (pwl, pwr, _contact), sl in s1.slices.items():
         gx = sl.grid.grid_X()
@@ -168,13 +176,13 @@ def test_stage1_proposes_and_recommends_nothing_above_either_sides_ceiling():
             assert st.amp_star_mA <= 3.0 + TOL, (st.hemisphere, st.amp_star_mA)
 
 
-def test_the_control_this_fixture_reaches_above_the_ceiling_without_the_hard_bound():
+def test_the_control_this_fixture_reaches_above_the_ceiling_without_the_hard_bound(stage1_above_ceiling):
     """The control: on this fixture the safety models' own (soft) safe set, and the untouched
     queue, reach above 3.0 mA -- so the test above measures the bound, not a fixture that never
     went there. The two models are refitted exactly as `run_stage1` fits them."""
     from StimOptimizer.routines import plots as PLT
     from StimOptimizer.routines import surrogate as SUR
-    s1 = _stage1()
+    s1 = stage1_above_ceiling
     sgp = {}
     for hemi in ("Left", "Right"):
         Xs, sev, sv, _m = SC.safety_seed(s1.D, f"amp_mA_{hemi}", freq_grid=PLT.FREQ_GRID,
@@ -188,9 +196,9 @@ def test_the_control_this_fixture_reaches_above_the_ceiling_without_the_hard_bou
     assert (gx[soft, 1] > 3.0 + TOL).any(), "the soft safe set alone would allow a left current above 3.0 mA"
 
 
-def test_the_what_to_test_next_queue_is_filtered_to_the_ceiling_even_where_nothing_else_filters_it():
+def test_the_what_to_test_next_queue_is_filtered_to_the_ceiling_even_where_nothing_else_filters_it(stage1_above_ceiling):
     """The queue was the one table filtered by nothing: not the safe set, not the ceiling."""
-    s1 = _stage1()
+    s1 = stage1_above_ceiling
     sl = next(iter(s1.slices.values()))
     gx = sl.grid.grid_X()
     q = np.asarray(sl.queue, int)
@@ -257,7 +265,8 @@ def test_run_two_stage_hands_the_gates_ceiling_to_stage2(monkeypatch):
     d = _design_above_ceiling()
     PL.run_two_stage(d, data_horizon="t", washin_min=1.0, primary_item="left_leg",
                      gate_kwargs={"ceiling_mA": ceil},
-                     stage1_kwargs={"safety_ceiling_by_hemisphere": ceil})
+                     stage1_kwargs={"safety_ceiling_by_hemisphere": ceil,
+                                    "calibration_check": False})
     assert seen.get("ceiling_mA") == ceil
 
 

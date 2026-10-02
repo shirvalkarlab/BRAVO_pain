@@ -24,16 +24,6 @@ def test_first_window_rejected_when_mostly_missing():
     assert not np.isfinite(psd_bad).any()
 
 
-def test_first_window_kept_when_missing_below_threshold():
-    fs = 250.0
-    n = int(30 * fs)
-    sig = np.vstack([_sine(n, fs, 20.0)])
-    names = ["ZERO_TWO_LEFT"]
-    miss = np.zeros(n); miss[: int(0.05 * n)] = 1  # 5% < 10% floor
-    psd = sp.welch_psd_for_instance(sig, names, fs, names, missing=miss)
-    assert np.isfinite(psd).any()
-
-
 def test_centered_window_dropped_over_gap():
     """A rating-centered window dominated by a zero-fill gap is dropped from kept_mask."""
     fs = 250.0

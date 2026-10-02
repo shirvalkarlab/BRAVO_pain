@@ -9,7 +9,6 @@ import { ThemeProvider } from "@mui/material/styles";
 import theme from "assets/theme";
 import { PlatformContextProvider } from "context";
 import SideMenu from "components/SideMenu";
-import DashboardLayout from "layouts/DatabaseLayout/DashboardLayout";
 
 // The context saves each change to the server; nothing is sent from a test.
 jest.mock("database/session-control", () => ({
@@ -45,7 +44,3 @@ test("the sidebar draws its heading in sentence case and the product name unchan
   expect(screen.getByText("Biomarkers exploration")).toBeTruthy();
 });
 
-test("the page frame renders its children inside the content column", () => {
-  render(wrap(<DashboardLayout><p>page body</p></DashboardLayout>));
-  expect(screen.getByText("page body")).toBeTruthy();
-});

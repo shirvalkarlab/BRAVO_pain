@@ -237,6 +237,9 @@ def test_without_a_ceiling_argument_every_arm_reads_the_hard_limit_and_says_no_c
         assert arm.meta["safety_ceiling_provenance"] == SC.FALLBACK_PROVENANCE
 
 
+# Stage 1 runs here without its calibration check (`calibration_check=False`, 2026-10-02): a
+# warning that changes no recommendation (decision 233, ruling 6), read by no test in this file,
+# and held by `test_stratum_calibration.py`; its leave-one-out refits were most of each fit's time.
 def test_the_flat_fit_and_stage_1_seed_from_one_builder_and_agree_on_the_anchors():
     """Until 2026-09-12 the two fitters seeded from different epoch sets (Stage 1 counted a side's
     0 mA epochs as tolerated at zero current; the flat fit did not), so the same side under the
@@ -258,7 +261,8 @@ def test_the_flat_fit_and_stage_1_seed_from_one_builder_and_agree_on_the_anchors
     flat = PL.run(D, sites=("left_leg",), hemispheres=("Left",), outdir=None,
                   render_figures=False, data_horizon="t", washin_min=1.0,
                   safety_ceiling_by_hemisphere=by).arms["left_leg__Left"]
-    s1 = S1.run_stage1(D, data_horizon="t", washin_min=1.0, safety_ceiling_by_hemisphere=by)
+    s1 = S1.run_stage1(D, data_horizon="t", washin_min=1.0, safety_ceiling_by_hemisphere=by,
+                       calibration_check=False)
     audit = s1.frozen.audit["per_hemisphere"]["Left"]["safety_ceiling"]
     assert audit["safety_ceiling_mA"] == 3.0 and audit["safety_ceiling_provenance"] == "t"
     assert audit["n_tolerated_anchors"] == flat.meta["n_tolerated_anchors"]
@@ -279,7 +283,7 @@ def test_stage_1_reads_each_sides_own_ceiling_and_a_stricter_ceiling_shrinks_the
     by_strict = {"Left": (2.0, "left test"), "Right": (4.5, "right test")}
     by_loose = {"Left": (5.0, "left test"), "Right": (4.5, "right test")}
     res = S1.run_stage1(d, data_horizon="t", washin_min=1.0,
-                        safety_ceiling_by_hemisphere=by_strict)
+                        safety_ceiling_by_hemisphere=by_strict, calibration_check=False)
     a_l = res.frozen.audit["per_hemisphere"]["Left"]["safety_ceiling"]
     a_r = res.frozen.audit["per_hemisphere"]["Right"]["safety_ceiling"]
     assert (a_l["safety_ceiling_mA"], a_l["safety_ceiling_provenance"]) == (2.0, "left test")
@@ -287,7 +291,7 @@ def test_stage_1_reads_each_sides_own_ceiling_and_a_stricter_ceiling_shrinks_the
     n_strict = int(res.summary[res.summary["hemisphere"] == "Left"]["n_safe"].iloc[0])
 
     loose = S1.run_stage1(d, data_horizon="t", washin_min=1.0,
-                          safety_ceiling_by_hemisphere=by_loose)
+                          safety_ceiling_by_hemisphere=by_loose, calibration_check=False)
     n_loose = int(loose.summary[loose.summary["hemisphere"] == "Left"]["n_safe"].iloc[0])
     assert n_strict < n_loose, (n_strict, n_loose)
 

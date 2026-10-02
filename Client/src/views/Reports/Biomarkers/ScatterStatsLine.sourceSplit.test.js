@@ -41,8 +41,13 @@ test("the line is printed under the cell's own statistics, in the PI's words", (
   const line = getByTestId("source-split-line");
   expect(line.textContent).toBe(
     "TD values: R \u22120.05 (\u22120.23 to +0.12), 76 reports \u00b7 PSD values: R \u22120.37 (\u22120.56 to \u22120.19), 86 reports");
+  // The cell's own statistics line ends "not allowing for the 22 bands tested". Until 2026-10-02
+  // this searched for its older wording, which no longer exists, so indexOf gave -1 and the order
+  // check passed whatever the order was.
   const text = container.textContent;
-  expect(text.indexOf("Correlation for this square alone: r = ")).toBeLessThan(text.indexOf("TD values:"));
+  const own = text.indexOf("not allowing for the 22 bands tested");
+  expect(own).toBeGreaterThanOrEqual(0);
+  expect(own).toBeLessThan(text.indexOf("TD values:"));
 });
 
 test("no line for a stored grid built before the split", () => {

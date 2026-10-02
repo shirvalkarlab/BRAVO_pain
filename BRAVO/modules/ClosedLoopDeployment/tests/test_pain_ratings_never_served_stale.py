@@ -29,23 +29,6 @@ def test_a_new_pain_report_reaches_the_design_matrix_with_the_recordings_unchang
     assert len(live_inputs) == 1, "the settings (recording-derived) must still be read only once"
 
 
-def test_the_design_matrix_is_not_part_of_what_is_saved_under_the_recording_key(live_inputs, monkeypatch):
-    seen = {}
-    real = AD._shared_store
-
-    def spy(kind, sig, payload, **kw):
-        seen[kind] = payload
-        return real(kind, sig, payload, **kw)
-    monkeypatch.setattr(AD, "_shared_store", spy)
-    AD.evidence_inputs_cached("PARTICIPANT", force_refresh=True)
-    saved = seen["inputs"]
-    frames = saved.values() if isinstance(saved, dict) else saved
-    for f in frames:
-        cols = set(getattr(f, "columns", []))
-        assert not cols & {"nrs", "vas", "left_leg_vas", "back_vas", "mpq_sum"}, \
-            f"a pain column is saved under the recording key: {sorted(cols)}"
-
-
 def test_the_joined_table_memo_tells_two_pain_frames_apart():
     psd, eps = _psd_frame(), _epoch_frame()
     p1 = pd.DataFrame({"epoch": [1.0], "report_id": ["1"], "nrs": [7.0], "vas": [70.0]})

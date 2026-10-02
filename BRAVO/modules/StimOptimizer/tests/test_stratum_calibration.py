@@ -39,9 +39,16 @@ def _fitted_strata(res):
     return out
 
 
-def test_every_fitted_surface_carries_the_pre_registered_check_and_it_blocks_nothing():
-    res = S1.run_stage1(_matrix(), hemispheres=("Left", "Right"), primary_item="left_leg_vas",
-                        data_horizon="2026-12-31")
+@pytest.fixture(scope="module")
+def checked():
+    """The fit with the check computed, shared by the two tests that read it (2026-10-02; each
+    made this identical fit itself before)."""
+    return S1.run_stage1(_matrix(), hemispheres=("Left", "Right"), primary_item="left_leg_vas",
+                         data_horizon="2026-12-31")
+
+
+def test_every_fitted_surface_carries_the_pre_registered_check_and_it_blocks_nothing(checked):
+    res = checked
     strata = _fitted_strata(res)
     assert strata, "the fixture must fit at least one per-rate surface"
     for rs in strata:
@@ -97,16 +104,22 @@ def test_a_fold_that_cannot_be_trained_on_says_not_computable_rather_than_passin
     assert cal["blocking"] is False and cal["checks"]["C2_loera_skill"] in (True, False, None)
 
 
-def test_the_check_never_changes_what_the_search_recommends():
-    """The same fit, with the check computed and with it switched off, must resolve the same way."""
-    res_on = S1.run_stage1(_matrix(), hemispheres=("Left", "Right"), primary_item="left_leg_vas",
-                           data_horizon="2026-12-31")
+def test_the_check_never_changes_what_the_search_recommends(checked):
+    """The same fit, with the check computed and with it switched off, must resolve the same way.
+
+    Since 2026-10-02 most Stage 1 tests run with the check switched off, because it is a warning
+    that changes nothing and it was most of their time; this test is what licenses that, so it
+    compares EVERY fitted surface (not only the first) and the frozen configuration itself."""
+    res_on = checked
     res_off = S1.run_stage1(_matrix(), hemispheres=("Left", "Right"), primary_item="left_leg_vas",
                             data_horizon="2026-12-31", calibration_check=False)
-    a, b = _fitted_strata(res_on)[0], _fitted_strata(res_off)[0]
-    assert a.resolution.get("resolved") == b.resolution.get("resolved")
-    assert a.x_star == b.x_star and np.isclose(a.mu_star, b.mu_star)
-    assert b.meta.get("calibration") is None, "switched off means not computed, not a blank"
+    on, off = _fitted_strata(res_on), _fitted_strata(res_off)
+    assert len(on) == len(off) and on
+    for a, b in zip(on, off):
+        assert a.resolution.get("resolved") == b.resolution.get("resolved")
+        assert a.x_star == b.x_star and np.isclose(a.mu_star, b.mu_star)
+        assert b.meta.get("calibration") is None, "switched off means not computed, not a blank"
+    assert res_on.frozen.describe() == res_off.frozen.describe()
 
 
 if __name__ == "__main__":                              # pragma: no cover

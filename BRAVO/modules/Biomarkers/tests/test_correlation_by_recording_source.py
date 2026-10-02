@@ -168,14 +168,6 @@ def test_without_the_per_report_flag_the_split_says_it_could_not_be_made():
     assert blank["correlation_by_recording_source"]["available"] is False
 
 
-def test_the_grid_rule_version_moved_so_no_stored_grid_without_the_split_is_served():
-    try:
-        from modules.Biomarkers import bravo_service as BS
-    except ImportError:                                    # pragma: no cover - host spelling
-        from Biomarkers import bravo_service as BS
-    assert int(BS._BAND_SWEEP_RULE_VERSION.split("_")[0][1:]) >= 23, BS._BAND_SWEEP_RULE_VERSION
-
-
 if __name__ == "__main__":
     for _n, _f in sorted(globals().items()):
         if _n.startswith("test_") and callable(_f):

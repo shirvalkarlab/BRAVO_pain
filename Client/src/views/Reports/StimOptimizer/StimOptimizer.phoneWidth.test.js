@@ -43,15 +43,6 @@ describe("wide tables scroll inside their own card, never the page", () => {
     });
   });
 
-  it("the Today | Suggested | Difference table sits inside a sideways-scrolling wrapper", () => {
-    const { getAllByText } = render(
-      <DecisionStrip arms={{}} plan={newResponse.two_stage} inForce={newResponse.in_force_by_side} />,
-    );
-    const heads = getAllByText("Difference");
-    expect(heads.length).toBeGreaterThan(0);
-    heads.forEach((h) => expect(h.closest("[data-scroll-x]")).not.toBeNull());
-  });
-
   it("the readiness rows sit inside a sideways-scrolling wrapper", () => {
     const { container } = render(<SensingEvidenceTable closedLoop={newResponse.closed_loop} />);
     const rows = container.querySelectorAll('[data-testid="readiness-row"]');

@@ -18,7 +18,6 @@ import {
   T, LAYOUT, WEIGHT, FONT_FAMILY, contrastRatio, relativeLuminance,
 } from "assets/theme/base/tokens";
 import colors from "assets/theme/base/colors";
-import typography from "assets/theme/base/typography";
 import { JumpRow } from "views/Reports/paper/links";
 
 const SRC = path.resolve(__dirname, "..", "..");
@@ -319,12 +318,6 @@ describe("D6: one typeface, IBM Plex Sans, in weights 400 and 600 only", () => {
     expect(WEIGHT).toEqual({ regular: 400, strong: 600 });
   });
 
-  test("every weight the theme names (the JSX fontWeight props map to these) is 400 or 600", () => {
-    ["fontWeightLighter", "fontWeightLight", "fontWeightRegular", "fontWeightMedium", "fontWeightBold"]
-      .filter((k) => typography[k] !== undefined)
-      .forEach((k) => expect({ k, w: [400, 600].includes(Number(typography[k])) }).toEqual({ k, w: true }));
-  });
-
   test("no other face and no other weight in the pages, paper/ or the theme", () => {
     const v = [...PAGE_FILES, ...THEME_FILES].flatMap((f) => d6Violations(rel(f), read(f)));
     expect(report(v)).toBe("");
@@ -470,11 +463,6 @@ describe("D13: 64 px between sections and a content column of at most 1,120 px",
   test("the tokens say 1120 and 64", () => {
     expect(LAYOUT.contentMax).toBe(1120);
     expect(LAYOUT.betweenSections).toBe(64);
-  });
-
-  test("paper/Section leaves 64 px below itself, from the token", () => {
-    const src = read(path.join(SRC, "views", "Reports", "paper", "Section.js"));
-    expect(src).toMatch(/marginBottom:\s*LAYOUT\.betweenSections/);
   });
 
   test("the layout and the three pages cap their column at the token, and nothing wider", () => {

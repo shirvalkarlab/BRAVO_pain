@@ -538,37 +538,22 @@ def test_a_family_with_no_measured_p_values_is_not_assessed_and_does_not_raise()
           "and an empty family raises nothing")
 
 
-def test_family_wise_correction_is_isolated_per_grid_and_is_family_size_sensitive():
-    """Renamed from `test_family_wise_correction_does_not_pool_the_correlation_and_auc_grids_
-    together` -- a review found the old name undersold what the test actually checks. It proves
-    TWO separate things, both load-bearing, and the name now says both:
+def test_the_same_p_values_get_smaller_q_values_in_a_smaller_family():
+    """Benjamini-Hochberg's q-value for a p-value depends on how many tests share its family: the
+    reason decision 63 restricts the family to the grid's 22 band centres instead of the older
+    routine's ~101 bins. The same three p-values, corrected once on their own and once beside three
+    large ones, get strictly smaller q-values in the family of three.
 
-    1. `band_time_sweep_from_power` calls `_apply_family_wise_correction` once for the correlation
-       rows and once for the AUC rows -- two separate 22-centre families, never one 44-test family.
-       Correcting the correlation rows on their own gives exactly the same answer as correcting that
-       same list of p-values with `bh_fdr` directly, i.e. the AUC rows passed in the SAME call to
-       `band_time_sweep_from_power` never leak into the correlation family.
-    2. Within ONE family, Benjamini-Hochberg's q-value for a given p-value genuinely does depend on
-       how many other tests are in that same family -- that is the entire reason decision 63
-       restricts the family to 22 centres instead of pooling in the older routine's ~101 bins. This
-       test does NOT assert that q-values are independent of family size (they are not); it asserts
-       the correct, opposite claim below.
-    """
+    Split 2026-10-02 from `test_family_wise_correction_is_isolated_per_grid_and_is_family_size_
+    sensitive`, whose name and docstring also said the sweep corrects the correlation grid and the
+    AUC grid separately; its body never ran the sweep, and its other half repeated the equality with
+    `bh_fdr` that the test above makes."""
     rows_a = [{"p_selection_aware": p} for p in (0.001, 0.02, 0.03)]
     rows_b = [{"p_selection_aware": p} for p in (0.001, 0.02, 0.03, 0.9, 0.95, 0.99)]
     A._apply_family_wise_correction(rows_a)
     A._apply_family_wise_correction(rows_b)
-    expected_a = SU.bh_fdr(np.asarray([0.001, 0.02, 0.03]))
-    expected_b = SU.bh_fdr(np.asarray([0.001, 0.02, 0.03, 0.9, 0.95, 0.99]))
-    for row, eq in zip(rows_a, expected_a):
-        assert row["family_wise_q_8_to_30hz"] == eq
-    for row, eq in zip(rows_b, expected_b):
-        assert row["family_wise_q_8_to_30hz"] == eq
-    # And, exactly because BH is family-size-sensitive, the shared first three p-values get a
-    # SMALLER (more significant) q-value in the narrower 3-test family than in the 6-test one --
-    # the concrete mechanism behind "restricting the family gives more power" (decision 63).
-    for ra, eb in zip(rows_a, expected_b[:3]):
-        assert ra["family_wise_q_8_to_30hz"] <= eb
+    for ra, rb in zip(rows_a, rows_b[:3]):
+        assert ra["family_wise_q_8_to_30hz"] < rb["family_wise_q_8_to_30hz"], (ra, rb)
 
 
 def test_a_planted_band_ranks_best_under_the_family_wise_correction_and_pure_noise_mostly_clears():

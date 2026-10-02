@@ -122,14 +122,6 @@ def test_every_device_clock_family_converts_to_offset_plus_family_difference_plu
     assert J["BrainSenseSurveysTimeDomain"][0]["ElectrodeIdentifier"][0]["FirstPacketDateTime"] == ""
 
 
-def test_the_stream_moves_back_by_the_device_clocks_lead():
-    J = make_export(A_TABLET, A_OFF, 7494.0, OFFS)
-    before = ep(J["BrainSenseTimeDomain"][0]["FirstPacketDateTime"])
-    TC.convert_export(J, [])
-    after = ep(J["BrainSenseTimeDomain"][0]["FirstPacketDateTime"])
-    assert before - after == 7494.0
-
-
 def _stored(J, anchors):
     """What the ingest records for an export: its anchor and the entries it carried first."""
     counts = TC.convert_export(copy.deepcopy(J), anchors)

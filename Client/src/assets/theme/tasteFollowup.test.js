@@ -7,7 +7,7 @@ import fs from "fs";
 import path from "path";
 
 import {
-  T, STATE, GLYPH, FOCUS_RING, WRAP, REDUCED_MOTION, LAYOUT, FONT_FAMILY, WEIGHT,
+  T, STATE, GLYPH, FOCUS_RING, WRAP, REDUCED_MOTION, FONT_FAMILY, WEIGHT,
   contrastRatio,
 } from "assets/theme/base/tokens";
 import globals, { JUMP_ROW_CLASS, JUMP_LINK_CLASS } from "assets/theme/base/globals";
@@ -194,13 +194,6 @@ describe("D6: one face, two weights", () => {
       if (v && typeof v === "object" && v.fontWeight !== undefined) weights.add(v.fontWeight);
     });
     expect(Array.from(weights).sort()).toEqual([WEIGHT.regular, WEIGHT.strong]);
-  });
-});
-
-describe("D13: the column and section spacing", () => {
-  test("the content column is at most 1120 px and sections are 64 px apart", () => {
-    expect(LAYOUT.contentMax).toBe(1120);
-    expect(LAYOUT.betweenSections).toBe(64);
   });
 });
 

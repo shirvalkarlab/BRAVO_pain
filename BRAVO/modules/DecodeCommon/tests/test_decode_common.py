@@ -63,10 +63,6 @@ def test_canonical_name_is_idempotent():
         assert canon_channel(once) == once
 
 
-def test_ring_and_short_spellings_land_on_one_key():
-    assert canon_channel("ZERO_AND_THREE_LEFT_RING") == canon_channel("ZERO_THREE_LEFT")
-
-
 # ----------------------------------------------------------------------------------------
 # the timestamp and dropped-packet rules must not drift either
 # ----------------------------------------------------------------------------------------

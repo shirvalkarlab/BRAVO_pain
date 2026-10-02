@@ -45,9 +45,12 @@ def test_the_sentence_says_it_is_an_upper_bound_and_changes_nothing():
     assert "changes nothing" in s
 
 
+# Stage 1 runs here without its calibration check (`calibration_check=False`, 2026-10-02): a
+# warning that changes no recommendation (decision 233, ruling 6), read by no test in this file,
+# and held by `test_stratum_calibration.py`; its leave-one-out refits were most of each fit's time.
 def test_stage1_reports_the_exposure_counting_only_comparisons_that_could_be_formed():
     res = S1.run_stage1(_matrix(), hemispheres=("Left", "Right"), primary_item="left_leg_vas",
-                        data_horizon="2026-12-31")
+                        data_horizon="2026-12-31", calibration_check=False)
     ex = res.audit.get("resolution_exposure")
     assert ex is not None, "Stage 1 carries the exposure on its audit, which the page receives"
     formed = 0
@@ -71,7 +74,7 @@ def test_stage1_names_the_rate_length_scale_as_a_pinned_assumption():
     """Panel C item 7: the one-octave pin is reported on the response, with the value this run
     actually used, as an assumption and not an estimate."""
     res = S1.run_stage1(_matrix(), hemispheres=("Left", "Right"), primary_item="left_leg_vas",
-                        data_horizon="2026-12-31")
+                        data_horizon="2026-12-31", calibration_check=False)
     fl = res.audit.get("frequency_length_scale")
     assert fl is not None
     assert fl["pinned"] is True

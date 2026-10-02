@@ -46,9 +46,12 @@ def _record(n_ring1=10, n_ring2=10, n_off=4, pw=(60.0, 160.0), rates=(55.0, 110.
     return d
 
 
+# Stage 1 runs here without its calibration check (`calibration_check=False`, 2026-10-02): a
+# warning that changes no recommendation (decision 233, ruling 6), read by no test in this file,
+# and held by `test_stratum_calibration.py`; its leave-one-out refits were most of each fit's time.
 @pytest.fixture(scope="module")
 def two_contacts():
-    return S1.run_stage1(_record(), data_horizon="test", washin_min=1.0)
+    return S1.run_stage1(_record(), data_horizon="test", washin_min=1.0, calibration_check=False)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -128,7 +131,8 @@ def test_every_summary_and_per_rate_row_names_its_left_contact(two_contacts):
 
 
 def test_a_contact_below_the_minimum_is_skipped_with_its_reason_never_pooled():
-    res = S1.run_stage1(_record(n_ring2=3, n_off=2), data_horizon="test", washin_min=1.0)
+    res = S1.run_stage1(_record(n_ring2=3, n_off=2), data_horizon="test", washin_min=1.0,
+                        calibration_check=False)
     assert sorted(res.slices) == [(60.0, 160.0, "L C+1-")]
     reason = res.skipped["pwL60_pwR160_L C+2-"]
     assert "5 fitted stretches" in reason and "L C+2-" in reason
@@ -147,7 +151,8 @@ def test_the_reference_is_the_group_with_the_pulse_widths_and_left_contact_in_fo
 
 def test_a_clearly_better_contact_is_chosen_and_the_reasons_name_both_contacts():
     # ring 2 is 30 VAS points better than ring 1 against a noise SD of 3; ring 1 is in force
-    res = S1.run_stage1(_record(ring2_better=3.0, seed=3), data_horizon="test", washin_min=1.0)
+    res = S1.run_stage1(_record(ring2_better=3.0, seed=3), data_horizon="test", washin_min=1.0,
+                        calibration_check=False)
     s = res.frozen.setting("Left")
     assert s.detail["left_contact"] == "L C+2-"
     assert any("L C+1-" in r and "L C+2-" in r for r in s.reasons)
@@ -158,7 +163,7 @@ def test_a_clearly_better_contact_is_chosen_and_the_reasons_name_both_contacts()
 # ---------------------------------------------------------------------------------------------
 def test_a_record_without_contacts_is_grouped_by_pulse_widths_alone():
     d = _record().drop(columns=["cathode_Left", "cathode_Right"])
-    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0)
+    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, calibration_check=False)
     assert sorted(res.slices) == [(60.0, 160.0, None)]
     assert res.slices[(60.0, 160.0, None)].n_epochs == 24
     assert res.frozen.audit["left_contacts"] == []
@@ -172,7 +177,8 @@ def test_the_pulse_width_pooled_fit_reads_the_contact_in_force_and_the_shared_0_
     d = pd.concat([_record(), _record(pw=(100.0, 150.0)).assign(epoch=lambda x: x["epoch"] + 100)],
                   ignore_index=True)
     d["t0"] = pd.date_range("2025-07-01", periods=len(d), freq="3D", tz="UTC")
-    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, pool_pulse_widths=True)
+    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, pool_pulse_widths=True,
+                        calibration_check=False)
     rows = res.pooled_rate_summary
     assert set(rows["left_contact"]) == {"L C+1-"}
     # per rate: half of (2 pairings x (10 ring 1 + 4 off)) = 14

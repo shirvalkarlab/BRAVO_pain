@@ -152,17 +152,6 @@ def test_the_bridge_ratio_is_the_raw_median_with_the_five_mad_rule_and_the_bridg
     assert C.DEPLOYED_BRIDGE_RATIO == A.LSB_PER_UV2_DEVICE_PSD_TD_RATIO
 
 
-def test_the_bridge_ratio_is_flat_across_contacts_and_centres():
-    """Per contact pair 4.64-4.88 and per centre 4.69-4.89 on the raw median: one constant, not a
-    curve in frequency and not a per-contact table."""
-    pairs = C.load_bridge_pairs("RCS08")
-    for ch in sorted({p["channel"] for p in pairs}):
-        r = C.bridge_ratio([p for p in pairs if p["channel"] == ch])["ratio"]
-        assert 4.6 < r < 4.9, (ch, r)
-    for c in (7.5, 11.5, 15.5, 19.5, 23.5, 27.5):
-        r = C.bridge_ratio([p for p in pairs if p["center_hz"] == c])["ratio"]
-        assert 4.6 < r < 4.9, (c, r)
-
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

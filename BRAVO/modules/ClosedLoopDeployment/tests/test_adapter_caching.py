@@ -219,14 +219,6 @@ def test_a_second_identical_request_for_the_joined_table_does_no_work():
     assert AD.joined_cache_stats()["entries"] == 1
 
 
-def test_the_joined_table_is_rebuilt_when_a_value_changes_without_the_shape_changing():
-    psd, eps = _psd_frame(), _epoch_frame()
-    first = AD.joined_table_cached(psd, eps)
-    corrected = eps.copy()
-    corrected.loc[0, "amp_mA_Left"] = 2.5           # one corrected current, same row count
-    assert AD.joined_table_cached(psd, corrected) is not first
-
-
 def test_the_joined_table_memo_evicts_the_oldest_entry_and_stays_bounded():
     """Each entry is a frame of over a hundred thousand rows on the real record, so the memo has to
     stay small however many different inputs pass through it."""
@@ -235,7 +227,8 @@ def test_the_joined_table_memo_evicts_the_oldest_entry_and_stays_bounded():
         eps = _epoch_frame()
         eps.loc[0, "amp_mA_Left"] = 1.0 + 0.25 * k
         AD.joined_table_cached(psd, eps)
-    assert AD.joined_cache_stats()["entries"] == AD._JOINED_MEMO_MAX
+    stats = AD.joined_cache_stats()
+    assert stats["entries"] == stats["max"] == AD._JOINED_MEMO_MAX
 
 
 # ---------------------------------------------------------------------------------------------

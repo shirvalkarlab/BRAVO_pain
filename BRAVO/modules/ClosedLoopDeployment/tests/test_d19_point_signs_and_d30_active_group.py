@@ -56,6 +56,8 @@ def test_d19_established_flags_are_false_for_an_unresolved_edge_and_true_for_a_r
     unresolved = EdgeEstimate("E1", -4.45, (-18.6, 9.7), 0.54, 13, "run", 4)
     resolved = EdgeEstimate("E2", 0.9, (0.5, 1.3), 0.001, 400, "rating", 60)
     facts = PL._facts_for({}, unresolved, resolved, "power_linear")
+    # the point sign is read whether or not the interval clears zero (the PI's rule, 2026-09-13)
+    assert facts["power_slope_vs_amplitude_sign"] == -1 and facts["power_slope_vs_pain_sign"] == 1
     assert facts["power_slope_vs_amplitude_sign_established"] is False
     assert facts["power_slope_vs_pain_sign_established"] is True
     assert facts["power_slope_vs_amplitude_ci"] == [-18.6, 9.7]

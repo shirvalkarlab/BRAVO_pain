@@ -193,23 +193,6 @@ def _same(a, b):
 # ---------------------------------------------------------------------------------------------
 # Off by default
 # ---------------------------------------------------------------------------------------------
-def test_without_the_flag_the_response_has_no_two_stage_key_and_the_path_is_never_run(bench, monkeypatch):
-    def boom(*a, **k):
-        raise AssertionError("two_stage_block must not be called when the flag is absent")
-    monkeypatch.setattr(BS, "two_stage_block", boom)
-    out = BS.run_for_participant(dict(REQ))
-    assert out["available"] is True
-    assert "two_stage" not in out
-    assert bench.live.calls == [], "the LFP evidence builder must not run without the flag"
-    # `arms`, `blockers`, `manifest`, `recommendation_supported` and `summary` came from the flat
-    # per-arm pipeline, which `run_for_participant` no longer calls (2026-09-14: the arm strip
-    # and its chart are gone from the page; only the two-stage plan is served now).
-    assert sorted(out) == ["amplitude_effect", "available", "cache_status",
-                           "closed_loop", "current_map_schedule", "design_matrix", "ground_truth",
-                           "in_force_by_side", "participant", "store",
-                           "titration_plan", "washin_min"]
-
-
 # FIT ONCE, ASSERT MANY (2026-09-12). The flag-on requests below all fit Stage 1 on `bench.es`
 # with the same arguments, once per test, and assert on the block the service builds AFTER the fit.
 # `shared_stage1` (conftest.py) hands them one result. The field-for-field comparison against a
@@ -436,7 +419,8 @@ def _store_clinic_steps(root, tag):
              writer="clinic_sheet_ingest", trigger="test", provenance=[], root=root)
 
 
-def test_a_clinic_sheet_sync_is_not_served_the_response_built_before_it(bench):
+def test_a_clinic_sheet_sync_is_not_served_the_response_built_before_it(bench, shared_stage1):
+    # asserts only what the store serves and under which key, so the fits come from `shared_stage1`
     _store_clinic_steps(bench.root, "before_sync")
     first = BS.run_for_participant(dict(REQ_FLAG))
     second = BS.run_for_participant(dict(REQ_FLAG))

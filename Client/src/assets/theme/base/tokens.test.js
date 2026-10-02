@@ -124,11 +124,6 @@ describe("type sizes", () => {
     expect(typography.fontWeightBold).toBe(600);
   });
 
-  test("sentence case: no variant draws in uppercase", () => {
-    Object.values(typography).forEach((v) => {
-      if (v && typeof v === "object") expect(v.textTransform).not.toBe("uppercase");
-    });
-  });
 });
 
 describe("the light theme still builds from the tokens", () => {

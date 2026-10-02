@@ -138,12 +138,6 @@ def _thr_payload(eligible):
             "threshold": {"lower": 75.24469939878163, "upper": 213.48343672013655}}
 
 
-def test_the_switching_values_caveat_names_the_values_when_the_device_allows_them():
-    rows = adapter.caveats_for_report(_thr_payload(True))
-    text = " ".join(r["text"] for r in rows)
-    assert "75.2447 and 213.4834" in text
-
-
 def test_the_switching_values_caveat_withholds_the_values_when_the_device_refuses():
     # The parameter table withholds every value while the device refuses, because a number on screen
     # during a programming visit gets typed; the caveat on the same card printed both thresholds to

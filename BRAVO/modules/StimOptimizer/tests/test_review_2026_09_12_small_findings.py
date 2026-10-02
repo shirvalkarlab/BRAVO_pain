@@ -45,6 +45,9 @@ def test_a_real_history_still_reads_plateau_or_coverage():
     assert d.binding == "coverage" and d.plateau_met is False
 
 
+# Stage 1 runs here without its calibration check (`calibration_check=False`, 2026-10-02): a
+# warning that changes no recommendation (decision 233, ruling 6), read by no test in this file,
+# and held by `test_stratum_calibration.py`; its leave-one-out refits were most of each fit's time.
 def test_the_flat_pipeline_and_stage_1_hand_the_rule_no_history():
     """The summary rows now carry the not-assessable label in `stop_binding`."""
     d = _design()
@@ -53,7 +56,8 @@ def test_the_flat_pipeline_and_stage_1_hand_the_rule_no_history():
     assert list(rep.summary["stop_binding"]) == ["not assessable: no batch history"]
     assert list(rep.summary["stop"]) == [False]
     from StimOptimizer import stage1_openloop as S1
-    s1 = S1.run_stage1(d, hemispheres=("Left",), data_horizon="t", washin_min=1.0)
+    s1 = S1.run_stage1(d, hemispheres=("Left",), data_horizon="t", washin_min=1.0,
+                       calibration_check=False)
     assert set(s1.summary["stop_binding"]) == {"not assessable: no batch history"}
 
 

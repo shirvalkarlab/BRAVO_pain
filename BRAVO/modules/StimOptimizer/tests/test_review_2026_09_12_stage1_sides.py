@@ -53,11 +53,14 @@ def _matrix(n_per_cell=10, pw_levels=(60.0, 140.0), rates=(55.0, 110.0), seed=0,
     return d
 
 
+# Stage 1 runs here without its calibration check (`calibration_check=False`, 2026-10-02): a
+# warning that changes no recommendation (decision 233, ruling 6), read by no test in this file,
+# and held by `test_stratum_calibration.py`; its leave-one-out refits were most of each fit's time.
 @pytest.fixture(scope="module")
 def both_sides_own_columns():
     """Left at 60/140 us over two rates; Right at 150 us throughout, so every joint stratum's
     pair is (Left level, 150.0)."""
-    return S1.run_stage1(_matrix(), data_horizon="test", washin_min=1.0)
+    return S1.run_stage1(_matrix(), data_horizon="test", washin_min=1.0, calibration_check=False)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -83,7 +86,7 @@ def test_the_left_side_still_reads_the_left_column(both_sides_own_columns):
 
 def test_a_missing_right_column_falls_back_to_the_left_and_says_so():
     d = _matrix().drop(columns=["pw_us_Right"])
-    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0)
+    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, calibration_check=False)
     h = res.frozen.audit["per_hemisphere"]["Right"]
     assert h["pw_col"] == "pw_us_Left" and h["pw_col_fallback"] is True
     s = res.frozen.setting("Right")
@@ -93,7 +96,8 @@ def test_a_missing_right_column_falls_back_to_the_left_and_says_so():
 def test_an_explicit_absent_column_is_not_observed_not_substituted():
     """A caller naming a column that is not there asked about that column: NOT OBSERVED."""
     d = _matrix().drop(columns=["pw_us_Right"])
-    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, pw_col="pw_us_Right")
+    res = S1.run_stage1(d, data_horizon="test", washin_min=1.0, pw_col="pw_us_Right",
+                        calibration_check=False)
     for s in res.frozen.settings:
         assert s.pw_us is None and s.pw_resolved is None
     assert res.frozen.audit["per_hemisphere"]["Right"]["pw_col_fallback"] is False
@@ -115,7 +119,7 @@ def incumbent_on_a_thin_stratum():
     thin["freq_hz"] = 55.0
     d = pd.concat([d, thin], ignore_index=True)
     d["t0"] = pd.date_range("2025-07-01", periods=len(d), freq="3D", tz="UTC")   # thin = newest
-    return S1.run_stage1(d, data_horizon="test", washin_min=1.0)
+    return S1.run_stage1(d, data_horizon="test", washin_min=1.0, calibration_check=False)
 
 
 def test_the_incumbent_is_the_thin_stratum(incumbent_on_a_thin_stratum):
@@ -144,12 +148,11 @@ def test_the_reason_names_not_assessed_and_never_claims_resolution(incumbent_on_
     assert "IS resolved" not in joined
 
 
-def test_a_fittable_pulse_width_pair_in_force_is_the_reference_of_the_contrast():
+def test_a_fittable_pulse_width_pair_in_force_is_the_reference_of_the_contrast(both_sides_own_columns):
     """The control: with the incumbent on a fitted pair (140/150 us, 20 epochs) the contrast's
     reference IS the pulse-width pair in force, and the thin-stratum NOT ASSESSED branch never
-    fires."""
-    res = S1.run_stage1(_matrix(n_per_cell=10, pw_levels=(60.0, 140.0), rates=(55.0, 110.0)),
-                        data_horizon="test", washin_min=1.0)
+    fires. (The default `_matrix()`, so the module fixture's own fit since 2026-10-02.)"""
+    res = both_sides_own_columns
     s = res.frozen.setting("Left")
     assert res.frozen.incumbent_pw_us == 140.0
     assert not any("no fitted joint stratum of its own" in r for r in s.reasons)

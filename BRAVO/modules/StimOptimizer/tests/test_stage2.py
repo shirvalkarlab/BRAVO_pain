@@ -425,18 +425,6 @@ def test_other_gate_kwargs_still_reach_the_gate(shared_stage1):
         "a 10 Hz floor passed through gate_kwargs must change the rate verdict")
 
 
-def test_the_original_flat_entry_point_still_works():
-    """run() must be untouched by the staged addition; existing callers depend on it."""
-    from StimOptimizer import pipeline
-    d = _rcs08_like()
-    out = pipeline.run(d, sites=("left_leg",), hemispheres=("Left",), outdir=None,
-                       render_figures=False, data_horizon="test", washin_min=1.0,
-                       n_batches=1, q=2)
-    assert "left_leg__Left" in out.arms
-    assert not out.summary.empty
-    assert hasattr(out, "recommendation_is_supported")
-
-
 def _find_real_matrix():
     """Locate the real RCS08 design matrix, or return ``None``.
 

@@ -36,10 +36,13 @@ def _matrix_two_rates_one_pw():
     return d
 
 
+# Stage 1 runs here without its calibration check (`calibration_check=False`, 2026-10-02): a
+# warning that changes no recommendation (decision 233, ruling 6), read by no test in this file,
+# and held by `test_stratum_calibration.py`; its leave-one-out refits were most of each fit's time.
 @pytest.fixture(scope="module")
 def stage1_two_rates():
     d = _matrix_two_rates_one_pw()
-    return S1.run_stage1(d, data_horizon="test", washin_min=1.0)
+    return S1.run_stage1(d, data_horizon="test", washin_min=1.0, calibration_check=False)
 
 
 def _rate_strata_records(s1):

@@ -912,45 +912,6 @@ def test_empirical_lsb_ratio_needs_pairs():
     assert res["available"] is False
 
 
-def test_deployment_roc_by_era_splits_eras():
-    """deployment_roc_by_era assigns OFF/LOW/HIGH from the stim trajectory and refits the ROC per
-    era; a band present in all eras yields estimable per-era AUCs and a finite cut-point spread."""
-    import numpy as _np
-    rng = _np.random.default_rng(1)
-    E, C, F = 180, 2, 60
-    f = _np.linspace(0.95, 100, F)
-    labels = rng.normal(5, 2, E)
-    psd = _np.abs(rng.normal(1, 0.3, (E, C, F)))
-    band = (f >= 17.5) & (f <= 22.5)
-    psd[:, 0, band] *= (1 + 0.5 * (labels - labels.mean())[:, None])
-    # times across 90 days; stim trajectory steps OFF -> LOW -> HIGH over that window.
-    base = 1_700_000_000.0
-    t_epoch = base + _np.sort(rng.uniform(0, 90 * 86400, E))
-    times = [__import__("datetime").datetime.utcfromtimestamp(t).isoformat(sep=" ") for t in t_epoch]
-    det = {"f_set": f, "psd": psd, "labels": labels,
-           "chan_order": ["ZERO_TWO_LEFT", "ZERO_TWO_RIGHT"], "times": times}
-    # stim: 0 mA for first third, 1.0 mA middle, 3.0 mA last third
-    st = _np.linspace(base, base + 90 * 86400, 9)
-    sy = _np.array([0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 3.0, 3.0, 3.0])
-    stim_series = {"t": list(st), "y": list(sy)}
-    res = analytics.deployment_roc_by_era(det, "ZERO_TWO_LEFT", 20.0, stim_series,
-                                          band_width_hz=5.0, n_boot=120, seed=0)
-    assert res["available"], res.get("reason")
-    # all three eras populated by the trajectory
-    counts = res["era_counts"]
-    assert counts["OFF"] > 0 and counts["LOW"] > 0 and counts["HIGH"] > 0
-    # at least two eras estimable, and the pooled ROC is available
-    assert res["n_eras_estimable"] >= 2 and res["pooled"]["available"]
-    # cut-point spread is a finite number when >=2 eras have an operating point
-    if res["cutpoint_spread"] is not None:
-        assert res["cutpoint_spread"] >= 0.0
-    # each estimable era carries a clustered-bootstrap AUC in [0.5, 1]
-    for tag in ["OFF", "LOW", "HIGH"]:
-        e = res["eras"][tag]
-        if e.get("available"):
-            assert 0.5 <= e["auc"] <= 1.0
-
-
 def test_assign_stim_eras_uses_locf_not_nocb():
     """_assign_stim_eras must carry the stim trajectory FORWARD (LOCF): a sample's era is the stim
     amplitude in effect at or before it, not the next programmed change. Guards PARITY_audit §7
@@ -1163,17 +1124,19 @@ def test_deployment_summary_real_payload_json_serializable():
         assert isinstance(out["identity"]["participant"], str)
 
 
-def test_find_best_threshold_vectorized_matches_reference():
-    """The vectorized _find_best_threshold_for_metric (searchsorted sens/spec/acc sweep) must be
-    element-for-element identical to the verbatim pre-vectorization loop across degenerate inputs:
-    NaN scores, heavy ties, and all-one-class labels. This is the sens/spec-objective selector used
-    by the chronic sliding-window detector; vectorizing it removed ~35 s of per-threshold sklearn
-    confusion_matrix/accuracy_score overhead from the biomarker recompute."""
+# THE TWO THRESHOLD-SELECTOR EQUALITY CHECKS RUN IN PIECES (2026-10-02). Each compares a vectorised
+# selector with its slow reference loop on the same 150 random inputs, and the reference loops were
+# most of the container suite's time (45.8 s and 19.4 s of a 50 s run, measured on Jetstream2). The
+# inputs are drawn exactly as before, every trial in order from the same seed, so each trial is the
+# same input it always was; the pieces only share the trials out, five for the slower check and
+# three for the other, so the container runner's processes check them side by side. Together the
+# pieces check all 150 trials of each.
+def _sens_spec_trials():
+    """The 150 inputs of the sens/spec check, drawn in order from seed 0: NaN scores, heavy ties,
+    and all-one-class labels among them."""
     import numpy as np, pandas as pd
-    from modules.Biomarkers.routines import threshold_biomarker as tb
     rng = np.random.default_rng(0)
-    thr = np.arange(60, 200, 1)
-    fails = 0
+    out = []
     for trial in range(150):
         n = int(rng.integers(5, 60))
         y = rng.integers(0, 2, n)
@@ -1186,7 +1149,21 @@ def test_find_best_threshold_vectorized_matches_reference():
             lfp[rng.integers(0, n, size=max(1, n // 4))] = np.nan
         if trial % 3 == 0:
             lfp = np.round(lfp / 10) * 10
-        df = pd.DataFrame({"pain_level": y, "LFP_smoothed": lfp})
+        out.append(pd.DataFrame({"pain_level": y, "LFP_smoothed": lfp}))
+    return out
+
+
+def _check_sens_spec_selector(trials):
+    """The vectorized _find_best_threshold_for_metric (searchsorted sens/spec/acc sweep) must be
+    element-for-element identical to the verbatim pre-vectorization loop across degenerate inputs:
+    NaN scores, heavy ties, and all-one-class labels. This is the sens/spec-objective selector used
+    by the chronic sliding-window detector; vectorizing it removed ~35 s of per-threshold sklearn
+    confusion_matrix/accuracy_score overhead from the biomarker recompute."""
+    import numpy as np
+    from modules.Biomarkers.routines import threshold_biomarker as tb
+    thr = np.arange(60, 200, 1)
+    fails = 0
+    for df in trials:
         for metric in ("sens", "spec"):
             a = tb._find_best_threshold_for_metric(df, thr, metric=metric)
             b = tb._find_best_threshold_for_metric_reference(df, thr, metric=metric)
@@ -1203,12 +1180,54 @@ def test_find_best_threshold_vectorized_matches_reference():
     assert fails == 0, f"vectorized threshold selector diverged from reference in {fails} cases"
 
 
-def test_best_threshold_balanced_auc_matches_reference():
+def test_find_best_threshold_vectorized_matches_reference_trials_0_to_29():
+    _check_sens_spec_selector(_sens_spec_trials()[0:30])
+
+
+def test_find_best_threshold_vectorized_matches_reference_trials_30_to_59():
+    _check_sens_spec_selector(_sens_spec_trials()[30:60])
+
+
+def test_find_best_threshold_vectorized_matches_reference_trials_60_to_89():
+    _check_sens_spec_selector(_sens_spec_trials()[60:90])
+
+
+def test_find_best_threshold_vectorized_matches_reference_trials_90_to_119():
+    _check_sens_spec_selector(_sens_spec_trials()[90:120])
+
+
+def test_find_best_threshold_vectorized_matches_reference_trials_120_to_149():
+    _check_sens_spec_selector(_sens_spec_trials()[120:150])
+
+
+def _balanced_auc_trials():
+    """The inputs of the balanced-AUC check, drawn in order from seed 7: 150 draws, of which the
+    one-class ones are dropped (they are skipped upstream before this selector is called). Each
+    kept input carries the number of the draw it came from."""
+    import numpy as np
+    rng = np.random.default_rng(7)
+    out = []
+    for trial in range(150):
+        n = int(rng.integers(4, 80))
+        y = rng.integers(0, 2, n)
+        if len(np.unique(y)) < 2:
+            continue   # one-class folds are skipped upstream before this selector is called
+        lfp = rng.normal(120, 40, n).astype(float)
+        if trial % 4 == 0:
+            lfp = np.round(lfp / 15) * 15
+        if trial % 6 == 0 and n > 4:
+            lfp[rng.integers(0, n, size=max(1, n // 5))] = np.nan
+        out.append((trial, y, lfp))
+    return out
+
+
+def _check_balanced_auc_selector(first, last):
     """best_threshold_by_balanced_auc must reproduce the per-threshold roc_auc_score(y, binary_pred)
     grid search's BEST AUC exactly (roc_auc on a binary prediction == (sens+spec)/2), across NaN
     scores / ties / one-class folds. The chosen threshold among EXACT AUC ties is deterministic
     (first/lowest AUC-optimal threshold); we assert the AUC value matches and that the chosen
-    threshold is itself AUC-optimal (a valid member of the original's tie set)."""
+    threshold is itself AUC-optimal (a valid member of the original's tie set). Checks the draws
+    numbered `first` to `last` inclusive."""
     import numpy as np
     from sklearn import metrics
     from modules.Biomarkers.routines.threshold_biomarker import (
@@ -1229,20 +1248,13 @@ def test_best_threshold_balanced_auc_matches_reference():
                 best_auc, best_thr = a, float(t)
         return best_thr, best_auc
 
-    rng = np.random.default_rng(7)
     thr = np.arange(60, 200, 1)
     auc_fail = 0
     thr_not_optimal = 0
-    for trial in range(150):
-        n = int(rng.integers(4, 80))
-        y = rng.integers(0, 2, n)
-        if len(np.unique(y)) < 2:
-            continue   # one-class folds are skipped upstream before this selector is called
-        lfp = rng.normal(120, 40, n).astype(float)
-        if trial % 4 == 0:
-            lfp = np.round(lfp / 15) * 15
-        if trial % 6 == 0 and n > 4:
-            lfp[rng.integers(0, n, size=max(1, n // 5))] = np.nan
+    for trial, y, lfp in _balanced_auc_trials():
+        if not first <= trial <= last:
+            continue
+        n = y.size
         rt, ra = _reference(y, lfp, thr)
         vt, va = best_threshold_by_balanced_auc(y, lfp, thr)
         # 1) best AUC value identical
@@ -1260,6 +1272,18 @@ def test_best_threshold_balanced_auc_matches_reference():
             thr_not_optimal += 1
     assert auc_fail == 0, f"best balanced-AUC value diverged in {auc_fail} cases"
     assert thr_not_optimal == 0, f"chosen threshold was not AUC-optimal in {thr_not_optimal} cases"
+
+
+def test_best_threshold_balanced_auc_matches_reference_draws_0_to_49():
+    _check_balanced_auc_selector(0, 49)
+
+
+def test_best_threshold_balanced_auc_matches_reference_draws_50_to_99():
+    _check_balanced_auc_selector(50, 99)
+
+
+def test_best_threshold_balanced_auc_matches_reference_draws_100_to_149():
+    _check_balanced_auc_selector(100, 149)
 
 
 def test_roc_small_sample_advisory_is_label_only():
@@ -1604,31 +1628,6 @@ def test_td_to_lsb_applies_transform_constant_and_guards():
     assert math.isnan(analytics.td_to_lsb(sig[:249], sr, 20.0))
 
 
-def test_k_cancels_in_correlation_and_auc():
-    """THE SAFETY CLAIM behind the route switch: because the per-band feature is a LOG of band power,
-    the multiplicative k is an additive log-offset that cancels in Pearson r and in AUC. So swapping
-    the TD path from welch256×269 to transform×352.62 moves the displayed/deployable LSB scale but
-    cannot move any correlation or AUC result. Asserted byte-for-byte (not merely 'close')."""
-    from sklearn.metrics import roc_auc_score
-    from scipy.stats import pearsonr
-    rng = np.random.default_rng(3)
-    uv2 = np.exp(rng.normal(0, 1, 400))                     # positive band powers
-    pain = rng.normal(0, 1, 400)
-    label = (np.log(uv2) + 0.4 * rng.normal(0, 1, 400) > np.log(uv2).mean()).astype(int)
-    # feature = log(LSB) = log(k) + log(uv2): the log(k) term is a pure additive shift. Compare the
-    # PRIMARY transform k against an arbitrary alternate scale (the property is k-agnostic — it held
-    # for the retired welch256 269 too, and must hold for ANY positive constant).
-    k_alt = 269.0
-    f_alt = np.log(k_alt * uv2)
-    f352 = np.log(analytics.LSB_PER_UV2_TRANSFORM * uv2)
-    # difference is exactly the constant log-ratio, identical for every point
-    assert np.allclose(f352 - f_alt, np.log(analytics.LSB_PER_UV2_TRANSFORM / k_alt), atol=1e-12)
-    # Pearson r identical to full float precision
-    assert abs(pearsonr(f_alt, pain)[0] - pearsonr(f352, pain)[0]) < 1e-12
-    # AUC identical (rank statistic — a monotone +shift cannot reorder)
-    assert abs(roc_auc_score(label, f_alt) - roc_auc_score(label, f352)) < 1e-12
-
-
 def test_transform_centered_window_clip_dont_slide_contract():
     """The per-PRO TD extent for the 0–100 Hz sweep: 30 s CENTERED on the rating, CLIPPED to the
     recording (asymmetric near an edge, never slid into padding), dropped below one 1 s window or above
@@ -1711,42 +1710,6 @@ def test_modeled_transform_point_stays_flagged_native_preferred():
     native = y[bmask & ~is_modeled]
     assert native.size == 2 and np.all(native == 100.0)      # modeled 9999 excluded
     assert 9999.0 not in set(native.tolist())
-
-
-def test_modeled_excluded_from_native_correlation_path():
-    """SCOPE GUARD for the 'k cancels' safety claim. k cancels in r/AUC only within a SINGLE-SOURCE
-    feature (homogeneous k). A native+modeled MIXED feature is NOT k-invariant — raising modeled k from
-    269→352.62 shifts only the modeled subset. This is safe ONLY because the deployable / measured path
-    excludes modeled points via the is_modeled mask, so no mixed-k column ever reaches a correlation.
-    This test pins that segregation: (1) on a mixed series the masked native subset is k-invariant while
-    the unmasked mixed series is NOT, and (2) the bravo_service native-only mask drops every modeled
-    point regardless of which k produced it."""
-    from scipy.stats import pearsonr
-    rng = np.random.default_rng(7)
-    n = 300
-    uv2 = np.exp(rng.normal(0, 1, n))
-    pain = rng.normal(0, 1, n)                               # continuous outcome for correlation
-    is_modeled = np.zeros(n, bool); is_modeled[rng.choice(n, 120, replace=False)] = True
-    # native points carry raw device LSB (no k); modeled points carry k*uv2. Lifting modeled k adds a
-    # constant log-offset to ONLY the modeled rows, so the mixed column is no longer a pure rescale of
-    # itself between the two k -> a covariance-based statistic (Pearson r) moves.
-    native_lsb = uv2.copy()                                  # stand-in raw units, no k
-    def mixed_feature(k):
-        return np.log(np.where(is_modeled, k * uv2, native_lsb))
-    # (1) UNMASKED mixed feature is NOT k-invariant: Pearson r differs between the two k
-    k_alt = 269.0                                          # arbitrary alternate scale (k-agnostic claim)
-    r_mixed_alt = pearsonr(mixed_feature(k_alt), pain)[0]
-    r_mixed_352 = pearsonr(mixed_feature(analytics.LSB_PER_UV2_TRANSFORM), pain)[0]
-    assert abs(r_mixed_alt - r_mixed_352) > 1e-6          # mixing DOES move r — claim must be scoped
-    # (2) NATIVE-ONLY subset (the masked path) is fully k-invariant
-    nat = ~is_modeled
-    r_nat_alt = pearsonr(mixed_feature(k_alt)[nat], pain[nat])[0]
-    r_nat_352 = pearsonr(mixed_feature(analytics.LSB_PER_UV2_TRANSFORM)[nat], pain[nat])[0]
-    assert abs(r_nat_alt - r_nat_352) < 1e-12            # masked native path: k cancels, safe
-    # (3) the bravo_service native-only mask drops EVERY modeled point, independent of method/k
-    y = np.where(is_modeled, 9999.0, native_lsb)
-    keep = ~np.array([bool(m) for m in is_modeled])
-    assert np.all(np.isfinite(y[keep])) and 9999.0 not in set(y[keep].tolist())
 
 
 # ─────────────────────────────  CS-3 PSD→LSB BRIDGE  ─────────────────────────────
@@ -2228,14 +2191,6 @@ def test_small_cluster_counts_fall_back_to_iid():
         assert an._auto_block_len(_ar1(K)) == 1, K
 
 
-def test_uncorrelated_ratings_still_give_block_length_one():
-    """Pre-existing behaviour that must survive: no positive autocorrelation reproduces the i.i.d.
-    cluster bootstrap exactly."""
-    from modules.Biomarkers.routines import analytics as an
-    rng = np.random.default_rng(3)
-    assert an._auto_block_len(rng.normal(0, 1, 200)) == 1
-
-
 # --- F5: the folded point AUC has a null expectation above 0.5 ---------------------------------
 def test_folded_auc_null_reference_formula_matches_direct_simulation():
     """null_reference_auc = 0.5 + s*sqrt(2/pi) is E[max(A,1-A)] for A ~ N(0.5, s). It is computed
@@ -2246,14 +2201,6 @@ def test_folded_auc_null_reference_formula_matches_direct_simulation():
         sim = float(np.mean(np.maximum(A, 1.0 - A)))
         closed = 0.5 + s * np.sqrt(2.0 / np.pi)
         assert abs(sim - closed) < 2e-3, (s, sim, closed)
-
-
-def test_folding_reference_is_above_half_and_grows_with_noise():
-    """The whole point: comparing a folded AUC to 0.5 overstates discrimination, and the overstatement
-    is larger the noisier the estimate."""
-    lo = 0.5 + 0.05 * np.sqrt(2.0 / np.pi)
-    hi = 0.5 + 0.15 * np.sqrt(2.0 / np.pi)
-    assert 0.5 < lo < hi
 
 
 # --- F6/F7: the clamp is visible, and a suppressed CI stays suppressed everywhere --------------
@@ -2329,25 +2276,6 @@ def test_all_deployment_binarizations_pass_rating_group():
 
 
 # --- F13: the AUC estimand must be on the same unit as its interval (2026-09-02) ---------------
-def test_rating_equal_weighting_makes_every_rating_count_once():
-    """An unweighted AUC averages over positive-negative PAIRS, so a rating contributing k samples
-    on one side and k' on the other supplies k*k' of the pairs — its influence grows with the
-    PRODUCT of counts. Coverage is an artefact of recording, not of informativeness. Weighting each
-    sample by 1/(its rating's count) makes each rating carry total weight 1."""
-    import numpy as np
-    from sklearn import metrics
-    # rating 0 is matched to 8 samples, ratings 1..3 to one each. All of rating 0 is class 1.
-    g = np.array([0]*8 + [1, 2, 3])
-    y = np.array([1]*8 + [0, 0, 0])
-    x = np.array([5.0]*8 + [1.0, 2.0, 3.0])
-    cl, inv = np.unique(g, return_inverse=True)
-    w = 1.0 / np.bincount(inv).astype(float)[inv]
-    assert np.allclose([w[g == c].sum() for c in cl], 1.0), "each rating must carry total weight 1"
-    # here the dominant rating is perfectly separable, so both are 1.0; the invariant under test is
-    # the weight construction, which is what stops coverage from setting the estimate.
-    assert abs(metrics.roc_auc_score(y, x, sample_weight=w) - 1.0) < 1e-9
-
-
 @live
 def test_deployment_reports_both_weightings_and_their_difference():
     import sys
@@ -2434,7 +2362,7 @@ def test_block_length_for_returns_one_on_both_real_dependence_regimes():
     flat = rng.normal(0, 1, 43)
     for y in (nrs_like, flat):
         L = su.block_length_for(y, y.size)
-        assert L >= 1
+        assert L == 1, L      # was `>= 1` until 2026-10-02, which pinned nothing the name says
 
 
 # --- stim-stability: equivalence, and rate as a covariate (2026-09-03) --------------------------

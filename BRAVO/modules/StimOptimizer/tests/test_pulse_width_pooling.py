@@ -38,9 +38,13 @@ def _matrix_two_pairings():
     return d
 
 
+# Stage 1 runs here without its calibration check (`calibration_check=False`, 2026-10-02): a
+# warning that changes no recommendation (decision 233, ruling 6), read by no test in this file,
+# and held by `test_stratum_calibration.py`; its leave-one-out refits were most of each fit's time.
 @pytest.fixture(scope="module")
 def s1():
-    return S1.run_stage1(_matrix_two_pairings(), data_horizon="test", washin_min=1.0)
+    return S1.run_stage1(_matrix_two_pairings(), data_horizon="test", washin_min=1.0,
+                         calibration_check=False)
 
 
 def test_the_pooled_grid_standardises_the_two_pulse_width_inputs_and_reads_at_the_pairing_in_force():
@@ -91,7 +95,7 @@ def test_the_separate_fit_is_untouched_by_the_pooled_one(s1):
     """The pooled fit is ADDED; nothing about the per-pairing strata, the frozen configuration or
     the rate summary moves. Proved by refitting with pooling off and comparing value for value."""
     off = S1.run_stage1(_matrix_two_pairings(), data_horizon="test", washin_min=1.0,
-                        pool_pulse_widths=False)
+                        pool_pulse_widths=False, calibration_check=False)
     assert off.pooled_rate_strata == {} and off.pooled_rate_summary.empty
     pd.testing.assert_frame_equal(off.rate_summary, s1.rate_summary)
     pd.testing.assert_frame_equal(off.summary, s1.summary)
@@ -140,12 +144,12 @@ def test_the_response_carries_both_fits_and_names_the_default(s1):
 
 def test_pooling_is_skipped_with_a_reason_when_the_pairing_in_force_is_unknown():
     d = _matrix_two_pairings().drop(columns=["pw_us_Right"])
-    r = S1.run_stage1(d, data_horizon="test", washin_min=1.0)
+    r = S1.run_stage1(d, data_horizon="test", washin_min=1.0, calibration_check=False)
     # the Right column falls back to the Left one (existing behaviour); pooling still runs
     assert r.audit["pulse_width_pooling"]["computed"] is True
     d2 = _matrix_two_pairings()
     d2.loc[d2["epoch"] == d2["epoch"].max(), "pw_us_Left"] = np.nan
-    r2 = S1.run_stage1(d2, data_horizon="test", washin_min=1.0)
+    r2 = S1.run_stage1(d2, data_horizon="test", washin_min=1.0, calibration_check=False)
     a = r2.audit["pulse_width_pooling"]
     assert a["computed"] is False and "in force" in a["reason"]
     assert BS._pulse_width_pooling_block(r2)["available"] is False

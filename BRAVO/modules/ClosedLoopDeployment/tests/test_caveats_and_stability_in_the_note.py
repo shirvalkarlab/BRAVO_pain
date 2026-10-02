@@ -133,12 +133,6 @@ def test_a_report_that_is_not_available_produces_no_caveats_rather_than_raising(
     assert AD.caveats_for_report(None) == []
 
 
-def test_the_adjusted_reading_is_reported_as_a_caveat_on_the_plain_one():
-    rows = AD.caveats_for_report(_payload())
-    hit = [r for r in rows if "amp_mA_Left" in r["text"] or "current in force" in r["text"]]
-    assert hit, [r["text"] for r in rows]
-
-
 # --- E1's fallback to the whole-record estimate (found 2026-09-26) -----------------------------
 def test_e1_from_the_whole_record_carries_a_caveat():
     payload = _payload()

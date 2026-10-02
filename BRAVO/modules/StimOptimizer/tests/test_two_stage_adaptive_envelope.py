@@ -172,8 +172,12 @@ REQ_FLAG = dict(REQ, TwoStage=True)
 REASON = "physiological reason: the 40 Hz response was seen on the clinic sheet of 2026-08-18"
 
 
+# Stage 1 runs here without its calibration check (`calibration_check=False`, 2026-10-02): a
+# warning that changes no recommendation (decision 233, ruling 6), read by no test in this file,
+# and held by `test_stratum_calibration.py`; its leave-one-out refits were most of each fit's time.
 def _run(d, **kw):
-    return S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0, **kw)
+    return S1.run_stage1(d, hemispheres=("Left",), data_horizon="test", washin_min=1.0,
+                         calibration_check=False, **kw)
 
 
 # FIT ONCE, ASSERT MANY (2026-09-12). Four tests below fitted `_run(_matrix())` -- the constraint
@@ -414,7 +418,10 @@ def test_the_flag_off_response_is_unchanged_and_never_runs_the_path(bench, monke
     assert "two_stage" not in out2
 
 
-def test_the_service_block_excludes_the_out_of_envelope_stratum_by_default(bench):
+# The three service requests below fit the second site ("back") on the same matrix with the same
+# arguments; `shared_stage1` (conftest.py) fits it once per module. Each primary fit differs (the
+# explore-outside arguments differ), so each is still fitted for real (2026-10-02).
+def test_the_service_block_excludes_the_out_of_envelope_stratum_by_default(bench, shared_stage1):
     two = BS.run_for_participant(dict(REQ_FLAG))["two_stage"]
     fc = two["stage1"]["frozen_configuration"]
     s = fc["settings"][0]
@@ -434,7 +441,7 @@ def test_the_service_block_excludes_the_out_of_envelope_stratum_by_default(bench
     assert rate_cond["passed"] is True
 
 
-def test_the_service_override_key_with_a_reason_returns_the_out_of_envelope_rate_with_the_reason(bench):
+def test_the_service_override_key_with_a_reason_returns_the_out_of_envelope_rate_with_the_reason(bench, shared_stage1):
     req = dict(REQ_FLAG, TwoStageExploreOutsideAdaptive=REASON,
                TwoStageExploreOutsideAdaptiveBy="Prasad Shirvalkar")
     two = BS.run_for_participant(req)["two_stage"]
@@ -454,7 +461,7 @@ def test_the_service_override_key_with_a_reason_returns_the_out_of_envelope_rate
     assert rate_cond["passed"] is False and "40 Hz" in rate_cond["detail"]
 
 
-def test_the_service_override_key_with_an_empty_reason_is_ignored_and_said_to_be_ignored(bench):
+def test_the_service_override_key_with_an_empty_reason_is_ignored_and_said_to_be_ignored(bench, shared_stage1):
     two = BS.run_for_participant(dict(REQ_FLAG, TwoStageExploreOutsideAdaptive="",
                                       TwoStageExploreOutsideAdaptiveBy="somebody"))["two_stage"]
     fc = two["stage1"]["frozen_configuration"]

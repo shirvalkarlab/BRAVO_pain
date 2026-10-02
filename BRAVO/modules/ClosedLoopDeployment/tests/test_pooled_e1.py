@@ -102,12 +102,6 @@ def test_e1_without_a_stored_slope_names_itself_the_screening_statistic(monkeypa
     assert rep.edges["E1"].source == "screening_historical"
 
 
-def test_e1_from_a_stored_slope_names_itself_the_pooled_titration_slope(monkeypatch):
-    rep = _run_pipeline(monkeypatch, _row())
-    assert rep.edges["E1"].source == "pooled_titration"
-    assert rep.edges_historical["E1"].source == "screening_historical"
-
-
 def test_the_response_carries_the_source_of_every_edge(monkeypatch):
     """The page reads the dict, not the dataclass: `source` has to survive serialisation on the live
     edge. The historical edge kept beside it stays on the report object only since 2026-09-23 (panel

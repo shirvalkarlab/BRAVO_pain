@@ -454,6 +454,7 @@ def test_a_few_cluster_edge_is_reported_rather_than_disqualified():
     assert e.ci is None and not e.statistically_established and e.resolved
     assert "UNBOUNDED" in e.note
     assert "FEW CLUSTERS" in e.note, "the historical marker stays, as information"
+    assert "few clusters" in e.confounded_by
 
 
 def test_the_therapy_edge_switches_to_the_wild_cluster_bootstrap_at_few_clusters():
