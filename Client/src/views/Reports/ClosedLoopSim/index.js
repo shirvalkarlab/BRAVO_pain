@@ -209,6 +209,11 @@ function ClosedLoopSim() {
   // state, so a return to this route restores the arrangement as well as the results.
   const retained = readViewState(participant_uid);
 
+  // False until the server's record of the chosen band has answered. The browser's own copy can
+  // name another band (or another pain score) than the server's, and a request sent for the copy
+  // is wasted: the server's wins and the page then asks again (the review of 2026-10-02: the pain
+  // score flipped after load and the first result was already "changed since").
+  const [bandSynced, setBandSynced] = useState(false);
   const [envelope, setEnvelope] = useState(null);   // {band_candidate, participant_uid, committed_at}
   // Where the chosen band is held: on the server's record, or in this browser only (with why).
   const [bandRecord, setBandRecord] = useState(null);
@@ -261,13 +266,15 @@ function ClosedLoopSim() {
     // matching answer does not hand every panel a new object and refire its fetch.
     const local = loadBandCandidate(participant_uid);
     setEnvelope(local);
+    setBandSynced(false);
     let alive = true;
     syncChosenBand(participant_uid).then(({ envelope: server, status }) => {
       if (!alive) return;
       setBandRecord(status);
       const same = (a, b) => JSON.stringify(a && a.band_candidate) === JSON.stringify(b && b.band_candidate);
       if (!same(server, local)) setEnvelope(server);
-    });
+      setBandSynced(true);
+    }).catch(() => { if (alive) setBandSynced(true); });
     return () => { alive = false; };
   }, [participant_uid, navigate]);
 
@@ -317,8 +324,8 @@ function ClosedLoopSim() {
   const matchDir = cutpoint ? cutpoint.matchDir : "prior";
   const summary = useDeploymentSummary({
     participantUid: participant_uid,
-    channel: bc && bc.contact,
-    centerHz: bc && bc.center_freq_hz,
+    channel: bandSynced && bc ? bc.contact : null,
+    centerHz: bandSynced && bc ? bc.center_freq_hz : null,
     bandWidthHz: (bc && bc.bandwidth_hz) || 5.0,
     matchDir, cutThr, requestParams,
   });
@@ -330,7 +337,7 @@ function ClosedLoopSim() {
   // law. Both must clear, and they can disagree.
   // One candidate object for the report AND the simulation fetch, so the two cannot name
   // different bands (the simulation is read back BY candidate since 2026-09-11).
-  const reportCandidate = bc && {
+  const reportCandidate = bandSynced && bc ? {
     channel: bc.contact,
     centerHz: bc.center_freq_hz,
     bandWidthHz: bc.bandwidth_hz || 5.0,
@@ -338,7 +345,7 @@ function ClosedLoopSim() {
     rateHz: bc.rate_hz,
     pulseWidthUs: bc.pulse_width_us,
     thresholdMode: bc.threshold_mode || "dual",
-  };
+  } : null;
   const deploymentReport = useDeploymentReport({
     participantUid: participant_uid,
     bandCandidate: reportCandidate,

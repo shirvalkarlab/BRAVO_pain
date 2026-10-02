@@ -242,7 +242,7 @@ function SettingsFinePrint({ gs }) {
   const built = gridBuiltText(gs);
   return (
     <MDTypography title={built || undefined} sx={{ ...TYPE.body, color: PAL.ink2, maxWidth: "68ch", mt: 1 }}>
-      {`Grid: ${line}`}
+      {`Grid now: ${line}`}
     </MDTypography>
   );
 }

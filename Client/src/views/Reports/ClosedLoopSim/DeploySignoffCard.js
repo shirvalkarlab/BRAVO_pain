@@ -183,7 +183,7 @@ export function ChosenBandBlock({ bandCandidate, chosenBand, bandRecord }) {
         ? `${when || "time not recorded"}, chosen in a browser before the server kept a record; `
           + `carried over to the server${who ? ` by ${who}` : ""}`
         : `${when || "time not recorded"}${who ? `, by ${who}` : ""}; ${held}`} />
-      <KV k="Picked from the grid" v={grid || "not recorded with this band (chosen before "
+      <KV k="Band was chosen on" v={grid || "not recorded with this band (chosen before "
         + "2026-09-23, or loaded from a file)"} />
     </MDBox>
   );
@@ -519,7 +519,7 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
                 )}
                 <KV k="Odds ratio (95% range)" v={`${fmt(ev.odds_ratio)} (${fmt(ev.or_ci_low)}–${fmt(ev.or_ci_high)})${ev.credible_ci ? " ✓" : ""}`} />
                 <KV k="p from the mixed-effects model (ratings grouped in time)" v={ev.p_glmer != null ? ev.p_glmer.toExponential(2) : "not reported"} />
-                <KV k="Matched band-power readings / ratings" v={`${ev.n_matched_samples ?? "not reported"} / ${ev.n_clusters ?? "not reported"}`} />
+                <KV k="Readings behind the switching point / reports" v={`${ev.n_matched_samples ?? "not reported"} / ${ev.n_clusters ?? "not reported"}`} />
                 <BurnInNote ev={ev} />
                 {pw && pw.available ? (
                   <KV k="Chance of detecting a real link with pain" v={pw.more_data_needed
