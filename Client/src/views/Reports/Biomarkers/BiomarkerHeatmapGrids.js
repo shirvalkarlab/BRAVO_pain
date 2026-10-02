@@ -65,7 +65,7 @@ import GridSkeleton from "./GridSkeleton";
 import Section from "views/Reports/paper/Section";
 import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB, BIN_MID, diverging } from "./binarizationModel";
 import { contactSortKey } from "./contactOrder";
-import { bestCellReadout, cellNP, fmtP, pEquals, hoverCustomData, tierBullets, deviceSpectrumBullets, stabilityMark, stabilityBullet, clinicSheetBullets, sourceSplitLine } from "./gridReadouts";
+import { bestCellReadout, cellNP, fmtP, pEquals, hoverCustomData, tierBullets, deviceSpectrumBullets, needsMultiplePsds, stabilityMark, stabilityBullet, clinicSheetBullets, sourceSplitLine } from "./gridReadouts";
 
 // The heat maps' hover text, a size under the figure text (the PI, 2026-09-26: "reduce font size");
 // 11 px is the page's floor (decision 258).
@@ -346,7 +346,9 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
 
   // Plain lengths of signal on the axis (the PI, 2026-09-15: nothing appended -- which rows the
   // device can be set to is said once, in the caption's bullets).
-  const yLabels = useMemo(() => seconds.map((s) => secondsLabel(s)), [seconds]);
+  // An asterisk to the left of a row that needed two or more PSDs (see the PSD bullet).
+  const yLabels = useMemo(
+    () => seconds.map((s) => (needsMultiplePsds(sw, s) ? "*" : "") + secondsLabel(s)), [seconds, sw]);
   // Review 2026-09-15, B1: the corrected statistics for each column's best cell, on hover.
   const customdata = useMemo(() => hoverCustomData(sw, kind === "auc" ? "auc" : "corr"), [sw, kind]);
   // Sized 25% larger than the first Plotly pass, per the PI's own comparison against the size

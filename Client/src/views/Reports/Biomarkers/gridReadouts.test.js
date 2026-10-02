@@ -6,7 +6,7 @@
  * review measured on RCS08 (L 1-3+, 12.5 Hz, 300 s: r -0.534, interval -0.656 to -0.402, n 117,
  * q 0.0022) and the device ranges from the one home.
  */
-import { bestCellReadout, hoverReadout, hoverCustomData, rowTier, tierBullets, deviceSpectrumBullets, secondsLabel, stabilityMark, stabilityBullet, clinicSheetBullets, sourceSplitLine } from "./gridReadouts";
+import { bestCellReadout, hoverReadout, hoverCustomData, rowTier, tierBullets, deviceSpectrumBullets, needsMultiplePsds, secondsLabel, stabilityMark, stabilityBullet, clinicSheetBullets, sourceSplitLine } from "./gridReadouts";
 
 // The block the sweep response carries (DecodeCommon.device_ranges.timing_ranges_for_page), as
 // corrected against the clinician tablet on 2026-09-15: onset (Dual) 0-30 s, not the FDA's 6 min.
@@ -140,7 +140,7 @@ describe("row labels and tier bullets (B4)", () => {
     const b = tierBullets(RANGES, [3, 6, 9, 15, 21, 24, 30, 45, 60]);
     expect(b.length).toBe(2);
     expect(b[0]).toBe("Rows \u226430 s: device averaging window (0\u201330 s on tablet)");
-    expect(b[1]).toBe("Rows 45 s\u20131 min: one averaging window + onset hold (each \u226430 s); device holds level, no averaging");
+    expect(b[1]).toBe("Rows 45 s\u20131 min: one averaging window + onset hold (each \u226430 s); no device setting averages this long");
     b.forEach((line) => expect(line.split(" ").length).toBeLessThanOrEqual(24));
   });
   test("no ranges on the response, no bullets", () => {
@@ -154,11 +154,24 @@ describe("deviceSpectrumBullets", () => {
     const b = deviceSpectrumBullets(sw);
     expect(b).toEqual([
       // The PI's vocabulary on the heat maps (2026-09-25): TD and PSD, one word each, everywhere.
-      "358 of 451 matched reports (79%) had no TD in match window; read from PSD (N s row = nearest ceil(N/30) PSDs, else none)",
+      "*358 of 451 matched reports (79%) had no TD in match window; read from PSD. A row needs ceil(window/30 s) PSDs, else no value",
       "Match window defined under \"Adjust matching parameters\"",
     ]);
     expect(deviceSpectrumBullets({ n_pain_reports_from_device_spectrum: 0 })).toEqual([]);
     expect(deviceSpectrumBullets(null)).toEqual([]);
+  });
+});
+
+describe("rows that need two or more PSDs (asterisk)", () => {
+  const sw = { n_pain_reports_from_device_spectrum: 104, device_spectrum_total_grid: [[139]],
+    integration_seconds_delivered: [3, 6, 9, 15, 21, 24, 30, 45, 60] };
+  test("the PSD bullet starts with an asterisk and names the 45 s and 1 min rows as needing 2 PSDs", () => {
+    expect(deviceSpectrumBullets(sw)[0]).toBe("*104 of 139 matched reports (75%) had no TD in match window; "
+      + "read from PSD. 45 s and 1 min rows need 2 PSDs (ceil(window/30 s)); fewer, no value");
+  });
+  test("a row is starred only above 30 s, and only when some report was read from PSD", () => {
+    expect([30, 45, 60].map((s) => needsMultiplePsds(sw, s))).toEqual([false, true, true]);
+    expect(needsMultiplePsds({ n_pain_reports_from_device_spectrum: 0 }, 45)).toBe(false);
   });
 });
 
