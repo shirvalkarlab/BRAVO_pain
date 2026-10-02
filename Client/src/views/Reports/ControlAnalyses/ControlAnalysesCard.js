@@ -11,6 +11,7 @@ import PropTypes from "prop-types";
 import Card from "@mui/material/Card";
 import Select from "@mui/material/Select";
 import MDBox from "components/MDBox";
+import { promptSelectSx } from "views/Reports/paper/selectStyle";
 import { SessionController } from "database/session-control";
 import { T, TYPE, SPACE, CARD, LAYOUT } from "assets/theme/base/tokens";
 import { SectionRevealedContext } from "views/Reports/paper/Section";
@@ -73,7 +74,7 @@ export default function ControlAnalysesCard({ payload, clinicSheets, plain }) {
           <label htmlFor={SELECT_ID} style={{ ...TYPE.body, color: T.ink2 }}>{"Which check"}</label>
           <Select native size="small" value={a.key} onChange={(e) => setKey(e.target.value)}
             inputProps={{ id: SELECT_ID }}
-            sx={{ ...TYPE.body, color: T.ink, background: T.surface, maxWidth: "100%", minWidth: 280,
+            sx={{ ...TYPE.body, color: T.ink, ...promptSelectSx, maxWidth: "100%", minWidth: 280,
               "& select": { ...TYPE.body, color: T.ink, py: 0.75 } }}>
             {analyses.map((x) => <option key={x.key} value={x.key}>{x.title}{x.snapshot ? "" : " (not run yet)"}</option>)}
           </Select>

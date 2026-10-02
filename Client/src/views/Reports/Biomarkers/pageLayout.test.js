@@ -264,8 +264,8 @@ describe("7. the pairs the device refuses with today's contacts", () => {
     // and names no decision number; each lead's own detail is one click away
     expect(visibleText(status)).toMatch(/two contacts on either side of the stimulating contact/);
     expect(status.textContent).not.toMatch(/decision \d+/i);
-    expect(visibleText(status)).not.toMatch(/flanking/);
-    expect(status.textContent).toMatch(/flanking/);
+    // each lead's folded line is short now (2026-10-02): "Left: L 1⁻3⁺ only"
+    expect(status.textContent).toMatch(/(Left|Right): .* only/);
   });
 
   test("without it the page marks nothing and says nothing about allowed pairs (no rule invented here)", async () => {

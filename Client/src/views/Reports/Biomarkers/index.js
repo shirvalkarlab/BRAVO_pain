@@ -18,6 +18,7 @@ import { Grid, Select, MenuItem, FormControl,
   ToggleButton, ToggleButtonGroup } from "@mui/material";
 
 import MDBox from "components/MDBox";
+import { promptSelectSx } from "views/Reports/paper/selectStyle";
 import MDTypography from "components/MDTypography";
 
 import BiomarkerTimeline from "./BiomarkerTimeline";
@@ -735,7 +736,7 @@ function Biomarkers() {
                 <FormControl size="small" sx={{ minWidth: 280 }}>
                   <Select value={metric} onChange={(e) => setMetric(e.target.value)}
                           inputProps={{ id: "biomarkers-pain-score" }}
-                          sx={{ "& .MuiSelect-select": { ...TYPE.body, color: `${T.ink} !important` } }}>
+                          sx={{ ...promptSelectSx, "& .MuiSelect-select": { ...TYPE.body, color: `${T.ink} !important` } }}>
                     {metricOptions.map((m) => (
                       <MenuItem key={m.key} value={m.key} sx={{ ...TYPE.body }}>{m.label}</MenuItem>
                     ))}

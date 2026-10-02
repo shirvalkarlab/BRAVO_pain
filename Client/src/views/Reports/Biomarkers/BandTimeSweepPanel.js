@@ -44,6 +44,7 @@ import Plotly from "plotly.js-dist";
 import { Card, Grid, Select, MenuItem, FormControl } from "@mui/material";
 
 import MDBox from "components/MDBox";
+import { promptSelectSx } from "views/Reports/paper/selectStyle";
 import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 
@@ -238,7 +239,7 @@ function BandTimeSweepPanel({ participantUid, requestParams, availableMetrics, p
             </MDTypography>
             <FormControl size="small" sx={{ minWidth: 260 }}>
               <Select value={metric} onChange={(e) => setMetric(e.target.value)}
-                sx={{ fontSize: 14 }}>
+                sx={{ fontSize: 14, ...promptSelectSx }}>
                 {options.map((m) => (
                   <MenuItem key={m.key} value={m.key} sx={{ fontSize: 14 }}>{m.label}</MenuItem>
                 ))}
@@ -253,7 +254,7 @@ function BandTimeSweepPanel({ participantUid, requestParams, availableMetrics, p
               </MDTypography>
               <FormControl size="small" sx={{ minWidth: 220 }}>
                 <Select value={channel || ""} onChange={(e) => setChannel(e.target.value)}
-                  sx={{ fontSize: 14 }}>
+                  sx={{ fontSize: 14, ...promptSelectSx }}>
                   {channels.map((c) => (
                     <MenuItem key={c} value={c} sx={{ fontSize: 14 }}>{c}</MenuItem>
                   ))}

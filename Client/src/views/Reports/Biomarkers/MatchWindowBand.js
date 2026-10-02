@@ -20,6 +20,7 @@ import { useState } from "react";
 import { Grid, Select, MenuItem, FormControl, Slider, TextField, ToggleButton, ToggleButtonGroup } from "@mui/material";
 
 import MDBox from "components/MDBox";
+import { promptSelectSx } from "views/Reports/paper/selectStyle";
 import MDTypography from "components/MDTypography";
 
 import { T, TYPE, RADIUS, FOCUS_RING } from "assets/theme/base/tokens";
@@ -170,7 +171,7 @@ export default function MatchWindowBand({
           </MDTypography>
           <FormControl fullWidth size="small">
             <Select value={strategy} onChange={(e) => setStrategy(e.target.value)}
-                    inputProps={{ "aria-label": "split rule" }} sx={{ ...TYPE.body }}>
+                    inputProps={{ "aria-label": "split rule" }} sx={{ ...TYPE.body, ...promptSelectSx }}>
               {strategyOptions.map((s) => (
                 <MenuItem key={s.key} value={s.key} sx={{ ...TYPE.body }}>{s.label}</MenuItem>
               ))}

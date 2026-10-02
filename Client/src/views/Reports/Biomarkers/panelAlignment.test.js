@@ -115,6 +115,26 @@ describe("the two statistics lines", () => {
     expect(getComputedStyle(line).whiteSpace).toBe("nowrap");
   });
 
+  test("2b. neither line is clipped (the violin's n for low was cut to an ellipsis), both are centred, and the title is centred over both plots", () => {
+    ["scatter-headline", "violin-headline"].forEach((id) => {
+      const line = screen.getByTestId(id);
+      const st = getComputedStyle(line);
+      expect(st.textOverflow).not.toBe("ellipsis");
+      expect(st.overflow).not.toBe("hidden");
+      expect(getComputedStyle(line.parentElement).textAlign).toBe("center");
+    });
+    const title = screen.getByText(/ Hz · .* of signal/);
+    expect(getComputedStyle(title).textAlign).toBe("center");
+  });
+
+  test("2c. the TD and PSD values sit on separate lines, with n=X", () => {
+    const split = screen.queryByTestId("source-split-line");
+    if (split) {
+      expect(getComputedStyle(split).whiteSpace).toBe("pre-line");
+      expect(split.textContent).not.toMatch(/ reports/);
+    }
+  });
+
   test("3. the older wording is gone from the panels and the key says AUC", () => {
     const text = document.body.textContent;
     expect(text).not.toMatch(/22 bands is given for the circled square/);

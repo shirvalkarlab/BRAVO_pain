@@ -92,17 +92,14 @@ export function bestCellReadout(sw, kind, colIndex, rowIndex, { includeN = true 
   }
   // `includeN`: the hover carries the count (nothing else on a hover does); the panel lines beside
   // the scatter and the violin leave it out, since the plain line above them already has it.
+  // The corrected q first, then the cell's interval, the same two parts for the scatter and the
+  // violin (the PI, 2026-10-02). The verdict word and the across-settings answer are the Closed-Loop
+  // page's to print, not this one's.
   const parts = includeN ? [ratingsPhrase(best)] : [];
-  if (kind !== "auc" && best.pearson_r_low != null && best.pearson_r_high != null) {
-    parts.push(`interval ${fmtSigned(best.pearson_r_low)} to ${fmtSigned(best.pearson_r_high)}`);
-  }
   parts.push(qWords(best.family_wise_q_8_to_30hz));
-  parts.push(String(best.answer || "").replace(/_/g, " ") || "not resolved");
-  // B3 (decision 185): the cross-setting stability answer, the same words the Closed-Loop card's
-  // "Choose a band" column prints, read off the row the backend attached it to. A row with no
-  // answer field at all (an older stored response) leaves the line as it was.
-  const stab = best.cross_setting_stability;
-  if (stab && stab.answer) parts.push(`across settings: ${stabilityAnswerWord(stab)}`);
+  const lo = kind === "auc" ? best.auc_low : best.pearson_r_low;
+  const hi = kind === "auc" ? best.auc_high : best.pearson_r_high;
+  if (lo != null && hi != null) parts.push(`interval ${fmtSigned(lo)} to ${fmtSigned(hi)}`);
   return { isBest: true, text: parts.join(" · ") };
 }
 
@@ -297,13 +294,14 @@ export function sourceSplitLine(sw, colIndex, rowIndex) {
     if (!src) return null;
     const n = at(src.n_grid);
     if (n == null || !Number.isFinite(n)) return null;
-    if (n < min) return `${name} values: too few reports (${n})`;
+    if (n < min) return `${name} values: n=${n}, too few`;
     const r = at(src.r_grid);
     const lo = at(src.r_low_grid);
     const hi = at(src.r_high_grid);
     const iv = (lo != null && hi != null) ? ` (${fmtR(lo)} to ${fmtR(hi)})` : "";
-    return `${name} values: R ${fmtR(r)}${iv}, ${n} reports`;
+    return `${name} values: R ${fmtR(r)}${iv}, n=${n}`;
   };
   const parts = [part("TD", split.td), part("PSD", split.psd)].filter(Boolean);
-  return parts.length ? parts.join(" \u00b7 ") : null;
+  // One source per line (the PI, 2026-10-02): TD, then PSD on a new line.
+  return parts.length ? parts.join("\n") : null;
 }

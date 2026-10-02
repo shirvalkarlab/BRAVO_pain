@@ -45,7 +45,7 @@ describe("bestCellReadout (B1)", () => {
   test("the column's best cell prints n, the interval and the corrected q", () => {
     const r = bestCellReadout(SW, "corr", 1, 9);   // 12.5 Hz, 300 s
     expect(r.isBest).toBe(true);
-    expect(r.text).toBe("117 ratings · interval −0.66 to −0.40 · q < 0.01 (fdr 22 bands) · established");
+    expect(r.text).toBe("117 ratings · q < 0.01 (fdr 22 bands) · interval −0.66 to −0.40");
   });
   test("a cell that is not its column's best prints nothing (the PI, 2026-10-02: the sentence pointing at the circled square is gone)", () => {
     const r = bestCellReadout(SW, "corr", 1, 2);   // 12.5 Hz, 9 s; the column's best is at 300 s = 5m
@@ -55,16 +55,16 @@ describe("bestCellReadout (B1)", () => {
   test("the panel lines drop the ratings count, which the plain line beside them already carries", () => {
     // The PI, 2026-09-15: "no reason to say '96 ratings' again".
     expect(bestCellReadout(SW, "corr", 1, 9, { includeN: false }).text)
-      .toBe("interval −0.66 to −0.40 · q < 0.01 (fdr 22 bands) · established");
+      .toBe("q < 0.01 (fdr 22 bands) · interval −0.66 to −0.40");
     expect(bestCellReadout(SW, "auc", 2, 3, { includeN: false }).text)
-      .toBe("q 0.03 (fdr 22 bands) · established");
+      .toBe("q 0.03 (fdr 22 bands)");
     // the hover keeps the count: nothing else on a hover carries it
     expect(bestCellReadout(SW, "corr", 1, 9).text).toMatch(/^117 ratings/);
   });
   test("the AUC grid reads its own best row", () => {
     const r = bestCellReadout(SW, "auc", 2, 3);    // 13.5 Hz, 15 s
     expect(r.isBest).toBe(true);
-    expect(r.text).toBe("174 ratings · q 0.03 (fdr 22 bands) · established");
+    expect(r.text).toBe("174 ratings · q 0.03 (fdr 22 bands)");
   });
   test("a column with no best row prints nothing (the older sentence about the allowance is gone)", () => {
     expect(bestCellReadout(SW, "auc", 0, 0).text).toBe("");
@@ -168,16 +168,13 @@ describe("cross-setting stability on the grid (B3, decision 185)", () => {
     best_correlation_rows: SW.best_correlation_rows.map((r) =>
       r.band_center_hz === 12.5 ? { ...r, cross_setting_stability: { answer, reason, from_store: answer !== "not tested" } } : r),
   });
-  test("the best cell's panel line ends with the answer the Closed-Loop card gives", () => {
+  test("the best cell's panel line carries no verdict or across-settings answer: those are the Closed-Loop page's", () => {
     const r = bestCellReadout(withStability("behaves differently", "the interaction test rejects"), "corr", 1, 9);
-    expect(r.text).toBe("117 ratings · interval −0.66 to −0.40 · q < 0.01 (fdr 22 bands) · established · across settings: behaves differently");
-  });
-  test("an answer not yet computed says so in three words, not 'not tested'", () => {
-    const r = bestCellReadout(withStability("not tested", "the cross-setting stability answer has not been computed for this grid yet"), "corr", 1, 9);
-    expect(r.text.endsWith("across settings: not yet computed")).toBe(true);
+    expect(r.text).toBe("117 ratings · q < 0.01 (fdr 22 bands) · interval −0.66 to −0.40");
+    expect(r.text).not.toMatch(/across settings|established|cannot tell|not resolved/);
   });
   test("a row carrying no answer at all leaves the panel line as it was", () => {
-    expect(bestCellReadout(SW, "corr", 1, 9).text).toBe("117 ratings · interval −0.66 to −0.40 · q < 0.01 (fdr 22 bands) · established");
+    expect(bestCellReadout(SW, "corr", 1, 9).text).toBe("117 ratings · q < 0.01 (fdr 22 bands) · interval −0.66 to −0.40");
   });
   // CHANGED ON PURPOSE (the redesign of 2026-09-26, SPEC.md section 3.2): the stability answer is
   // drawn by SHAPE in ink, never by green, red or amber, so colour alone carries no meaning.
@@ -236,12 +233,12 @@ describe("the effective count beside the raw count (panel A item 4, 2026-09-22)"
     expect(hoverReadout(withEff, "corr", 1, 9)).toBe("117 ratings · q < 0.01 (fdr 22 bands)");
   });
   test("the panel line names it too", () => {
-    expect(bestCellReadout(withEff, "corr", 1, 9).text).toMatch(/^117 ratings \(about 98 independent\) · interval/);
+    expect(bestCellReadout(withEff, "corr", 1, 9).text).toMatch(/^117 ratings \(about 98 independent\) · q /);
   });
   test("a best row without the field, and any other cell, print exactly what they did", () => {
     expect(hoverReadout(withEff, "auc", 2, 3)).toMatch(/^174 ratings · q .* \(fdr 22 bands\)$/);
     expect(hoverReadout(withEff, "corr", 1, 2)).toBe("96 ratings · p 0.05");
-    expect(bestCellReadout(SW, "corr", 1, 9).text).toMatch(/^117 ratings · interval/);
+    expect(bestCellReadout(SW, "corr", 1, 9).text).toMatch(/^117 ratings · q /);
   });
 });
 
@@ -257,11 +254,11 @@ describe("the TD / PSD line above the scatter (P-19)", () => {
   const sw = { center_freqs_hz: [23.5, 24.5], correlation_by_recording_source: split };
   test("both sources, each with its interval and count, in the PI's words", () => {
     expect(sourceSplitLine(sw, 1, 0)).toBe(
-      "TD values: R \u22120.05 (\u22120.23 to +0.12), 76 reports \u00b7 PSD values: R \u22120.37 (\u22120.56 to \u22120.19), 86 reports");
+      "TD values: R \u22120.05 (\u22120.23 to +0.12), n=76\nPSD values: R \u22120.37 (\u22120.56 to \u22120.19), n=86");
   });
-  test("a source under the minimum reads 'too few reports' with its count", () => {
+  test("a source under the minimum reads 'too few' with its n", () => {
     expect(sourceSplitLine(sw, 0, 0)).toBe(
-      "TD values: R \u22120.10 (\u22120.30 to +0.10), 70 reports \u00b7 PSD values: too few reports (5)");
+      "TD values: R \u22120.10 (\u22120.30 to +0.10), n=70\nPSD values: n=5, too few");
   });
   test("no line from a response without the split, or one that could not make it", () => {
     expect(sourceSplitLine({ center_freqs_hz: [24.5] }, 0, 0)).toBeNull();

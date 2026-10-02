@@ -40,7 +40,7 @@ test("the line is printed under the cell's own statistics, in the PI's words", (
     wrap(<ScatterStatsLine cell={CELL} pinnedCell={PINNED} sw={SW} />));
   const line = getByTestId("source-split-line");
   expect(line.textContent).toBe(
-    "TD values: R \u22120.05 (\u22120.23 to +0.12), 76 reports \u00b7 PSD values: R \u22120.37 (\u22120.56 to \u22120.19), 86 reports");
+    "TD values: R \u22120.05 (\u22120.23 to +0.12), n=76\nPSD values: R \u22120.37 (\u22120.56 to \u22120.19), n=86");
   // The cell's own statistics line ("r = ..., p = ..., n = ...") comes first, then the source split.
   const text = container.textContent;
   const own = text.indexOf("r = -0.04, p = 0.61, n = 162");

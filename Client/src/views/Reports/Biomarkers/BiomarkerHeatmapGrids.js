@@ -276,8 +276,8 @@ export function gridStatusParts(result, sw, metricLabel) {
 }
 
 /** The device's sensing rule in plain words, printed in the open beside the refused count. */
-export const SENSING_RULE_PLAIN = "The device can sense only on the two contacts on either side of "
-  + "the stimulating contact, so a band on any other pair cannot be programmed with today's contacts.";
+export const SENSING_RULE_PLAIN = "Sensing only on the two contacts on either side of the stimulating "
+  + "contact; other pairs can't be programmed today.";
 
 /**
  * Why the device refuses the pairs: one plain sentence in the open, next to the refused count (a
@@ -297,9 +297,7 @@ export function RefusalReason({ pairs, rule }) {
           if (!r || !r.rule_applied) return null;
           return (
             <MDTypography key={side} component="span" display="block" sx={{ ...TYPE.body, color: T.ink2 }}>
-              {`${side} lead: ${r.why}${r.allowed_display ? `, so it senses on ${r.allowed_display} only` : ""}. `
-                + "A band found on another pair on this lead cannot be programmed without moving the "
-                + "stimulating contacts."}
+              {`${side}: ${r.allowed_display ? `${r.allowed_display} only` : "no allowed pair"}`}
             </MDTypography>
           );
         })}
@@ -315,18 +313,14 @@ export function bulletsFor(sw) {
   const notes = sw.notes || [];
   return [
     ...notes.slice(0, 3),
-    "A dark ring marks each column's best square; a heavier ring means it is still clear after the "
-      + "allowance for testing 22 bands at once \u2014 a research finding, not a device-ready setting.",
-    "The left grid ignores the high / low cuts (a continuous score has no split); the right grid "
-      + "recomputes and flashes.",
-    "Clicking a square shows its own R (Pearson) and rank-test p (Mann-Whitney), uncorrected.",
-    "The colours saturate at \u22120.5 and +0.5 for R and at 0.25 and 0.75 for the area "
-      + "(0.5 is a coin toss); the hover prints the true value.",
+    "Dark ring: column's best square; heavy ring: survives correction for 22 bands (research finding, "
+      + "not a device setting).",
+    "Left grid ignores high/low cuts; right grid recomputes.",
+    "Click a square: its R (Pearson) and Mann-Whitney p, uncorrected.",
+    "Colours saturate at \u00b10.5 (R) and 0.25/0.75 (AUC; 0.5 = chance); hover shows the true value.",
     // P-19 (the PI, 2026-09-25): the two sources, named here once in full and TD / PSD everywhere else.
-    "Each rating's band power comes from the time domain (TD) recording, in 3 s pieces, whenever any "
-      + "falls in the match window, and otherwise from PSD (the device's 30 s snapshot). The line above "
-      + "the scatter gives the clicked cell's R on its TD values alone and on its PSD values "
-      + "alone; it describes the cell and changes no selection or verdict.",
+    "Band power: time domain (TD) recording, in 3 s pieces, if any fall in the match window; else "
+      + "PSD (the device's 30 s snapshot). The TD/PSD lines above the scatter describe the cell only.",
     ...notes.slice(3),
   ];
 }
@@ -777,7 +771,7 @@ function PanelTitle({ pinnedCell, channelLabel }) {
   // this information for both panels.
   return (
     <MDTypography component="p"
-      sx={{ ...TYPE.title, color: T.ink, display: "block", mb: 0.5, mt: 0 }}>
+      sx={{ ...TYPE.title, color: T.ink, display: "block", mb: 0.5, mt: 0, textAlign: "center" }}>
       {`${channelLabel(pinnedCell.channel)} · ${pinnedCell.center} Hz · `}
       {`${secondsLabel(pinnedCell.secondsDisplay != null ? pinnedCell.secondsDisplay : pinnedCell.seconds)} of signal`}
     </MDTypography>
@@ -786,14 +780,14 @@ function PanelTitle({ pinnedCell, channelLabel }) {
 
 /** The box a statistics line sits in: the same centred box and left inset as the plot below it, so
  *  the line starts where the plot area starts (the PI, 2026-10-02: the lines were offset). */
-const statsBoxSx = (side) => ({ maxWidth: side || "none", mx: "auto", pl: `${PLOT_MARGIN.l}px`, minWidth: 0 });
+const statsBoxSx = () => ({ width: "100%", textAlign: "center", minWidth: 0 });
 
 /** ONE line, never wrapped: the headline statistic above a plot. */
 function HeadlineLine({ testId, title, children }) {
   return (
     <MDTypography component="p" data-testid={testId} title={title}
-      style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-      sx={{ ...TYPE.body, color: T.ink, display: "block", mb: 0.25, mt: 0 }}>
+      sx={{ ...TYPE.body, color: T.ink, display: "block", mb: 0.25, mt: 0,
+        whiteSpace: "nowrap" }}>
       {children}
     </MDTypography>
   );
@@ -855,7 +849,7 @@ export function ScatterStatsLine({ cell, pinnedCell, sw, side }) {
         const line = sourceSplitLine(sw, pinnedCell.col, pinnedCell.row);
         return line ? (
           <MDTypography variant="caption" data-testid="source-split-line"
-            sx={{ ...TYPE.body, color: T.ink2, display: "block", mb: 0.5 }}>
+            sx={{ ...TYPE.body, color: T.ink2, display: "block", mb: 0.5, whiteSpace: "pre-line" }}>
             {line}
           </MDTypography>
         ) : null;

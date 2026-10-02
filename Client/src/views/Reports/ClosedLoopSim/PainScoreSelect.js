@@ -9,6 +9,7 @@
  */
 import { FormControl, MenuItem, Select } from "@mui/material";
 import MDBox from "components/MDBox";
+import { promptSelectSx } from "views/Reports/paper/selectStyle";
 import MDTypography from "components/MDTypography";
 
 import { PAIN_SCORE_OPTIONS, painScoreLabel } from "views/Reports/painScores";
@@ -48,9 +49,7 @@ export default function PainScoreSelect({ value, bandDefault, options, onChange 
         <FormControl size="small">
           <Select value={value} onChange={(e) => onChange(e.target.value)}
             inputProps={{ "aria-label": "Pain score for every band-to-pain reading on this page" }}
-            sx={{ fontSize: PAL.fs.body, minWidth: 180, borderRadius: "4px", "& .MuiSelect-select": { py: 0.75 },
-              // The outline at least 3:1 against white (the graphic grey, 3.45:1; TASTE_AUDIT.md D3).
-              "& .MuiOutlinedInput-notchedOutline": { borderColor: PAL.graphic } }}>
+            sx={{ fontSize: PAL.fs.body, minWidth: 180, ...promptSelectSx, "& .MuiSelect-select": { py: 0.75 } }}>
             {opts.map((m) => (
               <MenuItem key={m.key} value={m.key} sx={{ fontSize: PAL.fs.body }}>{m.label}</MenuItem>
             ))}
