@@ -255,7 +255,7 @@ describe("2. folds closed on load", () => {
     expect(isFolded(home.querySelector("table"))).toBe(true);
     // the home schedule is no longer a card of its own
     const titled = Array.from(container.querySelectorAll(CARD_SELECTOR))
-      .filter((c) => c.textContent.includes("Home programming schedule"));   // (CARD_SELECTOR below)
+      .filter((c) => c.textContent.includes("Home schedule to map two currents"));   // (CARD_SELECTOR below)
     expect(titled).toHaveLength(1);
     expect(titled[0]).toBe(card);
   });

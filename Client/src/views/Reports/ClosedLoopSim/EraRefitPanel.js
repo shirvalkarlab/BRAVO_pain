@@ -230,7 +230,7 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
     <Card sx={{ ...CARD, width: "100%" }}>
       <MDBox p={3}>
         <MDTypography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink, mb: 1 }}>
-          Does the switching point hold at every stimulation state?
+          Switching point across stimulation states
         </MDTypography>
         <PanelStaleNote stale={cached.stale} staleReasons={cached.staleReasons}
           loading={cached.loading} notKept={cached.notKept}

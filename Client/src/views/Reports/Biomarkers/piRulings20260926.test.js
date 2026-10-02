@@ -69,7 +69,7 @@ describe("the heat maps", () => {
   const src = read("BiomarkerHeatmapGrids.js");
 
   test("the right map's title fits one line, the left one says R", () => {
-    expect(src).toContain('{"High vs Low Pain Logistic classification"}');
+    expect(src).toContain('{"High vs. low pain classification"}');
     expect(src).toContain('{"R with pain"}');
   });
 

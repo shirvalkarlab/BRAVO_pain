@@ -24,3 +24,9 @@ test.each(FILES)("every <Select> in %s uses it", (rel) => {
   expect(tags.length).toBeGreaterThan(0);
   tags.forEach((t) => expect(t).toMatch(/promptSelectSx/));
 });
+
+test("the plain <select> boxes of the offline checks carry the same blue outline", () => {
+  const text = fs.readFileSync(path.join(ROOT, "ControlAnalyses/figures.js"), "utf8");
+  const block = text.slice(text.indexOf("const SELECT = {"), text.indexOf("};", text.indexOf("const SELECT = {")));
+  expect(block).toMatch(/1\.5px solid \$\{T\.accent\}/);
+});

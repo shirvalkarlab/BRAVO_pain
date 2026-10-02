@@ -55,7 +55,7 @@ import { useCachedResult } from "database/useCachedResult";
 import { getResult, settingsKey } from "database/resultCache";
 import { biomarkerHeatmapSlot, prefetchBiomarkerHeatmapMetric } from "views/Reports/moduleCacheKeys";
 import { cellKey, getCell, putCell } from "./heatmapCellCache";
-import { PLOT_MARGIN, plotMargin, panelBoxStyle } from "./panelLayout";
+import { PLOT_MARGIN, PLOT_BOTTOM, plotMargin, panelBoxStyle } from "./panelLayout";
 import { T, TYPE, LAYOUT } from "assets/theme/base/tokens";
 import { DIVERGING, RANGE, textInk } from "assets/theme/base/dataColors";
 import { PLOTLY_LAYOUT, PLOTLY_CONFIG, FONT_FAMILY, FIGURE_TEXT_PX, directLabel, mergeDeep } from "views/Reports/figureStyle";
@@ -236,7 +236,7 @@ export function gridStatusLine(result, metricLabel) {
   const where = pairs.length ? `, on ${pairs.join(", ")}` : "";
   const band = (n) => (n === 1 ? "band" : "bands");
   const verb = (n, one, many) => (n === 1 ? one : many);
-  return `${head ? `${head}: ` : ""}after allowing for the 22 bands tested, ${rise} ${band(rise)} `
+  return `${head ? `${head}: ` : ""}after allowing for the 22 bands tested in each pair, ${rise} ${band(rise)} `
     + `${verb(rise, "rises", "rise")} with pain and ${fall} ${verb(fall, "falls", "fall")} with it${where}.`;
 }
 
@@ -445,7 +445,7 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
     // and cut the hover label off mid-word. Left unset, Plotly draws at the box's width; `width`
     // stays below as the box's own upper limit, so a wide screen draws it no larger than before.
     fig.setLayoutProps({
-      height, margin: plotMargin(44),
+      height, margin: plotMargin(PLOT_BOTTOM),
       font: PLOTLY_LAYOUT.font, paper_bgcolor: T.surface, plot_bgcolor: T.surface,
       // The heat maps' hover is three lines; set smaller than the figure text (the PI, 2026-09-26).
       hoverlabel: HEATMAP_HOVERLABEL,
@@ -667,7 +667,7 @@ function PlotlyViolin({ divId, highVals, lowVals, side }) {
       hovertemplate: "%{y:.1f} device units (LSB)<extra>Low pain</extra>",
     });
     fig.setLayoutProps({
-      height: side, margin: plotMargin(36),
+      height: side, margin: plotMargin(PLOT_BOTTOM),
       font: PLOTLY_LAYOUT.font, paper_bgcolor: T.surface, plot_bgcolor: T.surface,
       hoverlabel: PLOTLY_LAYOUT.hoverlabel,
       // The two groups are named on the axis itself ("High pain", "Low pain"): a direct label.
@@ -927,7 +927,7 @@ function PlotlyScatter({ divId, cell, pinnedCell, side, metricLabel }) {
     }));
 
     fig.setLayoutProps({
-      height: side, margin: plotMargin(44),
+      height: side, margin: plotMargin(PLOT_BOTTOM),
       font: PLOTLY_LAYOUT.font, paper_bgcolor: T.surface, plot_bgcolor: T.surface,
       hoverlabel: PLOTLY_LAYOUT.hoverlabel,
       xaxis: axisStyle({ title: { text: "Band power (device units, LSB)" } }),
@@ -1418,7 +1418,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
                   onHover={handleHover} onClick={(r, c) => handleClick(corrSw, r, c)} />
               </MDBox>
               <MDTypography component="h3" sx={{ ...subhead, gridArea: "t2" }}>
-                {"High vs Low Pain Logistic classification"}
+                {"High vs. low pain classification"}
               </MDTypography>
               <MDBox sx={{ gridArea: "k2" }}>{aucKey}</MDBox>
               <MDBox sx={{ gridArea: "m2", minWidth: 0 }}>

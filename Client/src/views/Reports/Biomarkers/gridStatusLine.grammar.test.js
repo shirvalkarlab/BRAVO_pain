@@ -20,3 +20,8 @@ describe("the heat maps' status line", () => {
       .toMatch(/2 bands rise with pain and 2 fall with it/);
   });
 });
+
+import { gridStatusLine as _gsl } from "./BiomarkerHeatmapGrids";
+test("the status line says the 22 bands are tested in each pair, so counts above 22 read right", () => {
+  expect(_gsl({ band_time_sweep: {} }, "Left Leg VAS")).toMatch(/22 bands tested in each pair/);
+});

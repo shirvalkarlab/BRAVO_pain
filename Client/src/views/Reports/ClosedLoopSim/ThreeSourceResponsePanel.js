@@ -282,7 +282,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
     if (specRef.current) Plotly.purge(specRef.current);
   }, []);
 
-  const title = "How much band power changes per milliamp, measured three ways";
+  const title = "Band power change per mA, three ways";
   const reportBlock = report && report.data && report.data.three_source_response;
   const footer = reportBlock && reportBlock.comparisons && reportBlock.comparisons[0]
     ? reportBlock.comparisons[0].footer : null;

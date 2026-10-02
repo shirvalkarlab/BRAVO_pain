@@ -317,7 +317,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
     <Card sx={{ ...CARD, width: "100%" }}>
       <MDBox p={3}>
         <MDTypography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink, mb: 1 }}>
-          Where does the switching point sit in the device&apos;s own units?
+          Switching point in device units
         </MDTypography>
         <MDTypography sx={{ ...TYPE.body, color: PAL.ink3, mb: 1 }}>
           LSB is the device&apos;s own unit of band power: the number its sensing readout prints.

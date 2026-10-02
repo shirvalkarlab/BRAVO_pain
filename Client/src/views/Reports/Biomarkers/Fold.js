@@ -23,7 +23,7 @@ export default function Fold({ show, hide = null, inside = null, defaultOpen = f
   const [open, setOpen] = useState(!!defaultOpen);
   const handle = (next) => { setOpen(next); if (onChange) onChange(next); };
   return (
-    <PaperFold label={open && hide ? hide : show} inside={inside} defaultOpen={!!defaultOpen}
+    <PaperFold label={show} inside={inside} defaultOpen={!!defaultOpen}
       onChange={handle}>
       {children}
     </PaperFold>

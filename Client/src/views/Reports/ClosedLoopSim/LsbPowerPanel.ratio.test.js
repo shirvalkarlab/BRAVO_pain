@@ -57,7 +57,7 @@ test("the ratio line names the constant in effect from the payload and not a rul
   // Title changed on purpose by decision 302: the panel says where the cut-point sits in device
   // units, never a "threshold" to program.
   // The title is a question since the redesign of 2026-09-26.
-  expect(await screen.findByText(/Where does the switching point sit in the device/)).toBeInTheDocument();
+  expect(await screen.findByText(/Switching point in device units/)).toBeInTheDocument();
   const text = document.body.textContent;
   expect(text).toMatch(/1\.08× the constant in effect \(1 µV² = 345\.59 LSB\)/);
   expect(text).toMatch(/independent check, not a programmed value/);
@@ -81,7 +81,7 @@ test("the power-vs-sample-size curve has the restored toolbar; the switching-poi
   });
   render(wrap(<LsbPowerPanel participantUid={UID} bandCandidate={BC} requestParams={REQ}
     cutpoint={{ threshold: 1.5, matchDir: "prior" }} onLsbThreshold={() => {}} />));
-  await screen.findByText(/Where does the switching point sit in the device/);
+  await screen.findByText(/Switching point in device units/);
   expect(Plotly.react).toHaveBeenCalled();
   const calls = Plotly.react.mock.calls;
   // the power curve names its y-axis "chance of detecting a real link with pain (%)"

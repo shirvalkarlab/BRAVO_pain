@@ -14,7 +14,7 @@
  */
 import React, { useMemo, useState } from "react";
 
-import { T, TYPE, SPACE, RADIUS, GLYPH } from "assets/theme/base/tokens";
+import { T, TYPE, SPACE, GLYPH } from "assets/theme/base/tokens";
 import { SIDE, CONTEXT } from "assets/theme/base/dataColors";
 import { painScoreLabel } from "views/Reports/painScores";
 
@@ -30,8 +30,8 @@ export { pairName };
 const CAPTION = { ...TYPE.body, color: T.ink3, marginTop: SPACE.xxs, maxWidth: "68ch" };
 const BODY = { ...TYPE.body, color: T.ink2 };
 const SELECT = {
-  ...TYPE.body, color: T.ink, background: T.surface, border: `1px solid ${T.ink3}`,
-  borderRadius: RADIUS.sm, padding: "4px 8px", marginLeft: SPACE.xs, marginRight: SPACE.sm,
+  ...TYPE.body, color: T.ink, background: T.surface, border: `1.5px solid ${T.accent}`,
+  borderRadius: 6, padding: "4px 8px", marginLeft: SPACE.xs, marginRight: SPACE.sm,
   fontFamily: "inherit",
 };
 

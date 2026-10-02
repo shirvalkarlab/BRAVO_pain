@@ -413,7 +413,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       <MDBox p={3}>
         <MDBox display="flex" justifyContent="space-between" alignItems="baseline" mb={1} flexWrap="wrap" gap={1}>
           <MDTypography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>
-            Where does the switching point sit?
+            Switching point location
           </MDTypography>
           {/* Match direction changes which neural samples are paired with which pain rating, so it
               changes the fit rather than the view. It is labelled in clinical terms (not the internal

@@ -170,3 +170,14 @@ describe("the plots sit under their heat maps", () => {
     });
   });
 });
+
+describe("the bottom edges of the four plot areas sit on one line", () => {
+  it("the heat maps, scatter and violin all take the one bottom margin from panelLayout", () => {
+    const fs = require("fs");
+    const src = fs.readFileSync(require("path").join(__dirname, "BiomarkerHeatmapGrids.js"), "utf8");
+    const used = src.match(/margin: plotMargin\([^)]*\)/g) || [];
+    expect(used.length).toBe(3);
+    used.forEach((u) => expect(u).toBe("margin: plotMargin(PLOT_BOTTOM)"));
+    expect(PLOT_MARGIN.b).toBe(require("./panelLayout").PLOT_BOTTOM);
+  });
+});

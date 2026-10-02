@@ -11,6 +11,7 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
+import { retryOnGatewayError } from "./retryOnGatewayError";
 import axios from "axios";
 
 import { ERRORCODE } from "./api-codes";
@@ -187,14 +188,14 @@ export const SessionController = (function () {
       csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
     }
     
-    return axios.post(server + url, form, {
+    return retryOnGatewayError(url, () => axios.post(server + url, form, {
       timeout: timeout,
       responseType: responseType,
       headers: {
         ...config,
         "X-CSRFToken": csrftoken
       }
-    });
+    }));
   };
 
   const displayError = (error, setAlert, redirect) => {

@@ -496,7 +496,7 @@ function ClinicStreamSection({ groups, inForceLeft, inForceRight, clinicStream, 
   const cs = clinicStream || {};
   const heading = (
     <MDTypography variant="h6" component="h3" sx={{ ...HEADING, fontSize: TYPE.lead }}>
-      From the clinic testing sheets (separate from the home pain surveys)
+      Clinic testing sheets (not home surveys)
     </MDTypography>
   );
   if (!cs.available || !groups.length) {

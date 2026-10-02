@@ -330,7 +330,7 @@ export default function WhatWouldChangeThis({ report, bare = false }) {
     return (
       <MDBox className="cl-what-changes">
         <MDTypography component="h3" sx={{ ...TYPE.body, display: "block", fontWeight: 600, color: PAL.ink }}>
-          What would change this answer, and who can do it
+          What could change the answer
         </MDTypography>
         {rows.map((it, i) => <Item key={it.key} item={it} n={i + 1} />)}
       </MDBox>

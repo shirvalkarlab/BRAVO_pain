@@ -391,7 +391,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       // Preserve any zoom the user applied to the histogram across live recolors; reset only when
       // the metric changes (different value domain).
       uirevision: `hist-${metricKey || "metric"}`,
-      margin: { l: 56, r: 16, t: 56, b: 44 },
+      margin: { l: 56, r: 16, t: 80, b: 44 },
       bargap: 0.02,
       xaxis: { title: { text: metricLabel || "Pain score" } },
       yaxis: { title: { text: yTitle },

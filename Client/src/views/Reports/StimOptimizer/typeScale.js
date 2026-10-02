@@ -102,7 +102,7 @@ export function SizedFold({ show, hide, defaultOpen = false, children, mt = 1, d
           padding: 0, cursor: "pointer", fontFamily: "inherit", textAlign: "left",
           display: "inline-flex", gap: SPACE.xs, alignItems: "center" }}>
         <FoldArrow open={open} />
-        <span>{open ? (hide || "Hide") : show}</span>
+        <span>{show}</span>
       </button>
       <Collapse in={open} unmountOnExit={false}>
         <MDBox mt={dense ? 0.5 : 1} sx={{ fontSize: TYPE.body, color: T.ink2 }}>{children}</MDBox>

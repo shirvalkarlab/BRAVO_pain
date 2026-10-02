@@ -284,7 +284,7 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
         ) : null}
 
         {mismatch && onRecompute ? (
-          <MDButton size="small" variant="contained" onClick={onRecompute} sx={{ ...PRIMARY, mt: 2 }}>
+          <MDButton size="small" variant="contained" onClick={onRecompute} disabled={loading} sx={{ ...PRIMARY, mt: 2 }}>
             {`Recompute for ${mismatch.chosen}`}
           </MDButton>
         ) : null}
@@ -342,7 +342,7 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
             <Section title="How each value was worked out and checked">
               <ParameterDetails report={deploymentReport} mode={mode} />
             </Section>
-            <Section title="The sign-off record: checks, evidence, caveats, the band signed for">
+            <Section title="Sign-off record">
               <SignoffRecord bandCandidate={bandCandidate} summary={summary}
                 deploymentReport={deploymentReport} chosenBand={chosenBand} bandRecord={bandRecord} />
             </Section>

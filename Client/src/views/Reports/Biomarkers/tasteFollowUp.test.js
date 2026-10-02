@@ -93,7 +93,7 @@ describe("C2: still grey blocks instead of a spinner", () => {
 });
 
 describe("C6: the shared fold and section", () => {
-  test("the page's fold is paper/Fold: content mounted while closed, the open label when given", () => {
+  test("the page's fold is paper/Fold: content mounted while closed, the same label open (only the arrow turns)", () => {
     const { container } = rtlRender(<Fold show="Stored results, memory" hide="Hide stored results">inside words</Fold>);
     expect(container.querySelector("[data-paper='fold']")).not.toBeNull();
     const button = screen.getByRole("button");
@@ -101,7 +101,7 @@ describe("C6: the shared fold and section", () => {
     expect(screen.getByText("inside words").hidden).toBe(true);
     fireEvent.click(button);
     expect(button.getAttribute("aria-expanded")).toBe("true");
-    expect(button.textContent).toBe("▸Hide stored results");
+    expect(button.textContent).toBe("▸Stored results, memory");
     expect(screen.getByText("inside words").hidden).toBe(false);
   });
 

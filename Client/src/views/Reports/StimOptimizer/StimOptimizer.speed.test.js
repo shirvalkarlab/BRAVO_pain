@@ -157,7 +157,7 @@ describe("C8: the research checks are asked for when their fold is first opened"
     expect(screen.getByTestId("control-analyses-card")).toHaveTextContent("Time of day and weekends");
     expect(checksRequests()).toBe(1);
     // Closing and opening again asks nothing more.
-    fireEvent.click(screen.getByRole("button", { name: /Hide the research checks/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Chance and current checks \(offline\)/ }));
     fireEvent.click(screen.getByRole("button", { name: /Chance and current checks \(offline\)/ }));
     await new Promise((r) => setTimeout(r, 20));
     expect(checksRequests()).toBe(1);

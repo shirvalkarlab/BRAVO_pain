@@ -374,7 +374,7 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
     [trajRef, cmpRef, distRef].forEach((r) => { if (r.current) Plotly.purge(r.current); });
   }, []);
 
-  const title = "What the automatic adjustment would have done: simulated, not measured, decides nothing";
+  const title = "Simulated closed loop (not measured)";
   // The page hands in the chosen band, which carries `contact`; `channel` is the request's spelling.
   const bcContact = bandCandidate && (bandCandidate.contact || bandCandidate.channel);
   const label = bcContact

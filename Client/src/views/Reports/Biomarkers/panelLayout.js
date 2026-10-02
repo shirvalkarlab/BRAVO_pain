@@ -11,6 +11,11 @@
  */
 export const PLOT_MARGIN = { l: 56, r: 8, t: 8, b: 44 };
 
+/** One bottom margin for both heat maps, the scatter and the violin, so the bottom edges of their
+ *  plot areas sit on one line (the PI, 2026-10-02: "make sure plots are vertically aligned"; the
+ *  scatter had 36 px, the others 44). */
+export const PLOT_BOTTOM = 44;
+
 /** The shared margin, with the bottom margin a plot needs for its own axis. */
 export const plotMargin = (b = PLOT_MARGIN.b) => ({ ...PLOT_MARGIN, b });
 

@@ -37,7 +37,7 @@ function daysWord(n) {
   return `${v} day${v === 1 ? "" : "s"}`;
 }
 
-export const HOME_SCHEDULE_TITLE = "Home programming schedule to map the two currents";
+export const HOME_SCHEDULE_TITLE = "Home schedule to map two currents";
 
 /** The schedule as a section: heading and one line open, everything else in one fold. */
 /** The setting in force when it is above today's ceiling, or null (`schedule.in_force`). */

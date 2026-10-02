@@ -1006,7 +1006,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     // was tall. That is exactly the overlap in the screenshot. Fix: derive every top-band Y from a
     // FIXED PIXEL offset converted through the live plot pixel height, and anchor each box by its
     // BOTTOM (just above the plot top) so it grows UP into the margin, never down into a lane.
-    const nLegRows = binMode ? 5 : 7;            // glyph-legend entries per mode (see traces above)
+    // Rows are COUNTED from the key traces, not assumed: an entry added to a mode, or a long name
+    // that wraps to a second line, made the box taller than the fixed count and it rose over the
+    // title (page review 2026-10-02: Multimodal colouring). A name over 70 characters counts twice.
+    const keyNames = traces.filter((t) => t.showlegend !== false && t.name).map((t) => String(t.name));
+    const nLegRows = Math.max(binMode ? 5 : 7, keyNames.length + keyNames.filter((n) => n.length > 70).length);
     const LEG_H_PX = nLegRows * 20 + 18;         // legend box pixel height (per-row + padding)
     const TITLE_H_PX = 64;                       // two-line title block
     const TOP_GAP_PX = 14;                       // gap between title and the legend boxes

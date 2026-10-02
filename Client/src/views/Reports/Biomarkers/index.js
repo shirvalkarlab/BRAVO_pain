@@ -896,7 +896,7 @@ function Biomarkers() {
                 research checks. Folded where the spec folds them; the calibration keeps its two
                 constants in the open (its own panel folds how they were fitted). */}
             <Grid item xs={12}>
-              <MDTypography component="h2" sx={SECTION_TITLE_SX}>{"Background"}</MDTypography>
+              <MDTypography component="h2" sx={SECTION_TITLE_SX}>{"Last scan"}</MDTypography>
 
               {computing ? (
                 <MDBox mt={2}>

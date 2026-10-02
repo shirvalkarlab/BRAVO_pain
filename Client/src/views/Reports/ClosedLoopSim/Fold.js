@@ -42,7 +42,7 @@ export default function Fold({ show, hide, defaultOpen = false, children, mt = 0
           "&:focus-visible": { outline: `2px solid ${PAL.accent}`, outlineOffset: 2,
             borderRadius: "4px" } }}>
         <FoldArrow open={open} />
-        {open ? (hide || "Hide") : show}
+        {show}
       </MDTypography>
       <Collapse in={open} unmountOnExit={false}>
         <MDBox mt={1}>{children}</MDBox>

@@ -5087,6 +5087,14 @@ DEPLOYMENT_GATE_SHORT_LABELS = {
 }
 
 
+def _short(x, digits=3):
+    """A number as the page prints it: three significant digits, never 0.45738925624915433."""
+    try:
+        return f"{float(x):.{digits}g}"
+    except (TypeError, ValueError):
+        return str(x)
+
+
 def _deployment_summary_stim_stable_gate(st):
     """Pure gate-state logic for deployment_summary's "stim_stable" gate (decision 82 fix).
 
@@ -5099,12 +5107,12 @@ def _deployment_summary_stim_stable_gate(st):
     """
     _v = st.get("stability_verdict") if st.get("available") else None
     if _v == "stable":
-        return "pass", f"band×era LRT p={st.get('lrt_p')} (equivalence verdict: stable)"
+        return "pass", f"band×era LRT p={_short(st.get('lrt_p'))} (equivalence verdict: stable)"
     if _v == "stim-dependent":
-        return "fail", f"band×era LRT p={st.get('lrt_p')} (equivalence verdict: stim-dependent)"
+        return "fail", f"band×era LRT p={_short(st.get('lrt_p'))} (equivalence verdict: stim-dependent)"
     if st.get("available"):
         return "indeterminate", (
-            f"band×era LRT p={st.get('lrt_p')} did not reject, but the interval on the largest "
+            f"band×era LRT p={_short(st.get('lrt_p'))} did not reject, but the interval on the largest "
             "between-era difference is wider than the declared margin -- these data cannot tell a "
             "stable band from a materially unstable one (absence of evidence, not evidence of "
             "stability).")
@@ -7309,7 +7317,7 @@ def deployment_summary(request_data):
                        _thr_state, _thr_detail, necessary=True))
     gates.append(_gate("credible_ci", "Credible effect-size CI",
                        "pass" if credible else "fail",
-                       f"OR CI [{g.get('or_lo')}, {g.get('or_hi')}]"))
+                       f"OR CI [{_short(g.get('or_lo'))}, {_short(g.get('or_hi'))}]"))
     # Stim-stability gate (audit C8, corrected per decision 82): FAIL-CLOSED / ABSTAIN, never
     # fail-open. This USED TO read the retired `stim_stable` boolean (`p_lrt >= 0.05`), which is a
     # failure to reject rather than evidence of stability -- with three eras and modest counts it

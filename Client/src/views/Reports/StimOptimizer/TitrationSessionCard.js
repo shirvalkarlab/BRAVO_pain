@@ -92,7 +92,7 @@ function filenameFromDisposition(disposition, fallback) {
 export const TITRATION_CARD_TITLE = "Next-visit requirements";
 /** The exploratory ladder's own heading (the PI, 2026-09-21): a second ladder for the stimulation
  *  configuration the readiness screen's best sensing pair needs, when it is not the one in force. */
-export const EXPLORATORY_TITLE = "Exploratory ladder for the pair the readiness check prefers";
+export const EXPLORATORY_TITLE = "Exploratory ladder, preferred pair";
 
 /** The soonest Wednesday on or after today, as "YYYY-MM-DD" for a `<input type="date">`. */
 function nextWednesdayISO() {
@@ -376,13 +376,13 @@ function WhySide({ side, plan }) {
       <MDBox component="dl" sx={DL}>
         {plan.pulse_width_note ? <><dt>Pulse width</dt><dd>{plan.pulse_width_note}</dd></> : null}
         {lad.why ? <><dt>Ladder, in words</dt><dd>{lad.why}</dd></> : null}
-        {hold.why ? <><dt>Hold per step, why</dt><dd>{hold.why}</dd></> : null}
-        <dt>Record from, why</dt>
+        {hold.why ? <><dt>Hold per step</dt><dd>{hold.why}</dd></> : null}
+        <dt>Record from</dt>
         <dd>{c ? (c.ipsilateral_alternative
           ? `${c.note}. The best contact on this side itself: ${contactLabel(c.ipsilateral_alternative)}, ${c.ipsilateral_alternative.n_qualifying ?? "—"} of ${c.ipsilateral_alternative.n_bands ?? "—"} bands both fall with current and rise with pain${c.ipsilateral_alternative.deployable ? "" : " (did not pass the readiness check)"}`
           : c.note) : (plan.sensing_contact_note || EMPTY)}</dd>
         {harmonicsText ? (
-          <><dt>Analyse at, the harmonics</dt>
+          <><dt>Analyse at</dt>
             <dd>{`stimulator artefact at ${harmonicsText}; centres within ±${num((plan.bands || {}).half_width_hz) ?? "—"} Hz are flagged, not dropped`}</dd></>
         ) : null}
         <dt>Rate</dt><dd>{plan.rate_why} — {src.rate_hz}</dd>
