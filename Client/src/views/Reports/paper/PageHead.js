@@ -45,7 +45,7 @@ export default function PageHead({ title, participant, painScore, status, items,
     <header data-paper="page-head" style={{ marginBottom: SPACE.lg }}>
       <h1 style={{ margin: 0, ...TYPE.title, color: T.ink, ...WRAP.balance }}>{title}</h1>
       {context ? (
-        <p style={{ margin: `${SPACE.xxs}px 0 0`, ...TYPE.caption, color: T.ink3 }}>{context}</p>
+        <p style={{ margin: `${SPACE.xxs}px 0 0`, ...TYPE.body, color: T.ink2 }}>{context}</p>
       ) : null}
       {status ? (
         <p role="status"

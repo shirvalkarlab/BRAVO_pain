@@ -154,8 +154,8 @@ function ChosenBandRecordLine({ status, hasBand }) {
   const text = chosenBandRecordText(status, hasBand);
   if (!text) return null;
   return (
-    <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.caption,
-      color: status.where === "browser" ? PAL.warnText : PAL.ink3 }}>
+    <MDTypography variant="caption" display="block" sx={{ ...TYPE.body,
+      color: status.where === "browser" ? PAL.warnText : PAL.ink2 }}>
       {/* A caution ink always carries its glyph (SPEC 2.3). */}
       {status.where === "browser" ? <span aria-hidden="true">{"\u25B2 "}</span> : null}
       {text}

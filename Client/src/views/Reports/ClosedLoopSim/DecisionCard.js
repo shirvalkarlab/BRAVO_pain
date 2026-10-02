@@ -264,7 +264,7 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
           staleWhy={actions.staleWhy} />
 
         {eyebrow ? (
-          <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3 }}>{eyebrow}</MDTypography>
+          <MDTypography sx={{ ...TYPE.body, color: PAL.ink2 }}>{eyebrow}</MDTypography>
         ) : null}
         <MDTypography component="h2" sx={{ ...TYPE.answer, ...WRAP.balance, color: status.ink, mt: 0.5 }}>
           {loading ? "Evaluating the device rules and the evidence…" : (
