@@ -46,6 +46,7 @@ from .routines import deployment_current
 from .routines import sheet_ratings
 from .routines import local_time
 from modules.DecodeCommon import data_start as _data_start
+from modules.DecodeCommon import parallel as _PAR
 from .routines import streaming_psd
 
 _log = logging.getLogger(__name__)
@@ -7863,7 +7864,14 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
     to turn a raw key like "ZERO_TWO_LEFT" into a display string itself. The raw key stays the
     dict key and the value every request field still sends -- only a label is added.
     """
-    def _one(raw_ch, raw_cache):
+    def _blank(raw_ch, e):
+        _log.warning("Biomarkers: band/length-of-signal sweep failed for %s (%s)",
+                     raw_ch, e, exc_info=True)
+        return analytics._sweep_blank(
+            f"the sweep could not be completed for contact pair {raw_ch}: {e}")
+
+    def _prepare(raw_ch, raw_cache):
+        """Matching and the covariate for one pair: what the statistics are called with."""
         t0 = _time.perf_counter()
         try:
             power, stats, centers, _, chunk_excl, from_device = _band_time_sweep_power_by_seconds(
@@ -7880,8 +7888,9 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
             if adjust_for_stim_current:
                 cov_values, cov_block = stim_current.current_in_force_for_reports(
                     participant_uid, pro_times, channel=raw_ch)
-            sweep = analytics.band_time_sweep_from_power(
-                power, pain_values, center_freqs_hz=centers,
+            kw = dict(
+                center_freqs_hz=centers,
+                tile_seconds=analytics.sweep_tile_seconds(),
                 strategy=label_strategy, low_pct=low_pct, high_pct=high_pct,
                 outlier_n_mad=outlier_n_mad, outlier_scale=outlier_scale,
                 n_perm=(analytics.BAND_TIME_SWEEP_N_PERM if n_perm is None else n_perm),
@@ -7895,6 +7904,15 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                                "reached from the 250 samples-per-second voltage trace by the "
                                "validated transform, or from the device's own spectrum where no "
                                "voltage trace was in range"))
+            return {"t0": t0, "match_s": match_s, "power": power, "stats": stats,
+                    "kw": kw, "cov_values": cov_values, "cov_block": cov_block}
+        except Exception as e:
+            return {"blank": _blank(raw_ch, e)}
+
+    def _finish(raw_ch, ctx, sweep):
+        """The labels and timings that go on one pair's answer, once its statistics are in."""
+        t0, match_s, stats, cov_block = ctx["t0"], ctx["match_s"], ctx["stats"], ctx["cov_block"]
+        try:
             if cov_block is not None:
                 sweep["stim_current_covariate"] = dict(cov_block)
             _fmt = analytics.format_channel(raw_ch, region=(region_map or {}).get(raw_ch))
@@ -7926,16 +7944,21 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
             # carrying the old field is served as if it were this shape.
             return sweep
         except Exception as e:
-            _log.warning("Biomarkers: band/length-of-signal sweep failed for %s (%s)",
-                         raw_ch, e, exc_info=True)
-            return analytics._sweep_blank(
-                f"the sweep could not be completed for contact pair {raw_ch}: {e}")
+            return _blank(raw_ch, e)
 
-    # EVERY CONTACT PAIR SIDE BY SIDE, in threads (2026-10-02, the Jetstream2 BRAVO): each pair's
-    # grid reads only its own cache and the same pain reports, and the answers are put back in the
-    # pairs' own order, so nothing in the response changes but the computing-time fields. Each
-    # thread runs in a copy of the request's context (the request memo stays shared) and closes its
-    # own database connection. `BIOMARKER_SWEEP_THREADS=1`: one pair after another, as before.
+    # EVERY CONTACT PAIR SIDE BY SIDE, in two steps (2026-10-02, the Jetstream2 BRAVO).
+    # STEP ONE, in threads: matching each pair's recordings to the pain reports (it reads only that
+    # pair's cache and the same reports). Each thread runs in a copy of the request's context (the
+    # request memo stays shared) and closes its own database connection. `BIOMARKER_SWEEP_THREADS=1`:
+    # one pair after another.
+    # STEP TWO, in worker processes: the statistics on each pair's power matrices (shuffles,
+    # resamples, fits), which are computing, not waiting, so threads share one core between them.
+    # Each pair is one task for the shared pool (`DecodeCommon.parallel`), and every pair's random
+    # numbers come from a generator built inside its own task from the request's seed, so no draw
+    # depends on which process ran it. `BIOMARKER_SWEEP_PROCESSES=1`: in this process, one pair
+    # after another; the same if the pool fails.
+    # Either way the answers are put back in the pairs' own order and nothing in the response
+    # changes but the computing-time fields.
     todo = [(ch, c) for ch, c in (raw_by_channel or {}).items() if c]
     try:
         n_threads = int(os.environ.get("BIOMARKER_SWEEP_THREADS", "") or len(todo) or 1)
@@ -7944,7 +7967,7 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
     if n_threads > 1 and len(todo) > 1:
         def _in_thread(ch, c):
             try:
-                return _one(ch, c)
+                return _prepare(ch, c)
             finally:
                 try:
                     from django.db import connection as _conn
@@ -7953,8 +7976,40 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                     pass
         with ThreadPoolExecutor(max_workers=min(n_threads, len(todo))) as pool:
             futs = [pool.submit(_contextvars.copy_context().run, _in_thread, ch, c) for ch, c in todo]
-            return {ch: f.result() for (ch, _c), f in zip(todo, futs)}
-    return {ch: _one(ch, c) for ch, c in todo}
+            prepared = [f.result() for f in futs]
+    else:
+        prepared = [_prepare(ch, c) for ch, c in todo]
+
+    live = [(ch, ctx) for (ch, _c), ctx in zip(todo, prepared) if "blank" not in ctx]
+    results = _sweep_statistics(
+        [(ctx["power"], pain_values, ctx["kw"]) for _ch, ctx in live])
+    answers = {}
+    for (ch, ctx), (status, value) in zip(live, results):
+        answers[ch] = (_finish(ch, ctx, value) if status == "ok"
+                       else _blank(ch, value))
+    return {ch: (ctx["blank"] if "blank" in ctx else answers[ch])
+            for (ch, _c), ctx in zip(todo, prepared)}
+
+
+def _sweep_statistics(jobs):
+    """``[(status, value), ...]`` for ``jobs`` = ``[(power, pain_values, keyword arguments), ...]``,
+    in the jobs' own order: in worker processes of the shared pool when there is more than one pair
+    to do, else (or if the pool fails) in this process.
+
+    The pool is asked exactly as every BRAVO pool is -- `parallel.pool_jobs()` workers through
+    `parallel.loky_backend()` -- because joblib keeps one pool per process and rebuilds it for a call
+    that asks differently (decision 369); the web worker's warm pool is the one used here."""
+    from .routines import sweep_workers
+    serial = os.environ.get("BIOMARKER_SWEEP_PROCESSES", "").strip() == "1"
+    if len(jobs) > 1 and not serial and _PAR.pool_jobs() > 1:
+        try:
+            import joblib
+            return joblib.Parallel(n_jobs=_PAR.pool_jobs(), backend=_PAR.loky_backend())(
+                joblib.delayed(sweep_workers.sweep_stats_task)(p, y, kw) for p, y, kw in jobs)
+        except Exception as e:                                 # noqa: BLE001 -- fall back, say so
+            _log.warning("Biomarkers: the worker pool failed for the grid statistics (%s); "
+                         "running them in this process", e)
+    return [sweep_workers.sweep_stats_task(p, y, kw) for p, y, kw in jobs]
 
 
 #: TRACK D, TASK D2(a) -- checked directly against `ClosedLoopDeployment.constraints.RULES`

@@ -15,6 +15,8 @@ def _run(threads):
     old_power, old_sweep, old_env = (B._band_time_sweep_power_by_seconds,
                                      analytics.band_time_sweep_from_power,
                                      os.environ.get("BIOMARKER_SWEEP_THREADS"))
+    old_proc = os.environ.get("BIOMARKER_SWEEP_PROCESSES")
+    os.environ["BIOMARKER_SWEEP_PROCESSES"] = "1"      # this test stands in for the statistics; they stay in-process
 
     def power(pro_times, raw_cache, _x, **kw):
         seen.add(threading.get_ident())
@@ -37,6 +39,10 @@ def _run(threads):
     finally:
         B._band_time_sweep_power_by_seconds = old_power
         analytics.band_time_sweep_from_power = old_sweep
+        if old_proc is None:
+            os.environ.pop("BIOMARKER_SWEEP_PROCESSES", None)
+        else:
+            os.environ["BIOMARKER_SWEEP_PROCESSES"] = old_proc
         if old_env is None:
             os.environ.pop("BIOMARKER_SWEEP_THREADS", None)
         else:
