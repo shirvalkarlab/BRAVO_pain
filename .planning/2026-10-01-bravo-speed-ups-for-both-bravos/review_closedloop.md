@@ -1,0 +1,38 @@
+# Closed-Loop page review (tab-3, viewport 1024x768, ~13 min, read-only)
+
+Did not click "Use this band" (it writes the chosen band to the server). Did press Recompute once and "Recompute this panel" once.
+
+## Broken / wrong
+- [ ] HIGH. Pain score flips after load. First paint showed "Left Leg VAS"; after load the dropdown read "Overall VAS". The first result then said "settings have changed since this result was computed" and showed the analysis for 24.5 Hz while the chosen band is 27.5 Hz ("Recompute: the analysis shown is for ZERO_THREE_LEFT at 24.5 Hz"). Expected: a fresh load matches the saved result. Fix: initialise the dropdown from the chosen band's score and the cache key before the first compute, so the key does not change after mount.
+- [ ] HIGH. Page is stale again right after a successful Recompute. I chose Left Leg VAS, pressed Recompute, it finished ("Computed a moment ago") and still showed the amber "settings have changed" banner (three times: top bar, card banner, and "Recompute this panel" in the LSB panel). Expected: banner gone. Probable cause: the stored grid score (Overall VAS, per "band was chosen on Overall VAS") differs from the dropdown, or the key is compared before and after normalisation. Fix: compare keys after normalising; show the banner once.
+- [ ] HIGH (contradiction). Grid card says "Grid: Left Leg VAS · ±15 min", and so does the "Matching from Biomarkers" line. Sign-off record says "Picked from the grid: Overall VAS · ±5 min window". Dropdown hint says "the band was chosen on Overall VAS". Three statements, two answers.
+- [ ] MED (contradiction). "On the 93 samples from 62 pain reports" vs "Matched band-power readings / ratings 92 / 62" in the same sign-off card. Later the LSB panel says "93 band-power readings · 62 groups".
+- [ ] MED (contradiction). Same quantity (AUC with stimulation current taken out) reads 0.51 (0.37-0.64), then "0.51 (0.37-0.65)" in the ROC card, and 0.539 (0.423-0.640) over 24 pain reports in the Evidence card and the caveat. Differing report counts (62 vs 24) are not explained. Also "0.45 (0.31-0.59)" vs "0.45 (0.31 to 0.60)" and "0.40-0.63" vs "0.40-0.68" (CI text differs between cards).
+- [ ] MED (contradiction). Current to band power: Evidence card says band power RISES with current (+0.083 per mA, -7.7 to 7.9). Background panel says -16.51 +/- 13.55 per mA (falls), on contact L 1-3 (not the chosen L 0-3). Caveat mentions this, but the two numbers sit on one page with no reconciliation. Background panel also draws "at 27.5 Hz (the chosen band)" on L 1-3 while the chosen band is on L 0-3.
+- [ ] MED (contradiction). Top "Stability across stimulation states: Cannot tell" vs the bottom card "Does the switching point hold at every stimulation state? Holds across stimulation states" with a tick. Different tests, but a reader sees opposite verdicts. Also Closed-Loop is meant to carry verdict words only once.
+- [ ] MED. Clipped / overlapping text inside plots (found by measuring SVG text outside its SVG box, and in screenshots):
+  - Rating-count plot: "counted as about 81% as many independent ratings, because neighbouring ratings resemble each other" is cut off on both sides and runs over the data line; "now: 62" overlaps "lower end of range: 5%" and the 200 tick.
+  - Device-readings plot: "Dual: usable · 256-point transform · 1200 ms averaging" overlaps the x-axis title "band power (device units, LSB)" and is clipped at the right.
+  - Y/x axis titles clipped: "chance of detecting a real link with pa...", "how well it tells high pain from lo...", "band power, standardised (0 = its average; higher goes with more pa...".
+  - "fitted data" and "coin toss" labels overlap in the week-by-week plot; "coin toss" overlaps the 0.5 tick and "shaded: 95% range, all states together" overlaps the plot's toolbar icons in the last card; "10th / 90th" labels cut at the top of the device-readings plot.
+  - Fix: widen margins or wrap; move the legend text outside the plot area.
+- [ ] MED. Raw numbers and code names on screen: "OR CI [0.45738925624915433, 1.545551646406637]", "band x era LRT p=0.31974358451988527", "left_leg_vas / median", "ZERO_THREE_LEFT", p "5.77e-1". Fix: round to 2-3 digits, show plain names.
+- [ ] MED. Titles are not short noun phrases (rule 15): "What would change this answer, and who can do it"; "The sign-off record: checks, evidence, caveats, the band signed for"; "What the automatic adjustment would have done: simulated, not measured, decides nothing"; "Where does the switching point sit?"; "Where does the switching point sit in the device's own units?"; "Where the switching point sits in the device's own readings (not a value to program)"; "Does the switching point hold at every stimulation state?"; "How much band power changes per milliamp, measured three ways". Also "Closed-loop feasibility and entry values" is long-ish.
+- [ ] LOW. Jargon on the page: "era" (band x era, "per-era fragility"), "gate", "D19 / D52 / A610 p. 38 / WP p. 14", "mixed-effects", "youden", "BCa", "decision 150, artifacts/contest_2026-09-13_SYNTHESIS.md section 3" (a repo file path shown to the user).
+- [ ] LOW. Panel C right half ("the response the loop is closed through") is a title with an empty plot. Honest (no curve can be fitted) but looks broken; say "no curve fitted" in the plot area.
+- [ ] LOW. During "Recomputing" the banner "settings have changed" and a live blue "Recompute for L 0-3 at 27.5 Hz" button remain clickable (double start risk) and the card heading says "Evaluating the device rules..." for about 2.5 minutes.
+- [ ] LOW. Switching-point label "power >= 0.00" on the ROC tooltip while the text says 0.001. Values wrap badly in the sign-off card ("0.53 (0.39-\n0.66)").
+- [ ] LOW. Dropdown text is 12 px (body is 14 px). Band-selection card "Corrected, 22 bands" is all "-" and "Same at every setting" all "?" for every row (expected when untested, but no explanation near the column).
+- [ ] LOW. About 20 updateSessions POSTs fire on load and the first load had 5 queryClosedLoopDeployment calls. All returned 200.
+
+## Timing
+- First load: spinner about 20 s, page shell with "Recomputing" about 2.5 min (queryClosedLoopDeployment is the long call). Recompute after changing the score: about 1.5-2 min. Far over the 10 s target, but the page shows a progress card meanwhile. No endless loop: both runs ended.
+
+## Verified working
+- Page loads logged in; no login prompt. Console: only `WebSocket ... /socket/notification failed` (low, likely not run in this setup). No failed (non-200) API calls.
+- Pain-score dropdown opens with 6 options (NRS, Overall, Left Leg, Back, MPQ Sum, Composite); selecting one updates the header and hint. Blue 1.5 px outline (rgb 11,92,173) present on the select. It is the only dropdown.
+- All folds opened without error (7 clicked: reading guide, notes, methods, per-mA table, agreement caveat, background).
+- Band-selection grid renders 22 rows per tab with colour scales; tabs L/R present. ROC hover tooltip works. Switching-point radios (Balanced / Favour catching pain / Weighted) and "Next report / Nearest recordings" toggle render.
+- "Recompute this panel" runs and swaps the panel to a progress line.
+- Device-refusal card lists 2 refusing rules with counts (2 refuse, 20 allowed, 52 checked) consistent between card and rule list. Safe ceiling reads "4.5 mA left, right not sent" after compute, but "not sent with this report" before compute.
+- No text under 12 px in the main area; SVG text only 12 and 14 px. No horizontal page scroll at 1024 px. Panels A and B captions are present and describe their figures.
