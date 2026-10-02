@@ -89,6 +89,13 @@ SESSION_COOKIE_SAMESITE = "Lax"
 #SESSION_COOKIE_SECURE = True
 #CSRF_COOKIIE_HTTPONLY = True
 SESSION_COOKIE_AGE = 3600*1  # 1 hour
+# A browser keeps one cookie per host NAME and ignores the port, so two BRAVOs reached as `localhost`
+# (the local one at :80, Jetstream2's through an SSH tunnel at :8080) shared one `sessionid` and each
+# answered 403 to the other's login (2026-10-02). BRAVO_COOKIE_SUFFIX gives a server its own cookie
+# names; Jetstream2's compose override sets "_js2". Unset, the names are Django's own.
+_COOKIE_SUFFIX = os.environ.get("BRAVO_COOKIE_SUFFIX", "").strip()
+SESSION_COOKIE_NAME = "sessionid" + _COOKIE_SUFFIX
+CSRF_COOKIE_NAME = "csrftoken" + _COOKIE_SUFFIX
 
 ALLOWED_HOSTS = [h for h in ["localhost", "127.0.0.1", os.environ.get('SERVER_HOST')] if h]
 
