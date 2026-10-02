@@ -4,10 +4,10 @@
 Steps 2-7 of the combined speed-up list (the PI's go-ahead, 2026-10-01): every value unchanged, each fix its own commit with proof, pulled onto the Jetstream2 BRAVO.
 
 ## Next Step
-Phase 5: keep unpacked recordings in each Jetstream2 web worker, keyed by content hash (Closed-Loop 11 s); then batch the 1,080 band checks; numba cache + pool prestart. Measure warm, side by side, on Jetstream2.
+Commit the four Sonnet agents' results as they land (C7 ROC/month caching, heat-map per-pair statistics in workers, tile build in workers, the per-grid correction test), each with a decision row and a Jetstream2 equality proof; then Phase 9 final re-proof and plan close.
 
 ## Current Phase
-Phase 5
+Phase 9
 
 ## Scope and rules
 - Code lands on the Mac checkout (the local BRAVO runs it live), pushed, then `git pull` on the Jetstream2 BRAVO.
@@ -40,10 +40,10 @@ Phase 5
 - **Status:** complete
 
 ### Phase 5: Step 5, B1/B3/B4 (parallel processes)
-- [ ] B1 Stim Optimizer GP fits in parallel processes
-- [ ] B3 tile table per sensing pair/recording in parallel (FFT one call per piece)
-- [ ] B4 recording decode/decrypt in processes, once per request
-- **Status:** pending
+- [x] B1 dropped (groups in workers slower, 358); held-out folds + band checks in workers (360)
+- [ ] B3 tile table in parallel: with an agent (2026-10-02)
+- [x] B4 recording cache per web worker (359), on at 3,000 MB on Jetstream2 (369)
+- **Status:** in progress (B3)
 
 ### Phase 6: Step 6, C3-C6 (pages)
 - [ ] C3 Biomarkers composite preview memoised; C4 timeline dependency
@@ -53,14 +53,13 @@ Phase 5
 
 ### Phase 7: Step 7, B5-B9 + C7-C9
 - [ ] B5 numba prange (simulation, design rule); B6 readiness fits; B7 grid cells; B8 DB queries; B9 background pool
-- [ ] C7 warm ROC/by-month cache; C8 control analyses on open; C9 small items
-- **Status:** pending
+- [x] B5 numba loops cached on disk (369); B6 threshold-rule fit (361); B8 clinic days once (363); B9 warm web workers (369)
+- [x] C8 research checks on open (365); [ ] C7 ROC/by-month caching: with an agent; B7 heat-map pairs (362), per-pair statistics in workers: with an agent
+- **Status:** in progress (C7, B7)
 
 ### Phase 8: Test consolidation (the PI, 2026-10-01: ONLY after Phase 7)
-- [ ] Inventory every test (container suite, host pytest, jest): runtime, overlap, what each pins
-- [ ] Propose merges and removals to the PI as a list first (CLAUDE.md s.6: some tests are kept on purpose, e.g. test_one_store.py's grandfathered count)
-- [ ] Consolidate and speed up after his go-ahead; suites green before and after, same behaviour pinned
-- **Status:** pending
+- [x] Done directly on the PI's word, no proposal (367): both Python sets 145 -> 66 s; 30 + 14 tests removed, each named against its cover
+- **Status:** complete
 
 ## Decisions Made
 | Decision | Rationale |
@@ -72,7 +71,8 @@ Phase 5
 |-------|---------|------------|
 
 ### Phase 9: Production parallel budget for the Jetstream2 BRAVO (PI, 2026-10-02)
-- [ ] After the sub-agents finish: rerun every proof and both test sets with no process caps (-n auto, all cores)
-- [ ] Measure memory per loky worker process and per web worker; count overlapping requests in real use
-- [ ] Set pool sizes (STIM_OPTIMIZER_LOO_JOBS, CLOSED_LOOP_SEGMENT_JOBS, band-check jobs) and web workers so 16 workers x pools cannot exhaust 245 GB; document in OPERATIONS_runbook.md
-- **Status:** pending
+- [x] Both test sets uncapped on Jetstream2 at 369: host 1,910 / container 949 passed (one test fixed)
+- [x] Measured: pool process median 220 MB (shared libraries counted once by the machine); 62 GB of 245 in use with 16 pools of 31 started
+- [x] Budget set and documented (runbook 3a): pool 31, kept a day, recording cache 3,000 MB
+- [ ] Final re-proof after the four agents' commits
+- **Status:** in progress

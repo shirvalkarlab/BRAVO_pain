@@ -556,6 +556,42 @@ def test_the_same_p_values_get_smaller_q_values_in_a_smaller_family():
         assert ra["family_wise_q_8_to_30hz"] < rb["family_wise_q_8_to_30hz"], (ra, rb)
 
 
+def test_the_sweep_corrects_the_correlation_rows_and_the_area_rows_as_two_separate_families():
+    """Decision 63: each grid is its own family of band centres. RUNS the sweep on the file's
+    planted-band fixture, then checks, from the p-values the sweep itself put on its rows, that
+      * the correlation rows' q-values equal `bh_fdr` on the correlation rows' p-values alone,
+      * the high-versus-low-pain (area under the curve) rows' q-values equal `bh_fdr` on those rows'
+        p-values alone, and
+      * pooling both sets of rows into one family would have given a different q-value to at least
+        one row, so the two checks above can tell separate families from a pooled one.
+    Added 2026-10-02: the earlier test of this name never ran the sweep (decision 367)."""
+    power, pain, centers = _synthetic_grid(seed=23, planted_col=6, strength=1.1)
+    sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=500, n_boot=500)
+    corr_rows, auc_rows = sw["best_correlation_rows"], sw["best_auc_rows"]
+    assert len(corr_rows) == len(auc_rows) == 22
+
+    def _ps(rows):
+        return np.array([np.nan if r.get("p_selection_aware") is None else r["p_selection_aware"]
+                         for r in rows], dtype=float)
+
+    def _qs(rows):
+        return np.array([np.nan if r["family_wise_q_8_to_30hz"] is None
+                         else r["family_wise_q_8_to_30hz"] for r in rows], dtype=float)
+
+    p_corr, p_auc = _ps(corr_rows), _ps(auc_rows)
+    assert np.isfinite(p_corr).sum() == 22 and np.isfinite(p_auc).sum() == 22
+    own_corr, own_auc = SU.bh_fdr(p_corr), SU.bh_fdr(p_auc)
+    assert np.array_equal(_qs(corr_rows), own_corr), (_qs(corr_rows), own_corr)
+    assert np.array_equal(_qs(auc_rows), own_auc), (_qs(auc_rows), own_auc)
+
+    pooled = SU.bh_fdr(np.concatenate([p_corr, p_auc]))
+    n_differ = int((pooled[:22] != own_corr).sum() + (pooled[22:] != own_auc).sum())
+    assert n_differ > 0, "pooling the two families would have given the same q-values; the " \
+                         "constructed data cannot tell separate families from a pooled one"
+    print(f"OK the correlation rows and the area rows are each corrected on their own 22 p-values; "
+          f"pooling all 44 would have changed {n_differ} of the 44 q-values")
+
+
 def test_a_planted_band_ranks_best_under_the_family_wise_correction_and_pure_noise_mostly_clears():
     """End-to-end through the real grid, on this file's own `_synthetic_grid`/`_pure_noise_grid`
     fixtures.
