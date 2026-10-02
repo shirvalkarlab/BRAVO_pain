@@ -105,11 +105,19 @@ class RetrospectiveDB:
             return pd.read_sql(text(sql), c, params=params)
 
     def rated_steps(self) -> pd.DataFrame:
-        """Visit-sheet steps with a sheet rating (Stim Testing or Notes tab), in sheet order."""
-        df = self._read(
-            "SELECT * FROM visit_steps WHERE rating_source IN ('stim_tab', 'notes_tab') "
-            "ORDER BY file, row_index")
-        return df
+        """Visit-sheet steps with a sheet rating (Stim Testing or Notes tab), in sheet order, with
+        each blank setting cell filled from the sheet's previous written value over EVERY row,
+        rated or not (a sheet leaves a cell blank when it did not change, and a change can be
+        written on an unrated row; audit 2026-10-02 found 17 values taken from an older row). A row
+        whose current exceeds the 5 mA action top is a parse error (the 12.0 mA row of 10_14_25)
+        and is neither used nor copied forward."""
+        df = self._read("SELECT * FROM visit_steps ORDER BY file, row_index")
+        for c in SETTING_COLS:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        bad = (df["amp_mA_Left"] > C.AMP_ACTION_MAX_MA) | (df["amp_mA_Right"] > C.AMP_ACTION_MAX_MA)
+        df = df[~bad].copy()
+        df[SETTING_COLS] = df.groupby("file")[SETTING_COLS].ffill()
+        return df[df["rating_source"].isin(RATED_SOURCES)].reset_index(drop=True)
 
     def all_steps(self) -> pd.DataFrame:
         return self._read("SELECT * FROM visit_steps ORDER BY file, row_index")
@@ -169,16 +177,28 @@ class SafetyModel:
 REWARD_VARIANTS = ("delta", "level", "worst_site")
 
 
+def _common_change(a: dict, b: dict, how: str = "mean") -> float:
+    """a minus b over the pain sites both states carry a REAL rating for (rated at that step or
+    carried forward within the visit), so a site's first rating mid-visit is not read as a change
+    (audit 2026-10-02: 24 transitions jumped 1.31 points on average from that alone). With no site
+    in common, the overall score's change."""
+    common = [s for s in C.PAIN_SITES if s in a["real"] and s in b["real"]]
+    if not common:
+        return float(a["sites"]["overall"] - b["sites"]["overall"])
+    f = np.mean if how == "mean" else np.max
+    return float(f([a["sites"][s] for s in common]) - f([b["sites"][s] for s in common]))
+
+
 @dataclass
 class RewardFunction:
     """R(s_t, a_t, s_t+1) in pain points (0-10 scale; positive = better).
 
-    Symptom term, by variant:
-      delta       composite(s_t) - composite(s_t+1): relief from the step just taken
-      level       baseline - composite(s_t+1): how far below the visit's first rating the patient
-                  now is (rewards staying low, not only getting lower)
-      worst_site  the mean of `level` on the composite and on the worst single site, so a setting
-                  that helps the average while one site gets worse is not fully rewarded
+    Symptom term, by variant (each over the sites rated in both states, `_common_change`):
+      delta       mean pain at s_t minus at s_t+1: relief from the step just taken
+      level       mean pain at the visit's first rating minus at s_t+1: how far below where the
+                  visit started the patient now is (the baseline is part of the state)
+      worst_site  half of `level`, half the same on the worst single site, so a setting that
+                  helps the average while one site gets worse is not fully rewarded
     Then minus the side-effect cost (0 / 1 / 2 points for none / mild / mild-persistent) and the
     safety penalty. A moderate or severe side effect, or a setting past a limit, ends the episode
     with TERMINAL_PENALTY added.
@@ -192,11 +212,11 @@ class RewardFunction:
 
     def __call__(self, cur: dict, nxt: dict, setting_next, baseline: dict) -> tuple[float, bool, dict]:
         if self.variant == "delta":
-            sym = cur["composite"] - nxt["composite"]
+            sym = _common_change(cur, nxt)
         elif self.variant == "level":
-            sym = baseline["composite"] - nxt["composite"]
+            sym = _common_change(baseline, nxt)
         else:
-            sym = 0.5 * (baseline["composite"] - nxt["composite"]) + 0.5 * (baseline["worst"] - nxt["worst"])
+            sym = 0.5 * _common_change(baseline, nxt) + 0.5 * _common_change(baseline, nxt, "max")
         se = nxt.get("side_effect")
         terminal = False
         se_cost = 0.0
@@ -244,49 +264,60 @@ def contact_onehot(label) -> np.ndarray:
 
 STATE_NAMES = ([f"pain_{s}" for s in C.PAIN_SITES] + ["composite", "worst", "side_effect"]
                + [f"cur_{a}" for a in C.ACTION_NAMES]
-               + [f"contact_{c}" for c in C.CONTACT_LEVELS] + ["contact_other", "at_home"])
+               + [f"contact_{c}" for c in C.CONTACT_LEVELS] + ["contact_other", "at_home"]
+               + ["baseline_composite", "baseline_worst"])
+#: Positions of the symptom numbers in the state (aligned between streams in validation).
+SYMPTOM_IDX = list(range(0, 9)) + [22, 23]
 
 
-def encode_state(sym: dict, setting_cur, contact_next, at_home: bool) -> np.ndarray:
+def encode_state(sym: dict, setting_cur, contact_next, at_home: bool, baseline: dict | None = None) -> np.ndarray:
     """Symptoms (0-10 scaled to 0-1), the setting in force (scaled to 0-1 over the action range),
-    the Left contact the next setting will use (one-hot) and whether the visit was at home."""
+    the Left contact the next setting will use (one-hot), whether the visit was at home, and the
+    visit's first rating (composite and worst site; the `level` rewards are measured from it)."""
+    baseline = baseline or sym
     sites = [sym["sites"][s] / 10.0 for s in C.PAIN_SITES]
     se = sym.get("side_effect")
     se = 0.0 if se is None or not np.isfinite(se) else se / 4.0
     cur = (normalize_action(setting_cur) + 1.0) / 2.0
     return np.concatenate([np.asarray(sites + [sym["composite"] / 10.0, sym["worst"] / 10.0, se]),
-                           cur, contact_onehot(contact_next), [1.0 if at_home else 0.0]]).astype(np.float32)
+                           cur, contact_onehot(contact_next), [1.0 if at_home else 0.0],
+                           [baseline["composite"] / 10.0, baseline["worst"] / 10.0]]).astype(np.float32)
 
 
-def _symptoms_from_row(row: pd.Series, carried: dict, sites_in_visit: list) -> dict:
-    """Seven sites with gaps carried forward within the visit (then the overall score); the
-    composite is the mean over the sites this visit ever rated; the worst is their maximum."""
+def _symptoms_from_row(row: pd.Series, carried: dict, sites_in_visit: list) -> dict | None:
+    """Seven sites with gaps carried forward within the visit (`real`: rated now or earlier this
+    visit); a site not yet rated takes the overall score for the state only. The composite is the
+    mean over the sites this visit ever rated; the worst is their maximum."""
     overall = row.get("overall")
-    vals = {}
+    has_overall = overall is not None and np.isfinite(overall)
+    vals, real = {}, set()
     for s in C.PAIN_SITES:
         v = row.get(s)
         if v is not None and np.isfinite(v):
             carried[s] = float(v)
-        vals[s] = carried.get(s, float(overall) if overall is not None and np.isfinite(overall) else np.nan)
+        if s in carried:
+            vals[s] = carried[s]
+            real.add(s)
+        else:
+            vals[s] = float(overall) if has_overall else np.nan
     rated = [vals[s] for s in sites_in_visit if np.isfinite(vals[s])]
     if not rated:
         return None
     for s in C.PAIN_SITES:                         # sites never rated this visit: fill for the state
         if not np.isfinite(vals[s]):
             vals[s] = float(np.mean(rated))
-    return {"sites": vals, "composite": float(np.mean(rated)), "worst": float(np.max(rated)),
+    return {"sites": vals, "real": real, "composite": float(np.mean(rated)), "worst": float(np.max(rated)),
             "side_effect": row.get("side_effect_score")}
 
 
 def _clean_settings(steps: pd.DataFrame) -> pd.DataFrame:
-    """Gaps in a step's setting take the visit's previous written value (a sheet leaves a cell
-    blank when it did not change); a step still missing any of the five is dropped. A current above
-    the device's fine-step range (12.5 mA) is a parse error and the step is dropped."""
+    """Steps still missing any of the five settings after the sheet fill are dropped (a gap is
+    also filled from the visit's previous step here, for callers that pass unfilled steps)."""
     d = steps.copy()
     for c in SETTING_COLS:
         d[c] = pd.to_numeric(d[c], errors="coerce")
     d[SETTING_COLS] = d.groupby("file")[SETTING_COLS].ffill()
-    bad = (d["amp_mA_Left"] > 12.5) | (d["amp_mA_Right"] > 12.5)
+    bad = (d["amp_mA_Left"] > C.AMP_ACTION_MAX_MA) | (d["amp_mA_Right"] > C.AMP_ACTION_MAX_MA)
     d = d[~bad]
     return d.dropna(subset=SETTING_COLS)
 
@@ -347,9 +378,9 @@ class TrajectoryBuilder:
                 continue
             at_home = str(g["setting"].iloc[0]) == "home"
             baseline = seq[0][1]
-            ep = {"O": [], "A": [], "R": [], "T": []}
+            ep = {"O": [], "A": [], "R": []}
 
-            def close(final_row, final_sym, terminal):
+            def close(final_row, final_sym, terminal, base):
                 if terminal:
                     if ep["O"]:
                         O.extend(ep["O"]); A.extend(ep["A"]); R.extend(ep["R"])
@@ -358,8 +389,9 @@ class TrajectoryBuilder:
                 else:
                     if ep["O"]:
                         s_last = encode_state(final_sym, final_row[SETTING_COLS].to_numpy(float),
-                                              final_row["left_contact"], at_home)
-                        O.extend(ep["O"] + [s_last]); A.extend(ep["A"] + [normalize_action(final_row[SETTING_COLS].to_numpy(float))])
+                                              final_row["left_contact"], at_home, base)
+                        O.extend(ep["O"] + [s_last])
+                        A.extend(ep["A"] + [normalize_action(final_row[SETTING_COLS].to_numpy(float))])
                         R.extend(ep["R"] + [0.0]); T.extend([0.0] * (len(ep["O"]) + 1))
                         TO.extend([0.0] * len(ep["O"]) + [1.0])
                         ep_visit.append(visit)
@@ -369,20 +401,20 @@ class TrajectoryBuilder:
                 (r0, s0), (r1, s1) = seq[t], seq[t + 1]
                 cur = r0[SETTING_COLS].to_numpy(float)
                 nxt = r1[SETTING_COLS].to_numpy(float)
-                obs = encode_state(s0, cur, r1["left_contact"], at_home)
+                obs = encode_state(s0, cur, r1["left_contact"], at_home, baseline)
                 rew, term, parts = self.reward(s0, s1, nxt, baseline)
                 ep["O"].append(obs); ep["A"].append(normalize_action(nxt)); ep["R"].append(rew)
+                nxt_contact = seq[t + 2][0]["left_contact"] if t + 2 < len(seq) else r1["left_contact"]
                 rows.append({"visit": visit, "at_home": at_home, "t": t, "reward": rew, "terminal": term,
                              "composite": s0["composite"], "composite_next": s1["composite"],
                              "contact_next": r1["left_contact"], "obs": obs,
-                             "next_obs": encode_state(s1, nxt, seq[t + 2][0]["left_contact"] if t + 2 < len(seq)
-                                                      else r1["left_contact"], at_home),
+                             "next_obs": encode_state(s1, nxt, nxt_contact, at_home, baseline),
                              **{f"cur_{k}": v for k, v in zip(C.ACTION_NAMES, cur)},
                              **{f"act_{k}": v for k, v in zip(C.ACTION_NAMES, nxt)}, **parts})
                 if term:
-                    close(r1, s1, True)
+                    close(r1, s1, True, baseline)
                     baseline = s1
-            close(seq[-1][0], seq[-1][1], False)
+            close(seq[-1][0], seq[-1][1], False, baseline)
         return Trajectories(np.asarray(O, np.float32), np.asarray(A, np.float32),
                             np.asarray(R, np.float32), np.asarray(T, np.float32),
                             np.asarray(TO, np.float32), ep_visit, pd.DataFrame(rows),
@@ -403,91 +435,146 @@ def redcap_points(reports: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def chronic_validation_set(db: RetrospectiveDB, *, exclude_visit_days: bool = True) -> pd.DataFrame:
+def _sym_from_redcap(means: pd.Series) -> dict | None:
+    """REDCap means -> the sheet's seven sites. Overall is the mean of nrs and the overall VAS
+    (`vas` is overall pain, StimOptimizer ITEM_COLUMNS); back from back_vas; left leg and left
+    foot from left_leg_vas. Head and the right leg and foot have no REDCap item: like a site a
+    visit never rated, they take the mean of the sites that do."""
+    def g(k):
+        v = means.get(k, np.nan)
+        return float(v) if np.isfinite(v) else np.nan
+    overall = np.nanmean([g("nrs"), g("vas")]) if np.isfinite([g("nrs"), g("vas")]).any() else np.nan
+    observed = {"overall": overall, "back": g("back_vas"), "left_leg": g("left_leg_vas"),
+                "left_foot": g("left_leg_vas")}
+    observed = {k: v for k, v in observed.items() if np.isfinite(v)}
+    if not observed:
+        return None
+    base = [observed[k] for k in ("overall", "back", "left_leg") if k in observed]
+    comp = float(np.mean(base))
+    sites = {s: observed.get(s, comp) for s in C.PAIN_SITES}
+    return {"sites": sites, "real": set(observed), "composite": comp, "worst": float(max(base)),
+            "side_effect": 0.0}
+
+
+def _quantile_map(x, ref_from, ref_to):
+    """Each value's rank within `ref_from`, read off as the same quantile of `ref_to`."""
+    ref_from = np.sort(np.asarray(ref_from, float))
+    q = np.searchsorted(ref_from, x, side="right") / max(len(ref_from), 1)
+    q = np.clip(q - 0.5 / max(len(ref_from), 1), 0, 1)
+    return np.quantile(np.asarray(ref_to, float), q)
+
+
+def chronic_validation_set(db: RetrospectiveDB, *, exclude_visit_days: bool = True,
+                           exclude_periods_with_visits: bool = False, washin_h: float | None = None,
+                           align_to: np.ndarray | None = None, keep_latest: bool = False) -> pd.DataFrame:
     """One row per long-term setting period with enough home reports.
 
-    Columns: the setting (raw), its Left contact, the mean pain in points over its reports (the
-    composite and each item), the report count, and `obs`: the state before it, built from the
-    previous period's reports (nrs -> overall and head, back_vas -> back, left_leg_vas -> left leg
-    and foot, vas -> right leg and foot) and the previous period's setting. Reports filed on a
-    visit-sheet day are left out by default, so validation sees home life, not visit-day testing.
+    Columns: the setting (raw), its Left contact, mean pain in points over its reports (the six-item
+    composite and each item), the report count, `prev_pain_composite` (the same for the last
+    earlier period with reports), `has_visit` (a visit sheet falls inside it), and `obs`: the state
+    before it (the previous period's reports as symptoms, the previous period's setting in force).
+    REDCap levels sit higher than sheet ratings (mean composite 7.35 against 4.39 in training,
+    audit 2026-10-02), so with `align_to` (training states) every symptom number is replaced by the
+    training value at the same rank: the models are asked about states like those they learned on.
+    Reports filed on a visit-sheet day are left out by default. `washin_h` overrides the 1-minute
+    wash-in.
     """
     ep = db.chronic_epochs()
     rep = redcap_points(db.redcap_reports())
+    raw_rep = db.redcap_reports()
+    vd = pd.to_datetime(db.all_steps()["visit_date_ts"], utc=True, errors="coerce")
+    visit_days = sorted(set(vd.dt.tz_convert("America/Los_Angeles").dt.date.dropna()))
     if exclude_visit_days:
-        vd = pd.to_datetime(db.all_steps()["visit_date_ts"], utc=True, errors="coerce")
-        days = set(vd.dt.tz_convert("America/Los_Angeles").dt.date.dropna())
         local = rep["t_utc"].dt.tz_convert("America/Los_Angeles").dt.date
-        rep = rep[~local.isin(days)]
+        keep = ~local.isin(set(visit_days))
+        rep, raw_rep = rep[keep], raw_rep[keep.values]
     for c in SETTING_COLS:
         ep[c] = pd.to_numeric(ep[c], errors="coerce")
+    washin = pd.Timedelta(hours=washin_h) if washin_h is not None else pd.Timedelta(minutes=C.WASHIN_MIN)
     rows = []
-    prev = None
+    prev_sym, prev_setting, prev_pain = None, None, np.nan
     for _, e in ep.iterrows():
-        lo = e["t_start"] + pd.Timedelta(minutes=C.WASHIN_MIN)
-        r = rep[(rep["t_utc"] >= lo) & (rep["t_utc"] < e["t_end"])]
+        sel = (rep["t_utc"] >= e["t_start"] + washin) & (rep["t_utc"] < e["t_end"])
+        r = rep[sel]
         means = r.drop(columns=["t_utc"]).mean(numeric_only=True)
+        raw_means = raw_rep[sel.values].mean(numeric_only=True)
         setting = e[SETTING_COLS].to_numpy(float)
+        d0 = e["t_start"].tz_convert("America/Los_Angeles").date()
+        d1 = e["t_end"].tz_convert("America/Los_Angeles").date()
         rec = {"epoch": e["epoch"], "t_start": e["t_start"], "dur_h": e["dur_h"],
                "left_contact": e["left_contact"], "n_reports": int(len(r)),
+               "has_visit": any(d0 <= v <= d1 for v in visit_days),
                **{k: v for k, v in zip(C.ACTION_NAMES, setting)},
-               **{f"pain_{k}": means.get(k, np.nan) for k in list(C.REDCAP_TO_POINTS) + ["composite"]}}
-        if prev is not None and np.isfinite(setting).all() and np.isfinite(prev["setting"]).all() \
-                and prev["sym"] is not None:
-            rec["obs"] = encode_state(prev["sym"], prev["setting"], e["left_contact"], True)
-        else:
-            rec["obs"] = None
+               **{f"pain_{k}": means.get(k, np.nan) for k in list(C.REDCAP_TO_POINTS) + ["composite"]},
+               "prev_pain_composite": prev_pain}
+        ok_prev = (prev_sym is not None and prev_setting is not None
+                   and np.isfinite(setting).all() and np.isfinite(prev_setting).all())
+        rec["obs"] = encode_state(prev_sym, prev_setting, e["left_contact"], True) if ok_prev else None
+        own = _sym_from_redcap(raw_means) if len(r) else None
+        rec["own_obs"] = (encode_state(own, setting, e["left_contact"], True)
+                          if own is not None and np.isfinite(setting).all() else None)
         rows.append(rec)
-        sym = None
-        if len(r) and np.isfinite(means.get("composite", np.nan)):
-            def g(k, fb):
-                v = means.get(k, np.nan)
-                return float(v) if np.isfinite(v) else fb
-            ov = g("nrs", float(means["composite"]))
-            sites = {"overall": ov, "head": ov, "back": g("back_vas", ov), "left_leg": g("left_leg_vas", ov),
-                     "left_foot": g("left_leg_vas", ov), "right_leg": g("vas", ov), "right_foot": g("vas", ov)}
-            sym = {"sites": sites, "composite": float(np.mean(list(sites.values()))),
-                   "worst": float(max(sites.values())), "side_effect": 0.0}
-        if sym is not None or prev is None:
-            prev = {"sym": sym, "setting": setting}
-        else:
-            prev = {"sym": prev["sym"], "setting": setting}
+        if own is not None:
+            prev_sym, prev_pain = own, float(means.get("composite", np.nan))
+        prev_setting = setting
     out = pd.DataFrame(rows)
     keep = out["obs"].notna() & (out["n_reports"] >= C.MIN_REPORTS_PER_EPOCH) \
-        & np.isfinite(out[list(C.ACTION_NAMES)]).all(axis=1)
-    return out[keep].reset_index(drop=True)
+        & np.isfinite(out[list(C.ACTION_NAMES)]).all(axis=1) & np.isfinite(out["prev_pain_composite"])
+    if exclude_periods_with_visits:
+        keep &= ~out["has_visit"]
+    if keep_latest:
+        keep.iloc[-1] = keep.iloc[-1] or out["own_obs"].iloc[-1] is not None
+    out = out[keep].reset_index(drop=True)
+    if align_to is not None and len(out):
+        ref = np.stack(out["obs"].to_list())
+        for col in ("obs", "own_obs"):
+            arr = [None if o is None else o.copy() for o in out[col]]
+            for j in SYMPTOM_IDX:
+                for a in arr:
+                    if a is not None:
+                        a[j] = _quantile_map(a[j], ref[:, j], align_to[:, j])
+            out[col] = arr
+    return out
 
 
-def latest_state(db: RetrospectiveDB, contact: str) -> np.ndarray | None:
-    """The state to recommend from today: the newest long-term period's reports and setting."""
-    v = chronic_validation_set(db, exclude_visit_days=False)
-    if v.empty:
+def validation_sets(db: RetrospectiveDB, train_obs: np.ndarray) -> dict:
+    """The primary validation set and three sensitivity versions, all aligned to training."""
+    return {
+        "primary": chronic_validation_set(db, align_to=train_obs),
+        "no_visit_periods": chronic_validation_set(db, align_to=train_obs, exclude_periods_with_visits=True),
+        "washin_24h": chronic_validation_set(db, align_to=train_obs, washin_h=24.0),
+        "unaligned": chronic_validation_set(db),
+    }
+
+
+def latest_state(db: RetrospectiveDB, contact: str, train_obs: np.ndarray | None = None) -> np.ndarray | None:
+    """The state to recommend from today: the NEWEST period's own reports and its own setting
+    (audit 2026-10-02: the previous version used the period before it), aligned to training."""
+    v = chronic_validation_set(db, exclude_visit_days=False, align_to=train_obs, keep_latest=True)
+    if v.empty or v["own_obs"].iloc[-1] is None:
         return None
-    last = v.iloc[-1]
-    obs = last["obs"].copy()
-    # the setting in force now is the last period's own; the contact asked about replaces its one-hot
-    obs[10:15] = (normalize_action(last[list(C.ACTION_NAMES)].to_numpy(float)) + 1.0) / 2.0
+    obs = v["own_obs"].iloc[-1].copy()
     obs[15:15 + len(C.CONTACT_LEVELS) + 1] = contact_onehot(contact)
     return obs
 
 
 def load(data_dir: str = DEFAULT_DATA_DIR, variant: str = "delta"):
-    """Convenience: (db, trajectories, validation set) for one reward variant."""
+    """Convenience: (db, trajectories, primary validation set) for one reward variant."""
     db = RetrospectiveDB(data_dir)
     db.ensure_built()
     traj = TrajectoryBuilder(RewardFunction(variant)).build(db.rated_steps())
-    return db, traj, chronic_validation_set(db)
+    return db, traj, chronic_validation_set(db, align_to=traj.observations)
 
 
 if __name__ == "__main__":
     db = RetrospectiveDB()
-    print("tables:", db.build_from_snapshot())
+    print("tables:", db.ensure_built())
     for v in REWARD_VARIANTS:
         tr = TrajectoryBuilder(RewardFunction(v)).build(db.rated_steps())
         ds = tr.mdp_dataset()
         print(f"{v:10s} episodes={len(ds.episodes)} transitions={ds.transition_count} "
               f"terminals={int(tr.terminals.sum())} reward mean={tr.transitions.reward.mean():.2f} "
               f"sd={tr.transitions.reward.std():.2f} obs_dim={tr.observations.shape[1]}")
-    val = chronic_validation_set(db)
-    print("validation periods:", len(val), "reports:", int(val.n_reports.sum()),
-          "contacts:", val.left_contact.value_counts().to_dict())
+    for name, val in validation_sets(db, tr.observations).items():
+        print(f"validation {name:16s} periods={len(val)} reports={int(val.n_reports.sum())} "
+              f"contacts={val.left_contact.value_counts().to_dict()}")

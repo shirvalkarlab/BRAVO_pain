@@ -41,11 +41,28 @@ def _clean(x):
     return x
 
 
-def run_one(model: str, variant: str, seed: int, *, loaded=None, n_perm=2000, device=None) -> dict:
+def check_data(store, tr, val, *, expect_periods=None, expect_experiences=None):
+    """Refuse to run on data that disagree with themselves. (A database read while another
+    process rebuilt it once gave doubled rows with no error.)"""
+    assert len(store) == len(tr.transitions), \
+        f"experiences file has {len(store)} rows, the database gives {len(tr.transitions)}: regenerate one"
+    assert store.state_dim == tr.observations.shape[1], "experiences file and database differ in state size"
+    obs_dim = {len(o) for o in val["obs"]}
+    assert obs_dim == {store.state_dim}, f"validation states have {obs_dim} numbers, training {store.state_dim}"
+    assert val["epoch"].is_unique, "a long-term setting period appears twice in validation (doubled rows?)"
+    if expect_periods is not None:
+        assert len(val) == expect_periods, f"validation periods {len(val)} != {expect_periods}"
+    if expect_experiences is not None:
+        assert len(store) == expect_experiences, f"experiences {len(store)} != {expect_experiences}"
+
+
+def run_one(model: str, variant: str, seed: int, *, loaded=None, n_perm=2000, device=None,
+            expect_periods=None, expect_experiences=None) -> dict:
     t0 = time.time()
     db, _tr, val = loaded or D.load(variant=variant)
     with open(os.path.join(D.DEFAULT_DATA_DIR, f"experiences_{variant}.json")) as f:
         store = M.ExperienceStore(json.load(f))                       # recipe step 1
+    check_data(store, _tr, val, expect_periods=expect_periods, expect_experiences=expect_experiences)
     train_v, held_v = M.split_by_visit(store, RECIPE["validation_split"], seed)
     train, held = store.subset(train_v), store.subset(held_v)
     M.set_seed(seed)
@@ -67,9 +84,13 @@ def run_one(model: str, variant: str, seed: int, *, loaded=None, n_perm=2000, de
         "rms_distance_model_vs_retrieved_action": float(np.mean(V.action_distance(a_model, a_ret))),
         "mean_retrieval_confidence": float(np.nanmean(ret_conf(obs))),
     }
+    # how many different settings the model recommends across the 52 periods (1 = a constant)
+    out["n_distinct_recommendations"] = int(len(np.unique(np.round(a_model, 3), axis=0)))
     rec = V.recommend(policy, {c: D.latest_state(db, c) for c in D.C.CONTACT_LEVELS}, q=q)
+    assert len(rec) == len(D.C.CONTACT_LEVELS), f"recommendations for {len(rec)} contacts"
     out.update({
         "arm": "agentdb", "model_type": model, "reward_variant": variant, "seed": seed,
+        "state_size": store.state_dim, "n_experiences": len(store),
         "recipe": RECIPE, "config": cfg,
         "n_train_visits": len(train_v), "n_heldout_visits": len(held_v),
         "n_train_experiences": len(train), "n_heldout_experiences": len(held),
@@ -90,12 +111,17 @@ def main():
     ap.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2])
     ap.add_argument("--n-perm", type=int, default=2000)
     ap.add_argument("--device", default=None)
+    ap.add_argument("--expect-periods", type=int, default=None,
+                    help="refuse to run unless the validation set has exactly this many periods")
+    ap.add_argument("--expect-experiences", type=int, default=None,
+                    help="refuse to run unless there are exactly this many experiences")
     a = ap.parse_args()
     os.makedirs(RESULTS, exist_ok=True)
     for variant in a.variants:
         loaded = D.load(variant=variant)
         for seed in a.seeds:
-            r = run_one(a.model, variant, seed, loaded=loaded, n_perm=a.n_perm, device=a.device)
+            r = run_one(a.model, variant, seed, loaded=loaded, n_perm=a.n_perm, device=a.device,
+                        expect_periods=a.expect_periods, expect_experiences=a.expect_experiences)
             path = os.path.join(RESULTS, f"agentdb_{a.model}_{variant}_{seed}.json")
             with open(path, "w") as f:
                 json.dump(r, f, indent=1)

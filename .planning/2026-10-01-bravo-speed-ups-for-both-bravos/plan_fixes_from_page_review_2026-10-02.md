@@ -59,3 +59,14 @@ The PI gives the go-ahead before any of it runs (rule 8).
 
 ## Suggested order
 A8, A1+A2, A3-A7, B1, A9-A14, B2-B6, C, D. Tests first for A and B (regression test named for the real defect).
+
+## Status (end of 2026-10-02 session; decisions 386-389)
+Done and pushed: A8 (386), A1, A2 (did not reproduce on its own; followed from A1), A3 labels, A4 label only (387), A12, A14 note not added, B1 retry, B4, C2 (legend rows, histogram margin), C3 band axis, D1 (offline-check dropdowns), D2 (eleven titles), D3 (fold labels), D4 (round numbers, Basis fold strings), alignment of plot bottoms (388), A9 (389).
+Not done, and why:
+- A4 (93 vs 92): two server fields not traced to the one reading that differs.
+- A5-A7: re-check after A1; the cards may have mixed two pain scores while the page was changing score.
+- A10, A11: need live data; A11 is probably both sides at the prior spread, not a copied value.
+- A13, A14: labels only; no text added.
+- B2 (first-load 2-3 min): re-measure each page alone; B3 (updateSessions calls), B5 (WebSocket), B6 (empty memory fold).
+- C1 (Closed-Loop plot text clipping), C4 (wrapping ranges), D5 (stat block stays as separate TD / PSD lines per the PI), D6 dates, D7 layout.
+- Local bridge watcher died during the session and was revived by `docker restart bravo_pain-bravo-server-1`.

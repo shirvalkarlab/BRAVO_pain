@@ -117,3 +117,26 @@ def test_risk_counts_recommendations_past_and_near_the_ceiling():
 def test_stay_policy_returns_the_setting_in_force():
     o = _obs(6.0, setting=(110, 3.0, 1.0, 60, 290))
     assert np.allclose(D.denormalize_action(V.stay_policy(o[None]))[0], [110, 3.0, 1.0, 60, 290], atol=1e-4)
+
+
+def test_equal_settings_give_exactly_tied_distances_despite_float32_states():
+    """Regression (2026-10-02): float32 states split ties and moved rank correlations."""
+    s = (110.0, 3.3, 1.7, 60.0, 130.0)
+    o = _obs(6.0, setting=s).astype(np.float32)
+    d = V.action_distance(V.stay_policy(np.stack([o, o])), D.normalize_action(np.array([s, s])))
+    assert d[0] == d[1] == 0.0
+    d2 = V.action_distance(V.stay_policy(o[None]).astype(np.float32), D.normalize_action([[55, 3.3, 1.7, 60, 130]]))
+    d3 = V.action_distance(V.stay_policy(o[None]), D.normalize_action([[55, 3.3, 1.7, 60, 130]]))
+    assert d2[0] == d3[0]
+
+
+def test_near_minus_far_puts_tied_distances_in_the_same_third_whatever_their_order():
+    val = _val(n=9)
+    val["pain_composite"] = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    rec = D.normalize_action([55, 0.0, 2.0, 100, 150]).astype(np.float32)
+    amps = [0, 0, 0, 0, 2, 2, 4, 4, 4]                 # four periods tie at the smallest distance
+    for perm in ([0, 1, 2, 3, 4, 5, 6, 7, 8], [3, 2, 1, 0, 5, 4, 8, 7, 6]):
+        v = val.iloc[perm].reset_index(drop=True)
+        v["amp_mA_Left"] = [amps[i] for i in perm]
+        r = V.evaluate_policy("x", lambda o: np.repeat(rec[None], len(o), 0), v, n_perm=20)
+        assert r["near_minus_far"] == pytest.approx(np.mean([1, 2, 3, 4]) - np.mean([7, 8, 9]))

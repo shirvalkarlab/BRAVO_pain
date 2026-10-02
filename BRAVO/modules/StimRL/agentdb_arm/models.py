@@ -40,7 +40,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-STATE_DIM = 22
 ACTION_DIM = 5
 
 
@@ -63,10 +62,10 @@ def set_seed(seed: int) -> None:
 @dataclass
 class Episode:
     visit: str
-    states: np.ndarray      # [T, 22]
+    states: np.ndarray      # [T, state size]
     actions: np.ndarray     # [T, 5], in [-1, 1]
     rewards: np.ndarray     # [T]
-    next_states: np.ndarray  # [T, 22]
+    next_states: np.ndarray  # [T, state size]
     dones: np.ndarray       # [T]
 
     def __len__(self):
@@ -105,6 +104,14 @@ class ExperienceStore:
 
     def __len__(self):
         return len(self.records)
+
+    @property
+    def state_dim(self) -> int:
+        """Read from the data, never fixed in the code (it changes between exports)."""
+        dims = {len(r["state"]) for r in self.records} | {len(r["next_state"]) for r in self.records}
+        if len(dims) != 1:
+            raise ValueError(f"states of different lengths in one store: {sorted(dims)}")
+        return dims.pop()
 
     @property
     def visits(self) -> list[str]:
@@ -214,11 +221,11 @@ def _batches(n, batch_size, rng):
 # Decision Transformer
 # ==================================================================================================
 class _DTNet(nn.Module):
-    def __init__(self, context, embed_dim, n_heads, n_layers, dropout):
+    def __init__(self, state_dim, context, embed_dim, n_heads, n_layers, dropout):
         super().__init__()
         self.context = context
         self.emb_r = nn.Linear(1, embed_dim)
-        self.emb_s = nn.Linear(STATE_DIM, embed_dim)
+        self.emb_s = nn.Linear(state_dim, embed_dim)
         self.emb_a = nn.Linear(ACTION_DIM, embed_dim)
         self.emb_pos = nn.Embedding(context, embed_dim)
         self.emb_type = nn.Embedding(3, embed_dim)
@@ -229,7 +236,7 @@ class _DTNet(nn.Module):
         self.head = nn.Linear(embed_dim, ACTION_DIM)
 
     def forward(self, R, S, A):
-        """R [B,K,1], S [B,K,22], A [B,K,5] -> predicted actions [B,K,5] (read at state tokens)."""
+        """R [B,K,1], S [B,K,state size], A [B,K,5] -> predicted actions [B,K,5] (read at state tokens)."""
         B, K, _ = S.shape
         pos = self.emb_pos(torch.arange(K, device=S.device))[None]
         ty = self.emb_type.weight
@@ -245,19 +252,29 @@ class DecisionTransformerAgent:
     name = "decision_transformer"
 
     def __init__(self, context=20, embed_dim=128, n_heads=8, n_layers=6, dropout=0.1,
-                 target_quantile=0.9, device=None):
+                 target_quantile=0.9, warmup_epochs=10, device=None):
         self.cfg = dict(context=context, embed_dim=embed_dim, n_heads=n_heads, n_layers=n_layers,
-                        dropout=dropout, target_quantile=target_quantile)
+                        dropout=dropout, target_quantile=target_quantile,
+                        warmup_epochs=warmup_epochs)
         self.device = pick_device(device)
-        self.net = _DTNet(context, embed_dim, n_heads, n_layers, dropout).to(self.device)
+        self.net = None
         self.rtg_scale = 1.0
         self.target_rtg = 0.0
+
+    def _ensure(self, state_dim):
+        if self.net is None:
+            c = self.cfg
+            self.state_dim = state_dim
+            self.net = _DTNet(state_dim, c["context"], c["embed_dim"], c["n_heads"], c["n_layers"],
+                              c["dropout"]).to(self.device)
+        elif state_dim != self.state_dim:
+            raise ValueError(f"model built for {self.state_dim} state numbers, data has {state_dim}")
 
     def _windows(self, episodes, items):
         """items: list of (episode index, end step, length). Left-aligned, zero-padded."""
         K = self.cfg["context"]
         B = len(items)
-        R = np.zeros((B, K, 1), np.float32); S = np.zeros((B, K, STATE_DIM), np.float32)
+        R = np.zeros((B, K, 1), np.float32); S = np.zeros((B, K, self.state_dim), np.float32)
         A = np.zeros((B, K, ACTION_DIM), np.float32); M = np.zeros((B, K), np.float32)
         for b, (e, t, L) in enumerate(items):
             ep, rtg = episodes[e]
@@ -279,6 +296,9 @@ class DecisionTransformerAgent:
         return [(e, t, min(K, t + 1)) for e, (ep, _) in enumerate(episodes) for t in range(len(ep))]
 
     def eval_loss(self, store: ExperienceStore) -> float:
+        if not len(store):
+            return float("nan")
+        self._ensure(store.state_dim)
         eps = [(ep, ep.returns_to_go()) for ep in store.episodes()]
         items = self._eval_items(eps)
         if not items:
@@ -294,6 +314,7 @@ class DecisionTransformerAgent:
     def fit(self, train: ExperienceStore, *, epochs=100, batch_size=64, learning_rate=1e-3,
             seed=0, val: ExperienceStore | None = None) -> dict:
         rng = np.random.default_rng(seed)
+        self._ensure(train.state_dim)
         eps = [(ep, ep.returns_to_go()) for ep in train.episodes()]
         all_rtg = np.concatenate([r for _, r in eps])
         self.rtg_scale = float(max(1.0, np.abs(all_rtg).max()))
@@ -301,7 +322,13 @@ class DecisionTransformerAgent:
         K = self.cfg["context"]
         flat = [(e, t) for e, (ep, _) in enumerate(eps) for t in range(len(ep))]
         opt = torch.optim.AdamW(self.net.parameters(), lr=learning_rate, weight_decay=1e-4)
-        hist = []
+        # Linear learning-rate warm-up, as in the original Decision Transformer. Without it, at the
+        # recipe's 0.001, one of nine real-data runs (level reward, seed 1) collapsed in its first
+        # epochs to one corner setting for every state (training loss stuck at 0.81).
+        steps_per_epoch = math.ceil(len(flat) / batch_size)
+        warm = max(1, self.cfg["warmup_epochs"] * steps_per_epoch)
+        sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda k: min(1.0, (k + 1) / warm))
+        hist, lr_hist = [], []
         t0 = time.time()
         for _ in range(epochs):
             self.net.train()
@@ -314,10 +341,11 @@ class DecisionTransformerAgent:
                 loss = self._loss(eps, items)
                 opt.zero_grad(); loss.backward()
                 nn.utils.clip_grad_norm_(self.net.parameters(), 0.25)
-                opt.step()
+                lr_hist.append(opt.param_groups[0]["lr"])
+                opt.step(); sched.step()
                 tot += loss.item() * len(b); n += len(b)
             hist.append(tot / n)
-        return {"train_loss_history": hist, "train_loss": self.eval_loss(train),
+        return {"train_loss_history": hist, "lr_history": lr_hist, "train_loss": self.eval_loss(train),
                 "val_loss": self.eval_loss(val) if val is not None and len(val) else float("nan"),
                 "loss_name": "mean squared error, predicted vs logged setting ([-1, 1] units)",
                 "target_return_to_go": self.target_rtg, "rtg_scale": self.rtg_scale,
@@ -374,12 +402,19 @@ class SarsaAgent:
                         bins="rate 4 x Left current 3 x Right current 3")
         self.device = pick_device(device)
         self.bins = ActionBins()
-        self.net = mlp(STATE_DIM, self.bins.size, hidden).to(self.device)
+        self.net = None
         self.centres = np.stack([self.bins.geometric_centre(i) for i in range(self.bins.size)])
         self.support = np.zeros(self.bins.size, int)
 
     def _t(self, x):
         return torch.tensor(np.asarray(x), device=self.device)
+
+    def _ensure(self, state_dim):
+        if self.net is None:
+            self.state_dim = state_dim
+            self.net = mlp(state_dim, self.bins.size, self.cfg["hidden"]).to(self.device)
+        elif state_dim != self.state_dim:
+            raise ValueError(f"model built for {self.state_dim} state numbers, data has {state_dim}")
 
     def _td(self, net, tgt, s, a, r, s2, a2, end):
         q = net(s).gather(1, a[:, None])[:, 0]
@@ -395,6 +430,7 @@ class SarsaAgent:
     def eval_loss(self, store) -> float:
         if not len(store):
             return float("nan")
+        self._ensure(store.state_dim)
         T = self._tensors(store.transitions())
         with torch.no_grad():
             return float(self._td(self.net, self.net, *T))
@@ -402,6 +438,7 @@ class SarsaAgent:
     def fit(self, train: ExperienceStore, *, epochs=100, batch_size=64, learning_rate=1e-3,
             seed=0, val=None) -> dict:
         rng = np.random.default_rng(seed)
+        self._ensure(train.state_dim)
         tr = train.transitions()
         ai = self.bins.index(tr["a"])
         self.support = np.bincount(ai, minlength=self.bins.size)
@@ -456,10 +493,18 @@ class ActorCriticAgent:
         self.cfg = dict(gamma=gamma, actor_lr=actor_lr, critic_lr=critic_lr,
                         entropy_coef=entropy_coef, beta=beta, max_weight=max_weight, hidden=hidden)
         self.device = pick_device(device)
-        self.qnet = mlp(STATE_DIM + ACTION_DIM, 1, hidden).to(self.device)
-        self.vnet = mlp(STATE_DIM, 1, hidden).to(self.device)
-        self.actor = mlp(STATE_DIM, ACTION_DIM, hidden).to(self.device)
+        self.qnet = None
         self.log_std = nn.Parameter(torch.full((ACTION_DIM,), -0.5, device=self.device))
+
+    def _ensure(self, state_dim):
+        if self.qnet is None:
+            h = self.cfg["hidden"]
+            self.state_dim = state_dim
+            self.qnet = mlp(state_dim + ACTION_DIM, 1, h).to(self.device)
+            self.vnet = mlp(state_dim, 1, h).to(self.device)
+            self.actor = mlp(state_dim, ACTION_DIM, h).to(self.device)
+        elif state_dim != self.state_dim:
+            raise ValueError(f"model built for {self.state_dim} state numbers, data has {state_dim}")
 
     def _t(self, x):
         return torch.tensor(np.asarray(x, np.float32), device=self.device)
@@ -488,6 +533,7 @@ class ActorCriticAgent:
     def eval_loss(self, store) -> dict:
         if not len(store):
             return {"critic": float("nan"), "actor_mse": float("nan")}
+        self._ensure(store.state_dim)
         tr = store.transitions()
         T = [self._t(tr[k]) for k in ("s", "a", "r", "s2", "a2", "end")]
         with torch.no_grad():
@@ -498,6 +544,7 @@ class ActorCriticAgent:
     def fit(self, train: ExperienceStore, *, epochs=100, batch_size=64, learning_rate=None,
             seed=0, val=None) -> dict:
         rng = np.random.default_rng(seed)
+        self._ensure(train.state_dim)
         tr = train.transitions()
         T = [self._t(tr[k]) for k in ("s", "a", "r", "s2", "a2", "end")]
         tgt = copy.deepcopy(self.qnet)

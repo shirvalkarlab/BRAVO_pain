@@ -8,16 +8,19 @@ import pytest
 from StimRL.agentdb_arm import models as M
 
 
-def synthetic(n_visits=8, steps=12, seed=0):
+DIM = 24      # any size works: every model reads it from the data
+
+
+def synthetic(n_visits=8, steps=12, seed=0, dim=DIM):
     """Visits whose reward is highest when the Left current (action[1]) matches state[0]."""
     rng = np.random.default_rng(seed)
     out = []
     for v in range(n_visits):
-        s = rng.uniform(0, 1, M.STATE_DIM)
+        s = rng.uniform(0, 1, dim)
         for t in range(steps):
             a = rng.uniform(-1, 1, M.ACTION_DIM)
             r = 1.0 - abs(a[1] - (2 * s[0] - 1))
-            s2 = rng.uniform(0, 1, M.STATE_DIM)
+            s2 = rng.uniform(0, 1, dim)
             out.append({"visit": f"v{v}", "state": s.tolist(), "action": a.tolist(), "reward": float(r),
                         "next_state": s2.tolist(), "done": False})
             s = s2
@@ -65,12 +68,15 @@ def test_retrieval_returns_most_similar_successful(store):
 SMALL = {"decision_transformer": dict(context=5, embed_dim=32, n_heads=4, n_layers=2)}
 
 
+@pytest.mark.parametrize("dim", [22, 24])
 @pytest.mark.parametrize("name", list(M.AGENTS))
-def test_policy_actions_are_n_by_5_within_minus1_plus1(store, name):
+def test_policy_actions_are_n_by_5_within_minus1_plus1(name, dim):
     M.set_seed(0)
+    store = M.ExperienceStore(synthetic(dim=dim))
+    assert store.state_dim == dim
     agent = M.AGENTS[name](device="cpu", **SMALL.get(name, {}))
     agent.fit(store, epochs=5, batch_size=16, learning_rate=1e-3, seed=0, val=store)
-    obs = np.random.default_rng(1).uniform(0, 1, (7, M.STATE_DIM)).astype(np.float32)
+    obs = np.random.default_rng(1).uniform(0, 1, (7, dim)).astype(np.float32)
     a = agent.policy(obs)
     assert a.shape == (7, M.ACTION_DIM)
     assert np.all(a >= -1) and np.all(a <= 1)
@@ -106,5 +112,41 @@ def test_actor_critic_policy_moves_toward_logged_settings(store):
 def test_sarsa_only_recommends_cells_the_data_delivered(store):
     agent = M.SarsaAgent(device="cpu", min_support=3)
     agent.fit(store, epochs=5, batch_size=16, seed=0)
-    a = agent.policy(np.random.default_rng(2).uniform(0, 1, (20, M.STATE_DIM)).astype(np.float32))
+    a = agent.policy(np.random.default_rng(2).uniform(0, 1, (20, DIM)).astype(np.float32))
     assert np.all(agent.support[agent.bins.index(a)] >= 3)
+
+
+@pytest.mark.parametrize("name", list(M.AGENTS))
+def test_model_refuses_data_with_a_different_state_size(name):
+    agent = M.AGENTS[name](device="cpu", **SMALL.get(name, {}))
+    agent.fit(M.ExperienceStore(synthetic(dim=22)), epochs=1, batch_size=16, seed=0)
+    with pytest.raises(ValueError):
+        agent.eval_loss(M.ExperienceStore(synthetic(dim=24)))
+
+
+def test_decision_transformer_learning_rate_warms_up_to_the_recipe_value(store):
+    """Regression: without warm-up one real-data run collapsed to a single corner setting."""
+    agent = M.DecisionTransformerAgent(device="cpu", warmup_epochs=2, **SMALL["decision_transformer"])
+    lr = agent.fit(store, epochs=4, batch_size=16, learning_rate=1e-3, seed=0)["lr_history"]
+    assert lr[0] < 1e-4 and lr[-1] == pytest.approx(1e-3)
+    assert all(b >= a for a, b in zip(lr, lr[1:]))
+
+
+def test_runner_refuses_doubled_or_mismatched_data(store):
+    """Regression: parallel database rebuilds once doubled every row without an error."""
+    import types
+    import pandas as pd
+    from StimRL.agentdb_arm.run_agentdb_arm import check_data
+    obs = [np.zeros(DIM, np.float32)] * 3
+    tr = types.SimpleNamespace(transitions=pd.DataFrame({"x": range(len(store))}),
+                               observations=np.zeros((len(store), DIM)))
+    good = pd.DataFrame({"epoch": [1, 2, 3], "obs": obs})
+    check_data(store, tr, good, expect_periods=3)
+    with pytest.raises(AssertionError):
+        check_data(store, tr, pd.DataFrame({"epoch": [1, 1, 2], "obs": obs}))
+    with pytest.raises(AssertionError):
+        doubled = types.SimpleNamespace(transitions=pd.concat([tr.transitions] * 2),
+                                        observations=tr.observations)
+        check_data(store, doubled, good)
+    with pytest.raises(AssertionError):
+        check_data(store, tr, good, expect_periods=52)

@@ -4,8 +4,8 @@
    * States are a handful of cells: the patient's composite pain (lower, middle or upper third
      of the training ratings) by the Left contact the next setting uses (6), so 18 cells.
    * Actions are cells too: rate (4 bands) x Left current (3) x Right current (3) x mean pulse
-     width (2), so 72 cells. A recommended cell is turned back into a setting by taking the median
-     of the settings actually delivered in it, so the table never invents an untried setting.
+     width (2), so 72 cells. A recommended cell is turned back into the setting delivered in it most
+     often, so the table only ever recommends a combination that was actually given.
    * The critic is the Q-table: Q(s, a) = mean reward + gamma x the value of the next state
      under the actor, solved by repeated sweeps over the observed transitions.
    * The actor is a table of probabilities: pi(a | s) is proportional to how often clinicians
@@ -81,8 +81,13 @@ class TabularActorCritic:
         np.add.at(n, (s, a), 1)
         self.n = n
         self.sigma = float(np.std(r)) if len(r) > 1 else 1.0
-        # the setting each action cell stands for: median of what was delivered there
-        self.cell_setting = {c: np.median(raw[a == c], axis=0) for c in np.unique(a)}
+        # the setting each action cell stands for: the setting delivered there most often, a real
+        # delivered combination (audit 2026-10-02: a per-column median was an untried setting in
+        # 26 of 51 cells)
+        self.cell_setting = {}
+        for c in np.unique(a):
+            vals, counts = np.unique(np.round(raw[a == c], 4), axis=0, return_counts=True)
+            self.cell_setting[int(c)] = vals[int(np.argmax(counts))]
         behav = (n + 1e-3) / (n + 1e-3).sum(axis=1, keepdims=True)
         visited = n > 0
         pi = np.where(visited, behav, 0.0)

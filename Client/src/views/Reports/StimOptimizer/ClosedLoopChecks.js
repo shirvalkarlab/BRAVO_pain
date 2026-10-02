@@ -264,8 +264,7 @@ function Numbers({ c, lfp }) {
             })}
             {lfp && (
               <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.2 }}>
-                {lfp.n_cells_screened != null ? `${lfp.n_cells_screened} contact-and-rate combinations screened` : ""}
-                {lfp.n_cells_unbuildable != null ? `, ${lfp.n_cells_unbuildable} could not be built` : ""}
+                {screenedLine(lfp)}
                 {" · one side's sensing contact licenses only that side"}
               </MDTypography>
             )}
@@ -291,8 +290,7 @@ function Numbers({ c, lfp }) {
                 ? <>read on <span style={{ whiteSpace: "nowrap" }}>{contactLabel({ display_short: lfp.selected_display_short }, Array.isArray(lfp.selected_key) ? lfp.selected_key[0] : null)}</span>
                   {lfp.pinned_rate_hz != null ? <> at <span style={{ whiteSpace: "nowrap" }}>{fmtHz(lfp.pinned_rate_hz)}</span></> : null}</>
                 : "no sensing contact could be used"}
-              {lfp.n_cells_screened != null ? ` · ${lfp.n_cells_screened} contact-and-rate combinations screened` : ""}
-              {lfp.n_cells_unbuildable != null ? `, ${lfp.n_cells_unbuildable} could not be built` : ""}
+              {lfp.n_cells_screened != null || lfp.n_cells_unbuildable != null ? ` · ${screenedLine(lfp)}` : ""}
               {passing.length ? ` · responding centres ${passing.map((v) => Number(v).toFixed(1)).join(", ")} Hz` : ""}
             </MDTypography>
           )}
@@ -360,6 +358,22 @@ export function gateHeadline(plan) {
   return gate.passed === true
     ? `Yes: ${n} of ${n} checks pass`
     : `No: ${nFail} of ${n} checks block${nNot ? `, ${nNot} not assessed` : ""}`;
+}
+
+/** How many contact-and-rate combinations were looked at and how many had no usable recording, with
+ *  the commonest reason the server gives (page review 2026-10-02: "12 screened, 12 could not be
+ *  built" read as a contradiction beside the assessed counts). All unbuilt reads "none could be
+ *  built", not a count that looks like a subset. */
+export function screenedLine(lfp) {
+  const screened = lfp.n_cells_screened;
+  const bad = lfp.n_cells_unbuildable;
+  const reasons = Object.entries(lfp.unbuildable_reasons || {}).sort((a, b) => b[1] - a[1]);
+  const why = reasons.length ? ` (${reasons[0][0]}${reasons.length > 1 ? `, +${reasons.length - 1} more` : ""})` : "";
+  if (screened == null && bad == null) return "";
+  if (bad == null) return `${screened} contact-and-rate combinations screened`;
+  if (screened != null && bad >= screened && screened > 0) return `none of ${screened} combinations could be built${why}`;
+  const head = screened != null ? `${screened} combinations screened, ` : "";
+  return `${head}${bad} could not be built${why}`;
 }
 
 export default function ClosedLoopChecks({ plan }) {

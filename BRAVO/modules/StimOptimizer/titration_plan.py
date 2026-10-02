@@ -740,20 +740,18 @@ def side_plan(side, *, rate_in_force_hz, rate_source, pulse_width_us, pulse_widt
                    f"research synthesis §1; open item 30)"),
         "step_timing": (f"a {RAMP_ROW_S:g} s ramp row then a {hold['seconds']:g} s test row, "
                         f"{timing['total_s']:g} s (2 min) a step (the PI's ruling, 2026-09-14)"),
-        "hold": (f"within_visit.PRE_CHANGE_WINDOW_S ({SETTLED_WINDOW_S:g} s) + within_visit.RAMP_EXCLUDE_S "
-                 f"({POST_RAMP_MARGIN_S:g} s, decisions 141 and 144) + {SLACK_S:g} s slack; pieces of "
-                 f"within_visit.CHUNK_S ({PIECE_S:g} s), within_visit.MIN_CHUNKS_PRE_CHANGE "
-                 f"({MIN_PIECES_PER_SETTING}) required"),
+        "hold": (f"{SETTLED_WINDOW_S:g} s of settled signal before a change + {POST_RAMP_MARGIN_S:g} s "
+                 f"after the ramp + {SLACK_S:g} s slack; read in {PIECE_S:g} s pieces, at least "
+                 f"{MIN_PIECES_PER_SETTING} per setting (decisions 141, 144)"),
         "bands": (f"{CENTRES_SOURCE}; harmonics from every whole multiple of the rate folded by the "
-                  f"device's 250 Hz sampling (Biomarkers.routines.analytics.harmonic_landings_hz), "
-                  f"plus rate/2, rate/4 and 3·rate/4 (research synthesis §1; decision 124); "
+                  f"device's 250 Hz sampling, "
+                  f"plus rate/2, rate/4 and 3·rate/4 (decision 124); "
                   f"±{HARMONIC_HALF_WIDTH_HZ:g} Hz, advisory (the PI, 2026-09-06)"),
         "yield.settled_points_from_session": "the ladder's step count (one settled point per step)",
-        "yield.record_today": ("the stored pooled current-to-power table (within_visit_pooled_shape) and "
-                               "the stored per-run points table (three_source_run_points), both "
-                               "written by the Closed-Loop page, read as stim_optimizer"),
-        "yield.margin": ("ClosedLoopDeployment.post_ramp.margin_becomes_available over the stored "
-                         "per-run points table; the floor is amplitude_effect.MIN_POINTS_CURVATURE"),
+        "yield.record_today": ("the stored pooled current-to-power table and the stored per-run points "
+                               "table, both written by the Closed-Loop page"),
+        "yield.margin": ("the stored per-run points table; the margin switches on once one run holds "
+                         "enough steps to read a curve (the minimum number of points for curvature)"),
         "conditions": "research synthesis §1; decision 133 (impedance); the PI's ruling of 2026-09-14",
     }
     return {
@@ -1078,7 +1076,7 @@ def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pul
         "first_exposure": "the epoch table (adapter.build_design_matrix), cathode per side per epoch; decisions 164 and 165 for the stop rule",
         "ladder": (f"0 mA up to the ceiling in {STEP_MA:g} mA steps, then down in {DOWN_STEP_MA:g} mA drops "
                    f"(the PI's ruling, 2026-09-14), stopped early by the first-exposure rule"),
-        "hold": (f"within_visit.PRE_CHANGE_WINDOW_S ({SETTLED_WINDOW_S:g} s) + RAMP_EXCLUDE_S ({POST_RAMP_MARGIN_S:g} s) + {SLACK_S:g} s slack"),
+        "hold": (f"{SETTLED_WINDOW_S:g} s of settled signal + {POST_RAMP_MARGIN_S:g} s after the ramp + {SLACK_S:g} s slack"),
         "acute_pain_holds": (f"{HOLD_MINUTES_EACH:g} min each, a rating every {HOLD_RATING_EVERY_MIN:g} min, off / on / off "
                              f"(the PI's ask of 2026-09-21: the acute effect on pain)"),
         "bands": f"{CENTRES_SOURCE}; the cell's own bands that rise with pain; harmonics of {rate['rate_hz']:g} Hz ±{HARMONIC_HALF_WIDTH_HZ:g} Hz",

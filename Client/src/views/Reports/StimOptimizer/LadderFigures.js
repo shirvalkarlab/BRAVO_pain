@@ -77,7 +77,9 @@ export function BandAxis({ bands }) {
   const [ref, width] = useMeasuredWidth(420, 320);
   if (!bands || !Array.isArray(bands.centres_hz)) return null;
   const lo = 8, hi = 30;
-  const W = Math.min(width, 560), L = 12, R = 12;
+  // 20 px each side so the end tick ("30") and a label near either end are not cut off (page review
+  // 2026-10-02); a label that would cross an edge is anchored to it instead of centred.
+  const W = Math.min(width, 560), L = 20, R = 20;
   const x = (f) => L + ((f - lo) / (hi - lo)) * (W - L - R);
   const flagged = new Set((bands.avoid_hz || []).map((v) => Number(v)));
   // The landings on the axis, labelled on as many rows as they need not to overlap.
@@ -88,10 +90,11 @@ export function BandAxis({ bands }) {
   const rowEnds = [];
   const placed = landings.map((l) => {
     const cx = x(l.f);
+    const anchor = cx - LABEL_W / 2 < 0 ? "start" : (cx + LABEL_W / 2 > W ? "end" : "middle");
     let row = rowEnds.findIndex((end) => cx - LABEL_W / 2 > end + 6);
     if (row < 0) { row = rowEnds.length; rowEnds.push(-Infinity); }
     rowEnds[row] = cx + LABEL_W / 2;
-    return { ...l, cx, row };
+    return { ...l, cx, row, anchor };
   });
   const DOT_Y = 12, AXIS_Y = 24, TICK_Y = 38, LAB0 = 56, ROW = 16;
   const H = LAB0 + Math.max(0, rowEnds.length - 1) * ROW + 6;
@@ -112,7 +115,7 @@ export function BandAxis({ bands }) {
         {placed.map((l) => (
           <g key={l.k}>
             <line x1={l.cx} x2={l.cx} y1={DOT_Y - 8} y2={AXIS_Y + 3} stroke={T.caution} strokeDasharray="2 2" />
-            <text x={l.cx} y={LAB0 + l.row * ROW} {...SVG_TEXT} textAnchor="middle">
+            <text x={l.cx} y={LAB0 + l.row * ROW} {...SVG_TEXT} textAnchor={l.anchor}>
               {`${landingName(l.k)} → ${l.f} Hz`}
             </text>
           </g>
