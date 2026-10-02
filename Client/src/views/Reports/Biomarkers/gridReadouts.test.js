@@ -173,6 +173,10 @@ describe("rows that need two or more PSDs (asterisk)", () => {
     expect([30, 45, 60].map((s) => needsMultiplePsds(sw, s))).toEqual([false, true, true]);
     expect(needsMultiplePsds({ n_pain_reports_from_device_spectrum: 0 }, 45)).toBe(false);
   });
+  test("the words 'need 2 PSDs' are one literal string, so the built chunks can be searched for it", () => {
+    const src = require("fs").readFileSync(require("path").join(__dirname, "gridReadouts.js"), "utf8");
+    expect(src).toContain('"need 2 PSDs"');
+  });
 });
 
 describe("cross-setting stability on the grid (B3, decision 185)", () => {

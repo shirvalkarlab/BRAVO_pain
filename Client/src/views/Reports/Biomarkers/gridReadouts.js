@@ -263,8 +263,15 @@ function multiPsdRows(sw) {
   return Object.keys(byK).map(Number).sort((a, b) => a - b).map((k) => {
     const names = byK[k].map(spacedSeconds);
     const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
-    return `${list} row${names.length > 1 ? "s need" : " needs"} ${k} PSDs`;
+    return `${list} row${names.length > 1 ? "s" : ""} ${psdNeed(k, names.length > 1)}`;
   });
+}
+
+/** "need 2 PSDs" written whole, not assembled, so a search of the built chunks finds it (the rows
+ *  up to 60 s only ever need 2); other counts are assembled. */
+function psdNeed(k, plural) {
+  if (k === 2) return plural ? "need 2 PSDs" : "needs 2 PSDs";
+  return `${plural ? "need" : "needs"} ${k} PSDs`;
 }
 
 /** Rows whose label carries the asterisk: those that need more than one PSD, when any report was
