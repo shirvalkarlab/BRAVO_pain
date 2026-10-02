@@ -4,10 +4,10 @@
 Steps 2-7 of the combined speed-up list (the PI's go-ahead, 2026-10-01): every value unchanged, each fix its own commit with proof, pulled onto the Jetstream2 BRAVO.
 
 ## Next Step
-Commit the four Sonnet agents' results as they land (C7 ROC/month caching, heat-map per-pair statistics in workers, tile build in workers, the per-grid correction test), each with a decision row and a Jetstream2 equality proof; then Phase 9 final re-proof and plan close.
+None: closed 2026-10-02 on the PI's word. Declined: recording-key narrowing (~0.3 s) and the REDCap did-anything-change check.
 
 ## Current Phase
-Phase 9
+Done (2026-10-02)
 
 ## Scope and rules
 - Code lands on the Mac checkout (the local BRAVO runs it live), pushed, then `git pull` on the Jetstream2 BRAVO.
@@ -41,9 +41,9 @@ Phase 9
 
 ### Phase 5: Step 5, B1/B3/B4 (parallel processes)
 - [x] B1 dropped (groups in workers slower, 358); held-out folds + band checks in workers (360)
-- [ ] B3 tile table in parallel: with an agent (2026-10-02)
+- [x] B3 tile table in parallel (370: 24.9 -> 9.4 s)
 - [x] B4 recording cache per web worker (359), on at 3,000 MB on Jetstream2 (369)
-- **Status:** in progress (B3)
+- **Status:** complete
 
 ### Phase 6: Step 6, C3-C6 (pages)
 - [ ] C3 Biomarkers composite preview memoised; C4 timeline dependency
@@ -54,8 +54,8 @@ Phase 9
 ### Phase 7: Step 7, B5-B9 + C7-C9
 - [ ] B5 numba prange (simulation, design rule); B6 readiness fits; B7 grid cells; B8 DB queries; B9 background pool
 - [x] B5 numba loops cached on disk (369); B6 threshold-rule fit (361); B8 clinic days once (363); B9 warm web workers (369)
-- [x] C8 research checks on open (365); [ ] C7 ROC/by-month caching: with an agent; B7 heat-map pairs (362), per-pair statistics in workers: with an agent
-- **Status:** in progress (C7, B7)
+- [x] C8 research checks on open (365); [x] C7 measured, not built (371); B7 heat-map pairs (362), per-pair statistics in workers (372); matched-samples memo measured, not built (373)
+- **Status:** complete
 
 ### Phase 8: Test consolidation (the PI, 2026-10-01: ONLY after Phase 7)
 - [x] Done directly on the PI's word, no proposal (367): both Python sets 145 -> 66 s; 30 + 14 tests removed, each named against its cover
@@ -74,5 +74,5 @@ Phase 9
 - [x] Both test sets uncapped on Jetstream2 at 369: host 1,910 / container 949 passed (one test fixed)
 - [x] Measured: pool process median 220 MB (shared libraries counted once by the machine); 62 GB of 245 in use with 16 pools of 31 started
 - [x] Budget set and documented (runbook 3a): pool 31, kept a day, recording cache 3,000 MB
-- [ ] Final re-proof after the four agents' commits
-- **Status:** in progress
+- [x] Final re-proof: both test sets at the last code commit 97c0154c: host 1,911 / container 964 passed, 0 failed
+- **Status:** complete
