@@ -738,7 +738,7 @@ function DeviceSpectrumCaption({ sw }) {
 /** Which rows the device can be set to, from the ranges on the response (`device_timing_ranges`,
  * the one home), as bullets. */
 function DeviceTierCaption({ ranges, sw }) {
-  return <CaptionBullets items={tierBullets(ranges, (sw && sw.integration_seconds_delivered) || [])} />;
+  return <CaptionBullets items={tierBullets(ranges, (sw && sw.integration_seconds_delivered) || [], sw)} />;
 }
 
 /** The symbols inside the circles (decision 185): one bullet, shown only once a stored stability

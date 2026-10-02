@@ -211,7 +211,7 @@ export function rowTier(seconds, ranges) {
 /** Short bullets for the caption under the grids (the PI, 2026-09-15: "MUCH more concise, ideally
  * with bullet points"; the row labels themselves stay plain numbers). Sources are named in a word,
  * not spelled out; the full sentences stay on the response for anyone who opens it. */
-export function tierBullets(ranges, secondsList) {
+export function tierBullets(ranges, secondsList, sw) {
   if (!ranges || !Array.isArray(ranges.averaging_s)) return [];
   const rows = (secondsList || []).map(Number).filter(Number.isFinite);
   const avgRows = rows.filter((s) => rowTier(s, ranges).tier === "averaging");
@@ -224,8 +224,11 @@ export function tierBullets(ranges, secondsList) {
       + `(${ranges.averaging_s[0]}\u2013${ranges.averaging_s[1]} s on tablet)`);
   }
   if (onsetRows.length) {
-    out.push(`Rows ${spacedSeconds(Math.min(...onsetRows))}\u2013${spacedSeconds(Math.max(...onsetRows))}: one averaging window + `
-      + `onset hold (each \u2264${ranges.onset_dual_s[1]} s); no device setting averages this long`);
+    // The asterisk and the PSD count only when some report was read from PSD (the starred rows).
+    const starred = onsetRows.some((s) => needsMultiplePsds(sw, s));
+    const psd = starred ? `. ${multiPsdRows({ integration_seconds_delivered: onsetRows }).join("; ")} (ceil(window/30 s))` : "";
+    out.push(`${starred ? "*" : ""}Rows ${spacedSeconds(Math.min(...onsetRows))}\u2013${spacedSeconds(Math.max(...onsetRows))}: one averaging window + `
+      + `onset hold (each \u2264${ranges.onset_dual_s[1]} s); no device setting averages this long${psd}`);
   }
   if (beyondRows.length) {
     out.push(`Rows from ${spacedSeconds(Math.min(...beyondRows))}: beyond any device setting`);
@@ -242,12 +245,8 @@ export function deviceSpectrumBullets(sw) {
   const tot = ((sw && sw.device_spectrum_total_grid) || []).reduce((m, row) => Math.max(m, ...(row || [0])), 0);
   const share = tot > 0 ? ` (${Math.round((100 * n) / tot)}%)` : "";
   const ofTot = tot > 0 ? ` of ${tot}` : "";
-  const needs = multiPsdRows(sw);
-  const rule = needs.length
-    ? `${needs.join("; ")} (ceil(window/30 s)); fewer, no value`
-    : "A row needs ceil(window/30 s) PSDs, else no value";
   return [
-    `*${n}${ofTot} matched reports${share} had no TD in match window; read from PSD. ${rule}`,
+    `${n}${ofTot} matched reports${share} had no TD in match window; read from PSD`,
     "Match window defined under \"Adjust matching parameters\"",
   ];
 }

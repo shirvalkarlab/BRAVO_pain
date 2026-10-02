@@ -154,7 +154,7 @@ describe("deviceSpectrumBullets", () => {
     const b = deviceSpectrumBullets(sw);
     expect(b).toEqual([
       // The PI's vocabulary on the heat maps (2026-09-25): TD and PSD, one word each, everywhere.
-      "*358 of 451 matched reports (79%) had no TD in match window; read from PSD. A row needs ceil(window/30 s) PSDs, else no value",
+      "358 of 451 matched reports (79%) had no TD in match window; read from PSD",
       "Match window defined under \"Adjust matching parameters\"",
     ]);
     expect(deviceSpectrumBullets({ n_pain_reports_from_device_spectrum: 0 })).toEqual([]);
@@ -165,9 +165,11 @@ describe("deviceSpectrumBullets", () => {
 describe("rows that need two or more PSDs (asterisk)", () => {
   const sw = { n_pain_reports_from_device_spectrum: 104, device_spectrum_total_grid: [[139]],
     integration_seconds_delivered: [3, 6, 9, 15, 21, 24, 30, 45, 60] };
-  test("the PSD bullet starts with an asterisk and names the 45 s and 1 min rows as needing 2 PSDs", () => {
-    expect(deviceSpectrumBullets(sw)[0]).toBe("*104 of 139 matched reports (75%) had no TD in match window; "
-      + "read from PSD. 45 s and 1 min rows need 2 PSDs (ceil(window/30 s)); fewer, no value");
+  test("with PSD-read reports, the 45 s\u20131 min bullet is starred and says those rows need 2 PSDs", () => {
+    expect(tierBullets(RANGES, sw.integration_seconds_delivered, sw)[1]).toBe(
+      "*Rows 45 s\u20131 min: one averaging window + onset hold (each \u226430 s); no device setting averages this long. "
+      + "45 s and 1 min rows need 2 PSDs (ceil(window/30 s))");
+    expect(deviceSpectrumBullets(sw)[0]).toBe("104 of 139 matched reports (75%) had no TD in match window; read from PSD");
   });
   test("a row is starred only above 30 s, and only when some report was read from PSD", () => {
     expect([30, 45, 60].map((s) => needsMultiplePsds(sw, s))).toEqual([false, true, true]);
