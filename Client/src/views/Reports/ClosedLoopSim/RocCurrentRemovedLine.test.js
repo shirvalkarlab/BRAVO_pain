@@ -52,7 +52,8 @@ test("the panel places the line under its ROC figure", () => {
   const fs = require("fs");
   const path = require("path");
   const src = fs.readFileSync(path.join(__dirname, "DeploymentRocPanel.js"), "utf8");
-  expect(src).toMatch(/<RocCurrentRemovedLine plainAuc=\{roc \? roc\.auc : null\} adjusted=\{envOk \? env\.auc_current_removed : null\} \/>/);
+  // the summary's match-window reading (2026-10-02), never this panel's own second computation
+  expect(src).toMatch(/<RocCurrentRemovedLine plainAuc=\{roc \? roc\.auc : null\} adjusted=\{currentRemoved \|\| null\} \/>/);
   expect(src.indexOf("<RocCurrentRemovedLine")).toBeGreaterThan(src.indexOf("<div ref={ref}"));
   expect(src.indexOf("<RocCurrentRemovedLine")).toBeLessThan(src.indexOf("<div ref={histRef}"));
 });

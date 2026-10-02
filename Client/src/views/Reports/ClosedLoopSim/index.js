@@ -365,6 +365,10 @@ function ClosedLoopSim() {
   const summaryForBand = withheldIfOtherBand(summary, bc, "summary", { painScore, includeSheets,
     matching: requestParams, matchingKeys: MATCHING_KEYS.filter((k) => k !== "MatchDirection"
       && k !== "IncludeClinicSheetRatings") });
+  // ONE AUC WITH THE CURRENT TAKEN OUT, on the biomarker match window (the PI, 2026-10-02): the
+  // summary's reading feeds the sign-off, Evidence and ROC cards alike.
+  const matchWindowAuc = summaryForBand && summaryForBand.data && summaryForBand.data.evidence
+    ? (summaryForBand.data.evidence.auc_current_removed || null) : null;
 
   // TRACK D: fetched independently of any committed candidate -- see useBandSweepGrid.js for why
   // gating this on useDeploymentReport's own enabled condition would make it unreachable from the
@@ -620,7 +624,7 @@ function ClosedLoopSim() {
 
             {/* SECTION 3, "Evidence consistency" */}
             <MDBox id="cl-evidence" mb={8}>
-              <EvidenceTrianglePanel report={report} />
+              <EvidenceTrianglePanel report={report} matchWindowAuc={matchWindowAuc} />
             </MDBox>
 
             {/* SECTION 4, "Stability across stimulation states" It qualifies the
@@ -669,7 +673,7 @@ function ClosedLoopSim() {
                     <Grid item xs={12} md={6} id="cl-roc">
                       <DeploymentRocPanel participantUid={participant_uid} bandCandidate={bc}
                         requestParams={requestParams} onCutpoint={setCutpoint}
-                        lsbThreshold={lsbThreshold} />
+                        lsbThreshold={lsbThreshold} currentRemoved={matchWindowAuc} />
                     </Grid>
                     <Grid item xs={12} md={6} id="cl-lsb">
                       <LsbPowerPanel participantUid={participant_uid} bandCandidate={bc}

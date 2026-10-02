@@ -116,7 +116,8 @@ function solveCutpoint(roc, rule, costRatio) {
   };
 }
 
-function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCutpoint, lsbThreshold }) {
+function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCutpoint, lsbThreshold,
+  currentRemoved }) {
   const ref = useRef(null);
   const histRef = useRef(null);
   const fwdRef = useRef(null);
@@ -457,7 +458,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
             Plotly graph object survives loading/refit cycles instead of being torn down. */}
         <div ref={ref} style={{ width: "100%", display: roc ? "block" : "none" }} />
         {/* The same area with the stimulation current taken out (2026-09-26), descriptive only. */}
-        <RocCurrentRemovedLine plainAuc={roc ? roc.auc : null} adjusted={envOk ? env.auc_current_removed : null} />
+        <RocCurrentRemovedLine plainAuc={roc ? roc.auc : null} adjusted={currentRemoved || null} />
 
         {/* Feature-distribution histogram beneath the ROC (pain-high vs pain-low), with the cut-point
             threshold line drawn on top. Also always-mounted so it survives refits. Only shown when

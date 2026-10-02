@@ -144,18 +144,24 @@ export const CURRENT_CONFOUND_NOTE =
  * different findings, and this project has confused an absent measurement for a negative one
  * before.
  */
+/** The current in words, never its column (decision 314): the summary names the side. */
+function currentWords(a) {
+  const side = a && a.hemisphere ? String(a.hemisphere).toLowerCase() : null;
+  return side ? `the ${side} stimulation current` : "the stimulation current";
+}
+
 function AdjustedEdgeLine({ adjusted }) {
   const a = adjusted || null;
   if (!a) return null;
-  const n = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v).toFixed(d));
-  // The current in the server's words, never its column (decision 314): an answer saved before the
-  // words were sent reads "the stimulation current in force".
-  const what = `${a.adjusted_for_words || "the stimulation current"} in force`;
+  // ONE FIGURE, ON THE BIOMARKER MATCH WINDOW (the PI, 2026-10-02): the summary's reading, the one
+  // the sign-off and ROC cards print, to their 2 decimals; never the report's settings-period one.
+  const n = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v).toFixed(d));
+  const what = `${currentWords(a)} in force`;
   if (!a.available || n(a.auc) == null) {
     return (
       <MDTypography variant="caption" data-testid="e2-adjusted"
         sx={{ ...TYPE.body, display: "block", mb: 1, color: PAL.ink2 }}>
-        {`With ${what} taken out of the band power: not made here (${a.why || "no reason was "
+        {`With ${what} taken out of the band power, on the biomarker match window: not made here (${a.why || "no reason was "
           + "recorded"}). An absent reading, not one at chance.`}
       </MDTypography>
     );
@@ -168,7 +174,7 @@ function AdjustedEdgeLine({ adjusted }) {
   return (
     <MDTypography variant="caption" data-testid="e2-adjusted"
       sx={{ ...TYPE.body, display: "block", mb: 1, color: PAL.ink2 }}>
-      {`With ${what} taken out of the band power: ${n(a.auc)}${span}${reports} (0.5 is coin `
+      {`With ${what} taken out of the band power, on the biomarker match window: ${n(a.auc)}${span}${reports} (0.5 is coin `
         + `flipping).${pr} It describes the reading above; that one sets the verdict.`}
     </MDTypography>
   );
@@ -183,28 +189,22 @@ function AdjustedEdgeLine({ adjusted }) {
  * the plain one is the strip's own number moved by the same offset the adjusted block carries
  * between its `estimate` and its `auc`, so the two are always on one scale. Descriptive only.
  */
-export function currentRemovedSentence(e) {
-  const a = e && e.adjusted;
+export function currentRemovedSentence(a) {
   if (!a) return null;
-  const words = a.adjusted_for_words || "the stimulation current";
+  const words = currentWords(a);
   const n = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
-  const f = (v) => Number(v).toFixed(3);
+  const f = (v) => Number(v).toFixed(2);
+  const span = (x) => `${f(x.auc)}${n(x.auc_low) != null && n(x.auc_high) != null
+    ? ` (${f(x.auc_low)} to ${f(x.auc_high)})` : ""}`;
   if (!a.available || n(a.auc) == null) {
-    return `This link is read without taking the stimulation current out, and could not be read `
-      + `with ${words} taken out (${a.why || "no reason was recorded"}).`;
+    return `On the biomarker match window, this link could not be read with ${words} taken out `
+      + `(${a.why || "no reason was recorded"}).`;
   }
-  const off = n(a.estimate) != null ? n(a.auc) - n(a.estimate) : null;
-  const lo = ciBound(e.ci, 0);
-  const hi = ciBound(e.ci, 1);
-  const plain = off != null && n(e.estimate) != null
-    ? `${f(n(e.estimate) + off)}${!lo.unbounded && !hi.unbounded && lo.value != null && hi.value != null
-      ? ` (${f(lo.value + off)} to ${f(hi.value + off)})` : ""}` : null;
-  const adj = `${f(a.auc)}${n(a.auc_low) != null && n(a.auc_high) != null
-    ? ` (${f(a.auc_low)} to ${f(a.auc_high)})` : ""}`;
+  const same = a.plain_on_same_samples;
+  const plain = same && n(same.auc) != null ? `${span(same)} as it is and ` : "";
   const reports = a.n_pain_reports ? `, over ${Number(a.n_pain_reports)} pain reports` : "";
-  return `This link is read without taking the stimulation current out${plain ? `: ${plain}` : ""}. `
-    + `With ${words} in force taken out of the band power it reads ${adj}${reports}. 0.5 is coin `
-    + "flipping; the first reading sets the verdict.";
+  return `On the biomarker match window, this link reads ${plain}${span(a)} with ${words} in force `
+    + `taken out of the band power${reports}. 0.5 is coin flipping; the plain reading sets the verdict.`;
 }
 
 export function currentConfoundApplies(candidate) {
@@ -347,6 +347,15 @@ function LinkStrip({ k, e }) {
 }
 
 /** The counts behind one link, and the module's own sentence about how it was made. */
+/** The E2 note without its own "read again with the current taken out" sentence (the report's
+ *  settings-period figure): the page prints one such figure, the summary's on the biomarker match
+ *  window, beside it in this fold (the PI, 2026-10-02). The server's note is unchanged. */
+export function withoutReadAgain(note) {
+  const s = String(note || "");
+  const i = [" READ AGAIN WITH ", " THE READING WITH "].map((m) => s.indexOf(m)).filter((x) => x >= 0);
+  return i.length ? s.slice(0, Math.min(...i)) : s;
+}
+
 function LinkMethod({ k, e }) {
   if (!e) return null;
   const meta = EDGE_META[k] || {};
@@ -362,7 +371,7 @@ function LinkMethod({ k, e }) {
             + `${e.n_clusters === 1 ? "" : " groups"}.`}
       </MDTypography>
       {e.note ? (
-        <MDTypography sx={{ ...TYPE.body, color: PAL.ink2 }}>{e.note}</MDTypography>
+        <MDTypography sx={{ ...TYPE.body, color: PAL.ink2 }}>{k === "E2" ? withoutReadAgain(e.note) : e.note}</MDTypography>
       ) : null}
     </MDBox>
   );
@@ -516,7 +525,7 @@ function SignTestMethod({ coherence }) {
   );
 }
 
-export default function EvidenceTrianglePanel({ report }) {
+export default function EvidenceTrianglePanel({ report, matchWindowAuc }) {
   const { data, loading, err } = report || { data: null, loading: false, err: null };
   // Which band this report is about, for the scope of the caveat under the second link.
   const candidate = ((data || {}).candidates || [])[0] || null;
@@ -574,18 +583,18 @@ export default function EvidenceTrianglePanel({ report }) {
             <LinkStrip k={k} e={edges[k]} />
             {/* The interim sentence only while the report carries no adjusted reading, so the page
                 never says "not adjusted for it yet" beside a number that has been adjusted. */}
-            {k === "E2" && showCurrentConfound && !(edges.E2 && edges.E2.adjusted) ? (
+            {k === "E2" && showCurrentConfound && !matchWindowAuc ? (
               <MDTypography variant="caption" data-testid="e2-current-confound"
                 sx={{ ...TYPE.body, display: "block", mb: 1, color: PAL.warnText, maxWidth: "68ch" }}>
                 <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.caution.glyph}</span>
                 {CURRENT_CONFOUND_NOTE}
               </MDTypography>
             ) : null}
-            {k === "E2" && currentRemovedSentence(edges.E2) ? (
+            {k === "E2" && currentRemovedSentence(matchWindowAuc) ? (
               <MDTypography variant="caption" data-testid="e2-current-open"
                 sx={{ ...TYPE.body, display: "block", mb: 1, color: PAL.ink, maxWidth: "68ch" }}>
                 <span aria-hidden="true" style={{ marginRight: 6, color: PAL.warnText }}>{STATE.caution.glyph}</span>
-                {currentRemovedSentence(edges.E2)}
+                {currentRemovedSentence(matchWindowAuc)}
               </MDTypography>
             ) : null}
           </MDBox>
@@ -598,12 +607,12 @@ export default function EvidenceTrianglePanel({ report }) {
         <Fold show="Method"
           hide="Hide how this was worked out" mt={0}>
           {["E1", "E2", "E3"].map((k) => <LinkMethod key={k} k={k} e={edges[k]} />)}
-          {edges.E2 && edges.E2.adjusted ? (
+          {matchWindowAuc ? (
             <MDBox mb={1.5}>
               <MDTypography sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink }}>
                 Band power → pain, read again with the current taken out
               </MDTypography>
-              <AdjustedEdgeLine adjusted={edges.E2.adjusted} />
+              <AdjustedEdgeLine adjusted={matchWindowAuc} />
             </MDBox>
           ) : null}
           <SignTestMethod coherence={data.coherence} />
