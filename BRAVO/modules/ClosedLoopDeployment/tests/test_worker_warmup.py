@@ -52,6 +52,7 @@ def _run(code, extra_env=None, timeout=300):
     env = dict(os.environ)
     env.pop("BRAVO_WARMUP", None)
     env.pop("BRAVO_WARMUP_POOL", None)
+    env["BRAVO_WARMUP_PARTICIPANTS"] = "0"      # these subprocesses have no database; the step has its own tests
     env.update(extra_env or {})
     out = subprocess.run([sys.executable, "-c", PRELUDE + code], env=env, capture_output=True,
                          text=True, timeout=timeout, cwd=str(BRAVO_ROOT))
@@ -290,3 +291,98 @@ def test_the_gunicorn_hook_warms_the_worker_and_swallows_any_failure(monkeypatch
     _Worker.log.lines.clear()
     conf["post_worker_init"](_Worker())
     assert any("warm-up" in l for l in _Worker.log.lines), _Worker.log.lines
+
+
+# --------------------------------------------------------------------------------------------
+# 6. the participants' data, loaded into each web worker before it takes a request (2026-10-02)
+# --------------------------------------------------------------------------------------------
+# The first heat-map cell click that reached a web worker loaded the REDCap ratings and decoded every
+# recording (6 s on the Mac, 12 s on the 16-worker Jetstream2 BRAVO); later clicks in the same
+# worker took 0.03-0.13 s. With 16 workers, most early clicks were that first one. The step makes the
+# two Biomarkers requests the page makes (the grid, then one cell of it) for each participant, so
+# the worker is warm for the page's first click.
+def _fake_service(calls, grid_response=None):
+    import types
+    svc = types.ModuleType("fake_bm_service")
+    def run_for_participant(req):
+        calls.append(dict(req))
+        if req.get("BandTimeSweepCell"):
+            return {"band_time_sweep_cell": {"points": []}}
+        return grid_response if grid_response is not None else {
+            "integration_seconds": [1.0, 5.0],
+            "band_time_sweep": {"CH_A": {"center_freqs_hz": [8.5, 9.5]}}}
+    svc.run_for_participant = run_for_participant
+    return svc
+
+
+def test_the_participants_step_makes_the_pages_grid_request_then_one_cell_request(monkeypatch):
+    W = _load_warmup_in_process()
+    calls = []
+    monkeypatch.setattr(W, "_participant_uids", lambda: ["P1"])
+    monkeypatch.setattr(W, "_biomarkers_service", lambda: _fake_service(calls))
+    out = W._participants_step()
+    assert out == {"participants": 1, "warmed": ["P1"], "failed": {}}, out
+    assert calls[0].get("BandTimeSweep") == "1" and calls[0]["ParticipantId"] == "P1", calls
+    assert calls[1] == {"ParticipantId": "P1", "SweepMetric": "nrs", "BandTimeSweepCell": "1",
+                        "Channel": "CH_A", "BandCenterHz": 8.5, "IntegrationSeconds": 1.0}, calls
+    assert len(calls) == 2
+
+
+def test_one_participant_failing_does_not_stop_the_others(monkeypatch):
+    W = _load_warmup_in_process()
+    calls = []
+    svc = _fake_service(calls)
+    real = svc.run_for_participant
+    def flaky(req):
+        if req["ParticipantId"] == "BAD":
+            raise RuntimeError("no data")
+        return real(req)
+    svc.run_for_participant = flaky
+    monkeypatch.setattr(W, "_participant_uids", lambda: ["BAD", "P2"])
+    monkeypatch.setattr(W, "_biomarkers_service", lambda: svc)
+    out = W._participants_step()
+    assert out["warmed"] == ["P2"] and "BAD" in out["failed"] and "no data" in out["failed"]["BAD"], out
+
+
+def test_a_grid_with_no_channels_warms_only_the_grid(monkeypatch):
+    W = _load_warmup_in_process()
+    calls = []
+    monkeypatch.setattr(W, "_participant_uids", lambda: ["P1"])
+    monkeypatch.setattr(W, "_biomarkers_service",
+                        lambda: _fake_service(calls, grid_response={"band_time_sweep": {}}))
+    out = W._participants_step()
+    assert out["warmed"] == ["P1"] and len(calls) == 1, (out, calls)
+
+
+def test_the_participants_step_is_off_when_asked(monkeypatch):
+    W = _load_warmup_in_process()
+    for raw in ("0", "off", "false"):
+        monkeypatch.setenv("BRAVO_WARMUP_PARTICIPANTS", raw)
+        assert W._participant_limit() == 0, raw
+    monkeypatch.setenv("BRAVO_WARMUP_PARTICIPANTS", "2")
+    assert W._participant_limit() == 2
+    monkeypatch.delenv("BRAVO_WARMUP_PARTICIPANTS", raising=False)
+    assert W._participant_limit() == 3                      # the default: the three newest participants
+
+
+def test_warm_up_runs_the_participants_step_last_and_reports_it(monkeypatch):
+    W = _load_warmup_in_process()
+    order = []
+    for name in ("_import_step", "_r_step", "_numba_step", "_pool_step", "_participants_step"):
+        monkeypatch.setattr(W, name, (lambda n: (lambda *a, **k: order.append(n) or {}))(name))
+    report = W.warm_up(pool=0)
+    assert order == ["_import_step", "_r_step", "_numba_step", "_pool_step", "_participants_step"], order
+    assert "participants" in report["steps"]
+
+
+def test_a_source_file_with_no_owner_is_not_warmed(monkeypatch):
+    W = _load_warmup_in_process()
+    import types
+    class _Q:
+        def values_list(self, *a, **k):
+            return iter([None, "", "P1", "P1", "P2"])
+    fake_models = types.SimpleNamespace(SourceFile=types.SimpleNamespace(objects=_Q()))
+    server = types.ModuleType("Server"); server.models = fake_models
+    monkeypatch.setitem(sys.modules, "Server", server)
+    monkeypatch.delenv("BRAVO_WARMUP_PARTICIPANTS", raising=False)
+    assert W._participant_uids() == ["P1", "P2"]

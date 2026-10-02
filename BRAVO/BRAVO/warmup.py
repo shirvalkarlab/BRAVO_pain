@@ -31,6 +31,11 @@ Steps, each in its own try/except, so nothing here can stop a worker from starti
   r        R and lme4 (pymer4), holding the lock every R fit holds (`analytics._R_GLOBAL_LOCK`);
   numba    the design rule's two filters, the controller loop and the robustness replay, each on
            a few numbers through its own public function (so the argument conversion is the real one);
+  participants  the Biomarkers page's own two requests (the grid, then one cell of it) for each of the
+           three participants with recordings: loads the REDCap ratings and decodes the recordings into
+           this web worker, so the page's first heat-map click is not the one that pays (6 s on the Mac,
+           12 s on the 16-worker Jetstream2 BRAVO; later clicks took 0.03-0.13 s). BRAVO_WARMUP_PARTICIPANTS
+           sets how many (default 3, 0 turns it off). Runs last, after the pool.
   pool     OFF unless `BRAVO_WARMUP_POOL` asks: joblib's reusable worker pool, each worker
            importing the simulation module and running the controller loop once. It saved the
            first Closed-Loop request a further 2.4 s, but a started 64-process pool held 14.2 GB
@@ -188,6 +193,66 @@ def _pool_step(n):
     return {"workers": n, "tasks": 2 * n}
 
 
+PARTICIPANTS_ENV = "BRAVO_WARMUP_PARTICIPANTS"
+DEFAULT_PARTICIPANTS = 3
+
+
+def _participant_limit():
+    raw = os.environ.get(PARTICIPANTS_ENV, "").strip().lower()
+    if raw == "":
+        return DEFAULT_PARTICIPANTS
+    if raw in ("off", "no", "false"):
+        return 0
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_PARTICIPANTS
+
+
+def _participant_uids():
+    """The participants that have recordings (the first few), by uid."""
+    limit = _participant_limit()
+    if limit <= 0:
+        return []
+    from Server import models
+    seen = []
+    for uid in models.SourceFile.objects.values_list("owner_id", flat=True):
+        if uid and uid not in seen:              # a source file with no owner is not a participant
+            seen.append(uid)
+        if len(seen) >= limit:
+            break
+    return seen
+
+
+def _biomarkers_service():
+    return _import("modules.Biomarkers.bravo_service")
+
+
+def _participants_step():
+    """Make the Biomarkers page's grid request and then one cell request for each participant, so
+    this worker holds the ratings and the decoded recordings before its first click."""
+    uids = _participant_uids()
+    svc = _biomarkers_service() if uids else None
+    warmed, failed = [], {}
+    for uid in uids:
+        try:
+            grid = svc.run_for_participant({"ParticipantId": uid, "BandTimeSweep": "1",
+                                            "SweepMetric": "nrs"})
+            data = (grid or {}).get("data", grid) or {}
+            sweeps = data.get("band_time_sweep") or {}
+            seconds = data.get("integration_seconds") or []
+            channel = next(iter(sorted(sweeps)), None)
+            centres = (sweeps.get(channel) or {}).get("center_freqs_hz") or [] if channel else []
+            if channel and centres and seconds:
+                svc.run_for_participant({"ParticipantId": uid, "SweepMetric": "nrs",
+                                         "BandTimeSweepCell": "1", "Channel": channel,
+                                         "BandCenterHz": centres[0], "IntegrationSeconds": seconds[0]})
+            warmed.append(uid)
+        except Exception as exc:                      # noqa: BLE001 -- one participant never stops the rest
+            failed[uid] = f"{type(exc).__name__}: {exc}"
+    return {"participants": len(uids), "warmed": warmed, "failed": failed}
+
+
 def _timed(name, fn, *args):
     t0 = time.perf_counter()
     try:
@@ -220,6 +285,7 @@ def warm_up(*, imports=True, r=True, numba=True, pool=None):
         steps["pool"] = _timed("pool", _pool_step, n)
         if n == 0 and steps["pool"].get("ok"):
             steps["pool"]["workers"] = 0
+        steps["participants"] = _timed("participants", _participants_step)
         report = {"enabled": True, "steps": steps, "seconds": round(time.perf_counter() - t0, 3)}
         _log.info("warm-up done in %.1f s: %s", report["seconds"],
                   ", ".join(f"{k} {v['seconds']:.1f} s{'' if v['ok'] else ' FAILED'}"
