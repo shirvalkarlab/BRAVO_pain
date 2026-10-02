@@ -77,7 +77,7 @@ function threeColumnLayout(headings, xTitle, yTitle) {
     };
     layout.annotations.push({
       text: h, x: x0, y: 1.12, xref: "paper", yref: "paper", showarrow: false,
-      xanchor: "left", font: { size: PAL.fs.caption, color: PAL.ink },
+      xanchor: "left", font: { size: PAL.fs.body, color: PAL.ink },
     });
   });
   return layout;
@@ -205,7 +205,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
         layout.annotations.push({
           text: "no steady reading from this source",
           x: dom[0] + 0.5 * (dom[1] - dom[0]), y: 0.55, xref: "paper", yref: "paper",
-          showarrow: false, xanchor: "center", font: { size: PAL.fs.caption, color: PAL.ink3 },
+          showarrow: false, xanchor: "center", font: { size: PAL.fs.body, color: PAL.ink3 },
         });
         layout[`xaxis${ax}`].showticklabels = false;
         layout[`yaxis${ax}`].showticklabels = false;
@@ -272,7 +272,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
       yaxis: { title: { text: "change per milliamp (device units)" }, zeroline: true, zerolinecolor: PAL.graphic },
       annotations: xs.length ? [] : [{ text: "no change per milliamp is stored for this contact yet",
         x: 0.5, y: 0.55, xref: "paper", yref: "paper", showarrow: false,
-        font: { size: PAL.fs.caption, color: PAL.ink3 } }],
+        font: { size: PAL.fs.body, color: PAL.ink3 } }],
     });
     Plotly.react(gd, traces, layout, PAL.MODEBAR);
   }, [contactObj, centre, spectrumRevealed]);
@@ -301,7 +301,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
       <Card sx={CARD}><CardContent sx={{ p: 3 }}>
         <Typography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink, mb: 1 }}>{title}</Typography>
         <Typography sx={{ ...TYPE.body, color: PAL.ink2, mb: 1 }}>{reason}</Typography>
-        <Typography sx={{ ...TYPE.caption, color: PAL.ink3 }}>
+        <Typography sx={{ ...TYPE.body, color: PAL.ink3 }}>
           This panel is informative only. It does not gate anything, and no verdict on this page
           depends on it.
         </Typography>
@@ -365,7 +365,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
 
         {contacts.length > 1 ? (
           <Stack direction="row" spacing={0.6} sx={{ mb: 1 }} alignItems="center">
-            <Typography sx={{ ...TYPE.caption, color: PAL.ink3 }}>Sensing contact pair:</Typography>
+            <Typography sx={{ ...TYPE.body, color: PAL.ink3 }}>Sensing contact pair:</Typography>
             {contacts.map((c) => (
               <Chip key={c.sensing_contact} size="small"
                 onClick={() => setContactPick({ ...contactPick, [side]: c.sensing_contact })}
@@ -388,7 +388,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
               : ""}
           </Typography>
         ) : null}
-        <Typography sx={{ ...TYPE.caption, color: PAL.ink3, display: "block", mb: 1 }}>
+        <Typography sx={{ ...TYPE.body, color: PAL.ink3, display: "block", mb: 1 }}>
           One marker shape per run; each point is the average of the steady stretch before the next
           step. The dashed line is the change per milliamp across every run on this contact, drawn
           through the average of the runs&apos; own centres.
@@ -398,7 +398,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
 
         <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} sx={{ mt: 0.5, mb: 1 }}>
           {[tdCaption, psdCaption, directCaption].map((c, i) => (
-            <Typography key={ROUTES[i]} sx={{ ...TYPE.caption, color: PAL.ink3, flex: 1 }}>{c}</Typography>
+            <Typography key={ROUTES[i]} sx={{ ...TYPE.body, color: PAL.ink3, flex: 1 }}>{c}</Typography>
           ))}
         </Stack>
 
@@ -417,7 +417,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
         </Typography>
         {spectrumRevealed ? (
           <Box sx={{ display: showSpectrum ? "block" : "none" }}>
-            <Typography sx={{ ...TYPE.caption, color: PAL.ink3, display: "block", mt: 0.5, mb: 0.5 }}>
+            <Typography sx={{ ...TYPE.body, color: PAL.ink3, display: "block", mt: 0.5, mb: 0.5 }}>
               From the recording (TD) only, the one source every run reports at every band.
               The shaded band is ±2 standard errors; striped bands carry a folded multiple of the
               stimulation rate; the dotted line marks the band drawn above.

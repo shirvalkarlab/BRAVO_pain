@@ -186,14 +186,14 @@ export default function BandStabilityPanel({ stability, cacheStatus, painScore }
   return (
     <Card sx={{ ...CARD, p: 3, height: "100%" }}>
       <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>
-        Does the band mean the same at every stimulation state?
+        Stability across stimulation states
       </MDTypography>
       <MDTypography data-testid="stability-answer" sx={{ ...TYPE.lead, color: PAL.ink, mt: 1, maxWidth: "68ch" }}>
         <span aria-hidden="true" style={{ color: lit.st.ink, marginRight: 6 }}>{lit.glyph}</span>
         <b style={{ fontWeight: 600, color: lit.st.ink }}>{`${lit.key.charAt(0).toUpperCase()}${lit.key.slice(1)}`}</b>
         {`: ${lit.gloss}.`}
       </MDTypography>
-      <MDTypography variant="caption" sx={{ ...TYPE.caption, color: PAL.ink3, display: "block", mt: 0.5 }}>
+      <MDTypography variant="caption" sx={{ ...TYPE.body, color: PAL.ink3, display: "block", mt: 0.5 }}>
         {bandPhrase}
         {painScore && painScore.key ? (
           <span data-testid="stability-pain-score">
@@ -202,7 +202,7 @@ export default function BandStabilityPanel({ stability, cacheStatus, painScore }
         ) : null}
       </MDTypography>
       {builtWhen ? (
-        <MDTypography variant="caption" display="block" sx={{ ...TYPE.caption, color: PAL.ink3 }}>
+        <MDTypography variant="caption" display="block" sx={{ ...TYPE.body, color: PAL.ink3 }}>
           {`Measured on the recordings, settings and pain reports assembled ${builtWhen}; this test is `
             + "refit fresh every time this page is read."}
         </MDTypography>
@@ -227,7 +227,7 @@ export default function BandStabilityPanel({ stability, cacheStatus, painScore }
             sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink }}>
             Odds ratio per standard deviation of band power, in each stimulation state
           </MDTypography>
-          <MDTypography variant="caption" display="block" sx={{ ...TYPE.caption, color: PAL.ink3, mb: 0.5 }}>
+          <MDTypography variant="caption" display="block" sx={{ ...TYPE.body, color: PAL.ink3, mb: 0.5 }}>
             How much the odds of a high-pain report change when band power rises by its own typical
             spread; 1 means no change. Each with its 95% range.
           </MDTypography>

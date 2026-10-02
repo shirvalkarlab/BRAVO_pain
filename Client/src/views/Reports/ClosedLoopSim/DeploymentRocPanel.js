@@ -266,7 +266,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       Plotly.relayout(gd, { annotations: [{
         x: op.fpr, y: op.tpr, xref: "x", yref: "y",
         text: `power ≥ ${fmt(op.threshold)}`, showarrow: true, arrowhead: 0,
-        arrowcolor: mColor, ax, ay, font: { size: PAL.fs.caption, color: labelTextColor },
+        arrowcolor: mColor, ax, ay, font: { size: PAL.fs.body, color: labelTextColor },
         bgcolor: mColor, bordercolor: mColor, borderpad: 3,
         xanchor: nearRight ? "right" : "left", yanchor: nearTop ? "top" : "bottom",
       }] });
@@ -333,7 +333,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
           line: { color: lineColor, width: 2, dash: "dash" } }],
         annotations: [{ x: opThr, y: 1, yref: "paper", yanchor: "bottom",
           text: `cut ≥ ${fmt(opThr)}${lsbTxt}`, showarrow: false, align: "center",
-          font: { size: PAL.fs.caption, color: lineColor },
+          font: { size: PAL.fs.body, color: lineColor },
           xanchor: opThr > (fh.x_min + fh.x_max) / 2 ? "right" : "left" }],
       });
     } else {
@@ -463,7 +463,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
             threshold line drawn on top. Also always-mounted so it survives refits. Only shown when
             the backend returns feature_hist (older payloads / off-band candidates may omit it). */}
         {roc && roc.feature_hist ? (
-          <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3, mt: 2 }}>
+          <MDTypography sx={{ ...TYPE.body, color: PAL.ink3, mt: 2 }}>
             Filled bars: readings matched to low-pain reports. Outlined bars: readings matched to
             high-pain reports. The dashed line is the switching point.
           </MDTypography>
@@ -505,7 +505,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
           <>
             <Grid container spacing={1.5} alignItems="center" mt={0.2}>
               <Grid item xs={12} md={7}>
-                <MDTypography variant="caption" sx={{ ...TYPE.caption, fontWeight: 600, color: PAL.ink3 }}>
+                <MDTypography variant="caption" sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink3 }}>
                   How the switching point is chosen
                 </MDTypography>
                 {/* 'net benefit' removed: its objective equals prevalence x the cost objective, so it
@@ -523,17 +523,17 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
               </Grid>
               {rule === "cost" ? (
                 <Grid item xs={12} md={5}>
-                  <MDTypography variant="caption" sx={{ ...TYPE.caption, color: PAL.ink3 }}>
+                  <MDTypography variant="caption" sx={{ ...TYPE.body, color: PAL.ink3 }}>
                     {`cost of a needless switch against a missed high-pain moment = ${costRatio.toFixed(2)} : 1`}
                   </MDTypography>
                   <Slider size="small" min={-3} max={3} step={0.25} value={logCost}
                     onChange={(e, v) => setLogCost(v)} sx={{ mt: -0.5 }}
                     aria-label="false-trigger to missed-pain cost ratio" />
                   <MDBox display="flex" justifyContent="space-between" sx={{ mt: -0.8 }}>
-                    <MDTypography variant="caption" sx={{ ...TYPE.caption, color: PAL.ink3 }}>
+                    <MDTypography variant="caption" sx={{ ...TYPE.body, color: PAL.ink3 }}>
                       ← fewer needless switches
                     </MDTypography>
-                    <MDTypography variant="caption" sx={{ fontSize: PAL.fs.caption, color: PAL.ink3 }}>
+                    <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.ink3 }}>
                       catch more pain →
                     </MDTypography>
                   </MDBox>
@@ -559,7 +559,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
                 <MDTypography display="block" sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>
                   The switching point was chosen on these same data, so both numbers are optimistic; expect lower accuracy on new ratings.
                 </MDTypography>
-                <MDTypography display="block" sx={{ ...TYPE.caption, color: PAL.ink3, mt: 0.5 }}>
+                <MDTypography display="block" sx={{ ...TYPE.body, color: PAL.ink3, mt: 0.5 }}>
                   {`${roc.n_samples} band-power readings · ${roc.n_clusters} separate groups of pain reports, `
                     + `at least ${env.refractory_min != null ? fmt(env.refractory_min, 0) : "?"} minutes apart · `
                     + `share of high-pain reports ${fmt(roc.prevalence)} · ${roc.n_boot_ok} resamples · `

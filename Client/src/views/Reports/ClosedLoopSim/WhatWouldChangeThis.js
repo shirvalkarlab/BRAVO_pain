@@ -309,7 +309,7 @@ function Item({ item, n }) {
         ) : null}
       </MDBox>
       <MDBox flex="0 0 auto" pl={1} sx={{ maxWidth: 220, textAlign: "right" }}>
-        <MDTypography variant="caption" sx={{ ...TYPE.caption, fontWeight: 600, color: PAL.ink2 }}>
+        <MDTypography variant="caption" sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink2 }}>
           {sentenceCase(item.actor)}
         </MDTypography>
       </MDBox>
@@ -347,7 +347,7 @@ export default function WhatWouldChangeThis({ report, bare = false }) {
   if (!data) {
     return (
       <Card sx={CARD}><MDBox p={3}>
-        <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>What would change this answer?</MDTypography>
+        <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Verdict sensitivity</MDTypography>
         <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", color: PAL.ink2 }}>
           {`Nothing has been evaluated for this configuration yet${err ? ` (${err})` : ""}, so `}
           there is no answer to change.
@@ -363,7 +363,7 @@ export default function WhatWouldChangeThis({ report, bare = false }) {
   return (
     <Card sx={{ ...CARD, width: "100%" }}>
       <MDBox p={3}>
-        <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>What would change this answer?</MDTypography>
+        <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Verdict sensitivity</MDTypography>
         <MDTypography variant="caption" sx={{ ...TYPE.lead, display: "block", color: PAL.ink, mt: 1 }}>
           {items.length === 0
             ? "Nothing is unresolved: every rule that could be evaluated is satisfied and the "

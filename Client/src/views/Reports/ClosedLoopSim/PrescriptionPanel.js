@@ -305,7 +305,7 @@ export default function ParameterTable({ report, mode, onMode }) {
               <MDBox display="flex" flexDirection="row" py={0.5} sx={{ backgroundColor: PAL.fillMuted }}>
                 {COLS.map(([flex, h], i) => (
                   <MDBox key={`h${h || i}`} flex={flex} sx={{ px: 0.5, textAlign: i === 2 || i === 4 ? "right" : "left" }}>
-                    <MDTypography variant="caption" sx={{ fontSize: PAL.fs.caption, fontWeight: 600, color: PAL.ink3 }}>
+                    <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.ink3 }}>
                       {h}
                     </MDTypography>
                   </MDBox>

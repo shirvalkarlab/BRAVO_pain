@@ -57,7 +57,7 @@ export default function PainScoreSelect({ value, bandDefault, options, onChange 
           </Select>
         </FormControl>
       </MDBox>
-      <MDTypography variant="caption" sx={{ fontSize: PAL.fs.caption, lineHeight: "18px", color: PAL.ink3, mt: 0.5 }}>
+      <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, lineHeight: "18px", color: PAL.ink3, mt: 0.5 }}>
         {`Every chart below uses this score. ${painScoreSourceText(value, bandDefault, opts)}`}
       </MDTypography>
     </MDBox>

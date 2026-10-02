@@ -95,7 +95,7 @@ function RuleRow({ row, state, ink, copy, actor }) {
             </MDTypography>
           ) : null}
           {row.observed ? (
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.caption,
+            <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body,
               color: PAL.ink2, mt: 0.25 }}>
               {`observed: ${row.observed}`}
             </MDTypography>
@@ -111,12 +111,12 @@ function RuleRow({ row, state, ink, copy, actor }) {
           {row.why ? (
             <>
               <MDTypography variant="caption" onClick={() => setOpen((o) => !o)}
-                sx={{ fontSize: PAL.fs.caption, color: PAL.accent, cursor: "pointer", display: "block",
+                sx={{ fontSize: PAL.fs.body, color: PAL.accent, cursor: "pointer", display: "block",
                   mt: 0.2, "&:hover": { textDecoration: "underline" } }}>
                 {open ? "Hide the rule's own wording" : "Read the rule's own wording"}
               </MDTypography>
               {open ? (
-                <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.caption,
+                <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body,
                   color: PAL.ink2, mt: 0.3, pl: 1,
                   borderLeft: `2px solid ${PAL.rule}` }}>
                   {row.why}
@@ -128,7 +128,7 @@ function RuleRow({ row, state, ink, copy, actor }) {
         </MDBox>
         {actor ? (
           <MDBox flex="0 0 auto" pl={1} sx={{ maxWidth: 200, textAlign: "right" }}>
-            <MDTypography variant="caption" sx={{ ...TYPE.caption, fontWeight: 600, color: PAL.ink2 }}>
+            <MDTypography variant="caption" sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink2 }}>
               {sentenceCase(actor)}
             </MDTypography>
           </MDBox>
@@ -147,7 +147,7 @@ function BucketHead({ state, title, count, note }) {
         {`${title} \u00B7 ${count}`}
       </MDTypography>
       {note ? (
-        <MDTypography variant="caption" sx={{ ...TYPE.caption, color: PAL.ink3 }}>
+        <MDTypography variant="caption" sx={{ ...TYPE.body, color: PAL.ink3 }}>
           {note}
         </MDTypography>
       ) : null}
@@ -183,7 +183,7 @@ export default function DeviceRuleLedger({ report }) {
   if (loading) {
     return (
       <Card sx={{ ...CARD, p: 3 }}>
-        <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Does the device allow it?</MDTypography>
+        <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Device rule check</MDTypography>
         <MDTypography sx={{ ...TYPE.lead, color: PAL.ink2, mt: 1 }}>Checking the device's rules…</MDTypography>
       </Card>
     );
@@ -191,7 +191,7 @@ export default function DeviceRuleLedger({ report }) {
   if (!data || !data.eligibility) {
     return (
       <Card sx={{ ...CARD, p: 3 }}>
-        <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Does the device allow it?</MDTypography>
+        <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Device rule check</MDTypography>
         <MDTypography sx={{ ...TYPE.lead, color: PAL.ink2, mt: 1, maxWidth: "68ch" }}>
           {`The device's rules have not been checked for this configuration${err ? ` (${err})` : ""}. `}
           They are checked for one sensing contact pair at one band, not for a participant, so a band
@@ -252,7 +252,7 @@ export default function DeviceRuleLedger({ report }) {
 
   return (
     <Card sx={{ ...CARD, p: 3 }}>
-      <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Does the device allow it?</MDTypography>
+      <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Device rule check</MDTypography>
       <MDTypography data-testid="rule-counts" sx={{ ...TYPE.lead, color: PAL.ink, mt: 1 }}>
         <span style={{ color: failures.length ? PAL.failText : PAL.ink }}>
           <span aria-hidden="true" style={{ marginRight: 4 }}>{STATE.refused.glyph}</span>

@@ -88,7 +88,7 @@ export default function BandCandidateIdentity({ bc, envelope }) {
             </MDTypography>
           )}
         </MDBox>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.caption, color: PAL.ink3,
+        <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body, color: PAL.ink3,
           mb: 1 }}>
           The first verdict here is the one this band was chosen with, when it was found. It is a different
           quantity from the verdict at the top of the page, which is about whether the device will
@@ -97,7 +97,7 @@ export default function BandCandidateIdentity({ bc, envelope }) {
 
         <Grid container spacing={3}>
           <Grid item xs={12} md={6}>
-            <MDTypography variant="caption" sx={{ fontSize: PAL.fs.caption, fontWeight: 600, color: PAL.ink3 }}>Device identity</MDTypography>
+            <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.ink3 }}>Device identity</MDTypography>
             <MDBox mt={0.6}>
               <KV label="Hemisphere">{bc.hemisphere || "not reported"}</KV>
               <KV label="Contact (sensing)">{bc.contact || "not reported"}</KV>
@@ -117,7 +117,7 @@ export default function BandCandidateIdentity({ bc, envelope }) {
             {/* ALWAYS SHOWN. This block used to sit behind a "show the discovery-stage
                 statistics" toggle, collapsed by default. The PI on 2026-09-10: "there's no point
                 in hiding it ever." A number a reader cannot see cannot be checked. */}
-            <MDTypography variant="caption" sx={{ fontSize: PAL.fs.caption, fontWeight: 600, color: PAL.ink3 }}>When the band was found: statistics</MDTypography>
+            <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.ink3 }}>When the band was found: statistics</MDTypography>
             {(
               <MDBox mt={0.6}>
                 <KV label="Odds ratio (per 1 SD)">
@@ -180,7 +180,7 @@ export default function BandCandidateIdentity({ bc, envelope }) {
         ) : null}
 
         <MDBox mt={1}>
-          <MDTypography variant="caption" sx={{ fontSize: PAL.fs.caption, color: PAL.ink3 }}>
+          <MDTypography variant="caption" sx={{ fontSize: PAL.fs.body, color: PAL.ink3 }}>
             {prov.selection_biased ? "Selection-biased pool \u2014 " : ""}
             {prov.selection_note || ""}
             {envelope && envelope.committed_at

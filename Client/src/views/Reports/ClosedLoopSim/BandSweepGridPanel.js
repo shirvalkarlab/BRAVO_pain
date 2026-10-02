@@ -287,7 +287,7 @@ function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen
   if (!grid || grid.available === false) {
     return (
       <Card sx={{ ...CARD, p: 3 }}>
-        <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Which band?</MDTypography>
+        <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Band selection</MDTypography>
         <MDTypography sx={{ ...TYPE.lead, color: PAL.ink, mt: 1 }}>
           {(grid && grid.reason) || "no calibrated grid is available for this participant yet."}
           {" "}Open the Biomarkers page first, then return here.
@@ -390,7 +390,7 @@ function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen
 
   return (
     <Card sx={{ ...CARD, p: 3 }}>
-      <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Which band?</MDTypography>
+      <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Band selection</MDTypography>
       <MDTypography sx={{ ...TYPE.lead, color: PAL.ink, mt: 1, maxWidth: "68ch" }}>{answer}</MDTypography>
       {!grid.cross_setting_stability_included ? (
         <MDTypography sx={{ ...TYPE.body, color: PAL.warnText, mt: 1 }}>
@@ -437,19 +437,19 @@ function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen
           const ring = on ? `2px solid ${PAL.accent}` : "none";
           return [
             <MDTypography key={`${id}-lab`} variant="caption" component="label" htmlFor={id}
-              sx={{ ...TYPE.caption, textAlign: "right", paddingRight: "4px",
+              sx={{ ...TYPE.body, textAlign: "right", paddingRight: "4px",
                 color: on ? PAL.accent : PAL.ink2, fontWeight: on ? 600 : 400, cursor: "pointer" }}>
               {`${fmtHz(row.band_center_hz)} Hz`}
             </MDTypography>,
             <div key={`${id}-r`} title={corrTip(row)} style={{ height: CELL_H, borderRadius: 2,
               background: cellFill(row.pearson_r, R_LO, R_HI), display: "flex", alignItems: "center",
-              justifyContent: "center", fontSize: PAL.fs.caption,
+              justifyContent: "center", fontSize: PAL.fs.body,
               color: inkFor(row.pearson_r, R_LO, R_HI), outline: ring, outlineOffset: -1 }}>
               {row.pearson_r == null ? "" : fmtNum(row.pearson_r, 2)}
             </div>,
             <div key={`${id}-a`} title={aucTip(row)} style={{ height: CELL_H, borderRadius: 2,
               background: cellFill(row.auc, A_LO, A_HI), display: "flex", alignItems: "center",
-              justifyContent: "center", fontSize: PAL.fs.caption,
+              justifyContent: "center", fontSize: PAL.fs.body,
               color: inkFor(row.auc, A_LO, A_HI), outline: ring, outlineOffset: -1 }}>
               {row.auc == null ? "" : fmtNum(row.auc, 2)}
             </div>,

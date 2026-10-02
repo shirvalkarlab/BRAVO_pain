@@ -24,8 +24,8 @@
  *   1. THE DECISION CARD: the verdict at 22 px; red ✕ bullets when the device refuses and ▲ ones for
  *      evidence that was not checked, worded as before; the values to enter, only when the device
  *      allows them; "Sign and print"; one Details fold.
- *   2. "Which band?" (the grid).   3. "Does the device allow it?" (the rule table).
- *   4. "Does the evidence hang together?"   5. "Does the band mean the same at every stimulation
+ *   2. "Band selection" (the grid).   3. "Device rule check" (the rule table).
+ *   4. "Evidence consistency"   5. "Does the band mean the same at every stimulation
  *      state?"   6. Background, folded: current and band power three ways, the simulated closed
  *      loop, and the switching-point panels.
  *
@@ -164,7 +164,7 @@ function ChosenBandRecordLine({ status, hasBand }) {
 }
 
 /** The page's question, its title (SPEC 2026-09-26 section 5.2). */
-export const PAGE_QUESTION = "Can this setting be programmed, and what do I enter?";
+export const PAGE_QUESTION = "Closed-loop feasibility and entry values";
 
 /**
  * The browser tab's title (TASTE_AUDIT.md C7; SPEC section 6's naming table): the page's job in a
@@ -520,7 +520,7 @@ function ClosedLoopSim() {
                     it is not wrapped in a fold of its own: no fold inside a fold (rule 4). */}
                 {bc && deploymentReport.data && deploymentReport.data.cache_status ? (
                   <MDBox data-testid="stored-results-menu-item">
-                    <MDTypography sx={{ ...TYPE.caption, fontWeight: 600, color: PAL.ink3 }}>
+                    <MDTypography sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink3 }}>
                       Stored results
                     </MDTypography>
                     <CacheStatusLine status={deploymentReport.data.cache_status} />
@@ -570,7 +570,7 @@ function ClosedLoopSim() {
           </>
         ) : null}
 
-        {/* SECTION 1, "Which band?" Rendered whether or not a band is chosen: the grid is how a
+        {/* SECTION 1, "Band selection" Rendered whether or not a band is chosen: the grid is how a
             first band gets chosen, so it must be reachable exactly when none exists yet. Picking
             a row commits a band through the same store the file path uses (bandCandidateStore). */}
         <MDBox id="cl-grid" mb={8}>
@@ -604,19 +604,19 @@ function ClosedLoopSim() {
           </Card>
         ) : (
           <>
-            {/* SECTION 2, "Does the device allow it?" Before the evidence, because on a device
+            {/* SECTION 2, "Device rule check" Before the evidence, because on a device
                 that acts on its own, whether a configuration is PERMITTED comes before how well it
                 scores. */}
             <MDBox id="cl-rules" mb={8}>
               <DeviceRuleLedger report={report} />
             </MDBox>
 
-            {/* SECTION 3, "Does the evidence hang together?" */}
+            {/* SECTION 3, "Evidence consistency" */}
             <MDBox id="cl-evidence" mb={8}>
               <EvidenceTrianglePanel report={report} />
             </MDBox>
 
-            {/* SECTION 4, "Does the band mean the same at every stimulation state?" It qualifies the
+            {/* SECTION 4, "Stability across stimulation states" It qualifies the
                 relationship section 3 draws: a band whose meaning shifts with the current is a
                 different problem from one whose relationship is simply weak. */}
             <MDBox id="cl-stability" mb={8}>

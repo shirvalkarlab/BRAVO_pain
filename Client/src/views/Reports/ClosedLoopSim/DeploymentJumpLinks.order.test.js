@@ -61,7 +61,7 @@ describe("the Closed-Loop page's jump links are a table of contents", () => {
   it("the decision card, which carries Sign and print, opens the page, above the band grid (SPEC 2026-09-26 section 5.2)", () => {
     // The PI, 2026-09-26, merged the sign-off card into the one decision card (decision 302), and
     // the minimalist redesign of the same day puts that card first: the page opens with its answer,
-    // and "Which band?" is its first section below it. The record a clinician signs is printed from
+    // and "Band selection" is its first section below it. The record a clinician signs is printed from
     // that card, and the print opens every fold in it.
     const onPage = idsInPageOrder();
     expect(onPage.slice(0, 2)).toEqual(["cl-decision", "cl-grid"]);

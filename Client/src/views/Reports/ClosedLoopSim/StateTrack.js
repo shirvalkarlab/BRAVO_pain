@@ -48,7 +48,7 @@ export default function StateTrack({ track, data, showBlurb = true, dense = fals
   return (
     <MDBox>
       {track.label ? (
-        <MDTypography variant="caption" sx={{ ...TYPE.caption, display: "block", fontWeight: 600,
+        <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", fontWeight: 600,
           color: PAL.ink3, mb: 0.5 }}>
           {track.label}
         </MDTypography>

@@ -156,10 +156,10 @@ function drawTrajectory(gd, sim, hemisphere) {
       hline(P.lower, "y2", "dash"), hline(P.upper, "y2", "dash")],
     annotations: [
       ...ends,
-      { xref: "paper", x: 1, yref: "y", y: P.amp_high_mA, text: "upper limit", showarrow: false, xanchor: "right", yanchor: "bottom", font: { size: PAL.fs.caption, color: PAL.ink2 } },
-      { xref: "paper", x: 1, yref: "y", y: P.amp_low_mA, text: "lower limit", showarrow: false, xanchor: "right", yanchor: "top", font: { size: PAL.fs.caption, color: PAL.ink2 } },
-      { xref: "paper", x: 1, yref: "y2", y: P.upper, text: "upper threshold", showarrow: false, xanchor: "right", yanchor: "bottom", font: { size: PAL.fs.caption, color: PAL.ink2 } },
-      { xref: "paper", x: 1, yref: "y2", y: P.lower, text: "lower threshold", showarrow: false, xanchor: "right", yanchor: "top", font: { size: PAL.fs.caption, color: PAL.ink2 } },
+      { xref: "paper", x: 1, yref: "y", y: P.amp_high_mA, text: "upper limit", showarrow: false, xanchor: "right", yanchor: "bottom", font: { size: PAL.fs.body, color: PAL.ink2 } },
+      { xref: "paper", x: 1, yref: "y", y: P.amp_low_mA, text: "lower limit", showarrow: false, xanchor: "right", yanchor: "top", font: { size: PAL.fs.body, color: PAL.ink2 } },
+      { xref: "paper", x: 1, yref: "y2", y: P.upper, text: "upper threshold", showarrow: false, xanchor: "right", yanchor: "bottom", font: { size: PAL.fs.body, color: PAL.ink2 } },
+      { xref: "paper", x: 1, yref: "y2", y: P.lower, text: "lower threshold", showarrow: false, xanchor: "right", yanchor: "top", font: { size: PAL.fs.body, color: PAL.ink2 } },
     ],
   });
   Plotly.react(gd, traces, layout, PAL.MODEBAR);
@@ -202,12 +202,12 @@ function drawComparison(gd, sim) {
     uirevision: "cl-sim-compare", showlegend: false,
     yaxis: { ...AXIS, showline: false, ticks: "", categoryorder: "array",
       categoryarray: [...labels, "state changes per hour", "longest stretch at the upper limit"].reverse(),
-      tickfont: { size: PAL.fs.caption } },
+      tickfont: { size: PAL.fs.body } },
     xaxis: { ...AXIS, domain: [0, 0.56], title: { text: "% of the device's adjustment steps", standoff: 4 }, rangemode: "tozero" },
     xaxis2: { ...AXIS, domain: [0.62, 0.79], title: { text: "per hour", standoff: 4 }, rangemode: "tozero" },
     xaxis3: { ...AXIS, domain: [0.85, 1], title: { text: "minutes", standoff: 4 }, rangemode: "tozero" },
     annotations: [
-      { xref: "paper", yref: "paper", x: 0, y: 1.06, xanchor: "left", showarrow: false, font: { size: PAL.fs.caption },
+      { xref: "paper", yref: "paper", x: 0, y: 1.06, xanchor: "left", showarrow: false, font: { size: PAL.fs.body },
         text: `○ as recorded   ● loop closed (${MODEL_WORDS[act] || act})`
           + (sim.models.M3 ? `   — range over ${sim.models.M3.n_replicates} resampled runs` : "") },
     ],
@@ -263,7 +263,7 @@ function drawDistributionAndCurve(gd, sim) {
       shapes.push({ type: "rect", xref: "x2", yref: "paper", x0: a, x1: b, y0: 0, y1: 1, fillcolor: FILL_WRONG,
         line: { width: 0 }, layer: "below" });
       annotations.push({ xref: "x2", yref: "paper", x: 0.5 * (a + b), y: 0.96, text: "▲ power rises with current: positive feedback",
-        showarrow: false, font: { size: PAL.fs.caption, color: PAL.warnText } });
+        showarrow: false, font: { size: PAL.fs.body, color: PAL.warnText } });
     }
     if (isNum(curve.peak_mA)) {
       shapes.push({ type: "line", xref: "x2", yref: "paper", x0: curve.peak_mA, x1: curve.peak_mA, y0: 0, y1: 1,
@@ -271,7 +271,7 @@ function drawDistributionAndCurve(gd, sim) {
     }
   } else {
     annotations.push({ xref: "x2 domain", yref: "y2 domain", x: 0.5, y: 0.5, showarrow: false,
-      font: { size: PAL.fs.caption, color: PAL.ink3 }, text: "no response curve stored yet" });
+      font: { size: PAL.fs.body, color: PAL.ink3 }, text: "no response curve stored yet" });
   }
   const layout = plotlyLayout({
     margin: { l: 56, r: 16, t: 32, b: 48 }, height: 250, uirevision: "cl-sim-dist", showlegend: false,
@@ -281,9 +281,9 @@ function drawDistributionAndCurve(gd, sim) {
     yaxis2: { ...AXIS, anchor: "x2", title: { text: "power change from the lower limit", standoff: 6 } },
     shapes, annotations: [
       ...annotations,
-      { xref: "paper", yref: "paper", x: 0, y: 1.1, xanchor: "left", showarrow: false, font: { size: PAL.fs.caption },
+      { xref: "paper", yref: "paper", x: 0, y: 1.1, xanchor: "left", showarrow: false, font: { size: PAL.fs.body },
         text: "dashed: as recorded · solid: loop closed · where the current sits" },
-      { xref: "paper", yref: "paper", x: 0.56, y: 1.08, xanchor: "left", showarrow: false, font: { size: PAL.fs.caption },
+      { xref: "paper", yref: "paper", x: 0.56, y: 1.08, xanchor: "left", showarrow: false, font: { size: PAL.fs.body },
         text: `the response the loop is closed through${curve && curve.kind !== "none" ? " (grey: currents the fit rests on)" : ""}` },
     ],
   });
@@ -435,7 +435,7 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
     <Card sx={{ ...CARD, width: "100%", border: `1px dashed ${PAL.graphic}` }}>
       <MDBox p={3}>
         <MDTypography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>{title}</MDTypography>
-        {label ? <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3 }}>{label}</MDTypography> : null}
+        {label ? <MDTypography sx={{ ...TYPE.body, color: PAL.ink3 }}>{label}</MDTypography> : null}
         <MDBox mt={1}>
           <PanelStaleNote stale={!!stale} staleReasons={staleReasons || []} loading={!!loading}
             onRecompute={recompute} />

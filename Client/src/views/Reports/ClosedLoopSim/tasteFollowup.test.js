@@ -116,7 +116,7 @@ describe("C6 and C7: the page head", () => {
     expect(page).toMatch(/<PageHead title=\{PAGE_QUESTION\}/);
     expect(page).toMatch(/<CeilingLine leftMa=/);
     expect(page).not.toMatch(/component="h1"/);
-    expect(PAGE_QUESTION).toBe("Can this setting be programmed, and what do I enter?");
+    expect(PAGE_QUESTION).toBe("Closed-loop feasibility and entry values");
   });
   it("names the browser tab", () => {
     expect(DOCUMENT_TITLE).toBe("Closed-loop deployment");

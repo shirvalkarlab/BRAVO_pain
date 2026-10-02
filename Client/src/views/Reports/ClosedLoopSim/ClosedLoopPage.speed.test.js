@@ -7,7 +7,7 @@
  *     fold nobody had opened. They are now drawn the first time the fold is opened. "Sign and
  *     print" (and "Export JSON") still put both on the record when the fold was never opened: the
  *     record asks the page to draw them first, then takes its pictures.
- * C6. The "Which band?" grid (22 rows of coloured cells) was rebuilt on every re-render of the page,
+ * C6. The "Band selection" grid (22 rows of coloured cells) was rebuilt on every re-render of the page,
  *     a dozen or more times while the page loads, although nothing it shows had changed. It now
  *     re-renders only when one of its inputs changes value.
  *

@@ -150,19 +150,19 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
     const annotations = [
       { x: nMax * 1.02, y: tgt * 100, xanchor: "right", yanchor: "bottom",
         text: `${(tgt * 100).toFixed(0)}% target`, showarrow: false,
-        font: { size: PAL.fs.caption, color: PAL.ink3 } },
+        font: { size: PAL.fs.body, color: PAL.ink3 } },
       // Static "now" annotation so the current marker is self-identifying in a printout / grayscale
       // (audit C7), not only on hover.
       { x: pw.n_ratings_current, y: pw.power_current * 100, xanchor: "center", yanchor: "top",
         yshift: -6, text: `${sufficient ? "" : "▲ "}now: ${pw.n_ratings_current}`, showarrow: false,
-        font: { size: PAL.fs.caption, color: curTextColor } },
+        font: { size: PAL.fs.body, color: curTextColor } },
     ];
     // audit C4: label the conservative (CI-lower-bound) end of the power band.
     if (hasBand) {
       annotations.push({ x: pw.n_ratings_current, y: pw.power_current_lo * 100,
         xanchor: "left", yanchor: "top", xshift: 8,
         text: `▲ lower end of range: ${Math.round(pw.power_current_lo * 100)}%`, showarrow: false,
-        font: { size: PAL.fs.caption, color: PAL.warnText } });
+        font: { size: PAL.fs.body, color: PAL.warnText } });
     }
     // needed-N marker (only when more data is needed and the number is known). Audit C5: place it at
     // the CURVE's own power at n_need (linear-interpolate the existing curve array) — NOT on the 80%
@@ -190,7 +190,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
         showlegend: false });
       annotations.push({ x: nNeed, y: yNeed * 100, xanchor: "center", yanchor: "bottom",
         yshift: 6, text: `need: ${nNeed}`, showarrow: false,
-        font: { size: PAL.fs.caption, color: PAL.ink3 } });
+        font: { size: PAL.fs.body, color: PAL.ink3 } });
     }
     // Audit [19]: when the effective n is discounted for serial autocorrelation (design_effect > 1),
     // say so on the figure and clarify the x-axis is REAL ratings collected (power is evaluated at the
@@ -200,7 +200,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
     if (deff > 1.0) {
       annotations.push({ x: nMax * 0.5, y: 8, xanchor: "center", yanchor: "bottom",
         text: `▲ counted as about ${(100 / deff).toFixed(0)}% as many independent ratings, because neighbouring ratings resemble each other`,
-        showarrow: false, font: { size: PAL.fs.caption, color: PAL.warnText } });
+        showarrow: false, font: { size: PAL.fs.body, color: PAL.warnText } });
     }
     const layout = plotlyLayout({
       margin: { l: 56, r: 16, t: 16, b: 48 }, height: 200,
@@ -274,7 +274,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
           symbol: ["line-ns", "line-ns", "line-ns"],
           line: { width: 2, color: PAL.neutral } },
         text: ["10th", "median", "90th"], textposition: "top center",
-        textfont: { size: PAL.fs.caption, color: PAL.ink3 },
+        textfont: { size: PAL.fs.body, color: PAL.ink3 },
         hovertemplate: "%{x:.0f} LSB<extra></extra>", showlegend: false,
       });
       // Range bar
@@ -297,7 +297,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
       yaxis: { fixedrange: true, showline: false, ticks: "" },
       annotations: modeNote ? [{
         xref: "paper", yref: "paper", x: 0, y: -0.38, xanchor: "left", yanchor: "top",
-        text: modeNote, showarrow: false, font: { size: PAL.fs.caption, color: noteColor }, align: "left",
+        text: modeNote, showarrow: false, font: { size: PAL.fs.body, color: noteColor }, align: "left",
       }] : [],
     });
     // This gauge has never carried a toolbar (unlike the power curve above it): it is read-only,
@@ -319,7 +319,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
         <MDTypography component="h3" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink, mb: 1 }}>
           Where does the switching point sit in the device&apos;s own units?
         </MDTypography>
-        <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3, mb: 1 }}>
+        <MDTypography sx={{ ...TYPE.body, color: PAL.ink3, mb: 1 }}>
           LSB is the device&apos;s own unit of band power: the number its sensing readout prints.
         </MDTypography>
         <PanelStaleNote stale={cached.stale} staleReasons={cached.staleReasons}

@@ -156,7 +156,7 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
       });
       annotations.push({ x: pooled.auc_hi, y: yHi, xref: "x", yref: "y", yanchor: "bottom",
         xanchor: "left", text: "shaded: 95% range, all states together", showarrow: false,
-        font: { size: PAL.fs.caption, color: PAL.ink3 } });
+        font: { size: PAL.fs.body, color: PAL.ink3 } });
     }
     // (1) chance line at AUC = 0.5.
     traces.push({
@@ -164,7 +164,7 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
       line: REF_LINE, hoverinfo: "skip", showlegend: false,
     });
     annotations.push({ x: 0.5, y: yLo, xref: "x", yref: "y", yanchor: "top", xanchor: "center",
-      text: "coin toss", showarrow: false, font: { size: PAL.fs.caption, color: PAL.ink3 } });
+      text: "coin toss", showarrow: false, font: { size: PAL.fs.body, color: PAL.ink3 } });
     // (2) per-row CI whiskers + (3) AUC points, colored by era role.
     rows.forEach((r, i) => {
       const y = yOf(i);
@@ -194,7 +194,7 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
         if (reversed) {
           annotations.push({ x: r.era.auc, y, xref: "x", yref: "y", yanchor: "bottom",
             xanchor: "center", text: "▲ reversed", showarrow: false,
-            font: { size: PAL.fs.caption, color: PAL.warnText }, yshift: 8 });
+            font: { size: PAL.fs.body, color: PAL.warnText }, yshift: 8 });
         }
       } else {
         // Non-estimable era (audit C7): do NOT place a glyph on the chance line — that reads as
@@ -202,7 +202,7 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
         // scale, so the row stays visible without encoding absence as a meaningful AUC value.
         annotations.push({ x: xLeft, y, xref: "x", yref: "y", xanchor: "left", yanchor: "middle",
           text: "not enough readings", showarrow: false,
-          font: { size: PAL.fs.caption, color: PAL.ink3 } });
+          font: { size: PAL.fs.body, color: PAL.ink3 } });
       }
     });
 
@@ -257,7 +257,7 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
         <div ref={ref} style={{ width: "100%", display: data && !loading && !err ? "block" : "none" }} />
 
         {data && !loading && !err ? (
-          <MDTypography display="block" sx={{ ...TYPE.caption, color: PAL.ink3, mt: 1 }}>
+          <MDTypography display="block" sx={{ ...TYPE.body, color: PAL.ink3, mt: 1 }}>
             {`Stimulation states: off below ${data.thresholds_mA.off_max} mA · low current up to ${data.thresholds_mA.low_max} mA · high current above. `
               + "The same boundaries as the stability section above."}
           </MDTypography>

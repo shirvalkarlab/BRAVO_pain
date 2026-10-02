@@ -1,5 +1,5 @@
 /**
- * "Does the evidence hang together?" -- the three measured links (SPEC 2026-09-26 section 5.2 item 5).
+ * "Evidence consistency" -- the three measured links (SPEC 2026-09-26 section 5.2 item 5).
  *
  * THE REDESIGN OF 2026-09-26. The triangle drawing and the four-column sign table are gone. In their
  * place: one answer sentence; three aligned dot-and-interval strips, "Current → band power", "Band
@@ -79,21 +79,21 @@ import { ciBound, fmtNum, fmtP, parseSignPattern } from "./deployFormat";
 const EDGE_META = {
   E1: {
     name: "Current \u2192 band power",
-    question: "can the device move the signal?",
+    question: "Device control of signal",
     units: "band power per mA",
     rising: "band power rises as the current rises",
     falling: "band power falls as the current rises",
   },
   E2: {
     name: "Band power \u2192 pain",
-    question: "does the signal track the patient?",
+    question: "Signal tracks pain",
     units: "pain points per unit of band power",
     rising: "pain rises as band power rises",
     falling: "pain falls as band power rises",
   },
   E3: {
     name: "Current \u2192 pain",
-    question: "does the therapy work?",
+    question: "Therapeutic effect",
     units: "pain points per mA",
     rising: "pain rises as the current rises",
     falling: "pain falls as the current rises",
@@ -299,7 +299,7 @@ function LinkStrip({ k, e }) {
         <MDTypography component="h3" sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink }}>
           {meta.name}
         </MDTypography>
-        <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3 }}>
+        <MDTypography sx={{ ...TYPE.body, color: PAL.ink3 }}>
           {`${meta.question} · ${meta.units}`}
         </MDTypography>
       </MDBox>
@@ -315,7 +315,7 @@ function LinkStrip({ k, e }) {
           <line x1={x0} y1={yAxis} x2={x1} y2={yAxis} stroke={PAL.rule} strokeWidth="1" />
           <line x1={zero} y1={yAxis - 10} x2={zero} y2={yAxis + 8} stroke={PAL.graphic} strokeWidth="1" />
           <text x={zero} y={yAxis + 14} textAnchor="middle" dominantBaseline="hanging"
-            style={SVG_TEXT} fill={PAL.ink3} fontSize={PAL.fs.caption}>0</text>
+            style={SVG_TEXT} fill={PAL.ink3} fontSize={PAL.fs.body}>0</text>
           {/* The 95% range. A screening E1 is drawn finely dotted: a direction, not a measurement. */}
           {e && resolved ? (
             <line x1={loX} y1={yAxis} x2={hiX} y2={yAxis} stroke={ink} strokeWidth="2"
@@ -327,7 +327,7 @@ function LinkStrip({ k, e }) {
             <circle cx={dotX} cy={yAxis} r="5" fill={established ? ink : PAL.surface}
               stroke={ink} strokeWidth="1.5" />
           ) : null}
-          <text x={dotX} y={yAxis - 12} textAnchor={anchor} style={SVG_TEXT} fontSize={PAL.fs.caption}
+          <text x={dotX} y={yAxis - 12} textAnchor={anchor} style={SVG_TEXT} fontSize={PAL.fs.body}
             fill={PAL.ink}>{atDot || "no estimate"}</text>
         </svg>
       </div>
@@ -523,7 +523,7 @@ export default function EvidenceTrianglePanel({ report }) {
   const showCurrentConfound = currentConfoundApplies(candidate);
   const title = (
     <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>
-      Does the evidence hang together?
+      Evidence consistency
     </MDTypography>
   );
 
@@ -554,7 +554,7 @@ export default function EvidenceTrianglePanel({ report }) {
       <MDTypography data-testid="evidence-answer" sx={{ ...TYPE.lead, color: PAL.ink, mt: 1, maxWidth: "68ch" }}>
         {evidenceAnswer(data.coherence, edges)}
       </MDTypography>
-      <MDTypography sx={{ ...TYPE.caption, color: PAL.ink3, mt: 0.5 }}>
+      <MDTypography sx={{ ...TYPE.body, color: PAL.ink3, mt: 0.5 }}>
         {"Three measured links, each on its own scale with zero lined up; a hollow dot means its "
           + "95% range crosses zero."}
         {data.pain_score && data.pain_score.key ? (

@@ -52,10 +52,10 @@ import BandCandidateIdentity from "./BandCandidateIdentity";
 // Jump targets, set as `id` on the Grid items in index.js, in the order the page draws them.
 // DeploymentJumpLinks.order.test.js holds this list to the page's own order.
 export const JUMPS = [
-  { id: "cl-grid", label: "Which band?" },
-  { id: "cl-rules", label: "Does the device allow it?" },
-  { id: "cl-evidence", label: "Does the evidence hang together?" },
-  { id: "cl-stability", label: "The same at every stimulation state?" },
+  { id: "cl-grid", label: "Band selection" },
+  { id: "cl-rules", label: "Device rule check" },
+  { id: "cl-evidence", label: "Evidence consistency" },
+  { id: "cl-stability", label: "Stability across stimulation states" },
   { id: "cl-background", label: "Background" },
 ];
 
