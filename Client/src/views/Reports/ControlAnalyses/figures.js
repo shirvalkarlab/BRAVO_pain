@@ -76,8 +76,8 @@ export function ZeroMaFigure({ result }) {
         <span aria-hidden="true">Sensing pair</span>
         <select aria-label="Sensing pair" value={pair} onChange={(e) => setPair(e.target.value)} style={SELECT}>
           {pairs.map((p) => <option key={p} value={p}>{pairName(p)}</option>)}</select>
-        <span aria-hidden="true">Pain score</span>
-        <select aria-label="Pain score" value={score} onChange={(e) => setScore(e.target.value)} style={SELECT}>
+        <span aria-hidden="true">Saved-run pain score</span>
+        <select aria-label="Saved-run pain score" value={score} onChange={(e) => setScore(e.target.value)} style={SELECT}>
           {scores.map((s) => <option key={s} value={s}>{painScoreLabel(s)}</option>)}</select>
       </div>
       <PlotlyChart spec={spec} height={280} label="Correlation of each band with pain in each stretch" />
@@ -350,8 +350,8 @@ export function RatingPersistenceFigure({ result }) {
     <div data-testid="figure-rating_persistence" style={{ ...BODY, color: T.ink }}>
       {scores.length > 1 && (
         <div>
-          <span aria-hidden="true">Pain score</span>
-          <select aria-label="Pain score" value={score} onChange={(e) => setScore(e.target.value)} style={SELECT}>
+          <span aria-hidden="true">Saved-run pain score</span>
+          <select aria-label="Saved-run pain score" value={score} onChange={(e) => setScore(e.target.value)} style={SELECT}>
             {scores.map((s) => <option key={s} value={s}>{painScoreLabel(s)}</option>)}
           </select>
         </div>

@@ -239,7 +239,9 @@ describe("the control analyses card", () => {
     expect(table.textContent).toMatch(/one band, tested alone/);
     expect(table.textContent).toMatch(/116/);            // 52 / 0.45 rounded
     expect(table.textContent).toMatch(/87/);             // 52 / 0.6 rounded
-    fireEvent.change(screen.getByLabelText("Pain score"), { target: { value: "nrs" } });
+    // page review A14: the dropdown lists the scores the saved run covers, not the page's, and says so
+    expect(fig.textContent).toContain("Saved-run pain score");
+    fireEvent.change(screen.getByLabelText("Saved-run pain score"), { target: { value: "nrs" } });
     expect(screen.getByTestId("rating-persistence-targets").textContent).not.toMatch(/both off, 2025-07-16/);
     const [plot] = plotsIn(fig);
     expectCleanFigure(plot);
