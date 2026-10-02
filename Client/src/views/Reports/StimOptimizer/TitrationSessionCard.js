@@ -74,15 +74,11 @@ import { LadderPlot, BandAxis } from "./LadderFigures";
  * download itself is a raw file with no JSON body to carry the server's own copy in, so this page
  * shows its own. If one changes, change the other. */
 const SHEET_EXPORT_SETUP_NOTE =
-  "To let this server write directly to Google Sheets, sign it in as yourself: (1) in Google " +
-  "Cloud, create an OAuth client (Desktop app) and put its JSON at " +
-  "secrets/google_oauth_client.json; (2) on a machine with a browser, run " +
-  "google_oauth_consent.py once and click Allow -- it writes secrets/google_oauth_token.json " +
-  "(or point GOOGLE_OAUTH_TOKEN_FILE at it); (3) restart the server's worker processes. A " +
-  "service-account key at secrets/google_service_account.json is used only when no user token " +
-  "exists, and cannot CREATE sheets in a My Drive folder: a service account owns what it " +
-  "creates and has no Drive storage, so the copy is refused for quota. Until one of these is " +
-  "in place, this button downloads a filled .xlsx file instead.";
+  "Direct Google Sheets export needs a user sign-in: (1) create a Google Cloud OAuth client (Desktop app), " +
+  "JSON at secrets/google_oauth_client.json; (2) run google_oauth_consent.py once on a machine with a browser " +
+  "and click Allow (writes secrets/google_oauth_token.json, or set GOOGLE_OAUTH_TOKEN_FILE); " +
+  "(3) restart the worker processes. A service-account key (secrets/google_service_account.json) is a fallback " +
+  "only; it cannot create sheets in a My Drive folder (no Drive quota). Until then, this button downloads a filled .xlsx.";
 
 /** Pulls a `filename="..."` out of a `Content-Disposition` response header; falls back to a
  * generic name rather than failing the download outright. */
@@ -263,7 +259,7 @@ function BandStrip({ bands }) {
           );
         })}
         <span style={{ ...SMALL, marginLeft: 6 }}>
-          {`Hz · ${bands.n_clear ?? "—"} clear, ${bands.n_avoid ?? "—"} flagged (analysed either way); on the axis a clear centre is a filled dot and a flagged one a hollow ring`}
+          {`Hz · ${bands.n_clear ?? "—"} clear, ${bands.n_avoid ?? "—"} flagged (all analysed); filled dot = clear, hollow ring = flagged`}
         </span>
       </MDBox>
     </MDBox>
@@ -387,7 +383,7 @@ function WhySide({ side, plan }) {
           : c.note) : (plan.sensing_contact_note || EMPTY)}</dd>
         {harmonicsText ? (
           <><dt>Analyse at, the harmonics</dt>
-            <dd>{`the stimulator shows up at ${harmonicsText}; a centre within ±${num((plan.bands || {}).half_width_hz) ?? "—"} Hz of one carries a folded multiple of the stimulation rate and is flagged, not dropped -- every centre above is still analysed (advisory, the PI, 2026-09-06)`}</dd></>
+            <dd>{`stimulator artefact at ${harmonicsText}; centres within ±${num((plan.bands || {}).half_width_hz) ?? "—"} Hz are flagged, not dropped`}</dd></>
         ) : null}
         <dt>Rate</dt><dd>{plan.rate_why} — {src.rate_hz}</dd>
         <dt>Pulse width, source</dt><dd>{src.pulse_width_us}</dd>
@@ -564,7 +560,7 @@ function TitrationSessionCard({ plan, participantUid, homeSchedule = null }) {
     const need = num(margin.min_settled_settings);
     if (need === null) return `whether ${MARGIN} can be switched on could not be judged (no per-run table is stored)`;
     if (margin.available) {
-      return `A run with at least ${need} steps held long enough to read exists (${margin.run} on ${margin.sensing_contact}: ${margin.max_settled_settings_in_one_run}), so ${MARGIN} ${margin.switch_on ? "is switched on" : "can be switched on; it is off today"}.`;
+      return `A run with ≥${need} readable steps exists (${margin.run} on ${margin.sensing_contact}: ${margin.max_settled_settings_in_one_run}); ${MARGIN} ${margin.switch_on ? "is on" : "can be switched on; off today"}.`;
     }
     const most = num(margin.max_settled_settings_in_one_run);
     return `No run in the record holds the ${need} steps held long enough to read that ${MARGIN} needs${most === null ? "" : ` (the most in any one run is ${most}, ${margin.run} on ${margin.sensing_contact})`}; it stays off until this session is recorded, and the session's rising leg alone gives ${num((left || right || {}).yield ? (left || right).yield.distinct_currents_up_leg : null) ?? "—"}.`;
@@ -591,7 +587,7 @@ function TitrationSessionCard({ plan, participantUid, homeSchedule = null }) {
   const oneRate = num((left || right || {}).rate_hz);
   const minutes = num((plan.session_time || {}).total_minutes);
   const answer = plan.available
-    ? `One clinic session${oneRate !== null ? ` at ${fmtHz(oneRate)}` : ""}: each side's current stepped up from 0 mA in ${num(plan.step_mA) ?? 0.5} mA steps and back down, ${num(plan.hold_s) ?? 60} s a step, with recording on${minutes !== null ? `, about ${Math.round(minutes)} minutes` : ""}.`
+    ? `One clinic session${oneRate !== null ? ` at ${fmtHz(oneRate)}` : ""}: each side stepped up from 0 mA in ${num(plan.step_mA) ?? 0.5} mA steps and back down, ${num(plan.hold_s) ?? 60} s a step, recording${minutes !== null ? `, ~${Math.round(minutes)} min` : ""}.`
     : null;
   const exportControls = (
     <MDBox display="flex" alignItems="center" gap={1} flexWrap="wrap">
@@ -720,22 +716,22 @@ function TitrationSessionCard({ plan, participantUid, homeSchedule = null }) {
               <SheetTable
                 title={`Left ladder${left && left.sensing_contact ? ` — record from ${contactLabel(left.sensing_contact)}` : ""}`}
                 caption={left
-                  ? `0 mA to ${fmtMa(left.ceiling_mA)} in ${num(plan.step_mA) ?? 0.5} mA steps, top held once, back down to 0 mA in `
-                    + `${num(plan.down_step_mA) ?? 1.0} mA drops; the right side held at `
-                    + `${fmtMa(left.held_other_side && left.held_other_side.current_mA)} for the whole ladder.`
+                  ? `0 mA to ${fmtMa(left.ceiling_mA)} in ${num(plan.step_mA) ?? 0.5} mA steps, top held once, down in `
+                    + `${num(plan.down_step_mA) ?? 1.0} mA drops; right side held at `
+                    + `${fmtMa(left.held_other_side && left.held_other_side.current_mA)}.`
                   : null}
                 rows={leftRows} columns={sheetColumns} />
               <SheetTable
                 title={`Right ladder${right && right.sensing_contact ? ` — record from ${contactLabel(right.sensing_contact)}` : ""}`}
                 caption={right
-                  ? `0 mA to ${fmtMa(right.ceiling_mA)} in ${num(plan.step_mA) ?? 0.5} mA steps, top held once, back down to 0 mA in `
-                    + `${num(plan.down_step_mA) ?? 1.0} mA drops; the left side held at `
-                    + `${fmtMa(right.held_other_side && right.held_other_side.current_mA)} for the whole ladder.`
+                  ? `0 mA to ${fmtMa(right.ceiling_mA)} in ${num(plan.step_mA) ?? 0.5} mA steps, top held once, down in `
+                    + `${num(plan.down_step_mA) ?? 1.0} mA drops; left side held at `
+                    + `${fmtMa(right.held_other_side && right.held_other_side.current_mA)}.`
                   : null}
                 rows={rightRows} columns={sheetColumns} />
               <SheetTable
                 title={`Joint corners (optional, ${jointRows.length ? Math.round(jointRows.length / 2) : 0} points)`}
-                caption={jc.why ? `${jc.why}; not run if the visit is short on time.` : "not run if the visit is short on time."}
+                caption={jc.why ? `${jc.why}; skipped if short on time.` : "Skipped if short on time."}
                 rows={jointRows} columns={sheetColumns} />
               {proposedSides.map((side) => {
                 const p = proposed[side];
@@ -743,7 +739,7 @@ function TitrationSessionCard({ plan, participantUid, homeSchedule = null }) {
                 return (
                   <SheetTable key={`expl-${side}`}
                     title={`Exploratory ladder — ${(p.stimulation || {}).contacts_short || side} (${rows.filter((r) => r.row_kind === "ramp").length} steps, then ${rows.filter((r) => r.row_kind === "hold").length} holds)`}
-                    caption={`Part A: 0 mA to ${fmtMa(p.ceiling_mA)} in ${num(plan.step_mA) ?? 0.5} mA steps at ${fmtHz(p.rate_hz)}, stopped at the first side-effect score of 2, back down in ${num(plan.down_step_mA) ?? 1.0} mA drops; part B: three ${num((p.acute_pain_holds || {}).minutes_each) ?? 5} min holds, off / on / off, a rating every minute; the ${side === "Left" ? "right" : "left"} side held at ${fmtMa(p.held_other_side && p.held_other_side.current_mA)}.`}
+                    caption={`A: 0 mA to ${fmtMa(p.ceiling_mA)} in ${num(plan.step_mA) ?? 0.5} mA steps at ${fmtHz(p.rate_hz)}, stop at side-effect score 2, down in ${num(plan.down_step_mA) ?? 1.0} mA drops. B: three ${num((p.acute_pain_holds || {}).minutes_each) ?? 5} min holds (off/on/off), rated each minute. ${side === "Left" ? "Right" : "Left"} side held at ${fmtMa(p.held_other_side && p.held_other_side.current_mA)}.`}
                     rows={rows} columns={sheetColumns} />
                 );
               })}

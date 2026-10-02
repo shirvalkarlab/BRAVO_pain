@@ -35,7 +35,7 @@ describe("the titration card's harmonic wording is advisory, never a refusal", (
     const left = plan.sides.Left.bands;
     expect(left.n_avoid).toBeGreaterThan(0);
     expect(screen.getAllByText(new RegExp(
-      `${left.n_clear} clear, ${left.n_avoid} flagged \\(analysed either way\\)`)).length)
+      `${left.n_clear} clear, ${left.n_avoid} flagged \\(all analysed\\)`)).length)
       .toBeGreaterThan(0);
   });
 
@@ -50,8 +50,7 @@ describe("the titration card's harmonic wording is advisory, never a refusal", (
   it("the 'analyse at' row states the flag is advisory and drops nothing", () => {
     rtlRender(wrap(<TitrationSessionCard plan={plan} participantUid={UID} />));
     const t = document.body.textContent;
-    expect(t).toMatch(/carries a folded multiple of the stimulation rate and is flagged, not dropped/);
-    expect(t).toMatch(/every centre above is still analysed/);
-    expect(t).toMatch(/advisory, the PI, 2026-09-06/);
+    expect(t).toMatch(/centres within ±\d+(\.\d+)? Hz are flagged, not dropped/);
+    expect(t).toMatch(/stimulator artefact at/);
   });
 });
