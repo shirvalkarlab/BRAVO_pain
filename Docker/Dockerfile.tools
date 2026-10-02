@@ -1,0 +1,13 @@
+# Adds the tools both BRAVO containers need on top of whichever base image each runs (the PI,
+# 2026-10-02): ripgrep (searches use rg, never grep) and numba at the version requirements.txt pins
+# (the Mac image lacked it; it had been installed by hand, so a recreate would have lost it).
+#   docker build -f docker/Dockerfile.tools --build-arg BASE=<image> -t <image> .
+# Mac: BASE=bravo-server-fork:local   Jetstream2: BASE=bravo-server:with-deps
+ARG BASE
+FROM ${BASE}
+RUN apt-get update && apt-get install -y --no-install-recommends ripgrep \
+    && rm -rf /var/lib/apt/lists/*
+RUN python3 -c "import numba" 2>/dev/null \
+    || pip install --no-cache-dir --break-system-packages numba==0.61.2 \
+    || pip install --no-cache-dir numba==0.61.2
+RUN rg --version | head -1 && python3 -c "import numba; print('numba', numba.__version__)"
