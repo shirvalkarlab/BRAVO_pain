@@ -743,6 +743,26 @@ def test_a_configurations_exposure_is_read_from_the_epoch_table_and_says_when_it
     assert TP.configuration_exposure(None, "Left", {1, 2})["epochs"] == 0
 
 
+def test_the_exposure_sentence_ends_on_the_last_stretchs_end_and_counts_stretches_with_current():
+    """Page review 2026-10-02 (A10), traced on RCS08 L C+1-: the sentence said "over 23 stretches,
+    3738 h, 2025-10-11 to 2026-06-24", but 4 of the 23 were at 0 mA and the last stretch STARTED on
+    2026-06-24 and ran to 2026-07-07. It now counts the stretches that carried current, names the
+    ones at 0 mA apart, ends on the last stretch's end, and puts the hours in days too."""
+    t = pd.Timestamp("2026-01-01", tz="UTC")
+    rows = [("2a-2b-2c", 0.0, 3, 0), ("2a-2b-2c", 1.6, 20, 10), ("2a-2b-2c", 3.5, 8, 30)]
+    es = pd.DataFrame([dict(epoch=float(k), t0=t + pd.Timedelta(days=d), dur_h=240.0, freq_hz=55.0,
+                            amp_mA_Left=a, amp_mA_Right=2.5, pw_us_Left=60.0, pw_us_Right=60.0,
+                            cathode_Left=c, cathode_Right="1a-1b-1c", n=n, left_leg_vas=50.0)
+                       for k, (c, a, n, d) in enumerate(rows)])
+    ex = TP.configuration_exposure(es, "Left", {2})
+    s = ex["sentence"]
+    assert ex["epochs_powered"] == 2 and ex["reports_powered"] == 28 and ex["hours_powered"] == 480.0
+    assert ex["last_end"] == "2026-02-10"          # started 2026-01-31, 240 h later
+    assert "over 2 stretches of unchanged settings" in s and "1 more at 0 mA" in s
+    assert "480 h (20 days)" in s and "to 2026-02-10" in s and "28 pain reports" in s
+    assert "2026-01-31," not in s                   # never the last stretch's START as the end
+
+
 def test_the_acute_pain_holds_are_off_on_off_with_a_rating_every_minute_and_the_patient_blind():
     h = TP.acute_pain_holds(3.5)
     assert [x["current_mA"] for x in h["holds"]] == [0.0, 3.5, 0.0]
