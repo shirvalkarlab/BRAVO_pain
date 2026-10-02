@@ -1,444 +1,441 @@
 # Decisions and open items — the digest
 
-**Compacted 2026-09-19 at the PI's direction; shortened again 2026-09-26 ("not every decision needs to
-be held, and many can be merged").** Every decision number resolves here, on its own one-line row or
-inside a merged row that names its range. The full rows, with every proof, field count, timing and
-verbatim quote, are in `docs/decision_log_full_2026-09-19.md`; a decision number resolves there. PI
-quotes are paraphrased here with his permission (2026-09-19). Struck rows stay struck: the mistake is
-the lesson. New decisions are appended to Part 3 here (one or two lines) AND as a full row in the full log.
+Compacted 2026-09-19 and 2026-09-26 at the PI's direction ("not every decision needs to be held, and many can be merged"); compressed 2026-10-02. Every decision resolves here and in full (proofs, counts, timings, quotes) in `docs/decision_log_full_2026-09-19.md`. PI quotes paraphrased with permission (2026-09-19). Struck rows stay struck: the mistake is the lesson. New decisions: a line in Part 3 AND a full row in the full log.
+
+Abbreviations: SO, CL, BM = Stim Optimizer, Closed-Loop, Biomarkers (page or module); JS2 = the Jetstream2 BRAVO; Mac = the local BRAVO; fdr = Benjamini-Hochberg correction across bands; `→N` = superseded by N.
 
 ---
 
 ## Part 1 — Standing rules, by subject (the log's current state)
 
 **Signal, units, calibration**
-- **Every time comes from the tablet clock, never the device (INS) clock** (328): one home `MedtronicPercept/TabletClock.py`; device ticks only measure gaps inside a block.
-- Pain-report timestamps are California wall-clock; device times are UTC; convert before matching (2). The chronic detector joins on the California calendar day (142). The session matcher caps nothing per report; reports claimed by more than one session are counted and warned about (221).
-- Windows with >10% zero-filled samples are dropped (4), in every routine (57-59).
-- 60 Hz notch off by default (13). Only the two 256-point FFT modes convert (14). The voltage trace converts by the transform route at **345.59** (211; recipe and de-identified blocks in `routines/calibration.py`, 208); the bridge constant, 72.16, is composed, never "measured" (33, house rules). The frozen per-participant log-log model (11) is deleted (218; `DEVICE_percept_rc.md` §10 keeps its numbers). 8.8 Hz R 0-3+ counts only from 2026-03-01 (16); no impedance term (17).
-- **Log power enters no calculation, anywhere** (PI, 2026-09-19; 202, 204-206, 212, 218).
-- **Time is modelled nowhere**: drift is a current effect in a patient >3 years into disease; no age penalty, no time input (193-196).
-- **Every view and product starts at the device's implant date** (RCS08: 2025-07-16 18:06 UTC; `DecodeCommon/data_start.py`): measurements before it are dropped where they are read, the setting in force at implant is kept and moved to it; the rows stay in the database (260). The cut reaches the export, the raw recordings list, the participant-context service, the custom-analysis pipeline (263), the saved tiles and PSDs (289) and the timeline's chronic files (313).
-- One vocabulary: **TD** for band power from the time-domain recording in 3 s pieces (montage recordings included, labelled "Montage"), **PSD** for the device's own 30 s snapshot; never "spectrum" bare (115, 298, 299, house rules).
+- **Tablet clock only, never the device (INS) clock**; device ticks only for gaps within a block (328; `MedtronicPercept/TabletClock.py`).
+- Pain reports California local, device UTC (2); chronic detector on California days (142); matcher warns on shared reports, no cap (221).
+- Windows >10% zero-filled dropped everywhere (4, 57-59).
+- 60 Hz notch off (13); only 256-point FFT modes convert (14). Trace converts at **345.59** (208, 211; `routines/calibration.py`); bridge 72.16 composed, never "measured" (33). Log-log model deleted (11, 218; `DEVICE_percept_rc.md` §10). 8.8 Hz R 0-3+ only from 2026-03-01 (16); no impedance term (17).
+- **Log power in no calculation** (PI, 2026-09-19; 202, 204-206, 212, 218).
+- **Time modelled nowhere**: drift is a current effect >3 years in (193-196).
+- **Every view starts at the implant date** (RCS08 2025-07-16 18:06 UTC; `DecodeCommon/data_start.py`; 260, 263, 289, 313).
+- **TD** = time-domain band power, 3 s pieces (montage: "Montage"); **PSD** = the device's 30 s snapshot; never bare "spectrum" (115, 298, 299).
 
 **Statistics and verdicts**
-- Discrimination intervals are signed, never folded; the lower bound may fall below 0.5 (7, 8, 19). Validation is forward-chaining out-of-sample (12).
-- Gates have three states; a gate that goes green on absence of evidence is unsafe (9). A not-assessed condition still blocks but is counted separately in the wording (176).
-- "Established" means the point sign; intervals and p stay as caveats; verdict flagged provisional when any interval spans zero (147). D19 passes on point signs (134); D26 capture checks read the pooled slope and WARN (139).
-- **Every chance test that moves the pain ratings is the exact rotation test**: the pain scores slid along in time by every possible step once, the observed order counted once, smallest p 1/n; above 5,000 values 1,000 distinct steps (`stats_utils.rotations`, one home; 314, 315). The chunk shuffle is deleted. Family-wise correction on the grid: Benjamini-Hochberg over 22 centres (63). The cell interval is a block bootstrap, its block the pain series' lag-1 decorrelation length (183).
-- Every model fitted offline holds its test rows out as blocks of TIME with the neighbouring rows dropped from training, the gap from the label's own decorrelation timescale (240); held-out scores are taken **within each block**, never pooled across blocks (310); every candidate is reported plainly AND with the stimulation current taken out; an out-of-sample score is never folded; none of this refuses anything (240). The current is taken out as a named SHAPE with its flexibility stated: a 3-knot spline in the two guards, a straight line in `partial_corr` and the adjusted grid; fitted on training rows only (241).
-- **A reading with the current taken out is descriptive**: it never re-selects a band or moves a verdict (233 answer 2; 234, 242, 243, 293). The current-adjusted heat-map grid sits behind a switch, plain by default (234).
-- E1 (current-to-power) is the pooled titration slope, model B: one intercept per run, ramped side's current, single-side runs, other side held at ANY constant (126, 197, 198); both legs of a ladder count, and a streaming restart under 20 s with the current held does not split a run (213). Never pooled across visits at the per-run level (40); curvature tested pooled across visits (errors allowing for repeated measurements within a visit) before any switching value on a peaked band, and only on one side of the peak (55, 56, 124).
-- **The one-band rule**: a sensing contact and rate is usable when ONE band falls with current AND rises with pain on the stored Biomarkers grid; no majority rules (199). "Rises with pain" means positive with the block-bootstrap interval wholly above zero ("supported", 210); the grid's stricter "established" is shown beside it. On RCS08 today 0 of 50 contact-and-rate combinations are usable (217).
-- **The device's sensing-pair rule**: the pair must be the two contacts flanking the lead's stimulating contact (stimulate on 1, sense 0-2; on 2, sense 1-3; on 1 and 2, sense 0-3; on 0 or 3 nothing). One home, `DecodeCommon/sensing_rule.py` (305); applied on the Stim optimizer's readiness table (217) and as blocking device rule D52 on the Closed-loop page (247). On RCS08 the allowed pairs are L 1-3+ and R 0-3+.
-- **Harmonics**: the folded multiples of the stimulation rate come from one home (`analytics.harmonic_landings_hz`, 277); a band on one is flagged and analysed either way, a warning, never a refusal (220, 287), in the PI's wording: it "carries a folded multiple of the stimulation rate", never "measures the stimulator". At 55 Hz every centre from 22.5 to 29.5 Hz carries one (277).
-- Honest current: a milliamp number is recommended only when three per-speed checks pass (not flat, beats today beyond scatter, ≥6 pairs each ≥5 ratings on ≥2 California days spanning ≥1 mA) (158, 184). Rate ≥55 Hz unless a stated reason (138). Left and right are modelled together (157). Pulse-width pairings are fitted separately by default; a pooled fit sits behind the current-map card's toggle, for the clinic stream too (222, 255). A clinic setting counts only the ratings that carry the score being fitted (258c). The Stim optimizer's calibration check is a warning (238, 233 answer 6); a current whose pain map moves between blocks of time carries a dagger, read as the whole group's readings moving, not the setting (253, 275, 294).
-- ~~Reliable change index~~: deleted (231); too few pairs, too much scatter.
-- Post-move margin: 0 s by measurement; the 20 s switch stays OFF by the PI's ruling: use as much data as we can (144, 178-179, 191, 196, 217).
-- **Safety ceiling: PI-stated, 4.5 mA each side** (145, 160), one home `StimOptimizer/safety_ceiling.py`. **No page proposes, recommends, schedules, simulates or exports a current above it**: the Closed-loop limits are capped with the cap stated (306); the Stim optimizer's held ladder side, safe sets, queues and second-stage windows are bounded (308); a setting in force above it is shown, never offered (312). The module's 5.0 mA hard limit is not the safe ceiling. Side-effect score 2 is its own rung, cost 2.0 (165); moderate/severe steps never seed "tolerated" (164); the amplitude-severity statistic is recomputed each request (166).
-- Thresholds are placed from the record: median averaged reading ± the design rule's minimum; the tablet's capture pair shown beside (180). Timing: averaging 3 s, onset 30 s (max enterable), blanking 30 s, transitions 30 s, startup 15 s (150, 169); ranges, the 8-30 Hz adaptive band range included, have one home, `DecodeCommon/device_ranges.py` (168, 285).
-- Ground truth per row: device band power passing the 99.5th-percentile ceiling table > calibrated trace > composed (tagged) > never uncalibrated; both values and fold ratio where both exist (33, 47, 52).
+- Intervals signed, never folded; lower bound may be <0.5 (7, 8, 19); forward-chaining validation (12).
+- Refusing checks: three states, never pass on absent evidence (9); not-assessed blocks, counted apart (176).
+- "Established" = point sign; provisional if any interval spans zero (147); D19 on point signs (134); D26 warns (139).
+- **Every chance test moving pain ratings is the exact rotation test**: smallest p 1/n; >5,000 values: 1,000 steps (`stats_utils.rotations`; 314, 315). Grid fdr over 22 centres (63); cell interval by block bootstrap, block = lag-1 decorrelation length (183).
+- Offline models: held-out TIME blocks, neighbours dropped, scored **within each block**, reported plain AND current-removed, never refusing (240, 310); current as a named shape, 3-knot spline in guards (241).
+- **Current-removed readings are descriptive**, never re-selecting a band or moving a verdict (233 answer 2; 234, 242, 243, 293).
+- E1 = change in power per mA pooled over titration runs (model B; other side at ANY fixed current; both legs; <20 s restarts join) (126, 197, 198, 213); never pooled across visits per run (40); curvature tested pooled before any switching value on a peaked band (55, 56, 124).
+- **One-band rule**: usable when ONE band falls with current AND rises with pain ("supported") on the stored BM grid (199, 210). RCS08: 0 of 50 (217).
+- **Sensing-pair rule**: sense on contacts flanking the stimulating one (1: 0-2; 2: 1-3; 1 and 2: 0-3; 0 or 3: none) (217, 247, 305). RCS08: L 1-3+, R 0-3+.
+- **Harmonics** flagged and analysed, never refused; a band "carries a folded multiple of the stimulation rate", never "measures the stimulator" (220, 277, 287).
+- Current recommended only when three per-speed checks pass (not flat; beats today beyond scatter; ≥6 pairs of ≥5 ratings on ≥2 California days spanning ≥1 mA) (158, 184); rate ≥55 Hz unless reasoned (138); L and R together (157); pulse widths separate by default (222, 255); clinic settings count only fitted-score ratings (258c); calibration check warns (233 answer 6, 238); drifting pain maps get a dagger (253, 275, 294).
+- ~~Reliable change index~~ deleted (231).
+- Post-move margin 0 s; 20 s switch OFF (PI: use as much data as we can) (144, 178-179, 191, 196, 217).
+- **Safety ceiling 4.5 mA per side, PI-stated** (145, 160; `StimOptimizer/safety_ceiling.py`): **no page proposes, recommends, schedules, simulates or exports a current above it** (306, 308, 312); the 5.0 mA module limit is not it. Side-effect score 2 its own rung, cost 2.0 (165); moderate/severe steps never seed "tolerated" (164); severity statistic per request (166).
+- Device thresholds: median averaged reading ± design rule's minimum (180); averaging 3 s, onset 30 s (max), blanking 30 s, transitions 30 s, startup 15 s (150, 169); ranges incl. the 8-30 Hz adaptive band in `DecodeCommon/device_ranges.py` (168, 285).
+- Ground truth per row: ceiling-checked device band power (99.5th percentile) > calibrated trace > composed (tagged) > never uncalibrated (33, 47, 52).
 
 **The store**
-- One store, `BRAVO/modules/CacheStore/`; a second implementation is a test failure (30). Key decides whether to write (26); key from database rows alone (24, 25). The saved 3 s tiles are read or written only for the one input set every page uses; any other request builds in memory (289).
-- **No pain rating in any recording-derived key or payload** (23): the Closed-loop inputs entry holds the settings stream and the design matrix is built per request (273); it is keyed on the recording set, the tile key, both calibration constants and a rule version (215, 289).
-- Every derived write carries `writer=` and flattened `provenance=`; a consumer whose own output is in the chain is refused, and the refusal raises (31, 39). A refused entry is replaced, not skipped (41).
-- Recordings cached without expiry; pain reports fetched fresh on every build; the held table serves drill-downs only until the next build (22, 78). The Biomarkers top timeline is an acquisition timeline, a raw kind with nothing from a pain report in it (216).
-- Parquet+zstd tables, npz arrays, pickle otherwise; CSV/JSON excluded because the therapy timestamp is timezone-aware (29). Redis: 512 MB, allkeys-lru, locks/freshness/small values only, protocol 2 (27, 28).
-- One entry per participant per kind by default; `KEEP_NEWEST_BY_KIND` names the kinds that keep more (sweep kinds 12; the stability answer 12, one per grid, 248; simulation, design rule and robustness 6, one per candidate, 309; two Stim optimizer responses); the daily-default heat-map grids are kept by a keep group outside the twelve (318). Six writes reporting success and one file on disk is the failure this prevents (107).
-- A stored heat-map grid or stability answer is served to another page only under the rule in force (293, 317) and only for its own grid (248, 256).
-- A test that touches the store clears or restores ONLY while its own override is in force, and never reaches a launcher that writes to the production root; three times a test has reached that root (96, 116, 129).
-- Memos are keyed on the participant's current recording set, not the participant (130); work repeated within one request is held for that request only (267, 278).
-- Saved control analyses are not the store: one file per run under `BRAVOStorage/control_analyses/`, every run kept, run offline only; a page never starts one (264).
+- One store, `BRAVO/modules/CacheStore/` (30); its key, from database rows alone, decides writing (24, 25, 26); saved 3 s pieces for the shared input set only (289).
+- **No pain rating in any recording-derived key or payload** (23, 215, 273, 289).
+- Derived writes carry `writer=` and flattened `provenance=`; self-consuming chains refused; refused entries replaced (31, 39, 41).
+- Recordings cached without expiry, pain reports fresh each build (22, 78); BM top timeline holds no pain data (216).
+- Parquet+zstd, npz, else pickle (29); Redis 512 MB, allkeys-lru, small values, protocol 2 (27, 28).
+- One entry per participant per kind unless `KEEP_NEWEST_BY_KIND` (sweep 12, stability 12, per-candidate 6, two SO responses); daily-default grids kept apart (107, 248, 309, 318).
+- Stored grids and stability answers cross pages only under the current rule, for their own grid (248, 256, 293, 317).
+- Store tests clear only under their own override and never reach a job writing the production root (breached three times: 96, 116, 129).
+- Memos keyed on the recording set (130); in-request repeats held per request (267, 278).
+- Control analyses are not the store: one file per run in `BRAVOStorage/control_analyses/`, offline only (264).
 
 **Pages**
-- Names: "Biomarkers exploration", "Stim optimizer", "Closed-loop deployment" (325). Style by the minimalist specification (`artifacts/design_2026-09-26_minimalist_redesign/`, 320): one typeface, five sizes, text greys at 4.5:1 or darker, the heat maps' hover text the one 11 px exception (325); **red only for device refusals and the safe ceiling**, with its glyph; statistical blockers in ink with ✕ (322); no decision numbers in page text (303, 321); each page opens on its answer.
-- Closed-loop figures draw once and restyle by trace index; rebuilding on interaction reintroduces the flash (5, hard). Plotly `doubleClick:false` and guarded purge on the heat maps (91). Figures that had the toolbar keep it; the heat maps have none (88, 324).
-- The Biomarkers module does not deal in what stimulation does to a biomarker (108). The heat maps are the headline; nine lengths, 1 s to 60 s (170); the Closed-loop "Choose a band" card reads the SAME stored grid under the Biomarkers page's settings tag, the clinic-sheet switch included, and the stability answer filed for that grid (131, 248).
-- The Closed-loop page is one decision card plus separate evidence cards (302; supersedes 258(a)). A report or summary computed for another band, pain score or clinic-sheet setting than the one chosen is withheld from every card and named, with Recompute offered (302, 307). The pain-score dropdown (NRS default) drives every band-to-pain reading (E2, E3, the stability card); E2 reads each piece's own settings period's ratings (290, 292). Clinic-sheet ratings enter the deployment summary only by the red-outlined button, off by default (258b).
-- The chosen closed-loop band is held on the server, append-only, naming who chose it; the browser keeps a mirror and says when it holds the only copy (249). A band picked on the grid carries its grid's pain score, split and window to the deployment summary (254).
-- A page judges a band on its own side (141). Every card's text is pinned by a fixture render test asserting what a clinician must read and the retired words' absence (174).
-- Stim contact notation is the clinic sheet's own, `L C+2-`; sensing pairs keep superscripts (181).
+- Names "Biomarkers exploration", "Stim optimizer", "Closed-loop deployment"; minimalist specification (`artifacts/design_2026-09-26_minimalist_redesign/`): one typeface, five sizes, greys 4.5:1 or darker, 11 px hover the one exception; **red only for device refusals and the safe ceiling**; no decision numbers on pages; each opens on its answer (303, 320, 321, 322, 325).
+- CL figures draw once, restyle by trace index (5, hard); heat maps: `doubleClick:false`, guarded purge, no toolbar (88, 91, 324).
+- BM does not model stimulation effects (108); heat maps are the headline, nine lengths 1-60 s (170); CL "Choose a band" reads the SAME stored grid and stability answer (131, 248).
+- CL: one decision card plus evidence cards (302; supersedes 258(a)); off-choice reports withheld, named (307); pain-score dropdown, NRS default, drives every band-to-pain reading (290, 292); sheet ratings reach the deployment summary only via the red-outlined button (258b).
+- Chosen CL band on the server, append-only, with chooser (249); grid-picked bands carry their grid's settings (254).
+- Pages judge a band on its own side (141); card text pinned by render tests (174).
+- Stim notation `L C+2-`; sensing pairs keep superscripts (181).
 
 **Process**
-- Commit identity: Prasad Shirvalkar, `prasad.shirvalkar@ucsf.edu`, inline `-c` (49). Default branch `PS_closedloop_deployment`; `v3.1.0` is a label (177). No worktrees: the container mounts only the main checkout (102, 177).
-- Written record: superseded documents go to `docs/archive/<date>/` by `git mv`, never deleted; no suite count in any document (34). Plan kept with planning-with-files, inject-smart, committed (36); autonomous mode with attestation allowed per plan, gated mode never (223). CI runs the page tests (257) and numba (271).
-- Only code changes are open items; clinic notes live separately (open items, 2026-09-10).
-- Every check ships with its live proof: field count and difference count, never a tolerance; alternating timings; the first live run of step 8 wrote nothing while every test passed (41).
+- Commits as Prasad Shirvalkar, `prasad.shirvalkar@ucsf.edu`, inline `-c` (49); branch `PS_closedloop_deployment`, `v3.1.0` a label, no worktrees (102, 177).
+- Superseded documents `git mv` to `docs/archive/<date>/`; no suite counts (34). Plans: planning-with-files, inject-smart, committed, autonomous with attestation, never gated (36, 223). CI runs page tests, numba (257, 271).
+- Only code changes are open items (2026-09-10).
+- Every check ships live proof: field and difference counts, never a tolerance; alternating timings (step 8's first live run wrote nothing, 41).
 
 ---
 
 ## Part 2 — Open items
 
 **Waiting on the PI**
-- Clinic record: the setting in force (L 3.0 mA 100 us, R 2.5 mA 150 us) dates from 2026-09-02 19:15 UTC, not 09-03 as older rows say (328). [2026-09-26, decision 329: the records naming 09-03 carry dated notes and every saved control analysis and the chronic level-shift report were re-run; what moved is in 329.] [2026-09-27: the product name is answered, decision 338; the server-written wording package (WP8) is still open.]
-- The N-items in `artifacts/pending_items_from_handoffs_2026-09-25.md`, ruled on 2026-09-27. Closed, no code needed (his call): N-01, N-02, N-03, N-07, N-08, N-13, N-14, N-16, N-17, N-18. N-10 (a July 2025 clinic step above the then-current safety limit) closed on his account: he attributes it to side effects that showed up days later, not a records error. N-06 (programming and testing closed loop after titration) is not a pending build item at all — nothing is coded; it is waiting on a usable sensing pair to exist, which is a state of the data, not of the software. N-11 (the sliding-window request default) and N-12 (the unused shuffle detector) are built — decisions 340 and 341. N-04, N-05 and N-20 were already answered by 280/285, 315 and 301. Still open:
-  - **N-09.** Two separate records exist of what stimulation rate was used: the clinic's paper testing sheets (filled by hand during visits, one-second precision, 820 steps across 29 visits) and the device's own automatically-saved settings history. The device's own history shows only 7 different rates were ever used. The clinic sheets show 10, including four — 25, 85, 100 and 180 Hz — that never appear anywhere in the device's history. One of those four (100 Hz) is clearly written in the original spreadsheet for two specific test groups in July 2025, so it is not a data-entry mistake. There is no way to tell, from the sheets or the device record alone, whether those four rates were actually delivered to the patient and the device simply failed to save a record of it (the device only saves a new record at certain moments, not continuously), or whether they were planned and written down but never actually given. Nothing in either record settles it — it would need someone who was in the room for those visits to say which happened.
-- RCSchronicpain (another repository): checked 2026-09-27 — the working tree is clean and pushed; the uncommitted work is a stash, `stash@{0}` "Claude Code BRAVO session edits 2026-09-25", 14 files / 959 lines (a MATLAB behavioral-outcomes refactor and new statistics/test files, not just "two plots recoloured" as it was summarised) on branch `refactor_stages123`. The PI said to delete it; the permission system refused (irreversible local destruction) — he needs to run `git stash drop stash@{0}` himself in that repository, after confirming the size above is really disposable. A separate, unrelated stash (`stash@{1}`, "On main: !!GitHub_Desktop<main>") was left untouched. The "3 token-shaped values" are `credentials/define_env_redcapAPI_tokens.m`, already committed and pushed by the PI himself (`717bb6d8`, "update credentials") — not a new finding, and not touched.
-- Left for the PI by 322: the timeline gutter's Arial, the faint PLANNING ONLY watermark, the badge component's uppercase.
-- How the Closed-loop page's 21 "can't be programmed yet" reasons are sorted into four buckets — the PI is reviewing this himself (2026-09-27: "I'll check it out and let you know").
-- [2026-10-02: resolved by 366, fixed in the cache itself.] Closed-Loop page redrew without end once its simulation loads, and always shows "Something it depends on has changed": `resultCache.getResult` (his file) reports each read's time as the computed time, and the simulation's label includes it (365). [2026-10-02]
-- [2026-09-27: resolved — decisions 339 and 343 shortened the hover's third line in the two places it had grown ("fdr" wording, dropping the independent-ratings addendum). If it still runs long, that would need a further specific instruction, since the remaining wording is what the hover's own 2026-09-16 ruling asked for.]
-- [2026-09-27: resolved — the PI ran the build himself, which caught one string the initial sweep missed (a registration-page disclaimer); rebuilt again and confirmed by grep. The frontend bundle is current through decision 339.]
+- Setting in force (L 3.0 mA 100 us, R 2.5 mA 150 us) dates from 2026-09-02 19:15 UTC, not 09-03 (328). [2026-09-26: 09-03 rows annotated, analyses re-run (329).] [2026-09-27: name answered (338); server wording package WP8 open.]
+- N-items (`artifacts/pending_items_from_handoffs_2026-09-25.md`), ruled 2026-09-27. Closed, no code: N-01, N-02, N-03, N-07, N-08, N-13, N-14, N-16, N-17, N-18; N-10 (July 2025 step above the then limit: late side effects, not a records error); N-06 waits on a usable sensing pair. Built: N-11 (340), N-12 (341). Answered: N-04 (280/285), N-05 (315), N-20 (301). Open:
+  - **N-09.** Sheets show 10 rates (820 hand-filled steps, 29 visits, one-second precision), the device history 7; 25, 85, 100, 180 Hz never on the device; 100 Hz clearly written for two July 2025 test groups. Delivered-but-unsaved or planned-never-given: only someone present can say.
+- RCSchronicpain (another repository), 2026-09-27: tree clean, pushed; `stash@{0}` "Claude Code BRAVO session edits 2026-09-25", 14 files / 959 lines (MATLAB outcomes refactor, statistics/test files) on `refactor_stages123`. PI said delete; permission refused; he runs `git stash drop stash@{0}` after checking. `stash@{1}` ("On main: !!GitHub_Desktop<main>") untouched. "3 token-shaped values" = `credentials/define_env_redcapAPI_tokens.m`, pushed by the PI (`717bb6d8`, "update credentials"); untouched.
+- Left for the PI by 322: gutter Arial, faint PLANNING ONLY watermark, badge uppercase.
+- CL's 21 "can't be programmed yet" reasons in four buckets: PI reviewing (2026-09-27).
+- [Resolved by 366, 2026-10-02, in the cache.] CL redrew endlessly once its simulation loaded, always showing "Something it depends on has changed": `resultCache.getResult` (his file) gave read time as computed time, which the simulation label includes (365).
+- [Resolved 2026-09-27.] Hover third line shortened (339, 343); more needs his instruction (2026-09-16 ruling).
+- [Resolved 2026-09-27.] PI's build caught a missed registration-page disclaimer; rebuilt, grep-confirmed; bundle current through 339.
 
-**Code, not yet built** (from the 2026-09-25 handoff scan)
-- P-11: the voltage trace's device units on the timeline, to be checked against 216. [2026-09-27: P-10 closed — the joining repair keeps the first block's tablet time, `MedtronicPercept/tests/test_no_tick_times.py`, built with 328.]
-- P-18: the timeline's detail panel; draft in `artifacts/spec_2026-09-25_P18_timeline_detail_panel.md`.
+**Code, not yet built** (2026-09-25 handoff scan)
+- P-11: trace device units on the timeline, check against 216. [2026-09-27: P-10 closed with 328, first block's tablet time kept, `MedtronicPercept/tests/test_no_tick_times.py`.]
+- P-18: timeline detail panel; draft `artifacts/spec_2026-09-25_P18_timeline_detail_panel.md`.
 
 **Waiting on data or a visit**
-- **Next visits** (protocol `artifacts/protocol_2026-09-25_rate_swap_and_down_first_ladder.md`, every question answered, §11): visits up to 3 hours door to door; Visit 1 includes the rate swap (the second cycle decided in the chair) and a second rater; Visit 2 the stimulation-off block with the full 90-minute wait; the down-first ladder answers the carry-over question (272). One tablet check at the first home session: the chronic log carries on across a change of group.
-- The titration readings (237) reach the card only once the visit's own data exist.
+- **Next visits** (`artifacts/protocol_2026-09-25_rate_swap_and_down_first_ladder.md` §11): ≤3 h; Visit 1 rate swap (second cycle chosen in the chair), second rater; Visit 2 stimulation off, full 90-minute wait; down-first ladder answers carry-over (272). First home session: check the chronic log spans a group change.
+- Titration readings (237) reach the card once the visit's data exist.
 
 **Caveats on the record, not fixable**
-- [2026-09-27: the PI considers both resolved, no further action.] The short-tile-copy measurement gap (289: two 2026-09 windows read an incomplete slice of a recording; the current window was re-measured, the two older ones cannot be re-run but their comparisons stand), and the R statistics environment (288: installed in the Dockerfiles, no image built to test it).
-- Not watched on screen: 292's dropdown effects, 294's daggers, 324's q wording (superseded in part by 339's shortened wording, itself confirmed only by reading the built files, not a browser).
+- [PI: both resolved, 2026-09-27.] Short-copy gap (289: two 2026-09 windows read a partial recording; current one re-measured, older two stand); R environment (288: in the Dockerfiles, no image built).
+- Not watched on screen: 292's dropdown, 294's daggers, 324's q wording (partly →339; checked in built files only).
 
-**Rewritten, not open**: 10. The 110 Hz "heat map" does not exist in the platform; the pre-registration (`PREREG_RCS08_110Hz.json`) is unrun and its counts do not reproduce (109). Re-measure before reopening.
+**Rewritten, not open**: 10. No 110 Hz "heat map" exists; pre-registration (`PREREG_RCS08_110Hz.json`) unrun, counts do not reproduce (109); re-measure before reopening.
 
-**Notes for the clinic, not items**: 55 Hz has one left-only visit day on the left electrode; the device never computes its own FFT while current is stepped, so that source is empty for every ladder; the clinic implication of 217 (L 0-3+ needs L C+1-2-) stands.
+**Notes for the clinic, not items**: 55 Hz has one left-only visit day on the left electrode; no device FFT while current is stepped, so none for any ladder; 217 stands (L 0-3+ needs L C+1-2-).
 
-**Closed**: the titration session (item 30, run 2026-09-16; 213); the rulings of 2026-09-21 (218-227); item 15 (258, 284, 291); every "found, not changed" note in 249-318 (fixed by 254, 255, 270, 309, 314, 315, 317, 318, 323; P-16 declined, 316). Resolved by consolidation, do not re-open: disk reads are 4.8% of the page; matching is 0.2-1.7% of Recompute. Closed items 1-9, 11-14, 16-29, 31 are one line each in the full log's Part 2.
+**Closed**: titration session (item 30, 2026-09-16; 213); 2026-09-21 rulings (218-227); item 15 (258, 284, 291); "found, not changed" notes in 249-318 (fixed by 254, 255, 270, 309, 314, 315, 317, 318, 323; P-16 declined, 316). Do not reopen: disk reads 4.8% of the page; matching 0.2-1.7% of Recompute. Items 1-9, 11-14, 16-29, 31: full log Part 2.
 
 ---
 
 ## Part 3 — Every decision, one line (number, date where it matters)
 
-Refs are commits or PRs; `→N` means superseded by N; a range such as `282-288.` is one merged row.
+Refs: commits or PRs; a range like `282-288.` is one merged row.
 
-1. R interface converter built without the frame converter (`33f45a5`).
-2. Pain-report timestamp is California local; parsing as UTC smears matches 7-8 h (`a4e4e68`).
-3. Concatenation repair kept; re-decode matched 67 of 67.
-4. Windows >10% missing samples dropped; zero-fill deflated band power.
-5. Figures draw once, restyle by trace index; memoised params — hard constraint (`255e0ef`).
-6. Net-benefit cut-point rule removed; it equals the cost rule (PR #3).
+1. R converter without the frame converter (`33f45a5`).
+2. Pain reports California local; UTC parsing smeared matches 7-8 h (`a4e4e68`).
+3. Concatenation repair kept; re-decode 67/67.
+4. Windows >10% missing dropped (zero-fill deflated power).
+5. Figures draw once, restyle by trace index, memoised params: hard rule (`255e0ef`).
+6. Net-benefit cut-point rule removed (= cost rule; PR #3).
 7. Discrimination interval not folded (`c50be37`).
-8. Per-epoch AUC signed; orientation fixed once on the pooled result (PR #5).
-9. Three-state gates; stability gate abstains when its test cannot run (PR #5).
-10. Recommendation single-sourced; recommended vs programmed stated; abstain on ramp guidance (`b0597f8`).
-11. Frozen per-participant conversion model with tiered fallback; modelled switching value flagged (`771f3c2`).
-12. Forward-chaining out-of-sample validation; in-sample hid reversals 0.55→0.24 (`d9d58a4`).
-13. Mains notch off by default (`f915257`).
+8. Per-epoch AUC signed, oriented once on the pooled result (PR #5).
+9. Three-state refusing checks; stability check abstains if untestable (PR #5).
+10. One-source recommendation; recommended vs programmed stated; abstains on ramp guidance (`b0597f8`).
+11. Frozen per-participant conversion model, tiered fallback; modelled switching value flagged (`771f3c2`).
+12. Forward-chaining out-of-sample validation (in-sample hid reversals 0.55→0.24) (`d9d58a4`).
+13. Mains notch off (`f915257`).
 14. Only 256-point modes convert (`f915257`).
-15. Direct spectrum-to-device route; round trip adds nothing, 0.8% (`f915257`).
-16. 8.8 Hz R 0-3+ from 2026-03-01; earlier data sit in a settling transient (`e9d7a80`).
+15. Direct spectrum-to-device route; round trip within 0.8% (`f915257`).
+16. 8.8 Hz R 0-3+ from 2026-03-01 (earlier: settling transient) (`e9d7a80`).
 17. Impedance term rejected, p 0.26 with grouping (`a9c3a01`).
-18. Transform route at 352.62 is the primary trace conversion (r 0.9927) (→209 →211: 345.59).
-19. Moving-block bootstrap, effective n, de-folded lower bound as gate.
-~~20~~. →21. Cut-point converted through the frozen model: a units error (z-scored log fed as linear).
-21. Fallback models the device power line off the raw trace at the cut-point's own centre; never converts the switching value (`09798f7`).
-~~22~~. →78. Recordings cached without expiry stands; reports never cached, except the read-only drill-downs.
-23. No pain rating in tile file or key; report change alters 19,464 values and causes 0 writes.
-24. File key from database rows alone, 0.33 s.
-25. Key carries event metadata, decode stamping, every constant.
-26. Key decides whether to write, not the caller.
-27. Redis for locks and small values; big products stay files (0.05 vs 0.14 s).
+18. Transform route at 352.62 primary (r 0.9927) (→209 →211: 345.59).
+19. Moving-block bootstrap, effective n; de-folded lower bound refuses.
+~~20~~. →21. Cut-point through the frozen model: units error (z-scored log as linear).
+21. Fallback models device power off the raw trace at the cut-point's centre; never converts the switching value (`09798f7`).
+~~22~~. →78. Recordings cached without expiry; reports uncached except read-only drill-downs.
+23. No pain rating in piece file or key: a report change alters 19,464 values, writes 0.
+24. File key from database rows alone (0.33 s).
+25. Key holds event metadata, decode stamping, every constant.
+26. Key, not caller, decides writing.
+27. Redis for locks, small values; big products as files (0.05 vs 0.14 s).
 28. Redis 512 MB, allkeys-lru, both compose files (`b7036bf`).
-29. Parquet+zstd tables, npz arrays; CSV/JSON lose the timezone.
+29. Parquet+zstd tables, npz arrays (CSV/JSON lose the timezone).
 30. One store implementation; duplicate deleted.
-31. Provenance chain and constructed-cycle proof before any write-back.
-32. Band range is all 22 centres 8.5-29.5 Hz; "8-20" was a slip.
-33. Ground-truth rule with ceiling check and fold ratio.
-34. Record consolidated; 50 documents archived by `git mv`; no suite counts in documents.
-35. Pain-report snapshot keyed on content, read by no page, history kept.
-36. Plan in planning-with-files, inject-smart, committed, no attestation or gate.
+31. Provenance chain and constructed-cycle proof before write-back.
+32. Band range: 22 centres, 8.5-29.5 Hz ("8-20" a slip).
+33. Ground-truth rule: ceiling check, fold ratio.
+34. 50 documents archived by `git mv`; no suite counts in documents.
+35. Pain-report snapshot keyed on content, unread, history kept.
+36. Plan: planning-with-files, inject-smart, committed; no attestation or gate.
 37. `therapy_settings` raw, keyed on source-file rows; `therapy_pain_matched` raw-derived; 0.01 vs 33 s.
-38. Sweep writes two tidy tables and serves its response on key match.
-39. Store refuses derived kind without writer; one module object under both import spellings; `exploration_ladder`.
-40. Amplitude effect per run and band, never pooled across visits at this level.
-41. Stim Optimizer reads as consumer, writes five products, refused entry replaced, code digest in key; first live run wrote nothing while tests passed.
-42. DecodeCommon is real code on both runners; naive start time mirrors platform.
-43. per_pro readers use channel_index behind a switch; 0 differences; 54 vs 65 s.
-44. Tile builder reads prepared traces; under 1 s saved of 37.
+38. Sweep writes two tidy tables; key match serves its response.
+39. Store refuses writer-less derived kinds; one module object for both import spellings; `exploration_ladder`.
+40. Amplitude effect per run and band, never pooled across visits.
+41. SO reads as consumer, writes five products; refused entries replaced; code digest in key; first live run wrote nothing, tests green.
+42. DecodeCommon real on both runners; naive start time mirrors platform.
+43. per_pro readers on channel_index behind a switch: 0 differences, 54 vs 65 s.
+44. Piece builder reads prepared traces (<1 s of 37 saved).
 45. Deployment report accepts the calibrated frame (had raised on every candidate).
-46. Redis build lock on the tile key: four cold requests, one build, 41 vs 368 s.
+46. Redis build lock on the pieces' key: four cold requests, one build, 41 vs 368 s.
 47. Device route ceiling (provisional →52); `ground_truth_verdict` written and read.
-48. `cache_status` on every module response; one line under each recompute control.
-49. Commit identity: the PI's own name and UCSF address.
-~~50~~. →51. Per-recording spectra into the store: "read by no page" was true and beside the point.
-51. Assembled matrix into the store; per-recording directory stays, stamp-served (0.35 vs 3.1 s).
-52. Device ceiling = 99.5th-percentile table per (electrode, centre) from full history.
-53. Track E done: `biomarker_psd_matrix` raw kind; row order follows collection order.
-54. Result cache bounded by bytes and resident participants; do-not-edit lifted once.
-55. Switching value on a peaked band only on the one-to-one side; pooled cluster-robust curvature test first.
-56. Pooled curvature test built and run live; mixed result, one contact 13 points over 4 visits.
-57. Entangled routine never applied the zero-fill rule (review).
-58. Fixed: missing mask carried through the adapter.
-59. Proof: 31 of 386 recordings excluded; 29,704 values moved; a best band moved.
-60. Recompute fires one request per press, watched live.
-61. Do not fold the entangled routine into the sweep; four axes differ.
+48. `cache_status` on every module response, one line under each recompute control.
+49. Commit identity: the PI's name, UCSF address.
+~~50~~. →51. Per-recording spectra to the store ("read by no page" true, beside the point).
+51. Assembled matrix stored; per-recording directory stamp-served (0.35 vs 3.1 s).
+52. Device ceiling = 99.5th-percentile table per (electrode, centre), full history.
+53. Track E: `biomarker_psd_matrix` raw kind, rows in collection order.
+54. Result cache bounded by bytes and resident participants (do-not-edit lifted once).
+55. Switching value on a peaked band: one-to-one side only, after a pooled curvature test (visit-level errors).
+56. Pooled curvature test live: mixed; one contact, 13 points, 4 visits.
+57. Entangled routine skipped the zero-fill rule (review).
+58. Fixed: missing mask through the adapter.
+59. 31 of 386 recordings excluded; 29,704 values and a best band moved.
+60. Recompute: one request per press (watched live).
+61. Entangled routine stays out of the sweep (four axes differ).
 62. Heat-map redesign: Option 2, search-first.
-63. Family-wise correction: Benjamini-Hochberg over 22 centres, no autocorrelation adjustment (its p-values from the exact rotation test since 315).
-64. Match direction wired into the sweep; BH built; a missed rule-version bump served a stale response.
-65. Track D go-ahead: BH label on the CL grid; forbidden bands stay selectable, greyed.
-66. Track A built (SVG grids, hover/click, contact strip); drill-down outlier bug caught.
-67. Track D built; device-rules column not built (rules need amplitude etc.); bare import broke the container.
+63. Grid fdr over 22 centres, no autocorrelation adjustment (rotation-test p since 315).
+64. Match direction in the sweep; BH built; missed rule-version bump served a stale response.
+65. Track D: BH label on the CL grid; forbidden bands selectable, greyed.
+66. Track A (SVG grids, hover/click, contact strip); drill-down outlier bug caught.
+67. Track D minus the device-rules column (needs amplitude etc.); bare import broke the container.
 68. Track D leftovers closed; one `MatchDirection` helper.
-69. All-None family test; `bh_fdr` matches statsmodels to 1e-10.
-70. RCS08 had zero study links; Join Study, grid seen live, grant revoked.
-71. `native_lsb_by_channel` added; the two live spectrum builders left unmerged.
-72. Merging the builders not recommended: same DSP, different sampling unit, four treatments.
-73. Shared matching layer designed; two of four matchers had no independence rule; crossover trial is what the field has and we cannot build.
-74. Direction consistency check built (chain-rule signs); contact filter bug caught.
-~~75~~. →231. Reliable-change floor built; not assessable on RCS08 then.
+69. All-None family test; `bh_fdr` = statsmodels to 1e-10.
+70. RCS08 had zero study links: joined, grid seen live, grant revoked.
+71. `native_lsb_by_channel` added; two live spectrum builders unmerged.
+72. Builders not merged: same DSP, different sampling unit, four treatments.
+73. Shared matching layer designed; two of four matchers lacked independence rules; a crossover trial is unbuildable.
+74. Direction consistency check (chain-rule signs); contact filter bug caught.
+~~75~~. →231. Reliable-change minimum built; unassessable on RCS08 then.
 76. `DecodeCommon/matching.py` ported from the richest matcher; 600-trial equality.
-77. Older scatter/violin panel removed; hover 2.9 s → ~1 s via recordings memo.
+77. Old scatter/violin panel removed; hover 2.9→~1 s (recordings memo).
 78. Amends 22: report table held for drill-downs until the next build.
-79. Six backend efficiency fixes, each with a 0-difference proof.
-80. Frontend dead code removed; purge-on-update and defeated memo bugs fixed.
-81. Four Plotly render-manager findings evaluated, none worth 58-file blast radius.
-82a. CL module audit: sign-off card read the retired `stim_stable` flag; two checks unwired.
-82b. Biomarkers grid on the shared cache; one Recompute control; background prefetch of other scores.
-83. `stim_stable` gate reads the three-way verdict; `adaptive_band` checks edges; two dead files deleted.
-84. Host suite run in the container: one failure was an environment mismatch; the test wiped the cache (→116).
-85. Participant id passed to the store; cross-participant eviction fixed.
-86. One pain-score dropdown; Y-axis shows delivered lengths; Medtronic labels; gunicorn needed SIGHUP.
-87. Plotly heat maps with side panels; requested vs delivered length carried separately.
+79. Six backend efficiency fixes, each 0-difference.
+80. Frontend dead code removed; purge-on-update and defeated-memo bugs fixed.
+81. Four Plotly render-manager findings: none worth a 58-file blast radius.
+82a. CL audit: sign-off read retired `stim_stable`; two checks unwired.
+82b. BM grid on the shared cache; one Recompute; other scores prefetched.
+83. `stim_stable` reads the three-way verdict; `adaptive_band` checks edges; two dead files deleted.
+84. Host suite in the container: one environment mismatch; the test wiped the cache (→116).
+85. Participant id to the store; cross-participant eviction fixed.
+86. One pain-score dropdown; Y-axis delivered lengths; Medtronic labels; gunicorn needed SIGHUP.
+87. Plotly heat maps with side panels; requested and delivered lengths separate.
 88. Gridlines off; shared `heatmapHeight`; modebar off.
-89. Sizing regression in 88 corrected.
-90. Title and stats rows; plots fill width; thumbnails L then R; pooled warning hidden.
-91. Native Plotly scatter and violin; click listener and double-click crash fixed.
-92. Availability endpoint cached on recording set and report digest: 8.4 s → 0.6 s.
-93. "How to read this" drawer deduped and reordered, 669 → 436 words.
-94. Sweep outliers: fixed per-(contact, centre) ceilings applied per 3 s piece with backfill; 0.436% excluded.
+89. 88's sizing regression corrected.
+90. Title, stats rows; full-width plots; thumbnails L then R; pooled warning hidden.
+91. Native Plotly scatter, violin; click listener and double-click crash fixed.
+92. Availability endpoint cached on recording set and report digest: 8.4→0.6 s.
+93. "How to read this" drawer deduped, reordered: 669→436 words.
+94. Sweep outliers: fixed per-(contact, centre) ceilings per 3 s piece, backfilled; 0.436% excluded.
 95. Dead export button → "Open this grid in Closed-Loop".
-96. Stability grid in a detached process after the grid lands; page key vs run key mismatch found only live.
-97. Daily stability precompute loop; stopped-early run refused.
-98. Stability column proof: 5,148 fields, 0 differing; page 291 s → 10.6 s.
-99. "Cannot tell" example re-anchored to 17.5 Hz; the p depends on band width.
-100. CL module: cache status on every return; wrong-key handler; zero logger calls fixed.
-101. CL `bravo_service.py`; catch-all logs (the 5-day silent outage); note/reason mismatch fixed.
-102. Naive timestamps are UTC on every machine; gitignore `_agent_bridge/_*`; agent worktrees were months stale.
-103. Consistency check wired; `within_visit_pooled_shape` stored so cold and warm agree.
-~~104~~. →231. Reliable change wired as a warning; wrong-frame defect caught by reading values (threshold from 0.93 spread is 2.6).
-105. `within_visit_band_scores` deleted after a live run showed nothing unique.
-106. Device-snapshot share marked per cell; R 0-3+ 79% snapshot-served, length axis 7x flatter.
-107. Every score precomputed; store kept one entry per kind → `KEEP_NEWEST_BY_KIND`; fan-out guard.
-108. Item 10 closed: Biomarkers does not model stimulation effects.
-109. No 110 Hz figure exists; pre-registration unrun; counts do not reproduce.
-110. Fake patient and per-rating overlay deleted; neighbouring-line trap noted.
-~~111~~. →231. Reliable change = 1 h pairwise SD per score, repeats removed; panel added; NRS threshold 1.01.
-~~112~~. →231. Stim-off pairs stay in the floor.
-113. Sign-off card embeds browser-side figure snapshots; grid cache slot collision; stale workers.
-114. Timeline circle equals the many-centre reader at its centre, 240 of 240.
-115. Many-centre reader deleted; never write "spectrum" bare.
-116. Host suite's one failure fixed; it had been clearing the production cache every run.
-117. Pooled-PSD builder on the shared matcher; 0 differences; dead branch crashes.
+96. Stability grid by background job after the grid; page/run key mismatch found live.
+97. Daily stability precompute; stopped-early run refused.
+98. Stability column: 5,148 fields, 0 differ; page 291→10.6 s.
+99. "Cannot tell" example at 17.5 Hz (p depends on band width).
+100. CL: cache status on every return; wrong-key handler; zero logger calls fixed.
+101. CL `bravo_service.py`; catch-all logs (5-day silent outage); note/reason mismatch fixed.
+102. Naive timestamps UTC everywhere; gitignore `_agent_bridge/_*`; agent worktrees were months stale.
+103. Consistency check wired; `within_visit_pooled_shape` stored, cold = warm.
+~~104~~. →231. Reliable change as warning; wrong-frame defect caught reading values (0.93 spread gives cut-off 2.6).
+105. `within_visit_band_scores` deleted (nothing unique live).
+106. Snapshot share per cell; R 0-3+ 79% snapshot-served, length axis 7x flatter.
+107. Every score precomputed; `KEEP_NEWEST_BY_KIND` replaces one-entry-per-kind; guard against jobs starting jobs.
+108. Item 10 closed: BM does not model stimulation effects.
+109. No 110 Hz figure exists; pre-registration unrun, counts irreproducible.
+110. Fake patient, per-rating overlay deleted; neighbouring-line trap noted.
+~~111~~. →231. Reliable change = 1 h pairwise SD per score, repeats removed; panel; NRS cut-off 1.01.
+~~112~~. →231. Stim-off pairs stay in the reliable-change minimum.
+113. Sign-off embeds browser figure snapshots; grid cache slot collision; stale workers.
+114. Timeline circle = many-centre reader at its centre (240/240).
+115. Many-centre reader deleted; never bare "spectrum".
+116. Host suite's failure fixed: it cleared the production cache each run.
+117. Pooled-PSD builder on the shared matcher (0 differences); dead branch crashes.
 118. `align_pros` already shared; two selectors are not matchers; `max_per_rating` open.
-119. Histogram caption names the score and the record total.
+119. Histogram caption names score and total.
 120. Timeline's own match window removed.
-121. Dash markers removed; snapshot route honours 30 s per snapshot on the length axis.
-122. CL grid is a 22-row heat map with radios; hemisphere commit bug fixed.
-123. CL prose folded; ledger to counts strip; "Sign agreement", "Full parameter recommendation", three column names.
-124. E1 stays a straight-line slope; literature and RCS08 support no peak yet; titration protocol → item 30.
-125. Three-source panel pooled across visits from stored per-run points; prefetched.
-126. E1 is the pooled titration slope; historical estimate kept beside it.
-127. No row; numbering gap in the original log.
-128. CL-DBS simulations card, M0-M3, 3 s pieces on the device clock; per-candidate entries.
+121. Dash markers removed; snapshot route counts 30 s per snapshot on the length axis.
+122. CL grid: 22-row heat map, radios; hemisphere commit bug fixed.
+123. CL prose folded; ledger → counts strip; renamed "Sign agreement", "Full parameter recommendation", three columns.
+124. E1 stays linear (no peak in literature or RCS08); titration protocol → item 30.
+125. Three-source panel pooled across visits from stored per-run points, prefetched.
+126. E1 = change in power per mA pooled over titration runs; historical estimate beside.
+127. No row (numbering gap).
+128. CL-DBS simulations card, M0-M3, 3 s pieces, device clock; per-candidate entries.
 129. A test emptied the production store; clear only under the override.
-130. Memos keyed on recording set identity.
-131. CL grid reads the Biomarkers page's own stored grid by settings tag; built on demand.
-132. Device rules read rate and pulse width from programmed settings when the candidate lacks them.
-133. D16 impedance from a fixed-current test; automatic low-current reads are spurious fails.
+130. Memos keyed on recording-set identity.
+131. CL grid reads BM's stored grid by settings tag, built on demand.
+132. Device rules take rate and pulse width from programmed settings if missing.
+133. D16 impedance from a fixed-current test; automatic low-current reads fail spuriously.
 134. D19 passes on point signs.
-135. D30 answered from the device's active group.
-136. Device facts rebuilt daily from ingested reports; two scanner misreads fixed.
-137. 123 dead tests deleted; two-stage path wired behind a flag.
-138. Stage 1 recommends ≥55 Hz unless a stated reason.
-139. D26 checks read the pooled slope and warn.
-140. Stim Optimizer first build 51 → 10 s; BLAS to one thread; no GPU in the container.
-141. CL page judges a band on its own side; 20 s margin first wired.
-142. Chronic detector on the California day; 26.2% of ratings moved; memo and key fixes.
-143. Stim Optimizer review: own-side pulse width; one module object per package; stream anchors off.
-144. 20 s margin behind a switch, OFF: two removed points flipped a verdict.
-145. Ceiling PI-stated; 3,696 lines of dead modules deleted; unread Biomarkers blocks removed.
-146. Titration session card designed from the record (amended by 160); two Stim Optimizer responses kept.
+135. D30 from the device's active group.
+136. Device facts rebuilt daily; two scanner misreads fixed.
+137. 123 dead tests deleted; two-stage path behind a flag.
+138. Stage 1: ≥55 Hz unless reason stated.
+139. D26 reads pooled change in power per mA; warns.
+140. SO first build 51→10 s; BLAS one thread; no GPU in the container.
+141. CL judges a band on its own side; 20 s margin first wired.
+142. Chronic detector on the California day: 26.2% of ratings moved; memo, key fixes.
+143. SO review: own-side pulse width; one module object per package; stream anchors off.
+144. 20 s margin behind a switch, OFF (two removed points flipped a verdict).
+145. Ceiling PI-stated; 3,696 lines of dead modules and unread BM blocks deleted.
+146. Titration session card from the data (amended by 160); two SO responses kept.
 147. "Established" = point sign; provisional flag.
-148. Timing parameter ranges found (FDA table 2); record-derived recommendations.
-149. Ranges wired into both modules; "programmed today" shown.
-150. Six-method contest; Kalman design rule adopted; averaging 3 s for response time.
-151. Simulation card replays programmed and recommended timing; undone switches counted.
-152. T3 design rule built; its kind added to `KEEP_NEWEST_BY_KIND`.
-153. T4 occupancy check; a sign error caught against the contest's report.
-154. T6 startup dip, two methods shown, not reconciled.
-155. T5 block bootstrap, vectorised by precompute; 36-90 s reproduced bit for bit.
-156. T7 gain wiring confirmed on constructed data; waits on the titration session.
-157. Left and right modelled together; arm strip removed; injected "coordinator" messages ignored.
+148. Timing ranges from FDA table 2; recommendations from the data.
+149. Ranges in both modules; "programmed today" shown.
+150. Six-method contest: Kalman design rule; averaging 3 s for response time.
+151. Simulation card replays programmed and recommended timing, counting undone switches.
+152. T3 design rule; kind in `KEEP_NEWEST_BY_KIND`.
+153. T4 occupancy check; sign error caught against the contest report.
+154. T6 startup dip: two methods, unreconciled.
+155. T5 block bootstrap vectorised: 36-90 s, bit for bit.
+156. T7 gain wiring confirmed on constructed data; awaits titration.
+157. L and R modelled together; four-chart strip removed; injected "coordinator" messages ignored.
 158. Honest-current rule; home titration schedule; two claims in 157 corrected.
-159. Current map cards on the page; surfaces on the response.
-160. Ceiling 4.5 mA; ladder redesign: ramp+test rows, 1.0 mA down legs, joint corners, sheet rows.
-161. Clinic sheets ingested as their own stream; Excel turned "8/10" into a date.
+159. Current map cards on the page; surfaces in the response.
+160. Ceiling 4.5 mA; ladder: ramp+test rows, 1.0 mA down legs, joint corners, sheet rows.
+161. Clinic sheets a separate stream; Excel turned "8/10" into a date.
 162. Titration card and clinic section drawn.
-163. "Make Google sheet" button; openpyxl `value=None` is a no-op.
+163. "Make Google sheet" button; openpyxl `value=None` does nothing.
 164. Moderate/severe steps excluded from tolerated anchors.
-165. Score 2 is its own rung, cost 2.0.
-166. Amplitude-severity statistic recomputed per request; typed number retired.
+165. Score 2 its own rung, cost 2.0.
+166. Amplitude-severity statistic per request; typed number retired.
 167. Clinician review: 19 findings; root cause "computed, stored, not on the page".
-168. Three Criticals fixed; device ranges one home in DecodeCommon.
-169. Ranges reconciled with the tablet; onset max 30 s; 5-minute rows beyond the device.
-170. Onset grids capped at 30 s; sweep ends at 60 s, nine lengths.
-171. Heat-map text and layout to the PI's wording.
+168. Three Criticals fixed; device ranges in DecodeCommon.
+169. Ranges match the tablet; onset max 30 s; 5-minute rows beyond the device.
+170. Onset grids ≤30 s; sweep to 60 s, nine lengths.
+171. Heat-map text, layout in the PI's wording.
 172. Retired-table notes reworded for the heat map.
-173. Corrected-statistic line beside the violin; no repeated n.
-174. Referent audit executed: 10 of 12 fixed; render test per card.
-175. "What would change this" item reworded; second in-clinic plan table removed; sign-off duplicate.
-176. Four leftovers: capital, stale comments, dead builders, gate wording (both copies).
+173. Corrected-statistic line beside the violin; n not repeated.
+174. Referent audit: 10 of 12 fixed; render test per card.
+175. "What would change this" reworded; second in-clinic plan table and sign-off duplicate removed.
+176. Four leftovers: capital, stale comments, dead builders, check wording (both copies).
 177. Default branch `PS_closedloop_deployment`.
 178. 20 s margin ON.
-179. 178 reversed the same night; OFF until a titration session decides it.
-180. Thresholds placed from the record; capture pair beside them.
+179. 178 reversed that night: OFF until a titration session decides.
+180. Thresholds placed from the data; tablet's low/high-current pair beside.
 181. Google Sheets via the PI's OAuth token; `L C+2-` notation; centred cells.
 182. Clinic sheets synced from Drive daily.
 183. Block bootstrap for cell intervals.
 184. Coverage counts occasions: ≥2 California days per pair.
-185. Stability answers on the Biomarkers grid; one home for the words.
-186. Clinic-sheet ratings in heat maps behind a switch, default off.
-187. T1 was a misinterpretation; the unread powerdomain block deleted.
-188. Hover three lines; Pearson and Mann-Whitney p on the backend via scipy; browser stats deleted.
-189. Descriptions folded; pairing line; pulse-width pooling plan (A behind toggle) not built.
-190. Duration weighting measured: no recommendation changes.
-191. Margin sweep: 0 of 30 settled values change; margin is a min-hold filter.
-192. Current map absolute ratings, colour centred on today's setting.
-193. Age penalty inert and unsupported; log drift ≠ raw drift.
+185. Stability answers on the BM grid, one home for the words.
+186. Clinic-sheet ratings in heat maps behind a switch, off.
+187. T1 misread; unread powerdomain block deleted.
+188. Hover three lines; Pearson, Mann-Whitney p on the backend (scipy); browser stats deleted.
+189. Descriptions folded; pairing line; pulse-width pooling plan (A, toggle) unbuilt.
+190. Duration weighting: no recommendation changes.
+191. Margin sweep: 0 of 30 settled values change; margin = minimum-hold filter.
+192. Current map: absolute ratings, colour centred on today's setting.
+193. Age penalty inert, unsupported; log drift ≠ raw drift.
 194. Time as fitted input (→196).
 195. Clinic stream without time input (→196).
-196. Time modelled nowhere; S7 settled at 0 s; run finder needed the other-side rule.
-197. Runs count whatever the other side is held at; 11 → 17 runs.
-198. Pooled slope model B kept.
-199. One-band rule; usable cells 6 → 4, all on harmonics (measured on the short tile copy, 289; the count since set by 210 and 217).
+196. Time modelled nowhere; S7 at 0 s; run finder needed the other-side rule.
+197. Runs count whatever the other side holds: 11→17.
+198. Pooled E1 model B kept.
+199. One-band rule: usable cells 6→4, all harmonics (short copy, 289; since 210, 217).
 200. Review leftovers C3, C4, C6, C7, T2, T3 built.
 201. C6 off-label line removed.
-202. No log power on the E1 path; remaining sites listed for the PI.
-203. Context compaction: this digest, the full log in `docs/`, shorter CLAUDE.md, house rules and store architecture; handoffs, worker reports, completed plans and generic rules deleted.
-204. No log power on the pooled full-spectrum path or in the pain correlation; 10 of 132 stability verdicts moved, the chosen band unchanged (measured on the short tile copy, 289).
-205. The outlier rule (5 MAD) and the heat map's logistic cross-check on raw power; the log-scale option refused.
-206. The aperiodic (1/f) fit deleted with its `fooof` transform; reached by no page; the device cannot threshold a peak's prominence.
-207. Calibration exploration (no code): the frozen model's curvature is between-band gain pooled into one slope; the constant was refitted instead.
-208. The June calibration anchor reproduced with the lab's code and extended to 2026-09-03 (n 133, k 345.59); block gate and 5-MAD ratio rule adopted; recipe and de-identified blocks in the repository.
-~~209~~. →211. The transform constant as the midpoint of two eras, 349.10.
-210. The one-band rule's pain leg loosened to "supported" (positive, block-bootstrap interval wholly above zero); "established" shown beside it.
-211. The transform constant is 345.59 everywhere, the recipe's one median over every block (209 superseded); composed bridge 72.16; verdicts unchanged.
-212. The Biomarkers calibration panel draws the calibration in effect (the transform constant over every paired block, the June reference, the bridge ratio per centre and pair, constants read from the server) instead of the frozen June model.
-213. The titration run finder joins two recordings split by a tablet restart under 20 s with the current held, and measures a setting reached by a rise or a fall, tagged by leg (the PI: pool both legs); the 2026-09-16 left ladder reads 8 settled currents in one run; verdicts unchanged.
-214. The Closed-Loop "LSB & power" cross-check reads the voltage trace in microvolts with the transform band power, against the constant in effect; the independent pairing gives 1/352.7 µV² per LSB, 0.98 times it.
-215. The Closed-Loop inputs entry is keyed on the recording set, both calibration constants and a rule version; it had served a frame built under the old constant.
-216. The Biomarkers top timeline is an acquisition timeline: it reads no pain report and is stored as the raw kind `acquisition_timeline`; the rating-centred sample index has its own endpoint (`/queryPsdScanIndex`).
-217. The readiness table applies the device's sensing-pair rule; on RCS08 (left C+2-, right C+1-2-) the allowed pairs are L 1-3+ and R 0-3+, neither with a band rising with pain: usable combinations 11 -> 0 of 50. The 20 s margin switch stays OFF.
-218-222. The PI's rulings of 2026-09-21, built: the frozen June log-log model deleted (218); four chronic-detector routines with no caller deleted (219); the harmonic rule a warning, never a refusal (220); the session matcher keeps no cap per report and warns on sharing (221); pooling across pulse widths behind the current-map card's toggle, default separate (222).
-223. Amends 36: a plan's `.mode` may carry `inject-smart autonomous`, attested at start and after every edit; `gate` stays off.
-224-227. The 2026-09-21 cleanup: the Binarization card laid out as option C with a timing histogram (224); the per-report band-power reader deleted, both copies (225); the Compute response no longer carries a second copy of the timeline (226); the audit leftovers built: the left refit panel deleted, the calibration recipe reports an interval and spread on its median ratio, the band around a modelled threshold is the participant's own scatter, stale-constant comments reworded (227).
-228. The heat-map square's scatter and violin use the same ratings the grid correlated, clinic-sheet ratings included when the switch is on (they had read REDCap only and drawn a rising line beside a negative r); sheet points hollow.
-229. Exploratory search on L 1-3+ over 252 settings of window, direction, cap, reuse and sheets: no row positive with q < 0.05; with the sheets on 10-22 of 22 bands fall with pain per setting; the near-hit 24.5 Hz, 60 s, 120-min pre-report square reads r 0.32, p 0.054, not resolved (corrected by 315). A lead, not a band to program.
-230. An exploratory ladder for L C+1-2- on the titration card, where the best sensing pair (L 0-3+) needs other stimulating contacts: a 15-step up/down ladder, three 5-minute holds off / on / off, a first-exposure stop rule, 33 sheet rows (rate set by 236; watch list by 277).
-231. The reliable-change index deleted with its card and tests (12 pairs, too much scatter); supersedes 75, 104, 111, 112.
-232. Research batch of 2026-09-22: four reports, each debated by a three-reviewer panel (`artifacts/research_2026-09-22_*`, synthesis). Common finding: on the left lead the bands that rise with pain rest on the current in force. Eight questions for the PI.
-233. The PI's eight answers: (1) the ladder's reading is the ramp with the current term, the holds beside it; (2) "supported" need not survive taking the current out; the adjusted value is descriptive only; (3) the exploratory ladder runs at 55 Hz, the rate in force; (4) the back site's parallel fit is wired; (5) the next session runs 55 Hz at 100/150 us, merged with the 60/160 us record; (6) the calibration check is a warning; (7) the current-adjusted grid is behind a switch; (8) the chosen band is recorded on the server.
-234. The heat map's correlation with the current in force on the pair's own side taken out, behind `AdjustForStimCurrent` (off by default); the plain value still selects and decides; the switch is in the store key, not the cross-page settings tag; the current is read from `therapy_settings` (`routines/stim_current.py`).
-235. Three interim caveats on the pages: the triangle's current-confound sentence for a left 21.5-27.5 Hz band (replaced by 242's adjusted reading), the current map's pooled association stated as not holding out of sample, and the heat maps' RCS08 lines rewritten.
-236. The exploratory ladder runs at the rate in force, 55 Hz, the cell's own rate shown beside it; supersedes 230's rate (its "24.5 Hz is clear" corrected by 277).
-237. Two readings of one titration session (`titration_readings.py`): the ramp with the current taken out is the reading, the holds beside it; a band that is 98% the current gets no adjusted number; one visit is a lead to repeat, never an established result. Not yet on the card.
-238. The clinic-stream fit follows the site it is asked for (it was hard-coded to the left leg); the back site gets its own parallel fit; the pre-registered calibration check runs per surface as a warning.
-239. `coverage_gap` turns the coverage refusal into what the next visit must deliver (pairs to repeat or add, under the ceiling); a ladder stepping one side can never pass without joint corners (its ruling-5 count corrected by 255, 258(c)).
-240. Two guards for every offline model (held-out blocks of time with neighbours dropped; a current-confound check) and the check before any decoder (`confound_diagnostic.py`); on no page. No set of bands beats its own shuffled level on any pair (corrected by 310, 315).
-241. The current is taken out as a named shape (`stats_utils.CovariateShape`: line, squared term, 3-knot spline, three kernels, one level per setting); the guards default to the spline, `partial_corr` keeps the line. On L 1-3+ a turn-over of pain with current is suggestive, not established; no shape changes the verdict.
-242. The Closed-Loop page says what its answer rests on: one verdict on the sign-off sheet, the stability answer ranked in "What would change this" and printed inside the coherence note, one caveats list (`adapter.caveats_for_report`), and E2 read again with the current in force taken out, descriptive. NRS today: left 0.564 plainly, 0.553 adjusted (corrected by 290).
-243. The Stim Optimizer page ordered as a decision is made, with the sensing rule in the open, "still positive with the current taken out" per band (read from a stored adjusted grid only), the "proven better" exposure and the rate-pin assumption stated (layout since amended by 303, 320, 325).
-244. The Closed-Loop jump links follow the page's own card order, pinned by a test that reads the page file.
-245. Amends 243: the current map's legend open on load; the search's stopping rule shown per side (not assessable on RCS08).
-246. Housekeeping: three unread field groups left the Closed-Loop response; each heat-map square carries its effective number of independent ratings and each grid its shuffle reconciliation; the whole-search count line (corrected by 315); the time-of-day and weekend check (moved by 264; R 1-3+'s cycle withdrawn by 265). Pain and L 1-3+ band power both run higher at weekends; taking the weekend out moves the correlation by at most 0.019.
-247. Device rule D52, the sensing-pair rule, blocking on the Closed-Loop page (L 0-2+ had been called permitted while the lead stimulates on contact 2); caveat numbers at four decimals; the heat maps drawn at their box's width.
-248. The stability answer keeps one entry per grid (12), names its grid, and the "Choose a band" card reads only its own grid's answer; the grid settings list gained the clinic-sheet switch (131 had been broken since 186).
-249. The chosen closed-loop band recorded on the server, append-only, naming who chose it (`chosen_band.py`, `/api/queryClosedLoopChosenBand`); the page says when a browser holds the only copy; the sign-off sheet names the band and its grid.
-250. The parameter card's notes carry one heading counting its own checks; the two long-failing Closed-Loop page tests repaired.
-251. The coverage gap printed on the current-map card under "Enough combinations tried?".
-252. One-off check of whether left chronic band power steps when left settings change (`stepB3_chronic_level_shift.py`): 4 of 21 changes readable; the three on L 1-3+ at 23.44 Hz all show power falling as current rises, one interval excluding zero. Nothing reads it.
-253. Why the Stim Optimizer's maps fail their calibration check (`calibration_diagnosis`, a warning): the left-leg 55 Hz 60/160 us map moves between blocks of time; the others are thin data. No boundary-avoiding kernel built (read with 275).
-254. A band chosen on the grid carries its grid's pain score, split and window to the deployment summary (it had used NRS and a tertile split whatever the grid).
-255. The clinic stream's fits pooled over pulse widths reach the page with the toggle; ruling 5's merged answer (`next_session_coverage`) heads the clinic section. Corrects 239: 3 of 6 qualifying pairs, not 5 (2 of 6 since 258(c)).
-256. The stability run's stopped-early rule protects its own grid's answer, not the newest of any grid.
-257. CI runs the page tests (jest).
-258. The PI's rulings of 2026-09-24: (a) sign-off card last (superseded by 302); (b) a red-outlined button adds clinic-sheet ratings to the deployment summary, off by default, through one merge helper; (c) a clinic setting counts only ratings carrying the score being fitted (the back fit had dropped back-only settings); (d) legibility (superseded by 320).
-259. The recompute bar enlarged (rule 7 lifted once for it).
-260. Every view and product starts at the implant date (RCS08 2025-07-16 18:06 UTC; `DecodeCommon/data_start.py`); earlier measurements dropped where read, the setting in force kept and moved to it; rows stay in the database.
-261. The coverage check reads a stored table's rating days as days (arrays had been counted as sums, or not at all).
-262. The PI's two analyses: in the both-off stretch 2025-07-16 to 08-22 the left 21.5-25.5 Hz family rises with VAS pain (a lead to confirm); a current with memory never beats the current in force; corrects 240's matching window to 60 minutes (its readings corrected by 310).
-263. The implant-date cut reaches the export, the raw recordings list, the participant-context service and the custom-analysis pipeline.
-264-265. Control analyses saved offline and shown on the Biomarkers and Stim Optimizer pages (`modules/ControlAnalyses/`, one card, every run kept); 265 corrects 246: from implant on R 1-3+ has no daily cycle; L 0-2+ keeps one.
-266-271. Speed-ups of 2026-09-25, every value unchanged: tiles built in batches, the FFT still once per piece (266); work repeated inside one request done once (267); the E2 adjusted interval's fits on one thread (268); the design rule's filter compiled with numba, no on-disk cache (269); CI installs numba (271). Also 270: the participant-context service works for RCS08 again.
-272. The carry-over test, saved: on the record every fall came after its rise, so carry-over and drift cannot be told apart; a down-first ladder would answer it.
-273-274. No pain rating saved under a label that ignores it: the Closed-Loop inputs hold the settings stream, the design matrix built per request (273); numba's type-checking log silenced below warnings (274).
-275. Regression-to-the-mean check: the swing at 1.6/1.2 mA is the whole group's over those weeks, not that setting's; 253's reading restated.
-276. Decision 262's p with the current taken out replaced by that reading's own shuffle (corrected by 310, 315: nothing beats its null).
-277. One harmonic check for both modules (`analytics.harmonic_landings_hz`), in the PI's advisory wording; at 55 Hz every centre 22.5-29.5 Hz carries a folded multiple, 24.5 Hz included; 9 of 22 centres clear.
-278-279. Speed-ups, exact: the recording-set identity worked out once per request (278); the grid's medians in one computation (279).
-280-281. Page fixes: the ROC cut-point in standardized band power units, the burn-in stated, stale record lines corrected (280); a clinic-sheet cell with a written correction keeps the delivered value (281, P-13).
-282-288. The 2026-09-25 batch: rating persistence and stepped-current-every-band control analyses (282); three more numba compilations and one-column time-block labels (283); the stability panel says when it was assembled (284); handoff items P-05 to P-09 and P-15, and the three-week burn-in kept because without it the mixed model fails to converge (285); P-14 resolved by calling the one difference routine (286); bands on a harmonic flagged, never struck (287); the Dockerfiles install R 4.3.3 with lme4, lmerTest and emmeans, no image built (288).
-289. The saved 3 s tiles are read or written only for the one input set every page uses; anything else builds in memory; the key carries the implant date. A short copy had been served in three windows (Part 2).
-290. E2 had read the ratings of the settings period before each piece's own since `8fbe11ba`; fixed. The only E2 the page ever called established was the wrong period's: L 1-3+ Left Leg VAS now 0.641, not established.
-291-292. The stability card: each state's odds ratio with its interval, one rating in one state and one week (291); intervals clustered on the pain report, and a pain-score dropdown driving every band-to-pain reading on the Closed-Loop page, NRS by default (292).
-293. The deployment summary prints its area with the current taken out beside the plain one, descriptive; the "Choose a band" card reads only stability answers under the rule in force.
-294. A dagger beside every recommended current whose pain map moves between blocks of time, worded after 275; pooled maps checked too, the across-rates table not.
-295-296. Speed-ups, exact: the calibration check's held-out folds refitted in parallel (295); the settings history kept per session file (`therapy_settings_by_file`), so a new file costs one parse (296).
-297. The research band detector, two versions, saved as control analyses (`band_detector.py`); with REDCap ratings only no reading on either pair clears q < 0.05 (p corrected by 314). A lead, not a finding.
-298-299. One vocabulary on the pages: TD and PSD, no "spectrum"; the heat-map square's split by source printed (298); montage pieces labelled "Montage" (299).
-300-301. The beta-peak classifiers re-saved under the pinned scikit-learn; old PSD files counted, nothing to delete (300); the visit protocol revised, the June mock-ups removed (301, commit `4590af6a`).
-302-304. The three pages cut to one decision card and fewer words (the PI, 2026-09-26): Closed-Loop one decision card plus separate evidence cards (supersedes 258(a)), the device-units panel prints no value to program, a report for any band but the chosen one withheld and named (302); Stim Optimizer status line, allowed pairs in the open (303); Biomarkers pain-score selector first, one status line (304).
-305. The device's sensing-pair rule has one home, `DecodeCommon/sensing_rule.py`; the grid response carries it outside its key.
-306. The Closed-Loop page recommends no current above the per-side safe ceiling (the upper limit had inherited 4.8 mA); capped with the measured currents kept and the cap stated; a cap, not a refusal.
-307. One pain score and one clinic-sheet setting across the Closed-Loop page (a report under another is withheld and named); the sensing-pair tabs named for screen readers.
-308. The Stim Optimizer proposes, recommends, schedules and exports no current above a side's ceiling: the held ladder side held at it, safe sets bounded, queues filtered, second-stage windows read it; the 5.0 mA module limit is not the safe ceiling.
-309. The robustness answer keeps six entries, one per candidate (107's failure again); the timeline prints pain scores by their display label.
-310. The check before any decoder scores held-out predictions within each block of time (pooled, the current alone had been reading which block a rating sat in); the rotation null keeps the observed order. Nothing beats its own null on any pair.
-311. P-12's band-power cells re-measured on the full tiles; every conclusion stands (R 0-3+ in 323).
-312. Seven small items: a setting in force above the ceiling shown, never offered; the timeline's pain label fitted to its gutter; the control-analyses and stored-results lines folded; the ROC panel prints 293's adjusted area; the stability grid's kind and rule in one home (`sweep_settings.py`); a stale class name renamed; P-16 left to the PI (316).
-313. The acquisition timeline dates a spanning chronic file from the implant date; refusals name the quantity, not the column.
-314. The research band detector uses the exact rotation p and draws each reading against its own shuffled level; the Closed-Loop page prints no column name. With REDCap ratings alone nothing on either pair clears q < 0.05.
-315. Every chance test that moves the pain ratings is the exact rotation test (`stats_utils.rotations`); the chunk shuffle deleted (a band unrelated to pain had read p ≤ 0.05 in 10.7% of records). Bands clearing the 22-band correction: daily 32 -> 10, the Biomarkers page's settings 34 -> 17; the one-band rule still 0 of 50.
-316. P-16 (rename the Stim Optimizer package) not done: the PI, "no rename".
-317. Other pages serve a stored heat-map grid only when built under the grid rule in force; rule, kind and key in `sweep_settings.py`.
-318. The daily-default heat-map grids stay on disk through a keep group, one per pain score, outside the twelve.
-319. The sign-flip bootstrap projects each vector directly, so R 0-3+ fits in memory; every p, estimate and standard error unchanged.
-320-325. The minimalist, plain-language redesign and its follow-ups (specification in `artifacts/design_2026-09-26_minimalist_redesign/`): one typeface, five sizes, greys at 4.5:1 or darker, colour for data (320); nine mismatches with the specification fixed (321); twelve taste proposals, red only for device refusals and the ceiling, statistical blockers in ink with ✕ (322); 318 and 319 proved live and P-12 measured on R 0-3+ (323); the figure toolbar, the corrected-q label and the device-rule counts restored (324); the old page names back ("Biomarkers exploration", "Stim optimizer", "Closed-loop deployment"), matching settings behind one "Adjust matching parameters" button, the two heat maps aligned, long Stim optimizer sections fold, blank clinic-sheet cells left blank (325).
-326. The page-against-server review (2026-09-26; 40 findings, 39 kept after a skeptic's check), fixed on all three pages: the Stim optimizer's current map was drawn mirrored across its diagonal since 3779bfb8 (2026-09-14), now flipped (the server was right); its "proven better" strip reads the frozen setting's own verdict and joint pulse-width stratum; its saved answer is keyed on the clinic-sheet steps; the Closed-loop headline follows the server's verdict and blockers; read-back ticks clear on any change; each device refusal names who can clear it (`resolved_by`, for the PI to look over); Biomarkers heat maps say when they are older than the controls and follow the clinic-sheet switch together; p or q in [0.045, 0.05) prints "< 0.05"; safety lines stay in the open under the new folds; the clinic sheet is named by a study code only.
-327. Records cleaned (the PI, 2026-09-26): this digest cut from 213 KB to 54 KB (every number still resolves; detail in the full log); all ten finished plans and the superseded design papers moved to `docs/archive/2026-09-26/` with an INDEX; SPEC.md is the one current design specification, amended through 326; no live plan remains.
-328. Every time is on the tablet clock (the PI, 2026-09-26: "INS device time should not be used anywhere for any reason"). Measured on RCS08: `FirstPacketDateTime`, the chronic log, patient events, the event log and group history are on the DEVICE clock, which ran ahead of the tablet by up to 2.1 h by 2026-09 (about 25 s a day since 2025-12); only `SessionDate`/`SessionEndDate` are the tablet clock. Rule, one home (`MedtronicPercept/TabletClock.py`, applied on read, raw exports never rewritten): an entry's tablet time is its own device seconds count plus the anchor of the export it was first carried in, anchor = SessionEndDate minus the Final DeviceDateTimeOffsetInSeconds (spread 121 s over the record; 27 exports without an end time use SessionDate minus Initial); device ticks only measure a gap or the spacing of power readings inside one block. The stored record was corrected in place with a 1.3 GB backup and restore script, and the copies the device clock had created were collapsed to one row per entry (patient events 21,109 -> 1,226 kept; therapy changes, recharge and settings snapshots likewise); 396 old-block entries left out. Verdicts and effect signs unchanged; today's setting has been in force since 2026-09-02 19:15 UTC, not 09-03.
-329. The analyses and records that read the old device clock, fixed (the PI, 2026-09-26: "Fix those analyses re Sep 3"): every record dating today's setting 2026-09-03 corrected to 2026-09-02 19:15 UTC; a typed stretch date removed from a card; the chronic level-shift report fixed (readings resolved against every record's schedule) and, with every saved control analysis, re-run. Moved: L 0-2+ has no daily cycle (no pair has one); R 0-3+ at 30 s is the one plain reading above its shuffled level before any decoder (p 0.035, q 0.42); ratings at 60 s fell (L 1-3+ 187 -> 104); the regression-to-the-mean outside comparison 33.8% -> 6.6%; a 6 h current memory edges past the current in force on NRS. Unchanged: the 0 mA L 1-3+ rise with VAS, the level-shift directions, nothing in the band detector clearing q < 0.05.
-330. Every time field in the 583 exports checked (184 paths): no tablet-clock field was missed (only SessionDate and SessionEndDate, true UTC with correct daylight saving), and every device field that is read is converted; converted times are within seconds almost always, at most about 5 min. REDCap, clinic-sheet and converted device times now agree (median 0.3 and 0.0 min; 393 of 778 reports within 2 min of her own remote press, against 20 on the device clock). The 45-60 s rows' earlier counts rested on re-stamped copies of one press. Recommended and adopted: a 15-minute window either side (`artifacts/analysis_2026-09-26_json_time_fields_and_matching.md`).
-331. Matching defaults (the PI, 2026-09-26, on 330): one home, `sweep_settings.py` (the Biomarkers page's `matchingDefaults.js` pinned to it by a page test); the window 15 min either side for the page (a saved 5 or 60 moved once) and the daily defaults (was 60); the direction "nearest" (was "pro_first": under it a report kept two TD pieces under 30 s apart, 3 reports on RCS08, 0 under "nearest", which pairs 380 reports against 377); cap 3, gap 2 min, TD 30 s, no reuse, sheets off kept (no measured basis). The Closed-Loop page inherits the Biomarkers page's last run (its grid, the stability card, the summary but its direction) and prints it in one line. Live RCS08: every verdict and 0 of 50 usable unchanged; the daily NRS grid 9 -> 7 bands past the 22-band correction (all falling, L 1-3+); the L 1-3+ 24.5 Hz summary "VALIDATED (stim-dependent)" -> "candidate" (its mixed model had not converged, OR 2.44, 2.43-2.44); the Stim optimizer's right-side exploratory ladder (R 0-2+) is no longer proposed.
-332. A grid's stability answer is computed on the grid's own pain score (found by 331): the daily precompute asks with the score as `SweepMetric` only, the per-point setup read `LabelMetric` and fell back to NRS, so all six daily grids carried the NRS answers (100 cannot tell, 32 behaves differently). Now each uses its own (rule v7): NRS unchanged; VAS 87 / 45, Left Leg VAS 120 / 12, back VAS 103 / 29, McGill 100 / 29 (3 not computable), composite 122 / 10 (cannot tell / behaves differently).
-333. E1's fallback to the whole-record estimate is now a caveat, not silent (an open item from 326). The current-to-power edge prefers the pooled titration-session table (decision 124); when that table cannot be read, the report falls back to the setting-epoch slope over the whole record, which can carry the opposite sign (measured, L 1-3+ 24.5 Hz: pooled -7.31 per mA against the fallback +1.63). The `source` field already named which was used; the caveats list now says so in the open when the fallback fires. No value or verdict changes; live today both sides read the pooled table, so 0 caveats added, 0 fields differing.
-334. The all-band scan follows the clinic-sheet switch, the same as the heat maps (the PI, 2026-09-27: "if clinic readings were activated by clicking the buttons they should be used ... same as the heat maps inherit"). Confirmed the heat maps merge sheet ratings via the same `_merge_clinic_sheet_ratings` the grid, its drill-down and the deployment summary already call; the scan (`run_for_participant`) took a tidy DataFrame that routine cannot write to, so a new sibling adds the sheet ratings as DataFrame rows instead, through the same `sheet_ratings_for_metric` lookup. Existing report rows are never touched (a pure concatenation, per row); off, nothing changes.
-335. Every fold/collapsible toggle drawn as one prominent, filled arrow chip, not six copies of a plain 14 px character (the PI, 2026-09-27: "make any clickable drop-down area much more prominent, perhaps with a really big toggle arrow"). One home, `views/Reports/paper/FoldArrow.js`: a rounded, accent-tinted chip with a bold accent-coloured arrow, used by `paper/Fold.js`, `paper/Section.js`, `ClosedLoopSim/Fold.js`, `ClosedLoopSim/ThreeSourceResponsePanel.js`, `Biomarkers/MatchWindowBand.js`'s "Adjust matching parameters" button and `StimOptimizer/typeScale.js`'s `SizedFold`; a source test fails if any of them draws its own arrow again. Visual only; no value, verdict or safety text moves.
-336. The tertile split's stored key no longer moves when the percentile sliders were left dragged (the PI, 2026-09-27, resolving the "key naming inconsistency" open item). `sweep_settings.label_strategy_params` now returns the fixed 33.3333/66.6667 cuts whenever the strategy is "tertile", instead of whatever the sliders were last left at; the computed split itself never changed, only the duplicate-filing this caused.
-337. A caution line, and two shortened on-plot boxes, on the Biomarkers "split into high and low pain" preview (the PI, 2026-09-27, building the never-finished "pain-day balance" item and the ballooning-box complaint). `binarizationModel.classBalanceFlag` warns when the two groups are too few (Peduzzi et al. 1996, floor 10 in the smaller group) or too lopsided (3:1, a general severity threshold); the "Low"/"High"/"Left out" boxes on the histogram now carry only their essential count, the source breakdown staying on hover.
-338. The platform's on-screen name is "UF/UCSF BRAVO" (the PI, 2026-09-27, on the name left open by 320). Changed in the browser tab title, the per-page title suffix, the sidebar brand, the top navigation bar and (caught after the first bundle check) a Chinese-locale registration disclaimer. Bundle rebuilt and confirmed by grep.
-339. The corrected-q wording is shorter everywhere it appears: "q 0.03 (fdr 22 bands)", not "q 0.03 (p corrected for testing 22 bands)" (the PI, 2026-09-27; "fdr" is now the standing shorthand for this correction). Fixed in both places that build it (the Biomarkers heat maps and the Closed-Loop tooltip); every pinning test updated; bundle rebuilt.
-340. The server's sliding-window request default now matches what the page has actually sent for years (false), instead of true (open item N-11). Nothing on any live page changes (proven: the page's own request is byte-identical before/after); a caller that omits the field now gets the cheap all-data fit instead of the old train/test detector, which stays reachable on purpose, not deleted.
-341. The old time-domain branch's unused 1,000-shuffle band inference is deleted, and everything that fed only it (open item N-12, "see if ok to delete old one including shuffles"). Checked first: the fallback timeline and the on-screen "claimed by more than one session" warning both still work (they read a different part of the same branch, kept); nothing reads the shuffle test's own output, on any page, ever. Proven live: 51 fields removed, 0 added, 0 of the rest differing.
-342. CI's Secret scan job fixed: three RCS08 fixture files added since the last pass each carried a cache-store key gitleaks' entropy rule flagged as a fake API key. Same false-positive shape as before, verified the same way, fingerprinted rather than loosened.
-343. The heat-map hover's rating count dropped its "(about N independent)" addendum (the PI, 2026-09-27: "trim the heat-map hover text now, use your judgment"). That detail stays on the pinned panel line, which already carries it; the hover now prints only the plain count and the corrected q, matching the hover's own original 2026-09-16 ruling ("X ratings, q = Y and nothing else").
-344. The titration card took a one-visit plan for 2026-09-30 (the PI: L and R C+1-2-, max L 2.5 / R 3 mA, sense L 0-3 and R 0-3, 55 Hz) through a per-visit table that changes the card and its Google-sheet export only, never the safety ceiling; RCS08's entry was removed after the visit, the mechanism kept.
-345. The menu named "Choosing stimulation settings" twice: the redesign's name for "Customized Analysis / Analysis Builder" landed on both the group and the platform's own Analysis Builder page. The page is "Analysis builder" again; the group keeps the name.
-346. Step A of the contact-aware Stim Optimizer (the PI, 2026-09-30 / 10-01): the model never read the contacts, so Left ring 1 and ring 2 were one surface. Groups are now (left pulse width, right pulse width, Left contact); Left-0-mA stretches join every contact group (his ruling); the reference is the configuration in force; the pulse-width-pooled fit keeps contacts apart; clinic stretches key on Left contact, read from six sheet notations. Live RCS08: 60/160 us split 13 (L C+1-) / 8 (L C+2-); the 55 Hz next-visit check counts only L C+2- and now finds 1 of 6 current pairs, not 2. Corrects my first summary of the literature: Sarikhani 2022 did search contact (with amplitude); none of the three searched contact, rate and amplitude together.
-347. Step B (partial pooling across Left contacts) is built and judged offline, not wired in: a shared pain surface plus a per-contact deviation whose size the data estimate. On RCS08 a contact effect shows only when all pulse widths are fitted together (home: share 1.0, p 0.002, held-out error 0.902 vs 0.932 for step A's separate surfaces, interval of the difference -0.09 to +0.04 points; clinic: share 0.59, p 0.003), and contact and pulse width changed together, so it may be a pulse-width effect; within the one pairing with two Left contacts (home 60/160 us) there is none (p 1.0). It does not predict held-out days better than step A, so by the module's rule it stays offline. Step D waits.
-348. Step C, server side only: the response ranks every (Left contact, rate) block for the next clinic visit at the pairing in force, most promising first (the PI: candidates = contacts that carried current plus L C+1-2-; rank by predicted improvement + 2 SD). On RCS08 47 of 48 blocks have no surface and tie at the prior bound (2.78 NRS points), so the response says the tie and offers no single next block; the one fitted block (L C+2-, 55 Hz, the setting in force) ranks last (best 0.55 points at L 3.5 / R 3.0 mA). Not on the page until he decides how a tie is broken.
-349. Step C borrows across rates and pulse widths (the PI, 2026-10-01: "extend it to borrow across pulse widths"): a contact with at least 8 clinic stretches of its own gets one fit over all its rates and pulse widths, read at the block's rate and the pulse widths in force, and a contact block is scored only where Left carries current. On RCS08: 17 blocks borrowed (L 1+2-, L C+2-, L C+1-), every one predicted worse than the setting in force; the 30 blocks of the five contacts with fewer than 8 stretches (L C+1-2- among them) still tie at the top, so no single block is offered. Left C+1-2- in the Percept record (2025-07-16 to 2025-12-03) was programmed at 0 mA on every one of its 227 rows.
-350. The Stim optimizer page shows the next-block ranking as two lists (the PI, 2026-10-01): contacts not yet tested enough to predict (tied at the top), then the measured blocks ranked with where each prediction comes from. The clinic and home-visit sheets (30 local copies, synced 2026-09-17) DO record Left C+1-2- with current: 0.5 and 1.0 mA on 2025-10-30 (110 Hz, 100 us), home program group D at 1.0 mA (110 Hz, from 2025-10-30) then 1.6 mA (145 Hz, from 2025-11-19), and 1.6 mA at the 2026-02-03 at-home test (165 Hz, 140 us); only one of those steps carries a pain rating, which is why the model sees one Left C+1-2- stretch. The Percept settings history shows none of them with current.
-351. Visit sheets: every step is kept, rated or not (the PI, 2026-10-01). Unrated steps are filled first from the visit's own Notes tab (timed verbal ratings), then from REDCap (the survey filed while the step was in force, VAS / 10); what stays unrated counts as EXPOSURE to its contact, never as pain data, and an unrated step with no time at all is a plan, not exposure (the 09_24_26 sheet is the titration card's exported ladder, never filled in). After a manual Drive sync (the local copy had stopped at 2026-09-17): 958 steps, 539 rated on the Stim tab, 30 from Notes, 6 from REDCap, 383 unrated. Rules recorded in CLAUDE.md section 10 and docs/clinic_sheets_parsing.yaml.
-352. Plotly out of the main page file (step 2 of the 2026-10-01 speed-up list, the PI's go-ahead). The route table imported the experimental pages eagerly (unused there) and App.js imported the offline report and the two survey pages eagerly; the experimental pages and the offline report import Plotly, so every page, the login page included, downloaded it first. Now all four load on demand. main.*.js 6,581,540 -> 726,653 bytes (1,879 -> 214 KB compressed); Plotly (3.5 MB) in its own chunk, fetched when a charting page opens (seen in the browser on the offline report, no console errors). 5 jest tests (3 watched RED); 1,026 of 1,026 across 119 suites.
-353. One maths-library thread by default in every BRAVO process (step 3 of the 2026-10-01 speed-up list). Each web worker had started as many maths threads as the machine has cores (16 on the Mac, 64 on the Jetstream2 BRAVO); several workers then fight over the cores (decisions 140 and 268 measured small fits 10-15x slower that way). Proof on RCS08, one thread against the default: heat-map grid 43,685 numbers compared, 19 differ, all timing; Closed-Loop report 73,600 compared, 3 differ, timing; Stim Optimizer two-stage 64,212 compared, 1 differs, timing. Single requests alternating default/one/default/one: 9.73/8.60/8.84/8.30 s, 27.04/25.89/26.91/26.74 s, 24.14/23.99/25.05/25.44 s. A thread count already set in the environment still wins. 3 tests (BRAVO/maths_threads.py, imported first by settings.py).
-354. Fewer page redraws (step 6, items C3-C5, of the 2026-10-01 speed-up list). Biomarkers page: the pain series for the composite score is built once per score choice instead of on every render, and the Biomarker Data Timeline no longer redraws on a slider change unless the high/low split view is showing (the only view that reads the matching result). Stim Optimizer page: the squares of 'Where have currents been tried' are drawn the first time that closed section is opened, not on page load, and stay drawn after it is closed again. No number on any page changes; 2 orientation tests now open the section first, as a reader does. 5 new page tests (watched RED; commit 3f7a289f says 8, wrongly); 1,031 of 1,031 across 121 files.
-355. The Stim Optimizer page asks for the two-stage plan at the same time as its own answer, not after it (step 4, item C2, of the 2026-10-01 speed-up list). The server stores the two answers separately and works them out in separate web workers, so waiting only added the plan's whole computing time. Same numbers either way (RCS08: the page's answer 10,541 values, 0 differ; the plan's 64,212, 1 differs, its own computing time). With nothing saved, the plan is ready at 73.5 s instead of 106.4-106.8 s on the Jetstream2 BRAVO (page answer unchanged, 32.3 s) and at 25.9-27.9 s instead of 35.4-37.5 s on the Mac (page answer 0.4-0.7 s later, the two share its cores); two alternating rounds each. Item B2 (the 'sleeping' in the Stim Optimizer profile) was dropped: it is joblib waiting for its leave-one-out workers. 2 page tests (1 watched RED); 1,033 of 1,033 across 122 files.
-356. Batched band power equals the one-at-a-time calculation on the Jetstream2 BRAVO too (2026-10-02, the PI: make them identical). Its x86 chip's maths library split the band-sum product over all segments differently from a one-segment product: 2,241 of 29,400 values differed in the last binary digit (largest 3.9e-16 of the value; 0 on the Mac). The band sums now run one segment at a time, the single call's own size: 0 of 29,400 differ on Jetstream2; the Mac's numbers cannot change (its single call is untouched).
-357. The Closed-Loop report simulates its record's segments in worker processes (2026-10-02). Each segment depends on itself alone; results are combined in segment order, so every sum is added as before. RCS08 on Jetstream2, warm, run side by side: 73,600 values, 0 analysis values differ (3 computing-time fields); the request 42.4 -> 38.4 s, its simulation step 9.1 -> 5.3 s (one round). Fitting the Stim Optimizer's groups in parallel was tried and dropped: 52.6 -> 66.6 s, and 55.2 s with the cores shared, because each call has only 4-10 groups and their held-out checks already run in parallel.
-358. The Stim Optimizer request runs its independent blocks side by side in threads (2026-10-02): the readiness check beside the two-stage block, and the clinic-sheet fit beside each further pain site. RCS08 on Jetstream2, warm, run side by side: 64,212 values, 0 analysis values differ (only the two-stage block's own computing time); 52.4 -> 45.6 s (one round). Threads share the request's inputs instead of copying them; they still share Python's lock, which caps the gain. STIM_OPTIMIZER_CONCURRENT_BLOCKS=0 turns it off.
-359. Unpacked recordings are kept in each Jetstream2 web worker between requests (2026-10-02). Unpacking RCS08's recordings cost 12.3 s of every Closed-Loop request; a deep copy of the kept content costs 1.5 s. Each file is kept under its path and content hash (a changed file is read and verified again) and every caller gets a deep copy, so no request can change another's data. RCS08 on Jetstream2, warm, side by side: Closed-Loop 38.8 -> 29.1 s (73,600 values, 0 analysis values differ), two-stage 51.6 -> 45.6 s (64,212, 0), heat-map grid 9.1 -> 9.0 s (43,685, 0). The decoded recordings are 4.0 GB per worker, so it is off unless BRAVO_RECORDING_CACHE_MB sets a budget; only the Jetstream2 BRAVO sets one (6000 MB per worker, 16 workers).
-360. The Stim Optimizer's 1,080 band checks run in worker processes (2026-10-02). Each check (two regression fits: does this band's power move with current?) depends on its own cell; whole cells go out in chunks and come back in order. RCS08 on Jetstream2, warm, three side-by-side rounds: two-stage request 45.2 -> 38.2, 55.0 -> 46.5, 45.9 -> 38.1 s; 64,212 values, 0 analysis values differ. STIM_OPTIMIZER_SCREEN_JOBS=1 turns it off; screens under 100 checks stay in one process.
-361. The Closed-Loop threshold-rule fit skips the blank padding after each stretch's last reading (2026-10-02): RCS08's table is 366 stretches x 1,499 steps with 42,684 of 548,634 cells holding a reading, and the compiled loop did every cell 900 times per fit. Each step's sum still runs over the whole row in the same order, so all 900 parameter sets give the same likelihoods to the last bit; the fit takes 0.81 s instead of 2.39 s (alternating rounds), the warm Closed-Loop request 38.7 -> 36.5 and 38.1 -> 35.1 s (73,600 values, 0 analysis values differ).
-362. The heat-map grid sweeps its contact pairs side by side in threads (2026-10-02): each pair reads only its own cache; answers return in pair order. RCS08 on Jetstream2, warm, side by side: 9.4 -> 7.8 s; 43,685 values, the 19 that differ are all computing-time fields. BIOMARKER_SWEEP_THREADS=1 turns it off.
-363. The clinic-sheet epoch frame converts each step's time to a California day once per frame, not per setting and pain site (2026-10-02): `_rating_days` ran 2,432 times per frame on RCS08, half of a build that runs twice per Stim Optimizer request. RCS08 on Jetstream2: 304 epochs x 45 columns, 13,680 cells, 0 differ; a build 7.1-8.9 s -> 3.0-3.9 s (three each, side by side on a busy machine).
-364. One worker-pool size for every BRAVO process pool (2026-10-02): the core count less one (63 on the Jetstream2 BRAVO, 15 on the Mac, unchanged there), or BRAVO_POOL_JOBS. joblib keeps one pool per web worker and rebuilds it whenever a call asks for a different size: 1.3-1.5 s each time on Jetstream2, against 0.02 s to reuse it; the Closed-Loop simulation asked for 64 and the Stim Optimizer for 15. The pool's size never changes an answer (each use's tests compare against one process); on Jetstream2 the held-out folds took 35.2 s at 48 workers and 35.8 s at 15.
-365. Fewer page redraws, part 2 (2026-10-02; speed-up items C5, C6, C8; sub-agent, reviewed). Closed-Loop: the Background fold's three-source figure and three simulation figures are drawn when the fold first opens, not on page load; "Sign and print" and "Export JSON" ask the page to draw them first, so the record still carries them. The "Which band?" grid and five Stim Optimizer cards redraw only when their inputs change. The research checks at the foot of the Biomarkers and Stim Optimizer pages are requested when their fold first opens. Redraw time during one page load in page tests (the sub-agent's alternating rounds): Stim Optimizer cards 336 -> 35-39 ms, Closed-Loop grid 70 -> 30 ms; each page's full text byte-identical (51,057 and 46,831 characters). 16 new page tests. C7 not done: it needs a test that two simultaneous R requests are safe. **Held for the PI:** once its simulation loads, the Closed-Loop page redraws without end and always shows "Something it depends on has changed", because the shared result cache reports each read's time as the computed time (`resultCache.getResult`, the PI's file); a page-side fix and its test are ready, not applied.
-366. The result cache's "computed at" is the time an answer was stored, not its last read (2026-10-02; the PI: "YES APPLY IT", and lifted rule 7, "these are our files, edit as needed"). `resultCache.getResult` had returned the read time, so the Closed-Loop page redrew without end once its simulation loaded (12 extra redraws in half a second in a page test, 0 after) and always showed "Something it depends on has changed"; the Recompute bar's "Computed …" line and the printed Closed-Loop record showed read time. Fixed at the source; the page-side stamp the sub-agent proposed (365) is not used. 3 new tests watched failing; page tests 1,038 passed.
+202. No log power on the E1 path; other sites listed for the PI.
+203. Compaction: digest, full log (`docs/`), shorter CLAUDE.md, house rules, store architecture; handoffs, reports, plans, generic rules deleted.
+204. No log power in the pooled full-spectrum path or pain correlation: 10 of 132 stability verdicts moved, chosen band kept (short copy, 289).
+205. Outlier rule (5 MAD), heat-map logistic cross-check on raw power; log-scale option refused.
+206. Aperiodic (1/f) fit and `fooof` transform deleted (unused; device cannot threshold peak prominence).
+207. Calibration (no code): frozen model's curvature = between-band gain pooled into one line; constant refitted.
+208. June calibration anchor reproduced, extended to 2026-09-03 (n 133, k 345.59); block check, 5-MAD ratio rule; recipe, de-identified blocks committed.
+~~209~~. →211. Transform constant = midpoint of two time blocks, 349.10.
+210. One-band rule's pain leg: "supported" (positive, interval above zero); "established" beside.
+211. Transform constant 345.59 everywhere (one median over all blocks; 209 superseded); bridge 72.16 composed; verdicts unchanged.
+212. BM calibration panel shows the calibration in effect (transform constant, June reference, per-centre/pair bridge ratio, server constants), not the June model.
+213. Run finder joins recordings split by <20 s tablet restarts at held current; rising and falling settings count, tagged by leg (PI: pool both); 2026-09-16 left ladder: 8 settled currents, one run; verdicts unchanged.
+214. CL "LSB & power" cross-check: µV trace with transform band power vs the constant in effect; independent pairing 1/352.7 µV² per LSB (0.98×).
+215. CL inputs keyed on recording set, both calibration constants, rule version (had served a stale-constant frame).
+216. BM top timeline = acquisition timeline: no pain reports, raw kind `acquisition_timeline`; rating-centred index at `/queryPsdScanIndex`.
+217. Readiness applies the sensing-pair rule: RCS08 (left C+2-, right C+1-2-) allows L 1-3+, R 0-3+, neither pain-rising; usable 11→0 of 50; 20 s margin OFF.
+218-222. PI rulings 2026-09-21: June log-log model (218) and four uncalled chronic-detector routines (219) deleted; harmonic rule warns only (220); matcher: no per-report cap, warns on sharing (221); pulse-width pooling behind a toggle, default separate (222).
+223. Amends 36: plan `.mode` may be `inject-smart autonomous`, attested at start and per edit; `gate` off.
+224-227. 2026-09-21 cleanup: Binarization card option C, timing histogram (224); per-report band-power reader deleted (225); duplicate timeline dropped (226); left refit panel deleted, recipe reports median-ratio interval and spread, modelled-threshold band = own scatter, stale-constant comments fixed (227).
+228. Square's scatter and violin use the grid's ratings, sheets included when on (REDCap-only drew a rising line beside a negative r); sheet points hollow.
+229. Exploratory search, L 1-3+, 252 settings (window, direction, cap, reuse, sheets): no row positive at q < 0.05; sheets on, 10-22 of 22 bands fall with pain; near-hit 24.5 Hz, 60 s, 120-min pre-report: r 0.32, p 0.054 (corrected by 315). A lead.
+230. Exploratory ladder, L C+1-2- (L 0-3+ needs those contacts): 15 steps up/down, three 5-minute holds off/on/off, first-exposure stop, 33 sheet rows (rate 236; watch list 277).
+231. Reliable-change index deleted (12 pairs, too much scatter); supersedes 75, 104, 111, 112.
+232. Research batch 2026-09-22: four reports, three reviewers each (`artifacts/research_2026-09-22_*`): left-lead pain-rising bands rest on the current in force; eight questions for the PI.
+233. PI's answers: (1) ladder reading = ramp with current term, holds beside; (2) "supported" need not survive current removal; (3) ladder at 55 Hz; (4) back-site parallel fit; (5) next session 55 Hz, 100/150 us, merged with 60/160 us data; (6) calibration check warns; (7) adjusted grid behind a switch; (8) chosen band on the server.
+234. Heat-map correlation with own-side current removed, behind `AdjustForStimCurrent` (off); plain value decides; switch in the store key, not the settings tag; current from `therapy_settings` (`routines/stim_current.py`).
+235. Interim caveats: current-confound note on a left 21.5-27.5 Hz band (→242); current map's pooled association fails out of sample; heat maps' RCS08 lines rewritten.
+236. Exploratory ladder at 55 Hz, the rate in force (cell's rate beside); supersedes 230 ("24.5 Hz is clear" corrected by 277).
+237. Titration readings (`titration_readings.py`): ramp with current removed, holds beside; no adjusted number for a band 98% current; one visit = a lead. Not yet on the card.
+238. Clinic-stream fit follows the requested site (was left leg); back site fitted; pre-registered calibration check per surface warns.
+239. `coverage_gap`: coverage refusal → pairs the next visit must repeat or add, under the ceiling; one-side ladders need joint corners (ruling-5 count corrected by 255, 258(c)).
+240. Two guards per offline model and a pre-decoder check (`confound_diagnostic.py`), on no page; no band set beats its shuffled level (corrected by 310, 315).
+241. Current removed as a named shape (`stats_utils.CovariateShape`: line, square, 3-knot spline, three kernels, per-setting levels); guards spline, `partial_corr` line. L 1-3+ pain turning over with current: suggestive; no shape changes the verdict.
+242. CL basis stated: one sign-off verdict; stability answer ranked in "What would change this" and the coherence note; one caveats list (`adapter.caveats_for_report`); E2 current-removed, descriptive (NRS left 0.564 plain, 0.553 adjusted; corrected by 290).
+243. SO ordered as a decision: sensing rule visible; "still positive with the current taken out" per band (stored adjusted grid); "proven better" exposure and rate-pin assumption stated (layout →303, 320, 325).
+244. CL jump links follow card order (test reads the page file).
+245. Amends 243: current-map legend open; stopping rule per side (unassessable on RCS08).
+246. Housekeeping: three unread CL field groups removed; squares show effective independent ratings, grids shuffle reconciliation; whole-search count (corrected by 315); time-of-day and weekend check (moved by 264; R 1-3+ cycle withdrawn, 265): weekends raise pain and L 1-3+ power; removing them moves r ≤0.019.
+247. Device rule D52 (sensing pair) blocks on CL (had passed L 0-2+ with contact 2 stimulating); caveats to four decimals; heat maps at box width.
+248. Stability answer: one entry per grid (12), named; "Choose a band" reads only its grid's; grid settings gain the sheet switch (131 broken since 186).
+249. Chosen CL band on the server, append-only, with chooser (`chosen_band.py`, `/api/queryClosedLoopChosenBand`); browser-only copy flagged; sign-off names band and grid.
+250. Parameter notes: one heading counting its checks; two long-failing CL tests repaired.
+251. Coverage gap under "Enough combinations tried?" on the current-map card.
+252. One-off left chronic power vs left setting changes (`stepB3_chronic_level_shift.py`): 4 of 21 readable; three on L 1-3+ at 23.44 Hz fall as current rises, one interval excluding zero; unread.
+253. SO maps fail calibration (`calibration_diagnosis`, warning): left-leg 55 Hz 60/160 us map drifts between time blocks; others thin. No boundary-avoiding kernel (see 275).
+254. Grid-chosen band carries its grid's pain score, split, window to the deployment summary (was NRS, tertiles).
+255. Pulse-width-pooled clinic fits via the toggle; ruling 5's merged answer (`next_session_coverage`) heads the clinic section. Corrects 239: 3 of 6 pairs, not 5 (2 of 6 since 258(c)).
+256. Stopped-early stability run protects its own grid's answer.
+257. CI runs page tests (jest).
+258. PI rulings 2026-09-24: (a) sign-off card last (→302); (b) red-outlined button adds sheet ratings to the deployment summary, default off, one merge helper; (c) clinic settings count only ratings with the fitted score; (d) legibility (→320).
+259. Recompute bar enlarged (rule 7 lifted once).
+260. Every view starts at the implant date (RCS08 2025-07-16 18:06 UTC; `DecodeCommon/data_start.py`): earlier measurements dropped on read, setting in force moved to it, rows kept.
+261. Coverage reads stored rating days as days (had summed or skipped arrays).
+262. PI's analyses: both-off stretch 2025-07-16 to 2025-08-22, left 21.5-25.5 Hz family rises with VAS (lead); a current with memory never beats the current in force; 240's window → 60 minutes (corrected by 310).
+263. Implant cut reaches export, raw recordings list, participant-context service, custom-analysis pipeline.
+264-265. Control analyses saved offline, one card on BM and SO (`modules/ControlAnalyses/`, all runs kept); 265 corrects 246: from implant, R 1-3+ has no daily cycle, L 0-2+ does.
+266-271. Exact speed-ups 2026-09-25: pieces in batches, one FFT each (266); in-request repeats once (267); E2 interval fits single-threaded (268); numba design-rule filter, no disk cache (269); CI installs numba (271); 270: participant-context service fixed for RCS08.
+272. Carry-over test saved: every fall followed its rise, so carry-over and drift cannot be told apart; a down-first ladder would.
+273-274. No pain rating under a label that ignores it: CL inputs hold the settings stream, design matrix per request (273); numba type-check log silenced (274).
+275. Regression to the mean: the 1.6/1.2 mA swing is the whole group's drift those weeks, not the setting (restates 253).
+276. 262's current-removed p → its own shuffle (corrected by 310, 315: nothing beats its shuffled level).
+277. One harmonic check (`analytics.harmonic_landings_hz`), PI's advisory wording; at 55 Hz centres 22.5-29.5 Hz, 24.5 Hz included, carry a folded multiple; 9 of 22 clear.
+278-279. Exact speed-ups: recording-set identity once per request (278); grid medians in one pass (279).
+280-281. ROC cut-point in standardized band power units, burn-in stated, stale lines fixed (280); corrected sheet cells keep the delivered value (281, P-13).
+282-288. 2026-09-25 batch: rating-persistence, stepped-current control analyses (282); three numba compilations, one-column time-block labels (283); stability panel dated (284); P-05 to P-09, P-15; three-week burn-in kept for convergence (285); P-14 via the difference routine (286); harmonic bands flagged, not struck (287); Dockerfiles install R 4.3.3, lme4, lmerTest, emmeans, unbuilt (288).
+289. Saved 3 s pieces only for the one input set all pages use, else in memory; key carries the implant date. A short copy had served three windows (Part 2).
+290. E2 read the previous settings period's ratings since `8fbe11ba`; fixed. The only E2 ever "established" was that one: L 1-3+ Left Leg VAS now 0.641, not established.
+291-292. Stability card: per-state odds ratio with interval, one rating in one state and one week (291); intervals allow repeats per pain report; CL pain-score dropdown (NRS default) drives every band-to-pain reading (292).
+293. Deployment summary shows the current-removed area beside the plain one; "Choose a band" reads only current-rule stability answers.
+294. Dagger on each recommended current whose pain map drifts between time blocks (wording per 275); pooled maps too, not the across-rates table.
+295-296. Exact speed-ups: calibration folds in parallel (295); settings history per session file (`therapy_settings_by_file`), one parse per new file (296).
+297. Research band detector (two versions, `band_detector.py`) saved as control analyses; REDCap-only: nothing clears q < 0.05 on either pair (p per 314). A lead.
+298-299. Pages say TD and PSD, never "spectrum"; square's split by source shown (298); montage pieces labelled "Montage" (299).
+300-301. Beta-peak classifiers re-saved under pinned scikit-learn; old PSD files counted, none deleted (300); visit protocol revised, June mock-ups removed (301, `4590af6a`).
+302-304. One decision card per page (PI, 2026-09-26): CL decision plus evidence cards (supersedes 258(a)), device-units panel gives no value to program, unchosen bands' reports withheld and named (302); SO status line, allowed pairs visible (303); BM pain-score selector first, one status line (304).
+305. Sensing-pair rule in `DecodeCommon/sensing_rule.py`; grid response carries it outside its key.
+306. CL recommends nothing above the per-side ceiling (limit had inherited 4.8 mA): capped, cap stated, measured currents kept; not a refusal.
+307. One pain score and sheet setting across CL (others withheld, named); sensing-pair tabs named for screen readers.
+308. SO offers nothing above a side's ceiling: held ladder side at it, safe sets bounded, queues filtered, second-stage windows capped; the 5.0 mA module limit is not the ceiling.
+309. Robustness answer: six entries, one per candidate (107's failure again); timeline shows pain-score labels.
+310. Pre-decoder check scores held-out predictions within each time block (pooled, current alone predicted the block); rotation keeps observed order. Nothing beats its shuffled level.
+311. P-12's band-power cells re-measured on full pieces; conclusions stand (R 0-3+: 323).
+312. Seven items: setting in force above the ceiling shown, not offered; timeline pain label fits gutter; control-analyses and stored-results lines folded; ROC prints 293's adjusted area; stability kind and rule in `sweep_settings.py`; stale class renamed; P-16 to the PI (316).
+313. Timeline dates a spanning chronic file from implant; refusals name the quantity, not the column.
+314. Band detector: exact rotation p, each reading against its shuffled level; CL prints no column names. REDCap-only: nothing clears q < 0.05.
+315. Every chance test moving pain ratings = exact rotation test (`stats_utils.rotations`); chunk shuffle deleted (false p ≤ 0.05 in 10.7% of records). Past the 22-band correction: daily 32→10 bands, BM settings 34→17; one-band rule still 0 of 50.
+316. P-16 (rename the SO package): PI, "no rename".
+317. Cross-page grids served only if built under the grid rule in force; rule, kind, key in `sweep_settings.py`.
+318. Daily-default grids kept by a keep group, one per pain score, outside the twelve.
+319. Sign-flip bootstrap projects vectors directly; R 0-3+ fits in memory; every p, estimate, standard error unchanged.
+320-325. Minimalist redesign (`artifacts/design_2026-09-26_minimalist_redesign/`): one typeface, five sizes, greys 4.5:1 or darker, colour for data (320); nine mismatches fixed (321); twelve taste proposals: red only for device refusals and the ceiling, statistical blockers in ink with ✕ (322); 318, 319 proved live, P-12 on R 0-3+ (323); toolbar, corrected-q label, device-rule counts restored (324); old names back ("Biomarkers exploration", "Stim optimizer", "Closed-loop deployment"), one "Adjust matching parameters" button, heat maps aligned, long SO sections fold, blank sheet cells blank (325).
+326. Page-against-server review (2026-09-26; 40 findings, 39 kept after a skeptic's check): SO current map mirrored across its diagonal since 3779bfb8 (2026-09-14), flipped; "proven better" strip reads the frozen setting's verdict and joint pulse-width stratum; saved answer keyed on sheet steps; CL headline follows the server; read-back ticks clear on change; refusals name who clears them (`resolved_by`, for PI review); BM heat maps flag staleness, follow the sheet switch together; p or q in [0.045, 0.05) prints "< 0.05"; safety lines unfolded; sheet named by study code.
+327. Records cleaned (PI, 2026-09-26): digest 213→54 KB; ten finished plans, superseded designs to `docs/archive/2026-09-26/` with INDEX; SPEC.md the one design specification (through 326); no live plan.
+328. Tablet clock only (PI, 2026-09-26). On RCS08 `FirstPacketDateTime`, chronic log, patient events, event log, group history use the DEVICE clock (≤2.1 h fast by 2026-09, ~25 s/day since 2025-12); only `SessionDate`/`SessionEndDate` are tablet. `MedtronicPercept/TabletClock.py` (on read; exports untouched): tablet time = device seconds + export anchor (SessionEndDate − Final DeviceDateTimeOffsetInSeconds; spread 121 s; 27 exports lacking end time: SessionDate − Initial). Database corrected in place (1.3 GB backup); duplicates collapsed (patient events 21,109→1,226); 396 old-block entries excluded. Verdicts unchanged; setting in force since 2026-09-02 19:15 UTC, not 09-03.
+329. Device-clock readers fixed (PI, 2026-09-26, re Sep 3): today's setting re-dated 2026-09-03 → 2026-09-02 19:15 UTC; typed stretch date removed; level-shift report fixed, re-run with all control analyses. Moved: no pair has a daily cycle (L 0-2+ lost it); R 0-3+ at 30 s the one plain reading above its shuffled level before any decoder (p 0.035, q 0.42); 60 s ratings fell (L 1-3+ 187→104); regression-to-the-mean outside comparison 33.8%→6.6%; 6 h current memory edges past the current in force (NRS). Unchanged: 0 mA L 1-3+ rise with VAS, level-shift directions, band detector (nothing at q < 0.05).
+330. All 583 exports' time fields checked (184 paths): no tablet-clock field missed (only SessionDate, SessionEndDate: true UTC, daylight saving correct); every device field read is converted (at most ~5 min off). REDCap, sheet and device times agree (median 0.3, 0.0 min; 393 of 778 reports within 2 min of her remote press vs 20 on the device clock). Earlier 45-60 s counts were re-stamped copies of one press. Adopted: 15 min either side (`artifacts/analysis_2026-09-26_json_time_fields_and_matching.md`).
+331. Matching defaults (PI, 2026-09-26, on 330) in `sweep_settings.py` (`matchingDefaults.js` pinned by test): window 15 min either side for page (saved 5 or 60 moved once) and daily (was 60); direction "nearest", not "pro_first" (kept two TD pieces <30 s apart: 3 reports on RCS08, 0 under "nearest"; pairs 380 vs 377 reports); cap 3, gap 2 min, TD 30 s, no reuse, sheets off. CL inherits BM's last run (grid, stability card, summary except direction). RCS08: verdicts, 0 of 50 unchanged; daily NRS grid 9→7 bands past the 22-band correction (all falling, L 1-3+); L 1-3+ 24.5 Hz "VALIDATED (stim-dependent)"→"candidate" (unconverged, OR 2.44, 2.43-2.44); SO right ladder (R 0-2+) dropped.
+332. Stability answer per grid's own pain score (found by 331; precompute set only `SweepMetric`, setup read `LabelMetric`, fell back to NRS: six grids held NRS answers, 100 cannot tell, 32 behaves differently). Rule v7, cannot tell/behaves differently: NRS unchanged; VAS 87/45, Left Leg VAS 120/12, back VAS 103/29, McGill 100/29 (3 not computable), composite 122/10.
+333. E1's fallback now a stated caveat (open item from 326): when the pooled titration table (124) is unreadable, the per-setting-period change in power per mA over all data can flip sign (L 1-3+ 24.5 Hz: pooled -7.31 per mA, fallback +1.63); `source` already named it. Live: both sides pooled, 0 caveats added, 0 fields differing.
+334. All-band scan follows the clinic-sheet switch like the heat maps (PI, 2026-09-27): `run_for_participant` takes a DataFrame `_merge_clinic_sheet_ratings` cannot write, so a sibling appends sheet rows via `sheet_ratings_for_metric`; existing rows untouched; off, no change.
+335. Fold toggles: one filled arrow chip, not six plain 14 px characters (PI, 2026-09-27): `views/Reports/paper/FoldArrow.js` in `paper/Fold.js`, `paper/Section.js`, `ClosedLoopSim/Fold.js`, `ClosedLoopSim/ThreeSourceResponsePanel.js`, `Biomarkers/MatchWindowBand.js`, `StimOptimizer/typeScale.js` (`SizedFold`); a test fails any private arrow. Visual only.
+336. Tertile key no longer moves with left-dragged sliders (PI, 2026-09-27, "key naming inconsistency"): `sweep_settings.label_strategy_params` returns fixed 33.3333/66.6667; the split never changed, only duplicate filing.
+337. BM high/low pain split preview (PI, 2026-09-27): `binarizationModel.classBalanceFlag` warns on too few (Peduzzi et al. 1996: minimum 10 in the smaller group) or lopsided groups (3:1, a general severity cut-off); "Low"/"High"/"Left out" boxes show counts only, sources on hover.
+338. On-screen name "UF/UCSF BRAVO" (PI, 2026-09-27; open since 320): tab, page titles, sidebar, top bar, a Chinese-locale registration disclaimer. Rebuilt; grep-confirmed.
+339. Corrected q reads "q 0.03 (fdr 22 bands)", not "q 0.03 (p corrected for testing 22 bands)" (PI, 2026-09-27; "fdr" standing shorthand): BM heat maps, CL tooltip; tests updated.
+340. Server's sliding-window default true → false, as the page has sent for years (N-11); live pages unchanged (request byte-identical); omitting callers get the all-data fit; old train/test detector kept reachable.
+341. Old time-domain branch's unused 1,000-shuffle band inference deleted with its sole inputs (N-12); fallback timeline and "claimed by more than one session" warning kept. Live: 51 fields removed, 0 added, 0 differing.
+342. CI secret scan: store keys in three new RCS08 fixtures fingerprinted (gitleaks entropy false positive), rule not loosened.
+343. Heat-map hover drops "(about N independent)" (PI, 2026-09-27; kept on the panel line): count and corrected q only, per the 2026-09-16 ruling ("X ratings, q = Y and nothing else").
+344. Titration card took a one-visit plan for 2026-09-30 (PI: L and R C+1-2-, max L 2.5 / R 3 mA, sense L 0-3, R 0-3, 55 Hz) via a per-visit table that never touches the ceiling; RCS08's entry removed after, mechanism kept.
+345. Menu said "Choosing stimulation settings" twice (redesign renamed "Customized Analysis / Analysis Builder" in group and page); page reverted to "Analysis builder".
+346. Contact-aware SO, step A (PI, 2026-09-30 / 10-01): groups (left pulse width, right pulse width, Left contact) split Left ring 1 from 2; Left-0-mA stretches join every contact group (his ruling); reference = configuration in force; pooled-pulse-width fit keeps contacts apart; clinic stretches keyed from six sheet notations. RCS08: 60/160 us → 13 (L C+1-) / 8 (L C+2-); 55 Hz check counts only L C+2-: 1 of 6 pairs, not 2. Correction: Sarikhani 2022 searched contact (with amplitude); none of three searched contact, rate and amplitude together.
+347. Step B (partial pooling across Left contacts) built, kept offline: RCS08 contact effect only with all pulse widths pooled (home: share 1.0, p 0.002, held-out error 0.902 vs A's 0.932, difference interval -0.09 to +0.04 points; clinic: share 0.59, p 0.003), confounded with pulse width; none within the one two-contact pairing (home 60/160 us, p 1.0). No held-out gain over A, so offline (module rule). Step D waits.
+348. Step C, server only: ranks (Left contact, rate) blocks for the next visit at the pairing in force (PI: candidates = current-carrying contacts plus L C+1-2-; rank = predicted improvement + 2 SD). RCS08: 47 of 48 blocks lack a surface, tie at the prior bound (2.78 NRS points): no single block offered; the one fitted (L C+2-, 55 Hz, in force) ranks last (best 0.55 points at L 3.5 / R 3.0 mA). Off-page until he rules on ties.
+349. Step C borrows across rates and pulse widths (PI, 2026-10-01): contacts with ≥8 own clinic stretches get one fit, read at the block's rate and pulse widths in force; blocks scored only where Left carries current. RCS08: 17 blocks borrowed (L 1+2-, L C+2-, L C+1-), all worse than the setting in force; 30 blocks of five contacts with <8 stretches (incl. L C+1-2-) tie at top. Percept history (2025-07-16 to 2025-12-03): L C+1-2- at 0 mA on all 227 rows.
+350. SO ranks next blocks in two lists (PI, 2026-10-01): too-untested contacts (tied), then measured blocks with prediction sources. Sheets (30 local copies, synced 2026-09-17) show L C+1-2- with current: 0.5, 1.0 mA on 2025-10-30 (110 Hz, 100 us); home group D 1.0 mA (110 Hz, from 2025-10-30), 1.6 mA (145 Hz, from 2025-11-19); 1.6 mA at home 2026-02-03 (165 Hz, 140 us). One has a pain rating (one modelled stretch); Percept history shows none.
+351. Visit sheets: every step kept (PI, 2026-10-01). Unrated steps take Notes-tab timed verbal ratings, then REDCap (survey filed while in force, VAS / 10); still unrated = EXPOSURE, never pain data; untimed = a plan (09_24_26 = the titration card's unfilled export). After a manual Drive sync (copy stopped 2026-09-17): 958 steps; 539 rated on the Stim tab, 30 from Notes, 6 from REDCap, 383 unrated. Rules: CLAUDE.md section 10, docs/clinic_sheets_parsing.yaml.
+352. Plotly out of the main bundle (speed-up step 2, 2026-10-01, PI's go-ahead): four eagerly imported pages now load on demand, so login no longer downloads it. main.*.js 6,581,540→726,653 bytes (1,879→214 KB compressed); Plotly (3.5 MB) its own chunk (offline report checked, no console errors). 5 jest tests (3 watched RED); 1,026/1,026 across 119 suites.
+353. One maths-library thread per BRAVO process (speed-up step 3, 2026-10-01): one per core (16 Mac, 64 JS2) contended (140, 268: small fits 10-15x slower). RCS08, one thread vs default: grid 43,685 numbers, 19 differ; CL 73,600, 3; SO two-stage 64,212, 1; all timing fields. Alternating default/one: 9.73/8.60/8.84/8.30 s, 27.04/25.89/26.91/26.74 s, 24.14/23.99/25.05/25.44 s. Environment setting wins. 3 tests (BRAVO/maths_threads.py, first import in settings.py).
+354. Fewer redraws (speed-up step 6, C3-C5, 2026-10-01): BM composite pain series once per score choice; Biomarker Data Timeline redraws on slider change only in the high/low split view; SO 'Where have currents been tried' squares drawn on first opening, then kept. No number changes; 2 orientation tests open the section first. 5 new page tests (watched RED; commit 3f7a289f wrongly says 8); 1,031/1,031 across 121 files.
+355. SO requests the two-stage plan with its answer (speed-up step 4, C2, 2026-10-01). RCS08: answer 10,541 values, 0 differ; plan 64,212, 1 (computing time). Cold: plan 106.4-106.8→73.5 s on JS2 (answer 32.3 s, unchanged); 35.4-37.5→25.9-27.9 s on the Mac (answer 0.4-0.7 s later); two alternating rounds each. B2 (profile 'sleeping') dropped: joblib awaiting leave-one-out workers. 2 page tests (1 watched RED); 1,033/1,033 across 122 files.
+356. Batched band power = one-at-a-time on JS2 too (2026-10-02, PI: make them identical): x86 maths library differed in the last binary digit for 2,241 of 29,400 values (≤3.9e-16; 0 on the Mac); band sums now per segment: 0 of 29,400 differ; Mac path untouched.
+357. CL simulates segments in worker processes, combined in order (2026-10-02). RCS08/JS2 warm, side by side: 73,600 values, 0 analysis values differ (3 timing fields); request 42.4→38.4 s, simulation 9.1→5.3 s (one round). Parallel SO group fits dropped: 52.6→66.6 s, 55.2 s sharing cores (4-10 groups; folds already parallel).
+358. SO runs independent blocks in threads (2026-10-02): readiness beside two-stage, sheet fit beside each extra pain site. RCS08/JS2 warm, side by side: 64,212 values, 0 analysis values differ; 52.4→45.6 s (one round); Python's lock caps it. STIM_OPTIMIZER_CONCURRENT_BLOCKS=0 disables.
+359. JS2 web workers keep unpacked recordings (2026-10-02): unpacking RCS08 cost 12.3 s per CL request, a deep copy 1.5 s; keyed by path and content hash; callers get deep copies. RCS08/JS2 warm, side by side: CL 38.8→29.1 s (73,600 values, 0 analysis values differ), two-stage 51.6→45.6 s (64,212, 0), grid 9.1→9.0 s (43,685, 0). 4.0 GB per worker: off unless BRAVO_RECORDING_CACHE_MB is set; JS2: 6000 MB per worker, 16 workers.
+360. SO's 1,080 band checks (two regression fits each) in worker processes, whole cells in chunks, in order (2026-10-02). RCS08/JS2 warm, three side-by-side rounds: two-stage 45.2→38.2, 55.0→46.5, 45.9→38.1 s; 64,212 values, 0 differ. STIM_OPTIMIZER_SCREEN_JOBS=1 disables; <100 checks stay single-process.
+361. CL threshold-rule fit skips padding after each stretch's last reading (2026-10-02): RCS08's 366 stretches × 1,499 steps hold 42,684 of 548,634 cells, each visited 900 times per fit. Row sums keep their order: all 900 parameter sets match to the last bit; fit 2.39→0.81 s (alternating rounds); warm CL request 38.7→36.5, 38.1→35.1 s (73,600 values, 0 differ).
+362. Grid sweeps contact pairs in threads, each on its own cache, in order (2026-10-02). RCS08/JS2 warm, side by side: 9.4→7.8 s; 43,685 values, 19 differ, all timing. BIOMARKER_SWEEP_THREADS=1 disables.
+363. Clinic-sheet epoch frame converts step times to California days once per frame (2026-10-02): `_rating_days` had run 2,432 times per frame, half a build run twice per SO request on RCS08. JS2: 304 epochs × 45 columns, 13,680 cells, 0 differ; build 7.1-8.9→3.0-3.9 s (three each, side by side, busy machine).
+364. One worker-pool size for all BRAVO process pools (2026-10-02): cores minus one (63 JS2; 15 Mac, unchanged) or BRAVO_POOL_JOBS; joblib rebuilt a worker's pool on each size change (1.3-1.5 s on JS2 vs 0.02 s reuse; CL asked 64, SO 15). Size never changes answers; JS2 folds 35.2 s at 48 workers, 35.8 s at 15.
+365. Fewer redraws, part 2 (2026-10-02; items C5, C6, C8; sub-agent, reviewed): CL Background fold's three-source and three simulation figures drawn on first opening ("Sign and print", "Export JSON" draw them first); "Which band?" grid and five SO cards redraw on input change only; BM and SO research checks load on first opening. Page-test redraw time: SO cards 336→35-39 ms, CL grid 70→30 ms; page text byte-identical (51,057, 46,831 characters). 16 new page tests. C7 not done (needs a test that two simultaneous R requests are safe). Endless CL redraw (`resultCache.getResult`, the PI's file) held for him; fixed by 366.
+366. Result cache's "computed at" = time stored, not last read (2026-10-02; PI: "YES APPLY IT", lifting rule 7: "these are our files, edit as needed"). `resultCache.getResult` returning read time had made CL redraw endlessly (12 extra redraws in half a second in a page test, 0 after) and stamped the Recompute bar and printed CL record with read time. Fixed at the source, not by 365's page stamp. 3 new tests watched failing; 1,038 page tests passed.
 367. The test sets consolidated (2026-10-02; the PI authorised it directly; sub-agent, reviewed). Both Python sets on JS2, side by side: 145 -> 66 s wall. Host 1,907 -> 1,893 passed, container 956 -> 946, 0 failed; page tests 1,033 -> 1,019 (14 duplicates). Speed: Stage 1 fits in tests that never read the calibration check pass `calibration_check=False` (a warning that changes no recommendation, 233 ruling 6; 77.6 -> 7.7 s per fit, verdicts identical); identical fits built once per module; the two threshold equality checks split into 5 and 3 pieces. 30 Python tests removed, each named against the test that covers it (full log). Untrue names split or fixed: `test_family_wise_correction_is_isolated_per_grid...` never ran the sweep (its true half kept; per-grid isolation now untested), `test_lag_corr_finds_a_planted_lag_one...`, `test_block_length_for_returns_one...`.
 368. The design rule's per-step sum no longer calls itself (2026-10-02; the PI: "fix that problem where the design rule shouldn't call itself"). `_pairwise_sum` walks numpy's pairwise tree with an explicit stack; same numbers, same order. Equal bit for bit to np.sum and to the old recursive sum at 26 lengths (0-8,192, 6 draws each) and to the old sum at 8,193-65,536. Prepares the disk cache (369).
 369. Each web worker starts warm (2026-10-02; the PI: keep the pool warm "by setting very reasonable limits"). `BRAVO/warmup.py`, run by `gunicorn.conf.py`'s `post_worker_init`: imports, R under its lock, every numba loop. All numba loops now use the disk cache (design rule since 368; controller loop and robustness replay; reverses the caution of 269/283). Every pool asks through `parallel.loky_backend()` so a started pool is the one requests reuse; `BRAVO_POOL_IDLE_SECONDS` keeps it. Jetstream2 budget: 16 web workers x pool 31, kept a day, recording cache 3,000 MB: ~127 GB idle, ~175 GB worst (runbook 3a). Mac: no pool at start (`BRAVO_WARMUP_POOL` unset).
@@ -447,4 +444,6 @@ Refs are commits or PRs; `→N` means superseded by N; a range such as `282-288.
 
 ## Part 4 — Lineage, in brief
 
-PRs #3-#8 built the engine, figures, audit and validation; #9 (`39dfb2f`, 2026-06-29) merged 61 commits into `v3.1.0`; #10-#12 followed; since 2026-09-15 work lands on the default branch directly. Landmarks: `90eb109` calibrated closed-loop band power; `958cc89` matcher vectorised 21.4x with 0 differences; `688a185` withdrew an invented constant; `6c3c9f2` corrected brain-side labels by amendment. Two pushed messages (`b700717`, `7ab2d1b`) wrongly say the container path is not a live mount. Full lineage: the full log.
+- PRs #3-#8: engine, figures, audit, validation. #9 (`39dfb2f`, 2026-06-29): 61 commits into `v3.1.0`; #10-#12 followed. From 2026-09-15: work lands on the default branch.
+- `90eb109`: calibrated closed-loop band power. `958cc89`: matcher vectorised 21.4x, 0 differences. `688a185`: invented constant withdrawn. `6c3c9f2`: brain-side labels corrected by amendment.
+- `b700717`, `7ab2d1b`: pushed messages wrongly say the container path is not a live mount. Full lineage: the full log.

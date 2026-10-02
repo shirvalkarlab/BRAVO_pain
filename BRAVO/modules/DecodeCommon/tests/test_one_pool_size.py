@@ -41,8 +41,10 @@ def _three():
 
 
 def test_the_three_pools_default_to_one_size_the_cores_less_one():
-    got = _with_env({}, _three)
-    assert got == (P.pool_jobs(),) * 3 == (max(1, (os.cpu_count() or 2) - 1),) * 3
+    # Both read inside the cleared environment: a BRAVO_POOL_JOBS set on the machine (31 on the
+    # Jetstream2 BRAVO, decision 369) must not leak into the default this test pins.
+    got, shared = _with_env({}, lambda: (_three(), P.pool_jobs()))
+    assert got == (shared,) * 3 == (max(1, (os.cpu_count() or 2) - 1),) * 3
 
 
 def test_the_shared_variable_moves_all_three_and_a_use_s_own_moves_only_it():

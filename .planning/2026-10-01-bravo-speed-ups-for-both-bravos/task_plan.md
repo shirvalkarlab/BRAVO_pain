@@ -48,8 +48,8 @@ Phase 5
 ### Phase 6: Step 6, C3-C6 (pages)
 - [ ] C3 Biomarkers composite preview memoised; C4 timeline dependency
 - [ ] C5 folded figures drawn on open (Stim Optimizer) / after first paint (Closed-Loop, snapshots wait)
-- [ ] C6 memoised heavy cards, stable props
-- **Status:** pending
+- [x] C6 memoised heavy cards, stable props (with C5 Closed-Loop folds and C8: decision 365, 14c80751)
+- **Status:** complete
 
 ### Phase 7: Step 7, B5-B9 + C7-C9
 - [ ] B5 numba prange (simulation, design rule); B6 readiness fits; B7 grid cells; B8 DB queries; B9 background pool
