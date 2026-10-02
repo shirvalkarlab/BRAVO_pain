@@ -110,7 +110,9 @@ its line about `MEGA_HANDOFF.md`, archived), `jevgrep` (rule 14).
    recording-derived product** (in the payload it serves a stale rating with no visible symptom).
 6. **Every write-back carries its provenance chain and writer**, or Stim Optimizer can confirm its
    own exploration policy.
-7. **Do not edit `resultCache.js`, `useCachedResult.js` or `RecomputeBar.js`** (the PI's).
+7. **`resultCache.js`, `useCachedResult.js` and `RecomputeBar.js` are ours to edit** (the PI lifted the
+   old no-edit rule, 2026-10-02: "these are our files, edit as needed"). They serve all three pages,
+   so a change to them comes with a cache test and the full page-test run.
 8. **Plan approval is not execution authority.** He gives an explicit go-ahead before implementation.
 9. **Push this branch's work** (standing go-ahead, 2026-09-07), identity inline on every commit:
    `git -c user.name="Prasad Shirvalkar" -c user.email="prasad.shirvalkar@ucsf.edu"`. Commit only

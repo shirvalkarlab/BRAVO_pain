@@ -302,6 +302,9 @@ export function putResult(moduleKey, uid, key, bundle, meta) {
     bytes: estimateBytes(bundle),
     key: key == null ? null : String(key),
     savedAt: Date.now(),
+    // When the answer arrived; never touched by a read (decision 366). `savedAt` is the last-use
+    // time that eviction reads, and a read moves it.
+    computedAt: Date.now(),
     serverToken: SERVER_TOKEN,
     meta: meta || null,
   });
@@ -350,7 +353,11 @@ export function getResult(moduleKey, uid, currentKey) {
     bundle: e.bundle,
     key: e.key,
     savedAt: e.savedAt,
-    computedAt: e.savedAt,
+    // The time the answer was stored, not this read's (decision 366). Returning the read time made
+    // the Recompute bar say "Computed just now" for an hour-old answer, put the print time on the
+    // Closed-Loop record, and gave the Closed-Loop simulation (keyed on the report's `computedAt`)
+    // a new key on every render, so that page redrew without end.
+    computedAt: e.computedAt,
     meta: e.meta,
     stale: reasons.length > 0,
     staleReasons: reasons,

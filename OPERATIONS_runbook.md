@@ -247,8 +247,9 @@ From the project's own session rules, and they are not optional:
    source.
 3. **Before finishing, run both suites through their own runners and report the counts from those
    runs.**
-4. **Do not edit the shared result-cache contract files** — `resultCache.js`, `useCachedResult.js`,
-   `RecomputeBar.js`. **They are the PI's, and two defects in them are open on him.**
+4. **The shared result-cache files** — `resultCache.js`, `useCachedResult.js`, `RecomputeBar.js` —
+   may be edited (the PI lifted the old no-edit rule, 2026-10-02); they serve all three pages, so a
+   change comes with a cache test and the full page-test run.
 5. **Plan approval is not execution authority.** The PI gives an explicit go-ahead before
    implementation begins. The one exception he authorised himself was the Redis memory bound,
    because it was a live hazard rather than an improvement.

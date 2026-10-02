@@ -28,6 +28,7 @@ writes to the device.
    changing anything that looks obviously improvable.
 6. **Patient data:** device export file names carry real patient names; keep that folder out of the
    repository. `RCS08` is the de-identified code.
-7. **Do not edit** `Client/src/database/resultCache.js`, `useCachedResult.js` or `RecomputeBar.js`
-   (the PI's files).
+7. `Client/src/database/resultCache.js`, `useCachedResult.js` and `RecomputeBar.js` may be edited
+   (the PI lifted the old no-edit rule, 2026-10-02); a change comes with a cache test and the full
+   page-test run.
 8. **Plan approval is not a go-ahead to implement**; the PI gives that explicitly.

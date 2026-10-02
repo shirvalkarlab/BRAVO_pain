@@ -429,11 +429,11 @@ one stage severalfold and invalidates every comparison drawn from it.
 - **Check the served bundle before touching component code**, and **search for string literals the
   panel owns rather than component names**, because a production build renames components.
 - One result cache serves all three analysis views: `Client/src/database/resultCache.js`, the hook
-  `useCachedResult.js`, and the shared control `RecomputeBar.js`. **These are the PI's files — do
-  not edit them without asking.** Two defects in that contract are open and the three views work
-  around both: a deliberate recompute issues **two** fetches, and the entry limit is six against
-  nine slots for one participant, with a count being the wrong unit when one entry is nineteen
-  megabytes and another twenty kilobytes.
+  `useCachedResult.js`, and the shared control `RecomputeBar.js`. Ours to edit, with a cache test (the
+  PI lifted the old no-edit rule, 2026-10-02). The two defects once listed here are fixed in the
+  code: a recompute issues one fetch (the in-flight guard in `useCachedResult.js`), and a byte
+  budget plus a participant count replaced the six-entry limit (`resultCache.js`). Since decision
+  366, `computedAt` is the time an answer was stored; `savedAt` is the last read, for eviction.
 
 ---
 
@@ -510,7 +510,7 @@ and that the stale notice appears.
 |---|---|
 | `Client/src/views/Reports/Biomarkers/` | `index.js` (state and the slider handlers), `BiomarkerAnalytics.js`, `BiomarkerDataTimeline.js` (which replaced the older `BiomarkerTimeline.js`), `BinarizationPreview.js`, `binarizationModel.js`, `PsdLsbPanel.js`, `SpectralFeatureImportance.js`, `BandTimeSweepPanel.js` |
 | `Client/src/views/Reports/ClosedLoopSim/` | `index.js`, `BandCandidateStore.js`, `DeploymentVerdictStrip.js`, `DeploymentRocPanel.js`, `DeploymentEvidencePanel.js`, `LsbPowerPanel.js`, `CalibrationInEffectPanel (in `Biomarkers/`).js`, `EraRefitPanel.js`, `DeploySignoffCard.js`, `ThreeSourceResponsePanel.js`, `palette.js`, `deployPrint.css` |
-| Shared, and **the PI's own files — do not edit without asking** | `Client/src/database/resultCache.js`, `useCachedResult.js`, `RecomputeBar.js`, `views/Reports/moduleCacheKeys.js` |
+| Shared by all three pages (editable since 2026-10-02, with a cache test) | `Client/src/database/resultCache.js`, `useCachedResult.js`, `RecomputeBar.js`, `views/Reports/moduleCacheKeys.js` |
 
 **The `CUTPOINT_TRACE = 2` constant in `DeploymentRocPanel.js` is the single source for the
 cut-point trace index**, and the restyle-by-trace-index pattern depends on it.

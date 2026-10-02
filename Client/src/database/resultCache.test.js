@@ -270,3 +270,36 @@ test("discarding an entry is enough on its own to make a mounted hook refetch ex
   await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
   expect(sink.current.stale).toBe(false);
 });
+
+// "COMPUTED AT" IS WHEN THE ANSWER WAS STORED, NOT WHEN IT WAS LAST READ (decision 366, 2026-10-02).
+// `getResult` touches each entry's read time for eviction, and used to return that same read time as
+// `computedAt`: the Recompute bar said "Computed just now" for an answer an hour old, the printed
+// Closed-Loop record named the time it was printed, and the Closed-Loop simulation, keyed on the
+// report's `computedAt`, changed key on every render and redrew the page without end.
+test("computedAt stays at the time the answer was stored, however often it is read", () => {
+  const now = jest.spyOn(Date, "now");
+  try {
+    now.mockReturnValue(1000);
+    putResult(MODULES.closedLoop, UID, "k", { answer: 1 });
+    now.mockReturnValue(61000);
+    const first = getResult(MODULES.closedLoop, UID, "k");
+    now.mockReturnValue(3601000);
+    const later = getResult(MODULES.closedLoop, UID, "k");
+    expect({ first: first.computedAt, later: later.computedAt }).toEqual({ first: 1000, later: 1000 });
+  } finally {
+    now.mockRestore();
+  }
+});
+
+test("a read still counts as use for eviction (savedAt is touched; computedAt is not)", () => {
+  const now = jest.spyOn(Date, "now");
+  try {
+    now.mockReturnValue(1000);
+    putResult(MODULES.closedLoop, UID, "k", { answer: 1 });
+    now.mockReturnValue(5000);
+    const read = getResult(MODULES.closedLoop, UID, "k");
+    expect({ savedAt: read.savedAt, computedAt: read.computedAt }).toEqual({ savedAt: 5000, computedAt: 1000 });
+  } finally {
+    now.mockRestore();
+  }
+});
