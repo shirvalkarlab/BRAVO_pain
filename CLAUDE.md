@@ -128,7 +128,7 @@ its line about `MEGA_HANDOFF.md`, archived), `jevgrep` (rule 14).
 14. **Search with jevgrep; use `rg` for exact text, never `grep`** (PI, 2026-09-27; skill `jevgrep`, OpenJev via
     Codiv). For finding, classifying, routing, ranking, retrieving or verifying code by meaning, run
     `jg "<question>" <narrowest folder>`. Exact text (a literal string, a count, proving something is
-    absent: rules 2, 3, 11) goes to ripgrep: `rg`, installed in both containers (`docker/Dockerfile.tools`).
+    absent: rules 2, 3, 11) goes to ripgrep: `rg`, installed in both containers (`Docker/Dockerfile.tools`).
     Every `jg` sends the folder's code to Codiv: never `--no-ignore`, never a folder holding patient data.
 
 ## 8. Read first, and on demand
