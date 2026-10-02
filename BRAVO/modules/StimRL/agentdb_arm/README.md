@@ -25,7 +25,7 @@ code does none of the training, for the reasons below, so the models are written
 - **1.3.9 to 3.0.0-alpha.20 (`controllers/LearningSystem`) is a look-up table, not a model.**
   The state is a string. Values are stored under the exact key `state|action`. `trainBatch` uses
   the Q-learning target (best next value) for every session type, SARSA included. The "Decision
-  Transformer" score is the average reward stored under that exact key. A 22-number state written
+  Transformer" score is the average reward stored under that exact key. A state of numbers written
   as text never matches another state, so nothing carries over to a new state.
 - **agentic-flow 1.10.2** `createAgentDBAdapter` imports `agentdb/reasoningbank/adapter/agentdb-adapter`.
   Only AgentDB 1.0.x has that path, but agentic-flow asks for `agentdb ^1.4.3`, which does not
@@ -50,7 +50,7 @@ None of this code was run, and none of the patient data went into it.
 - `run_agentdb_arm.py`:
   - Runs one model type over the reward variants and seeds, using the recipe's training settings:
     epochs 100, batch 64, learning rate 0.001, validation split 0.2.
-  - Scores each run with `validation.evaluate_policy` and writes
+  - Scores each run with `validation.evaluate_all` (primary and sensitivity sets) and writes
     `_agent_bridge/_stim_rl_data/results/agentdb_<model>_<variant>_<seed>.json`.
   - `--model retrieval` scores the recipe's step 3 on its own.
 - `test_agentdb_arm.py`: the tests. They use small made-up data, not patient data.

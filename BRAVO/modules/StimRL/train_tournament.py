@@ -151,7 +151,8 @@ def _null_logger():
 def run_deep(name, variant, seed, steps, gamma, dev, *, cv=True) -> dict:
     import d3rlpy
     d3rlpy.seed(seed)
-    db, tr, val = D.load(variant=variant)
+    db, tr, _ = D.load(variant=variant)
+    vals = D.validation_sets(db, tr.observations)
     algo = make_algo(name, gamma=gamma, seed=seed, dev=dev)
     t0 = time.time()
     algo.fit(tr.mdp_dataset(), n_steps=steps, n_steps_per_epoch=steps, show_progress=False,
@@ -159,9 +160,10 @@ def run_deep(name, variant, seed, steps, gamma, dev, *, cv=True) -> dict:
              logger_adapter=_null_logger())
     train_s = time.time() - t0
     pol, q = deep_fns(algo, name)
-    res = V.evaluate_policy(name, pol, val, q=q, seed=seed)
-    res.update(variant=variant, seed=seed, gamma=gamma, steps=steps, train_s=round(train_s, 1), device=dev)
-    rec = V.recommend(pol, {c: D.latest_state(db, c) for c in C.CONTACT_LEVELS}, q=q)
+    res = V.evaluate_all(name, pol, vals, q=q, seed=seed)
+    res.update(variant=variant, seed=seed, gamma=gamma, steps=steps, train_s=round(train_s, 1), device=dev,
+               n_transitions=int(len(tr.transitions)))
+    rec = V.recommend(pol, {c: D.latest_state(db, c, tr.observations) for c in C.CONTACT_LEVELS}, q=q)
     res["recommendation"] = rec.to_dict(orient="records")
     if cv:
         d3rlpy.seed(seed)
@@ -170,9 +172,11 @@ def run_deep(name, variant, seed, steps, gamma, dev, *, cv=True) -> dict:
 
 
 def run_small(variant, seed) -> list:
-    db, tr, val = D.load(variant=variant)
+    """The table and GP models are deterministic given the data, so they run once (seed 0)."""
+    db, tr, _ = D.load(variant=variant)
+    vals = D.validation_sets(db, tr.observations)
     out = []
-    latest = {c: D.latest_state(db, c) for c in C.CONTACT_LEVELS}
+    latest = {c: D.latest_state(db, c, tr.observations) for c in C.CONTACT_LEVELS}
     models = [("QTable-AC (exploit)", T.TabularActorCritic(gamma=0.5, seed=seed), "exploit"),
               ("QTable-AC (explore)", T.TabularActorCritic(gamma=0.5, seed=seed), "explore"),
               ("QTable bandit (gamma 0)", T.TabularActorCritic(gamma=0.0, seed=seed), "exploit"),
@@ -181,15 +185,43 @@ def run_small(variant, seed) -> list:
     for name, m, mode in models:
         m.fit(tr.transitions)
         pol = (lambda mm, md: (lambda o: mm.policy(o, md)))(m, mode)
-        res = V.evaluate_policy(name, pol, val, q=m.q, seed=seed)
-        res.update(variant=variant, seed=seed, device="cpu")
+        res = V.evaluate_all(name, pol, vals, q=m.q, seed=seed)
+        res.update(variant=variant, seed=seed, device="cpu", n_transitions=int(len(tr.transitions)))
         res["recommendation"] = V.recommend(pol, latest, q=m.q).to_dict(orient="records")
         out.append(res)
-    for name, pol in [("Keep current setting", V.stay_policy), ("Random setting", V.make_random_policy(seed))]:
-        res = V.evaluate_policy(name, pol, val, seed=seed)
+    const = V.make_constant_policy(tr.transitions)
+    for name, pol in [("Keep current setting", V.stay_policy), ("Random setting", V.make_random_policy(seed)),
+                      (f"Most common setting {const.setting}", const)]:
+        res = V.evaluate_all(name, pol, vals, seed=seed)
         res.update(variant=variant, seed=seed, device="cpu")
         out.append(res)
     return out
+
+
+def run_heldout_value(name, variant, seed, steps, gamma, dev) -> dict:
+    """The clinic-sheet held-out test (`validation.heldout_visit_value_rank`) for one deep model."""
+    import d3rlpy
+    _, tr, _ = D.load(variant=variant)
+
+    cache = {}
+
+    def fit(train_tr):
+        visits = sorted(set(train_tr["visit"]))
+        key = tuple(visits)
+        if key in cache:                       # the decomposition reuses the same five fits
+            return cache[key]
+        d3rlpy.seed(seed)
+        algo = make_algo(name, gamma=gamma, seed=seed, dev=dev)
+        algo.fit(tr.mdp_dataset(visits), n_steps=steps, n_steps_per_epoch=steps, show_progress=False,
+                 save_interval=10 ** 9, experiment_name=f"hv_{name}_{variant}_{seed}", with_timestamp=False,
+                 logger_adapter=_null_logger())
+        cache[key] = lambda o, a: algo.predict_value(np.asarray(o, np.float32), np.asarray(a, np.float32))
+        return cache[key]
+
+    r = V.heldout_visit_value_rank(fit, tr.transitions, seed=seed)
+    r["decomposition"] = V.switch_gain_decomposition(fit, tr.transitions, seed=seed, n_perm=500)
+    r.update(model=name, variant=variant, seed=seed, steps=steps)
+    return r
 
 
 def _save(res, fname):
@@ -208,7 +240,18 @@ def main():
     ap.add_argument("--gamma", type=float, default=0.5)
     ap.add_argument("--no-cv", action="store_true")
     ap.add_argument("--small-only", action="store_true")
+    ap.add_argument("--heldout-value", action="store_true",
+                    help="only the clinic held-out switch-gain test for the value-based deep models")
     a = ap.parse_args()
+    if a.heldout_value:
+        for v in a.variants:
+            for s in a.seeds:
+                for name in [x for x in a.algos if x != "BC"]:
+                    r = run_heldout_value(name, v, s, a.steps, a.gamma, device())
+                    _save(r, f"heldout_value_{name.replace('+', 'p')}_{v}_{s}.json")
+                    print(name, v, s, {k: round(x, 3) for k, x in r.items() if isinstance(x, float)},
+                          {k: round(x, 3) for k, x in r["decomposition"].items() if isinstance(x, float)}, flush=True)
+        return
     if a.sanity:
         rep = sanity_check()
         _save(rep, "sanity_check.json")
@@ -217,16 +260,19 @@ def main():
     dev = device()
     for v in a.variants:
         for s in a.seeds:
-            for r in run_small(v, s):
-                _save(r, f"small_{r['model'].split(' ')[0]}_{r['model'].replace(' ', '_').replace('(', '').replace(')', '')}_{v}_{s}.json")
+            if s == a.seeds[0]:
+                for r in run_small(v, s):
+                    slug = "".join(ch if ch.isalnum() else "_" for ch in r["model"])[:40]
+                    _save(r, f"small_{slug}_{v}_{s}.json")
             if a.small_only:
                 continue
             for name in a.algos:
                 t0 = time.time()
                 r = run_deep(name, v, s, a.steps, a.gamma, dev, cv=not a.no_cv)
                 _save(r, f"deep_{name.replace('+', 'p')}_{v}_{s}.json")
-                print(f"{name:7s} {v:10s} seed {s}: rho_dist {r['rho_dist']:+.3f} (p_shift {r['p_dist_shift']:.3f}) "
-                      f"rho_q {r['rho_q']:+.3f} near-far {r['near_minus_far']:+.2f} risk {r['risk_mean']:.3f} "
+                print(f"{name:7s} {v:10s} seed {s}: rho_dist_change {r['rho_dist_change']:+.3f} "
+                      f"(p_shift {r['p_dist_change_shift']:.3f}) rho_adv {r['rho_adv']:+.3f} "
+                      f"near-far change {r['near_minus_far_change']:+.2f} risk {r['risk_mean']:.3f} "
                       f"past-limit {r['share_past_limit']:.2f}  [{time.time() - t0:.0f} s]", flush=True)
 
 

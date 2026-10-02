@@ -34,6 +34,21 @@ PW_EDGES = (120.0,)                     # bands: <=120, >120 us (mean of the two
 N_CONTACT = len(C.CONTACT_LEVELS) + 1
 
 
+_OFF_IDX = C.CONTACT_LEVELS.index("off (Left 0 mA)")
+
+
+def consistent_with_contact(setting, contact_idx: int) -> bool:
+    """A setting fits the Left contact it is recommended for: Left current 0 when the contact is
+    "off", above 0 for a named active contact ("other" accepts either). Without this the explore
+    reading recommended 10 Hz at 0 mA for every active contact (2026-10-02)."""
+    left = float(setting[1])
+    if contact_idx == _OFF_IDX:
+        return left == 0.0
+    if contact_idx < len(C.CONTACT_LEVELS):
+        return left > 0.0
+    return True
+
+
 def _band(x, edges):
     return int(np.searchsorted(np.asarray(edges), x, side="left"))
 
@@ -131,14 +146,17 @@ class TabularActorCritic:
         s = self.state_cell(obs)
         cells = []
         safety = SafetyModel()
-        for si in s:
+        contacts = np.argmax(obs[:, 15:15 + N_CONTACT], axis=1)
+        for si, ci in zip(s, contacts):
+            ok = np.array([c in self.cell_setting and not safety.violates(self.cell_setting[c])
+                           and consistent_with_contact(self.cell_setting[c], ci) for c in range(N_ACTIONS)])
             if mode == "exploit":
-                cells.append(int(np.argmax(self.pi[si])) if self.visited[si].any() else self.fallback_cell)
+                score = np.where(ok & self.visited[si], self.pi[si], -np.inf)
+                if not np.isfinite(score).any():                 # nothing tried here: clinicians' overall pick
+                    score = np.where(ok, self.n.sum(axis=0), -np.inf)
             else:
-                ucb = self.Q_shrunk[si] + self.beta * self.sigma / np.sqrt(self.n[si] + 1.0)
-                ok = np.array([c in self.cell_setting and not safety.violates(self.cell_setting[c])
-                               for c in range(N_ACTIONS)])
-                cells.append(int(np.argmax(np.where(ok, ucb, -np.inf))))
+                score = np.where(ok, self.Q_shrunk[si] + self.beta * self.sigma / np.sqrt(self.n[si] + 1.0), -np.inf)
+            cells.append(int(np.argmax(score)) if np.isfinite(score).any() else self.fallback_cell)
         return self._cell_to_norm(cells, obs)
 
     def q(self, obs, actions_norm):
@@ -180,9 +198,30 @@ class GPBandit:
     def policy(self, obs, mode="exploit"):
         obs = np.atleast_2d(obs)
         out = []
+        raw_c = denormalize_action(self.candidates)
         for o in obs:
+            ci = int(np.argmax(o[15:15 + N_CONTACT]))
             X = self._x(np.repeat(o[None], len(self.candidates), 0), self.candidates)
             mu, sd = self.gp.predict(X, return_std=True)
             score = mu if mode == "exploit" else mu + 1.0 * sd
+            fits = np.array([consistent_with_contact(r, ci) for r in raw_c])
+            score = np.where(fits, score, -np.inf) if fits.any() else score
             out.append(self.candidates[int(np.argmax(score))])
         return np.asarray(out, dtype=np.float32)
+
+
+class StateOnlyGP:
+    """Reference: a Gaussian process on the symptom numbers alone, blind to every setting. Any
+    held-out score it earns comes from pain falling by itself, not from settings."""
+
+    def fit(self, transitions: pd.DataFrame):
+        from sklearn.gaussian_process import GaussianProcessRegressor
+        from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel
+        X = np.stack(transitions["obs"].to_list())[:, :9]
+        y = transitions["reward"].to_numpy(float)
+        self.gp = GaussianProcessRegressor(ConstantKernel(1.0) * RBF(np.ones(9)) + WhiteKernel(1.0),
+                                           normalize_y=True, random_state=0).fit(X, y)
+        return self
+
+    def q(self, obs, actions_norm):
+        return self.gp.predict(np.atleast_2d(obs)[:, :9])

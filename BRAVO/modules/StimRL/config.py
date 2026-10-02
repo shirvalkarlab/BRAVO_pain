@@ -1,7 +1,7 @@
 """Fixed numbers for the offline RL study, each with where it comes from.
 
 Nothing here is new clinical policy: every limit is copied from the module that owns it, and a
-test (`tests/test_config_sources.py`) reads the owning file and fails if the two disagree.
+test (`tests/test_data_pipeline.py`, the last four) reads the owning file and fails if the two disagree.
 """
 
 # ---- Safety limits ----------------------------------------------------------------------------

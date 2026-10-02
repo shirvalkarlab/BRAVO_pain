@@ -2,9 +2,10 @@
 
     cd BRAVO/modules && ~/.venvs/bravo-stim-rl/bin/python -m StimRL.report --out <folder>
 
-Ranking: the expected drop in home pain is `-near_minus_far` (mean home pain, 0-10 points, in the
-third of long-term periods farthest from the model's recommendation minus the third closest),
-taken from the long-term record no model saw. The risk score is how close the recommendations sit
+Ranking: the expected drop in home pain is `-near_minus_far_change`: how much more home pain fell
+(0-10 points, from the previous period) in long-term periods near the model's recommendation than
+in periods far from it, from the long-term record no model trained on. It is an association in
+records where settings were not assigned at random, not a measured effect of the recommendation. The risk score is how close the recommendations sit
 to the 4.5 mA ceiling (0 below 4.0 mA, 1 at the ceiling). Models whose recommendations ever pass a
 limit are ranked after every model whose recommendations never do.
 """
@@ -29,11 +30,21 @@ def collect(results_dir: str) -> pd.DataFrame:
         if os.path.basename(p) == "sanity_check.json":
             continue
         r = json.load(open(p))
+        base = os.path.basename(p)
+        if base.startswith("agentdb_") and "variant" not in r:
+            for v in ("worst_site", "delta", "level"):
+                if f"_{v}_" in base:
+                    r["variant"] = v
+                    r["model"] = "AgentDB pick: " + base[len("agentdb_"):base.index(f"_{v}_")].replace("_", " ")
+                    break
         if "model" not in r or "variant" not in r:
             continue
         flat = {k: v for k, v in r.items() if not isinstance(v, (dict, list))}
         for k, v in (r.get("heldout") or {}).items():
             flat[f"heldout_{k}"] = v
+        for sname, s in (r.get("sensitivity") or {}).items():
+            for k in ("rho_dist_change", "near_minus_far_change", "n_periods"):
+                flat[f"{sname}_{k}"] = s.get(k)
         flat["source"] = ("agentdb arm" if os.path.basename(p).startswith("agentdb")
                           else "d3rlpy (mps)" if os.path.basename(p).startswith("deep") else "small / reference")
         flat["file"] = os.path.basename(p)
@@ -45,13 +56,18 @@ def summarise(df: pd.DataFrame) -> pd.DataFrame:
     g = df.groupby(["model", "variant", "source"])
     out = pd.DataFrame({
         "seeds": g.size(),
-        "expected_drop": -g["near_minus_far"].mean(),
-        "expected_drop_sd": g["near_minus_far"].std(),
-        "rho_dist": g["rho_dist"].mean(),
-        "rho_dist_sd": g["rho_dist"].std(),
-        "p_shift_median": g["p_dist_shift"].median(),
-        "rho_q": g["rho_q"].mean(),
-        "p_q_shift_median": g["p_q_shift"].median(),
+        "expected_drop": -g["near_minus_far_change"].mean(),
+        "expected_drop_sd": g["near_minus_far_change"].std(),
+        "rho_dist_change": g["rho_dist_change"].mean(),
+        "rho_dist_change_sd": g["rho_dist_change"].std(),
+        "p_shift_median": g["p_dist_change_shift"].median(),
+        "rho_adv": g["rho_adv"].mean(),
+        "p_adv_shift_median": g["p_adv_shift"].median(),
+        "rho_dist_level": g["rho_dist"].mean(),
+        "no_visit_drop": -g["no_visit_periods_near_minus_far_change"].mean()
+        if "no_visit_periods_near_minus_far_change" in df else np.nan,
+        "washin24_drop": -g["washin_24h_near_minus_far_change"].mean()
+        if "washin_24h_near_minus_far_change" in df else np.nan,
         "model_gain": g["model_gain_vs_history"].mean(),
         "risk": g["risk_mean"].mean(),
         "share_ge_4mA": g["share_at_or_above_4mA"].mean(),
@@ -76,19 +92,20 @@ def markdown(summary: pd.DataFrame, df: pd.DataFrame, recs: dict, sanity: dict |
         moved = ", ".join(f"{k} {sanity[k]['params_moved']}/{sanity[k]['params_checked']}" for k in algos)
         L += [f"Apple GPU check: MPS available = {sanity.get('mps_available')}, device {sanity.get('device')}; "
               f"weights moved after 5 pilot updates: {moved}.", ""]
-    L += ["Expected drop: mean home pain (0-10 points) in the third of long-term setting periods farthest "
-          "from the model's recommendation minus the third closest; positive means periods near the "
-          "recommendation hurt less. rho_dist: rank correlation of that distance with pain (positive is good); "
-          "p: one-sided, from rotating the pain series (keeps neighbouring periods' similarity). rho_q: rank "
-          "correlation of the model's own value of each period's setting with minus its pain. Risk: 0 below "
-          "4.0 mA, 1 at the 4.5 mA ceiling. Mean over seeds.", "",
-          "| rank | model | reward | source | seeds | expected drop (sd) | rho_dist | p | rho_q | p (q) | risk | at/above 4 mA | past a limit |",
-          "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    L += ["Expected drop: how much more home pain fell from the previous period (0-10 points) in long-term "
+          "periods near the recommendation than in periods far from it (thirds by distance); positive is good. "
+          "An association in records where settings were not randomised. rho_change: rank correlation of "
+          "distance with the change in pain (positive is good); p: one-sided, from rotating the series. "
+          "rho_adv: rank correlation of the model's predicted gain from each switch with the observed drop. "
+          "No-visit and 24 h columns: the expected drop on the periods with no visit inside (24) and with a "
+          "24-hour wash-in (34). Risk: 0 below 4.0 mA, 1 at the 4.5 mA ceiling. Mean over seeds.", "",
+          "| rank | model | reward | source | seeds | expected drop (sd) | rho_change | p | rho_adv | p (adv) | no-visit drop | 24 h drop | risk | past a limit |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for i, r in summary.iterrows():
         L.append(f"| {i + 1} | {r.model} | {r.variant} | {r.source} | {r.seeds} | {_fmt(r.expected_drop)} "
-                 f"({_fmt(r.expected_drop_sd)}) | {_fmt(r.rho_dist)} | {_fmt(r.p_shift_median, 3)} | "
-                 f"{_fmt(r.rho_q)} | {_fmt(r.p_q_shift_median, 3)} | {_fmt(r.risk, 3)} | "
-                 f"{_fmt(r.share_ge_4mA)} | {_fmt(r.share_past_limit)} |")
+                 f"({_fmt(r.expected_drop_sd)}) | {_fmt(r.rho_dist_change)} | {_fmt(r.p_shift_median, 3)} | "
+                 f"{_fmt(r.rho_adv)} | {_fmt(r.p_adv_shift_median, 3)} | {_fmt(r.no_visit_drop)} | "
+                 f"{_fmt(r.washin24_drop)} | {_fmt(r.risk, 3)} | {_fmt(r.share_past_limit)} |")
     ho = [c for c in summary.columns if c.startswith("heldout_")]
     if ho:
         L += ["", "Held-out visits (5-fold by visit, d3rlpy evaluators, deep models only): action difference "
@@ -156,8 +173,8 @@ def main():
     sanity = json.load(open(sp)) if os.path.exists(sp) else None
     open(os.path.join(a.out, "tournament_summary.md"), "w").write(markdown(summary, df, recs, sanity))
     figure(summary, os.path.join(a.out, "expected_drop_vs_risk.png"))
-    print(summary[["model", "variant", "seeds", "expected_drop", "rho_dist", "p_shift_median", "rho_q",
-                   "risk", "share_past_limit"]].round(3).to_string())
+    print(summary[["model", "variant", "seeds", "expected_drop", "rho_dist_change", "p_shift_median", "rho_adv",
+                   "p_adv_shift_median", "no_visit_drop", "washin24_drop", "risk", "share_past_limit"]].round(3).to_string())
 
 
 if __name__ == "__main__":

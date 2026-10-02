@@ -436,7 +436,7 @@ def redcap_points(reports: pd.DataFrame) -> pd.DataFrame:
 
 
 def _sym_from_redcap(means: pd.Series) -> dict | None:
-    """REDCap means -> the sheet's seven sites. Overall is the mean of nrs and the overall VAS
+    """REDCap means (already in 0-10 points) -> the sheet's seven sites. Overall is the mean of nrs and the overall VAS
     (`vas` is overall pain, StimOptimizer ITEM_COLUMNS); back from back_vas; left leg and left
     foot from left_leg_vas. Head and the right leg and foot have no REDCap item: like a site a
     visit never rated, they take the mean of the sites that do."""
@@ -481,13 +481,12 @@ def chronic_validation_set(db: RetrospectiveDB, *, exclude_visit_days: bool = Tr
     """
     ep = db.chronic_epochs()
     rep = redcap_points(db.redcap_reports())
-    raw_rep = db.redcap_reports()
     vd = pd.to_datetime(db.all_steps()["visit_date_ts"], utc=True, errors="coerce")
     visit_days = sorted(set(vd.dt.tz_convert("America/Los_Angeles").dt.date.dropna()))
     if exclude_visit_days:
         local = rep["t_utc"].dt.tz_convert("America/Los_Angeles").dt.date
         keep = ~local.isin(set(visit_days))
-        rep, raw_rep = rep[keep], raw_rep[keep.values]
+        rep = rep[keep]
     for c in SETTING_COLS:
         ep[c] = pd.to_numeric(ep[c], errors="coerce")
     washin = pd.Timedelta(hours=washin_h) if washin_h is not None else pd.Timedelta(minutes=C.WASHIN_MIN)
@@ -497,7 +496,6 @@ def chronic_validation_set(db: RetrospectiveDB, *, exclude_visit_days: bool = Tr
         sel = (rep["t_utc"] >= e["t_start"] + washin) & (rep["t_utc"] < e["t_end"])
         r = rep[sel]
         means = r.drop(columns=["t_utc"]).mean(numeric_only=True)
-        raw_means = raw_rep[sel.values].mean(numeric_only=True)
         setting = e[SETTING_COLS].to_numpy(float)
         d0 = e["t_start"].tz_convert("America/Los_Angeles").date()
         d1 = e["t_end"].tz_convert("America/Los_Angeles").date()
@@ -510,7 +508,7 @@ def chronic_validation_set(db: RetrospectiveDB, *, exclude_visit_days: bool = Tr
         ok_prev = (prev_sym is not None and prev_setting is not None
                    and np.isfinite(setting).all() and np.isfinite(prev_setting).all())
         rec["obs"] = encode_state(prev_sym, prev_setting, e["left_contact"], True) if ok_prev else None
-        own = _sym_from_redcap(raw_means) if len(r) else None
+        own = _sym_from_redcap(means) if len(r) else None
         rec["own_obs"] = (encode_state(own, setting, e["left_contact"], True)
                           if own is not None and np.isfinite(setting).all() else None)
         rows.append(rec)
@@ -526,7 +524,7 @@ def chronic_validation_set(db: RetrospectiveDB, *, exclude_visit_days: bool = Tr
         keep.iloc[-1] = keep.iloc[-1] or out["own_obs"].iloc[-1] is not None
     out = out[keep].reset_index(drop=True)
     if align_to is not None and len(out):
-        ref = np.stack(out["obs"].to_list())
+        ref = np.stack([o for o in out["obs"] if o is not None])
         for col in ("obs", "own_obs"):
             arr = [None if o is None else o.copy() for o in out[col]]
             for j in SYMPTOM_IDX:
@@ -550,7 +548,7 @@ def validation_sets(db: RetrospectiveDB, train_obs: np.ndarray) -> dict:
 def latest_state(db: RetrospectiveDB, contact: str, train_obs: np.ndarray | None = None) -> np.ndarray | None:
     """The state to recommend from today: the NEWEST period's own reports and its own setting
     (audit 2026-10-02: the previous version used the period before it), aligned to training."""
-    v = chronic_validation_set(db, exclude_visit_days=False, align_to=train_obs, keep_latest=True)
+    v = chronic_validation_set(db, align_to=train_obs, keep_latest=True)   # same report rules as validation
     if v.empty or v["own_obs"].iloc[-1] is None:
         return None
     obs = v["own_obs"].iloc[-1].copy()

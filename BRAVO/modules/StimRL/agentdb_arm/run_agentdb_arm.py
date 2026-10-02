@@ -6,7 +6,7 @@
 Models: decision_transformer, sarsa, actor_critic, retrieval (the recipe's step 3 on its own).
 Each run: load the stored experiences (recipe step 1), hold out 20% of visits (by visit), train
 with the recipe's epochs 100, batch size 64, learning rate 0.001 (step 2), score on the long-term
-home record with `validation.evaluate_policy`, compare with the retrieval suggestion (step 3) and
+home record with `validation.evaluate_all`, compare with the retrieval suggestion (step 3) and
 write `_agent_bridge/_stim_rl_data/results/agentdb_<model>_<variant>_<seed>.json`.
 Everything stays on this machine.
 """
@@ -56,10 +56,17 @@ def check_data(store, tr, val, *, expect_periods=None, expect_experiences=None):
         assert len(store) == expect_experiences, f"experiences {len(store)} != {expect_experiences}"
 
 
+def load(variant):
+    """(database, trajectories, the primary and sensitivity validation sets) for one reward."""
+    db, tr, _ = D.load(variant=variant)
+    return db, tr, D.validation_sets(db, tr.observations)
+
+
 def run_one(model: str, variant: str, seed: int, *, loaded=None, n_perm=2000, device=None,
             expect_periods=None, expect_experiences=None) -> dict:
     t0 = time.time()
-    db, _tr, val = loaded or D.load(variant=variant)
+    db, _tr, vals = loaded or load(variant)
+    val = vals["primary"]
     with open(os.path.join(D.DEFAULT_DATA_DIR, f"experiences_{variant}.json")) as f:
         store = M.ExperienceStore(json.load(f))                       # recipe step 1
     check_data(store, _tr, val, expect_periods=expect_periods, expect_experiences=expect_experiences)
@@ -77,7 +84,7 @@ def run_one(model: str, variant: str, seed: int, *, loaded=None, n_perm=2000, de
                         learning_rate=RECIPE["learning_rate"], seed=seed, val=held)
         policy, q, cfg = agent.policy, getattr(agent, "q", None), agent.cfg
 
-    out = V.evaluate_policy(f"agentdb_{model}", policy, val, q=q, n_perm=n_perm)
+    out = V.evaluate_all(f"agentdb_{model}", policy, vals, q=q, n_perm=n_perm, seed=seed)
     obs = np.stack(val["obs"].to_list()).astype(np.float32)
     a_model, a_ret = np.clip(policy(obs), -1, 1), ret_policy(obs)
     out["recipe_step3"] = {
@@ -86,7 +93,7 @@ def run_one(model: str, variant: str, seed: int, *, loaded=None, n_perm=2000, de
     }
     # how many different settings the model recommends across the 52 periods (1 = a constant)
     out["n_distinct_recommendations"] = int(len(np.unique(np.round(a_model, 3), axis=0)))
-    rec = V.recommend(policy, {c: D.latest_state(db, c) for c in D.C.CONTACT_LEVELS}, q=q)
+    rec = V.recommend(policy, {c: D.latest_state(db, c, _tr.observations) for c in D.C.CONTACT_LEVELS}, q=q)
     assert len(rec) == len(D.C.CONTACT_LEVELS), f"recommendations for {len(rec)} contacts"
     out.update({
         "arm": "agentdb", "model_type": model, "reward_variant": variant, "seed": seed,
@@ -118,7 +125,7 @@ def main():
     a = ap.parse_args()
     os.makedirs(RESULTS, exist_ok=True)
     for variant in a.variants:
-        loaded = D.load(variant=variant)
+        loaded = load(variant)
         for seed in a.seeds:
             r = run_one(a.model, variant, seed, loaded=loaded, n_perm=a.n_perm, device=a.device,
                         expect_periods=a.expect_periods, expect_experiences=a.expect_experiences)

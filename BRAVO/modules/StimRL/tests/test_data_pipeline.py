@@ -18,7 +18,10 @@ MODULES = os.path.abspath(os.path.join(HERE, "..", ".."))
 
 
 def _sym(composite, worst=None, se=None):
-    return {"sites": {s: composite for s in C.PAIN_SITES}, "composite": composite,
+    sites = {s: composite for s in C.PAIN_SITES}
+    if worst is not None:
+        sites["back"] = worst
+    return {"sites": sites, "real": set(C.PAIN_SITES), "composite": composite,
             "worst": composite if worst is None else worst, "side_effect": se}
 
 
@@ -37,8 +40,10 @@ def test_level_reward_is_the_drop_below_the_visit_baseline():
 
 
 def test_worst_site_reward_halves_composite_and_worst_site_gains():
-    r, _, _ = D.RewardFunction("worst_site")(_sym(7.0), _sym(5.0, worst=8.0), SAFE, _sym(8.0, worst=9.0))
-    assert r == pytest.approx(0.5 * 3.0 + 0.5 * 1.0)
+    base, nxt = _sym(8.0, worst=9.0), _sym(5.0, worst=8.0)
+    mean_drop = np.mean(list(base["sites"].values())) - np.mean(list(nxt["sites"].values()))
+    r, _, _ = D.RewardFunction("worst_site")(_sym(7.0), nxt, SAFE, base)
+    assert r == pytest.approx(0.5 * mean_drop + 0.5 * 1.0)
 
 
 @pytest.mark.parametrize("se,cost", [(0, 0.0), (1, 1.0), (2, 2.0)])
@@ -158,8 +163,53 @@ def test_validation_skips_wash_in_and_visit_day_reports_and_needs_a_previous_per
     assert len(val) == 1                                    # period 1 has no period before it
     row = val.iloc[0]
     assert row.n_reports == 3 and row.pain_nrs == 5.0 and row.pain_composite == 5.0
-    assert row.obs[0] == pytest.approx(0.8)                 # previous period's nrs, scaled to 0-1
+    assert row.prev_pain_composite == 8.0                   # period 1's three reports
+    assert row.obs[0] == pytest.approx(0.8)                 # overall = mean(nrs 8, vas 80/10)
     assert row.obs[10:15] == pytest.approx((D.normalize_action([55, 1, 1, 100, 150]) + 1) / 2)
+
+
+def test_latest_state_uses_the_newest_periods_own_reports_and_setting(tiny_snapshot):
+    """Regression (audit 2026-10-02): it used the reports of the period BEFORE the newest."""
+    db = D.RetrospectiveDB(str(tiny_snapshot))
+    db.ensure_built()
+    obs = D.latest_state(db, "L C+1-")
+    assert obs[0] == pytest.approx(0.5)                     # newest period: nrs 5, vas 50
+    assert obs[10:15] == pytest.approx((D.normalize_action([110, 2, 2, 100, 150]) + 1) / 2)
+    assert obs[15 + C.CONTACT_LEVELS.index("L C+1-")] == 1.0
+
+
+def test_a_setting_written_on_an_unrated_row_carries_to_the_next_rated_row(tiny_snapshot):
+    """Regression (audit 2026-10-02): the fill skipped unrated rows and used an older setting."""
+    st = pd.read_csv(tiny_snapshot / "visit_steps.csv")
+    st["freq_hz"] = [55.0, np.nan, 130.0]
+    st.loc[1, "freq_hz"] = np.nan
+    st = pd.concat([st, st.iloc[[1]].assign(row_index=3, rating_source="stim_tab", overall=5.0)], ignore_index=True)
+    st.to_csv(tiny_snapshot / "visit_steps.csv", index=False)
+    m = json.load(open(tiny_snapshot / "manifest.json")); m["visit_steps"]["rows"] = 4
+    json.dump(m, open(tiny_snapshot / "manifest.json", "w"))
+    db = D.RetrospectiveDB(str(tiny_snapshot))
+    db.build_from_snapshot()
+    r = db.rated_steps()
+    assert r.sort_values("row_index")["freq_hz"].tolist() == [55.0, 55.0, 130.0]
+
+
+def test_a_sites_first_rating_mid_visit_is_not_read_as_a_change():
+    """Regression (audit 2026-10-02): the composite jumped when a site was first rated."""
+    st = _steps([{"amp_mA_Left": 1, "overall": 6}, {"amp_mA_Left": 2, "overall": 6, "left_leg": 9}])
+    tr = D.TrajectoryBuilder(D.RewardFunction("delta")).build(st)
+    assert tr.rewards[0] == pytest.approx(0.0)
+
+
+def test_every_transition_matches_d3rlpys_own_transition_picker():
+    st = pd.concat([_steps([{"amp_mA_Left": a, "overall": p} for a, p in [(1, 7), (2, 6), (3, 5)]], file="a"),
+                    _steps([{"amp_mA_Left": a, "overall": p} for a, p in [(1, 4), (2, 3)]], file="b")])
+    tr = D.TrajectoryBuilder(D.RewardFunction("delta")).build(st)
+    ds = tr.mdp_dataset()
+    picked = [ds.transition_picker(e, i) for e in ds.episodes for i in range(e.transition_count)]
+    assert len(picked) == len(tr.transitions) == 3
+    for p, (_, row) in zip(picked, tr.transitions.iterrows()):
+        assert np.allclose(p.observation, row.obs) and np.allclose(p.next_observation, row.next_obs)
+        assert p.reward[0] == pytest.approx(row.reward)
 
 
 # ---- constants agree with the modules that own them ----------------------------------------------

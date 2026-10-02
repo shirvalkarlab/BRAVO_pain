@@ -199,3 +199,123 @@ def make_constant_policy(transitions: pd.DataFrame):
         return np.repeat(a[None, :], len(obs), axis=0)
     pol.setting = tuple(float(x) for x in mode)
     return pol
+
+
+def heldout_visit_value_rank(fit, transitions: pd.DataFrame, *, n_folds: int = 5, seed: int = 0,
+                             n_perm: int = 2000) -> dict:
+    """Clinic-sheet test with more data: in visits left out of training (5 folds by visit), does
+    the model's value of the setting that came next rank the relief that actually followed?
+
+    `fit(train_transitions)` returns q(obs, actions). Scores: Spearman between the observed
+    `symptom` drop (pain points, before penalties) and (a) q itself, (b) the predicted switch gain
+    q(s, next setting) - q(s, setting in force). (a) is inflated by pain that falls by itself
+    from a high level (the state carries the current pain), so (b) is the one that says whether
+    the model knows anything about SETTINGS. p is one-sided from shuffling the drops within each
+    visit."""
+    rng = np.random.default_rng(seed)
+    visits = np.array(sorted(transitions["visit"].unique()))
+    rng.shuffle(visits)
+    folds = [set(visits[i::n_folds]) for i in range(n_folds)]
+    qs, ys, groups, advs = [], [], [], []
+    for test in folds:
+        tr = transitions[~transitions["visit"].isin(test)]
+        te = transitions[transitions["visit"].isin(test)]
+        q = fit(tr)
+        obs = np.stack(te["obs"].to_list()).astype(np.float32)
+        act = normalize_action(te[[f"act_{k}" for k in C.ACTION_NAMES]].to_numpy(float)).astype(np.float32)
+        cur = (obs[:, 10:15].astype(np.float64) * 2.0 - 1.0).astype(np.float32)
+        qs.append(np.round(np.asarray(q(obs, act), float).ravel(), 6))
+        advs.append(np.round(np.asarray(q(obs, act), float).ravel() - np.asarray(q(obs, cur), float).ravel(), 6))
+        ys.append(te["symptom"].to_numpy(float))
+        groups.append(te["visit"].to_numpy())
+    qv, y, g, adv = np.concatenate(qs), np.concatenate(ys), np.concatenate(groups), np.concatenate(advs)
+    out = {"n_heldout": int(len(y))}
+    for key, x in (("value", qv), ("switch_gain", adv)):
+        rho = _spearman(x, y)
+        null = []
+        for _ in range(n_perm):
+            yp = y.copy()
+            for v in np.unique(g):
+                m = g == v
+                yp[m] = rng.permutation(y[m])
+            null.append(_spearman(x, yp))
+        p = (1 + np.sum(np.asarray(null) >= rho)) / (1 + n_perm) if np.isfinite(rho) else float("nan")
+        out[f"heldout_rho_{key}"] = rho
+        out[f"heldout_p_{key}"] = float(p)
+    return out
+
+
+def _rank(x):
+    from scipy.stats import rankdata
+    return rankdata(np.asarray(x, float))
+
+
+def _partial_rank_corr(x, y, Z):
+    """Correlation of the ranks of x and y after removing (by least squares) the ranks of Z."""
+    R = np.column_stack([np.ones(len(x))] + [_rank(z) for z in Z])
+    rx, ry = _rank(x), _rank(y)
+    ex = rx - R @ np.linalg.lstsq(R, rx, rcond=None)[0]
+    ey = ry - R @ np.linalg.lstsq(R, ry, rcond=None)[0]
+    if np.std(ex) == 0 or np.std(ey) == 0:
+        return float("nan")
+    return float(np.corrcoef(ex, ey)[0, 1])
+
+
+def switch_gain_decomposition(fit, transitions: pd.DataFrame, *, n_folds=5, seed=0, n_perm=1000) -> dict:
+    """The sharper held-out test (scientific review, 2026-10-02), rule fixed before running:
+    the model's recommendations are supported only if (a) > 0 with p < 0.05 AND (c) keeps its sign.
+      (a) rank correlation of q(s, next) with the relief that followed, after removing q(s, current)
+          and the current composite pain;
+      (b) rank correlation of -q(s, current) alone with relief ("leaving this setting helps");
+      (c) the switch gain on switches between two ACTIVE settings (Left current >= 1 mA before and
+          after, neither step with Left off) whose gain is not zero.
+    p-values: one-sided, shuffling relief within each visit."""
+    rng = np.random.default_rng(seed)
+    visits = np.array(sorted(transitions["visit"].unique()))
+    rng.shuffle(visits)
+    folds = [set(visits[i::n_folds]) for i in range(n_folds)]
+    parts = []
+    for test in folds:
+        q = fit(transitions[~transitions["visit"].isin(test)])
+        te = transitions[transitions["visit"].isin(test)]
+        obs = np.stack(te["obs"].to_list()).astype(np.float32)
+        nxt = normalize_action(te[[f"act_{k}" for k in C.ACTION_NAMES]].to_numpy(float)).astype(np.float32)
+        cur = (obs[:, 10:15].astype(np.float64) * 2 - 1).astype(np.float32)
+        parts.append(pd.DataFrame({
+            "qn": np.round(np.asarray(q(obs, nxt), float).ravel(), 6),
+            "qc": np.round(np.asarray(q(obs, cur), float).ravel(), 6),
+            "pain": obs[:, 7].astype(float), "base": obs[:, 22].astype(float),
+            "y": te["symptom"].to_numpy(float), "visit": te["visit"].to_numpy(),
+            "active": ((te["cur_amp_mA_Left"] >= 1.0) & (te["act_amp_mA_Left"] >= 1.0)).to_numpy()}))
+    d = pd.concat(parts, ignore_index=True)
+    d["gain"] = d["qn"] - d["qc"]
+    act = d[d["active"] & (d["gain"] != 0)]
+    stats = {
+        "a_partial": lambda f, y: _partial_rank_corr(f["qn"], y, [f["qc"], f["pain"]]),
+        # the level rewards are measured from the visit's first rating, which the state carries:
+        # remove it too, or q can rank "relief from baseline" through the baseline alone
+        "a_partial_baseline": lambda f, y: _partial_rank_corr(f["qn"], y, [f["qc"], f["pain"], f["base"]]),
+        "b_leave_current": lambda f, y: _spearman(-f["qc"], y),
+        "c_active_gain": lambda f, y: _spearman(f["gain"], y),
+    }
+    out = {"n": int(len(d)), "n_active_nonzero": int(len(act))}
+    for k, fn in stats.items():
+        f = act if k == "c_active_gain" else d
+        y = f["y"].to_numpy()
+        obs_stat = fn(f, y)
+        null = []
+        g = f["visit"].to_numpy()
+        for _ in range(n_perm):
+            yp = y.copy()
+            for v in np.unique(g):
+                m = g == v
+                yp[m] = rng.permutation(y[m])
+            null.append(fn(f, yp))
+        null = np.asarray(null, float)
+        out[k] = obs_stat
+        out[f"p_{k}"] = float((1 + np.sum(null >= obs_stat)) / (1 + n_perm)) if np.isfinite(obs_stat) else float("nan")
+    out["supports_recommendations"] = bool(out["a_partial"] > 0 and out["p_a_partial"] < 0.05
+                                           and out["c_active_gain"] > 0)
+    out["supports_after_baseline"] = bool(out["a_partial_baseline"] > 0 and out["p_a_partial_baseline"] < 0.05
+                                          and out["c_active_gain"] > 0)
+    return out
