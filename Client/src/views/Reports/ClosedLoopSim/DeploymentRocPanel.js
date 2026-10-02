@@ -489,15 +489,15 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
               {forward.beats_chance_forward ? STATE.pass.glyph : STATE.caution.glyph}
             </span>
             {forward.beats_chance_forward
-              ? `Holds on later weeks: ${fmt(forward.held_out_auc)} on weeks it was not fitted on, better than a coin toss across ${forward.n_folds} weeks (it reads ${fmt(forward.optimism)} lower than on the data it was fitted to). This is the number to weigh.`
+              ? `Holds on later weeks: AUC ${fmt(forward.held_out_auc)} on unfitted weeks (${forward.n_folds} folds), above chance; ${fmt(forward.optimism)} below the fitted-data AUC. Weigh this one.`
               : (forward.held_out_auc <= 0.55
-                ? `Does not hold on later weeks: ${fmt(forward.held_out_auc)} on weeks it was not fitted on, about a coin toss, though it reads ${fmt(forward.in_sample_auc)} on the data it was fitted to (${fmt(forward.optimism)} higher). Training on the past does not predict the future for this band.`
-                : `Not enough weeks yet: ${fmt(forward.held_out_auc)} on weeks it was not fitted on, near the ${fmt(forward.in_sample_auc)} on the data it was fitted to, but its 95% range still includes a coin toss; more weeks of ratings are needed.`)}
+                ? `Does not hold on later weeks: AUC ${fmt(forward.held_out_auc)} on unfitted weeks, near chance, against ${fmt(forward.in_sample_auc)} on fitted data (${fmt(forward.optimism)} higher).`
+                : `Not enough weeks yet: AUC ${fmt(forward.held_out_auc)} on unfitted weeks, near ${fmt(forward.in_sample_auc)} on fitted data; the 95% range still includes chance.`)}
           </MDTypography>
         ) : (forward && !forward.available ? (
           <MDTypography display="block" sx={{ ...TYPE.body, mt: 1, color: PAL.ink2 }}>
             <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.notChecked.glyph}</span>
-            {`Could not test it on later weeks (${forward.reason || "the ratings do not span enough weeks"}): every reading above is on the data it was fitted to.`}
+            {`Later-week test unavailable (${forward.reason || "too few weeks of ratings"}); readings above are on fitted data.`}
           </MDTypography>
         ) : null)}
 

@@ -401,7 +401,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
                     + (tl.n_modeled_points ? ` · ${tl.n_modeled_points} modelled readings in this band` : "")}
                 </MDTypography>
                 <MDTypography display="block" sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>
-                  {tl.note || "Modelled estimate: the device never sensed this band. Confirm it on the device's own readings before use."}
+                  {tl.note || "Modelled estimate; the device never sensed this band. Confirm on device readings."}
                 </MDTypography>
               </MDBox>
             ) : (
@@ -431,7 +431,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
             {/* 2) HOW MANY RATINGS ARE ENOUGH: a curve rather than three numbers. */}
             {pw && pw.available ? (
               <MDBox mb={2}>
-                {head(`Are there enough pain ratings? Now a ${fmt(pw.power_current * 100, 0)}% chance of detecting a real link, at ${pw.n_ratings_current} ratings`)}
+                {head(`Rating count: ${fmt(pw.power_current * 100, 0)}% power at ${pw.n_ratings_current} ratings`)}
                 <div ref={pwRef}
                   style={{ width: "100%", display: pw.curve ? "block" : "none" }} />
                 <MDTypography display="block"
@@ -440,8 +440,8 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
                     {pw.more_data_needed ? STATE.caution.glyph : STATE.pass.glyph}
                   </span>
                   {pw.more_data_needed
-                    ? `Not enough yet: about ${(pw.n_ratings_needed - pw.n_ratings_current)} more independent pain ratings are needed for an 80% chance.`
-                    : "Enough ratings for an 80% chance at the current count."}
+                    ? `Not enough: about ${(pw.n_ratings_needed - pw.n_ratings_current)} more independent ratings needed for 80% power.`
+                    : "Enough ratings for 80% power."}
                 </MDTypography>
               </MDBox>
             ) : (
@@ -452,7 +452,7 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
 
             {/* 3) µV²/LSB RATIO, for information */}
             <MDBox pt={2} sx={{ borderTop: `1px solid ${PAL.rule}` }}>
-              {head("µV²/LSB from streaming recorded alongside the device's own readings: an independent check of the constant in effect, not the number to program")}
+              {head("µV²/LSB from streaming: independent check, not a programmed value")}
               {lr && lr.available ? (
                 <MDTypography display="block" sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>
                   {`median ${lr.median.toExponential(2)} µV²/LSB `}

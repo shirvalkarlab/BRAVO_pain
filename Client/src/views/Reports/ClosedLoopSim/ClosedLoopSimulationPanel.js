@@ -460,9 +460,9 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
           <div ref={trajRef} style={{ width: "100%", minHeight: 380 }} />
           <Caption>
             {d0
-              ? `A · the longest continuous stretch of streaming, ${fmtNum(d0.n_steps * d0.dt_s / 60, 1)} min from ${stretchDate}: `
-                + "the current each version would command (top; dashed grey as recorded, blue with the loop closed, the shaded band its range over resampled runs, dotted black what the device delivered) "
-                + "over the band power each one sees (bottom; grey as recorded, blue moved by the commanded current). Solid lines are the current limits, dashed the switching thresholds."
+              ? `A · longest continuous stretch, ${fmtNum(d0.n_steps * d0.dt_s / 60, 1)} min from ${stretchDate}. `
+                + "Top, commanded current: dashed grey as recorded, blue loop closed (band = resampled-run range), dotted black delivered. "
+                + "Bottom, band power: grey as recorded, blue with commanded current. Solid lines: current limits; dashed: thresholds."
               : "A · no stretch long enough to draw."}
           </Caption>
         </MDBox>
@@ -471,12 +471,12 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
         <MDBox mt={1.2}>
           <div ref={cmpRef} style={{ width: "100%", minHeight: 260 }} />
           <Caption>
-            {`B · each quantity as recorded (open) and with the loop closed (filled), over ${fmtNum(rec.hours_of_signal, 1)} h of streaming in `
+            {`B · recorded (open) vs loop closed (filled), ${fmtNum(rec.hours_of_signal, 1)} h in `
               + `${rec.n_segments_used} stretches; `
-              + (run.models.M3 ? `the bar is the 2.5–97.5 % range across ${rs.n_fitted || 0} refits on resampled runs. `
+              + (run.models.M3 ? `bar: 2.5–97.5 % across ${rs.n_fitted || 0} refits. `
                 : `no interval is drawn${rs.reason ? ` (${rs.reason})` : ""}. `)
-              + `Closing the loop changes time at the upper limit by ${isNum(diff.frac_time_at_upper) ? `${(100 * diff.frac_time_at_upper).toFixed(1)} points` : "not reported"} `
-              + `and state changes by ${isNum(diff.transitions_per_hour) ? `${diff.transitions_per_hour.toFixed(0)} per hour` : "not reported"}.`}
+              + `Loop closed: time at upper limit ${isNum(diff.frac_time_at_upper) ? `${(100 * diff.frac_time_at_upper).toFixed(1)} points` : "not reported"} `
+              + `and state changes ${isNum(diff.transitions_per_hour) ? `${diff.transitions_per_hour.toFixed(0)} per hour` : "not reported"}.`}
           </Caption>
         </MDBox>
 

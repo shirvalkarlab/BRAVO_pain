@@ -60,7 +60,7 @@ test("the ratio line names the constant in effect from the payload and not a rul
   expect(await screen.findByText(/Where does the switching point sit in the device/)).toBeInTheDocument();
   const text = document.body.textContent;
   expect(text).toMatch(/1\.08× the constant in effect \(1 µV² = 345\.59 LSB\)/);
-  expect(text).toMatch(/independent check of the constant in effect/);
+  expect(text).toMatch(/independent check, not a programmed value/);
   expect(text).not.toMatch(/0\.01 rule|rule of thumb/);
 });
 
