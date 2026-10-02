@@ -203,8 +203,10 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
     expect(items).toContain(expected[0]);
     // The fact survives, and survives ONCE: RED today (3) because the drawer's bullet names the
     // snapshots twice more on its own. Counted on the caption's own words since the heat maps took
-    // the PI's vocabulary (2026-09-25: TD and PSD), which renamed "FFT snapshots" to "PSD".
-    expect(countOf(container.textContent, "read from PSD (")).toBe(1);
+    // the PI's vocabulary (2026-09-25: TD and PSD), which renamed "FFT snapshots" to "PSD". The
+    // caption lost its bracketed "(N s row = ...)" tail on 2026-10-02, so the count is on the text
+    // that stays.
+    expect(countOf(container.textContent, "read from PSD")).toBe(1);
   });
 
   it("the drawer's first note speaks of the circled cell and nine lengths (decision 172), a pin", async () => {
