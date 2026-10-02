@@ -74,7 +74,7 @@ async function renderGrid(requestParams, extra = {}) {
     <BiomarkerHeatmapGrids participantUid={UID} requestParams={requestParams} availableMetrics={METRICS}
       pageMetric="nrs" metricLabel="NRS (0–10)" onOpenInClosedLoop={() => {}} {...extra} />,
   ));
-  await waitFor(() => expect(screen.getByText(/How to read this/)).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByText(/Reading guide/)).toBeInTheDocument());
   return utils;
 }
 

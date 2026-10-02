@@ -82,12 +82,12 @@ describe("PageHead and Section", () => {
 
   test("a section is a question, an answer, a figure and one mounted method fold", () => {
     const { container } = render(
-      <Section id="s1" question="Does band power rise or fall with pain?"
+      <Section id="s1" question="Power–pain heat maps"
         answer="One band rises with pain." method="the method words">
         <div>figure</div>
       </Section>,
     );
-    expect(screen.getByRole("heading").textContent).toBe("Does band power rise or fall with pain?");
+    expect(screen.getByRole("heading").textContent).toBe("Power–pain heat maps");
     expect(container.textContent).toContain("the method words");
     expect(container.querySelectorAll("[data-paper='fold']").length).toBe(1);
     allFontSizes(container).forEach((px) => expect(px).toBeGreaterThanOrEqual(12));

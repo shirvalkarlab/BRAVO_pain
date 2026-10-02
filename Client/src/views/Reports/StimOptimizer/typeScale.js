@@ -30,7 +30,7 @@ export const TYPE = {
   section: TOKEN_TYPE.title.fontSize,     // 18: a section's title, written as a question
   lead: TOKEN_TYPE.lead.fontSize,         // 16: the answer under a title
   body: TOKEN_TYPE.body.fontSize,         // 14: prose, table rows, fold rows
-  small: TOKEN_TYPE.caption.fontSize,     // 12: captions, secondary lines
+  small: TOKEN_TYPE.body.fontSize,        // 14: captions, secondary lines (the PI, 2026-10-02: no 12 px prose)
   head: TOKEN_TYPE.caption.fontSize,      // 12: column headers, sentence case
   axis: TOKEN_TYPE.caption.fontSize,      // 12: text inside a figure
   numLarge: TOKEN_TYPE.lead.fontSize,     // 16: the setting in force and the suggested setting

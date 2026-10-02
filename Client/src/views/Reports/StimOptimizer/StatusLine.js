@@ -261,7 +261,7 @@ export default function StatusLine({ data, plan, planLoading = false, showHeadli
       )}
       {items.length > 0 && <GlyphKey />}
       {withDetail.length > 0 && (
-        <SizedFold show="What each item rests on" hide="Hide">
+        <SizedFold show="Basis" hide="Hide">
           <MDBox component="dl" data-testid="status-details"
             sx={{ m: 0, "& dt": { fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.ink, mt: 1 },
               "& dd": { m: 0, fontSize: TYPE.body, lineHeight: 1.57, color: T.ink2 } }}>

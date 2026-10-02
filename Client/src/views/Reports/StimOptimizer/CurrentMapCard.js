@@ -376,7 +376,7 @@ function SquareWithChecks({ r, g, idPrefix, inForceLeft, inForceRight, half, cei
             </MDTypography>
           ) : null}
           {(r.coverage_gap.why || r.coverage_gap.what_each_pair_needs || (r.coverage_gap.pairs_to_add || []).length) ? (
-            <SizedFold show="Why, and other settings that would count" hide="Hide" dense mt={0.25}>
+            <SizedFold show="Why; alternatives" hide="Hide" dense mt={0.25}>
               <MDTypography variant="caption" component="div" sx={{ ...SMALL }}>
                 {r.coverage_gap.why ? `${String(r.coverage_gap.why).replace(/ -- /g, " — ")}. ` : ""}
                 {r.coverage_gap.what_each_pair_needs
@@ -392,7 +392,7 @@ function SquareWithChecks({ r, g, idPrefix, inForceLeft, inForceRight, half, cei
       ) : null}
       {/* The server's closing sentence restates the three checks above it: folded. */}
       {r.sentence && (
-        <SizedFold show="The three checks, in one sentence" hide="Hide" dense mt={0.25}>
+        <SizedFold show="Three checks" hide="Hide" dense mt={0.25}>
           <MDTypography variant="caption" component="div" sx={{ ...SMALL }}>
             {String(r.sentence)}
           </MDTypography>
@@ -447,7 +447,7 @@ function RateStrataGroups({ groups, inForceLeft, inForceRight, pooledSurfaces, i
       )}
 
       {Object.keys(pooledSurfaces).length > 0 && (
-        <SizedFold show="Pooled across rates — reference only" hide="Hide the pooled surface"
+        <SizedFold show="Pooled across rates (reference)" hide="Hide the pooled surface"
           onChange={(open) => setPoolOpen((s) => ({ ...s, [g.key]: open || s[g.key] }))}>
           {showDescriptions && (
           <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, mb: 1, maxWidth: "68ch" }}>
@@ -754,7 +754,7 @@ function CurrentMapCard({ plan }) {
             sx={{ fontSize: TYPE.body, color: T.caution, maxWidth: "80ch" }}>
             {`▲ ${CURRENT_PAIN_CAVEAT_SHORT}`}
           </MDTypography>
-          <SizedFold show="The numbers behind this" hide="Hide the numbers" dense mt={0.5}>
+          <SizedFold show="Numbers" hide="Hide the numbers" dense mt={0.5}>
             <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, maxWidth: "80ch" }}>
               {CURRENT_PAIN_CAVEAT}
             </MDTypography>

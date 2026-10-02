@@ -12,7 +12,7 @@
  * menu (`ClosedLoopSim/DeveloperMenu.js`), closed by default, which hides its content without
  * unmounting it. The stored-results line is no longer wrapped in a fold of its own inside that menu
  * (no fold inside a fold, rule 4). The Biomarkers page's fold carries the spec's plain title for the
- * control analyses (section 6: "Checks against chance and against the current (run offline)").
+ * control analyses (section 6: "Chance and current checks (offline)").
  */
 import fs from "fs";
 import path from "path";
@@ -35,7 +35,7 @@ test("the Biomarkers page folds its control-analyses card, closed by default", (
   expect(fold).not.toBeNull();
   // PIN CHANGED 2026-09-26 (WP7): was show="Research checks, saved offline (control analyses)";
   // the spec's wording table replaces "Control analyses" with this plain title.
-  expect(fold).toMatch(/show="Checks against chance and against the current \(run offline\)"/);
+  expect(fold).toMatch(/show="Chance and current checks \(offline\)"/);
   expect(fold).not.toMatch(/defaultOpen/);
 });
 

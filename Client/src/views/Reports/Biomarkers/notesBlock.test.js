@@ -71,7 +71,7 @@ beforeEach(async () => {
           metricLabel="NRS (0–10)" onOpenInClosedLoop={() => {}} />
       </PlatformContextProvider>
     </ThemeProvider>);
-  await waitFor(() => expect(screen.getByText(/How to read this/)).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByText(/Reading guide/)).toBeInTheDocument());
 });
 
 const SIX = [

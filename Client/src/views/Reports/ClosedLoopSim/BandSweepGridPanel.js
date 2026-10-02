@@ -474,7 +474,7 @@ function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen
           + "settings · ? unknown · ○ not tested"}
       </MDTypography>
 
-      <Fold show="How to read this, and what it cannot tell you" hide="Hide how to read this" mt={2}>
+      <Fold show="Reading guide, limits" hide="Hide how to read this" mt={2}>
         <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, maxWidth: "68ch" }}>
           Each colour cell is the strongest of {countWord(nLengthsForChannel(sw, rows))} lengths of signal for that band, so it is
           optimistic by construction; hover a cell for its 95% range, the length it came from and

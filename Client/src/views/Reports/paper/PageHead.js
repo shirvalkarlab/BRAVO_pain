@@ -8,7 +8,7 @@
  * folded.
  *
  * Props:
- *   title        the page's question ("Which brain signal tracks pain?")
+ *   title        the page's question ("Brain signal vs. pain")
  *   participant  the de-identified code ("RCS08")
  *   painScore    the pain score's display label ("Left Leg VAS")
  *   status       the status sentence (string or node)

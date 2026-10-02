@@ -1,5 +1,5 @@
 /**
- * "Show the ruled-out settings, drawn" draws one panel per side, each with that side's per-pulse-
+ * "Ruled-out settings, drawn" draws one panel per side, each with that side's per-pulse-
  * width best cells (grey marks labelled with the side's own pulse width). The strata list carries a
  * Left and a Right row per joint fit; the table of fits keeps one row per joint fit, but the drawing
  * needs both sides' rows, or the Right panel draws none of its own (found 2026-09-26).

@@ -96,7 +96,7 @@ describe("Choose a band (BandSweepGridPanel)", () => {
     expect(titles.filter((t) => /10 lengths/.test(t))).toEqual([]);
   });
 
-  // Item 5, STALE-2. The fold "How to read this, and what it cannot tell you" says "the strongest
+  // Item 5, STALE-2. The fold "Reading guide, limits" says "the strongest
   // of ten lengths of signal". The Biomarkers copy of this sentence was corrected at decision 172;
   // this copy was not. The count must come from the data (nine here), never a typed word.
   it("item 5: the how-to-read fold does not say 'ten lengths' and states the count from the data", () => {
@@ -104,7 +104,7 @@ describe("Choose a band (BandSweepGridPanel)", () => {
       <BandSweepGridPanel grid={payload.band_sweep_grid} participantUid={UID}
         committed={null} onCandidateChosen={() => {}} />,
     );
-    fireEvent.click(screen.getByText(/How to read this, and what it cannot tell you/));
+    fireEvent.click(screen.getByText(/Reading guide, limits/));
     const text = container.textContent;
     expect(text).not.toMatch(/ten lengths/i);
     expect(text).toMatch(/\b(nine|9) lengths\b/i);

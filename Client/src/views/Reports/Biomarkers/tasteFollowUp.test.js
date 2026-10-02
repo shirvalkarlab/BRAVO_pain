@@ -94,10 +94,10 @@ describe("C2: still grey blocks instead of a spinner", () => {
 
 describe("C6: the shared fold and section", () => {
   test("the page's fold is paper/Fold: content mounted while closed, the open label when given", () => {
-    const { container } = rtlRender(<Fold show="Stored results and memory use" hide="Hide stored results">inside words</Fold>);
+    const { container } = rtlRender(<Fold show="Stored results, memory" hide="Hide stored results">inside words</Fold>);
     expect(container.querySelector("[data-paper='fold']")).not.toBeNull();
     const button = screen.getByRole("button");
-    expect(button.textContent).toBe("▸Stored results and memory use");
+    expect(button.textContent).toBe("▸Stored results, memory");
     expect(screen.getByText("inside words").hidden).toBe(true);
     fireEvent.click(button);
     expect(button.getAttribute("aria-expanded")).toBe("true");
@@ -113,11 +113,11 @@ describe("C6: the shared fold and section", () => {
 
   test("the sections are paper/Section", () => {
     const idx = stripComments(read("index.js"));
-    expect(idx).toMatch(/<Section id="biomarker-pairing" question="How are reports paired with recordings\?">/);
-    expect(idx).toMatch(/<Section id="biomarker-timeline" question="What was recorded, and when\?">/);
+    expect(idx).toMatch(/<Section id="biomarker-pairing" question="Report–recording pairing">/);
+    expect(idx).toMatch(/<Section id="biomarker-timeline" question="Recording timeline">/);
     expect(idx).not.toMatch(/<Card\b/);
     expect(stripComments(read("BiomarkerHeatmapGrids.js")))
-      .toMatch(/<Section id="biomarker-heat-maps" question="Does band power rise or fall with pain\?"/);
+      .toMatch(/<Section id="biomarker-heat-maps" question="Power–pain heat maps"/);
   });
 });
 

@@ -1,7 +1,7 @@
 /**
  * ONE VOCABULARY FOR THE TWO SOURCES ON THE HEAT MAPS (the PI, 2026-09-25). Each pain report's band
  * power comes from the time-domain recording, "TD", or from the device's 30 s snapshots, "PSD".
- * The two heat maps, their captions, side panels, legends and the "How to read this" drawer use
+ * The two heat maps, their captions, side panels, legends and the "Reading guide" drawer use
  * those two words and nothing else; the drawer introduces them once as "time domain (TD)" and
  * "PSD (the device's 30 s snapshot)". This reads every string literal the heat-map components can
  * print (comments stripped) and fails if an older word for either source comes back, and checks

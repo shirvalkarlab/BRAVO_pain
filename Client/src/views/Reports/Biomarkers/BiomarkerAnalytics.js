@@ -161,7 +161,7 @@ export default function BiomarkerAnalytics({ analytics, metricLabel }) {
   if (tdPanels.length === 0) return null;
 
   return (
-    <Section title="How each band's link with pain changed over time"
+    <Section title="Band–pain link over time"
              subtitle="The correlation between band power and pain at each frequency, in sliding windows across all the data we have."
              panels={tdPanels} />
   );

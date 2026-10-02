@@ -1,5 +1,5 @@
 /**
- * "How are reports paired with recordings?" -- the matching section of the Biomarkers page (the PI,
+ * "Report–recording pairing" -- the matching section of the Biomarkers page (the PI,
  * 2026-09-21, option C; laid out again in the redesign of 2026-09-26, SPEC.md section 5.1 item 3).
  *
  * One bold sentence says how many pain reports the match window admits (the section's answer); the
@@ -29,7 +29,7 @@ import TimingHistogram from "./TimingHistogram";
 import FoldArrow from "../paper/FoldArrow";
 
 const LABEL_SX = { ...TYPE.body, fontWeight: 600, color: T.ink, display: "block", mb: 0.5 };
-const NOTE_SX = { ...TYPE.caption, color: T.ink3, display: "block", mt: 0.5 };
+const NOTE_SX = { ...TYPE.body, color: T.ink3, display: "block", mt: 0.5 };
 // A small colour swatch beside a word (the colour is a mark, never the text's own colour).
 const SWATCH = { display: "inline-block", width: 10, height: 10, marginRight: 6 };
 const TOGGLE_SX = { "& .MuiToggleButton-root": { textTransform: "none", ...TYPE.body, py: 0.5, px: 1.25, lineHeight: 1.2 } };
@@ -178,11 +178,11 @@ export default function MatchWindowBand({
           </FormControl>
           {twoCut ? (
             <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={1.5} mt={0.5}>
-              <MDTypography component="span" sx={{ ...TYPE.caption, color: T.ink }}>
+              <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink }}>
                 <span aria-hidden="true" style={{ ...SWATCH, background: PAIN.low }} />
                 {`Low: ratings at or below the ${ordinal(lowPct)} percentile`}
               </MDTypography>
-              <MDTypography component="span" sx={{ ...TYPE.caption, color: T.ink }}>
+              <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink }}>
                 <span aria-hidden="true" style={{ ...SWATCH, background: PAIN.high }} />
                 {`High: at or above the ${ordinal(highPct)}`}
               </MDTypography>

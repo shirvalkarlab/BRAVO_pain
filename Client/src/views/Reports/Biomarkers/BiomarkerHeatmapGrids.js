@@ -142,7 +142,7 @@ function heatmapHeight(rows) {
 // the page's own grid routine with its full shuffles and resamples (the table is in the scratch
 // area, `_l13_search_left_leg_vas.csv`). Re-run 2026-09-26 when every chance test became the exact
 // rotation test (decision 315; `_ns315/l13_after_left_leg_vas.csv`): the counts below are that run's. Its headline lines are printed in bold at the top of the
-// "How to read this" drawer, for RCS08 only: they are a finding about one record, not a rule.
+// "Reading guide" drawer, for RCS08 only: they are a finding about one record, not a rule.
 export const L13_SEARCH_UID = "2e3c75c00d7f4f37b53a048d195f11da";
 /** The one plain sentence the search's fold opens on (SPEC.md section 5.1, Background). */
 export const L13_SEARCH_LEAD = "In short: across 252 ways of pairing reports with recordings on L 1\u207b3\u207a, no band "
@@ -291,7 +291,7 @@ export function RefusalReason({ pairs, rule }) {
       <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink, m: 0, maxWidth: LAYOUT.proseMax }}>
         {SENSING_RULE_PLAIN}
       </MDTypography>
-      <Fold show="Each lead's contacts and the pair it allows" hide="Hide each lead's contacts">
+      <Fold show="Contacts and allowed pair" hide="Hide each lead's contacts">
         {["Left", "Right"].map((side) => {
           const r = rule.by_side[side];
           if (!r || !r.rule_applied) return null;
@@ -552,7 +552,7 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
 
   if (!rows || !cols) {
     return (
-      <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3 }}>
+      <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3 }}>
         {"No grid could be computed for this contact pair."}
       </MDTypography>
     );
@@ -611,14 +611,14 @@ function ContactStrip({ sweeps, channel, setChannel, refused }) {
               opacity: refused && refused.includes(ch) ? 0.55 : 1,
             }}>
             <MDTypography component="span"
-              sx={{ ...TYPE.caption, fontWeight: active ? 600 : 400, color: active ? T.accent : T.ink,
+              sx={{ ...TYPE.body, fontWeight: active ? 600 : 400, color: active ? T.accent : T.ink,
                 display: "block" }}>
               {label}
             </MDTypography>
             {refused && refused.includes(ch) ? (
               <MDBox display="flex" alignItems="center" gap={0.5}>
                 <RefusedCross label="refused by the device" size={12} />
-                <MDTypography component="span" sx={{ ...TYPE.caption, fontWeight: 600, color: `${T.refused} !important` }}>
+                <MDTypography component="span" sx={{ ...TYPE.body, fontWeight: 600, color: `${T.refused} !important` }}>
                   {"Refused today"}
                 </MDTypography>
               </MDBox>
@@ -807,14 +807,14 @@ function HeadlineLine({ testId, title, children }) {
 export function ScatterStatsLine({ cell, pinnedCell, sw, side }) {
   if (!pinnedCell) {
     return (
-      <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3 }}>
+      <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3 }}>
         {"Click a square to see its ratings plotted against band power, with the fitted line."}
       </MDTypography>
     );
   }
   if (!cell || cell.loading || !cell.points || !cell.points.length) {
     return (
-      <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3 }}>
+      <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3 }}>
         {cell && cell.loading ? "Loading…" : "No underlying pairs could be loaded for this cell."}
       </MDTypography>
     );
@@ -838,12 +838,12 @@ export function ScatterStatsLine({ cell, pinnedCell, sw, side }) {
       {/* The scatter and the line below are fitted to these same n pairs; the clinic-sheet ratings
           among them (decision 186) are drawn hollow and counted here, under the headline. */}
       {nSheet ? (
-        <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3, display: "block", mb: 0.5 }}>
+        <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3, display: "block", mb: 0.5 }}>
           {`${nSheet} of them clinic-sheet scores (hollow points)`}
         </MDTypography>
       ) : null}
       {readout && readout.text ? (
-        <MDTypography variant="caption" sx={{ ...TYPE.caption, display: "block", mb: 0.5,
+        <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", mb: 0.5,
           color: readout.isBest ? T.ink : T.ink3, fontWeight: readout.isBest ? 600 : 400 }}>
           {readout.text}
         </MDTypography>
@@ -855,7 +855,7 @@ export function ScatterStatsLine({ cell, pinnedCell, sw, side }) {
         const line = sourceSplitLine(sw, pinnedCell.col, pinnedCell.row);
         return line ? (
           <MDTypography variant="caption" data-testid="source-split-line"
-            sx={{ ...TYPE.caption, color: T.ink2, display: "block", mb: 0.5 }}>
+            sx={{ ...TYPE.body, color: T.ink2, display: "block", mb: 0.5 }}>
             {line}
           </MDTypography>
         ) : null;
@@ -984,7 +984,7 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw, par
   if (!pinnedCell) {
     if (!showStats) return null;
     return (
-      <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3 }}>
+      <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3 }}>
         {"Click a square to compare band power in high-pain and low-pain reports."}
       </MDTypography>
     );
@@ -992,7 +992,7 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw, par
   if (!cell || cell.loading || !cell.points || !cell.points.length) {
     if (!showStats) return <MDBox sx={{ height }} />;
     return (
-      <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3 }}>
+      <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3 }}>
         {cell && cell.loading ? "Loading…" : "No underlying pairs could be loaded for this cell."}
       </MDTypography>
     );
@@ -1015,7 +1015,7 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw, par
         const readout = (sw && pinnedCell)
           ? bestCellReadout(sw, "auc", pinnedCell.col, pinnedCell.row, { includeN: false }) : null;
         return readout && readout.text ? (
-          <MDTypography variant="caption" sx={{ ...TYPE.caption, display: "block", mb: 0.5,
+          <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", mb: 0.5,
             color: readout.isBest ? T.ink : T.ink3, fontWeight: readout.isBest ? 600 : 400 }}>
             {readout.text}
           </MDTypography>
@@ -1366,9 +1366,9 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   // the waiting words sit beside the title; with none, still grey blocks shaped like the grid.
   const waitingWords = "Computing the calibrated grid…";
   return (
-    <Section id="biomarker-heat-maps" question="Does band power rise or fall with pain?"
+    <Section id="biomarker-heat-maps" question="Power–pain heat maps"
       actions={loading && corrSw && aucSw ? (
-        <MDTypography component="span" role="status" sx={{ ...TYPE.caption, color: T.ink3 }}>
+        <MDTypography component="span" role="status" sx={{ ...TYPE.body, color: T.ink3 }}>
           {waitingWords}
         </MDTypography>
       ) : null}>
@@ -1400,7 +1400,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
           <>
             {/* The one caveat line above the maps (SPEC.md section 5.1): how the reports were paired. */}
             {matchDirectionLabel ? (
-              <MDTypography component="p" sx={{ ...TYPE.caption, color: T.ink3, mt: 2, mb: 2 }}>
+              <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink3, mt: 2, mb: 2 }}>
                 {matchDirectionLabel === "prior"
                   ? "Matched using recordings from before each rating. A research reading, not a setting to program."
                   : "Matched using recordings from either time direction. A research reading, not a setting to program."}
@@ -1481,7 +1481,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
                 onClick={() => onOpenInClosedLoop && onOpenInClosedLoop({ channel, sweep: corrSw })}>
                 {"Open this grid in Closed-Loop \u2192"}
               </MDButton>
-              <MDTypography component="span" sx={{ ...TYPE.caption, color: T.ink3, maxWidth: 360 }}>
+              <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink3, maxWidth: 360 }}>
                 {gridReady
                   ? "The closed-loop settings page reads this same grid; any square can be picked there as a candidate band."
                   : "Available once the grid has been computed for a sensing contact pair."}
@@ -1489,7 +1489,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
             </MDBox>
 
             <MDBox mt={2}>
-              <Fold show="How to read this">
+              <Fold show="Reading guide">
                 {/* No box inside the card (decision 304): a hairline down the left edge marks the
                     drawer, whose notes are 14 px at weight 400 (SPEC.md section 5.1). `aucSw.notes`
                     is dropped -- both grids come from the same per-channel sweep response. Order:

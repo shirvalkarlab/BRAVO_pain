@@ -223,7 +223,7 @@ function CalibrationInEffectPanel({ participantUid }) {
           onRecompute={() => recomputeSlots(participantUid, [CL.conversionModel])} />
 
         {loading ? (
-          <MDTypography variant="caption" sx={{ ...TYPE.caption, display: "block", mt: 1, color: T.ink3 }}>
+          <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", mt: 1, color: T.ink3 }}>
             Loading the calibration tables…
           </MDTypography>
         ) : err ? (
@@ -244,7 +244,7 @@ function CalibrationInEffectPanel({ participantUid }) {
               </MDTypography>
             </MDBox>
 
-            <Fold show="How the two constants were fitted, and where they are used"
+            <Fold show="Constant fit and use"
               hide="Hide how the constants were fitted">
               {/* 1) THE TRANSFORM CONSTANT */}
               <MDBox mt={0.5} pt={1} sx={{ borderTop: `1px solid ${RULE}` }}>
@@ -278,7 +278,7 @@ function CalibrationInEffectPanel({ participantUid }) {
                 <MDTypography variant="caption" sx={HEAD}>
                   Every paired block, device LSB against TD band power
                 </MDTypography>
-                <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3, display: "block" }}>
+                <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3, display: "block" }}>
                   <span aria-hidden="true" style={{ ...DOT, background: SIDE.left }} />{"left lead \u00b7 "}
                   <span aria-hidden="true" style={{ ...DOT, background: SIDE.right }} />{"right lead \u00b7 "}
                   {"\u25cb hollow: left out as too short or far from the rest (LSB: the device's own units)"}

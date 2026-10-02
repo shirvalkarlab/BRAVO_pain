@@ -218,7 +218,7 @@ function TwoStagePlanCard({ plan, loading, err }) {
                 <MDBox mt={0.6}>
                   <ExcludedSettingsSummary envelope={envelope} />
                 </MDBox>
-                <Fold show="Show the ruled-out settings, drawn" hide="Hide the drawing" dense mt={0.4}>
+                <Fold show="Ruled-out settings, drawn" hide="Hide the drawing" dense mt={0.4}>
                   {/* Both sides' rows: each panel draws its own side's best cells (the table
                       above keeps one row per joint fit; 2026-09-26). */}
                   <ExcludedSettingsChart envelope={envelope} strata={Array.isArray(stage1.strata) ? stage1.strata : []} />
@@ -265,7 +265,7 @@ function TwoStagePlanCard({ plan, loading, err }) {
                 nowhere. ---------- */}
 
             {/* ---------- folded: how the answer was arrived at ---------- */}
-            <Fold show="How this was arrived at (what each step read, and the fit for each pulse width and side)"
+            <Fold show="Method"
               hide="Hide how this was arrived at">
               {["stage1", "gate", "stage2"].filter((k) => provenance[k]).map((k) => (
                 <MDTypography key={k} variant="caption" component="div" sx={{ color: T.ink2, fontSize: TYPE.body, mb: 0.6 }}>

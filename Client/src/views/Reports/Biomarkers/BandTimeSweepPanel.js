@@ -92,7 +92,7 @@ function BestTable({ rows, kind, nullValue }) {
   const isAuc = kind === "auc";
   if (!rows || !rows.length) {
     return (
-      <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, fontStyle: "italic" }}>
+      <MDTypography variant="caption" color="dark" sx={{ fontSize: 14, fontStyle: "italic" }}>
         {"No band centre produced a value, so there is no table to show."}
       </MDTypography>
     );
@@ -101,7 +101,7 @@ function BestTable({ rows, kind, nullValue }) {
     "95% interval", "Shuffled best of ten", "Pain reports", "Answer"];
   return (
     <MDBox sx={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
         <thead>
           <tr>
             {head.map((h) => (
@@ -233,7 +233,7 @@ function BandTimeSweepPanel({ participantUid, requestParams, availableMetrics, p
         <MDBox mt={2} display="flex" alignItems="center" flexWrap="wrap" sx={{ gap: 1.5 }}>
           <MDBox>
             <MDTypography variant="caption" fontWeight="bold" color="dark"
-              sx={{ fontSize: 12, display: "block" }}>
+              sx={{ fontSize: 14, display: "block" }}>
               {"Patient-reported pain score"}
             </MDTypography>
             <FormControl size="small" sx={{ minWidth: 260 }}>
@@ -248,7 +248,7 @@ function BandTimeSweepPanel({ participantUid, requestParams, availableMetrics, p
           {channels.length > 1 ? (
             <MDBox>
               <MDTypography variant="caption" fontWeight="bold" color="dark"
-                sx={{ fontSize: 12, display: "block" }}>
+                sx={{ fontSize: 14, display: "block" }}>
                 {"Sensing contact pair"}
               </MDTypography>
               <FormControl size="small" sx={{ minWidth: 220 }}>
@@ -274,27 +274,27 @@ function BandTimeSweepPanel({ participantUid, requestParams, availableMetrics, p
 
         {!requestParams ? (
           <MDTypography variant="caption" color="dark"
-            sx={{ fontSize: 12, display: "block", mt: 1, fontStyle: "italic" }}>
+            sx={{ fontSize: 14, display: "block", mt: 1, fontStyle: "italic" }}>
             {"This section reads the settings at the top of the page, so run the analysis up there "
              + "first and then come back."}
           </MDTypography>
         ) : null}
         {drifted ? (
           <MDTypography variant="caption"
-            sx={{ fontSize: 12, display: "block", mt: 1, color: PAL.warnText }}>
+            sx={{ fontSize: 14, display: "block", mt: 1, color: PAL.warnText }}>
             {"▲ The controls have changed since this grid was computed, so what is shown below is the "
              + "previous answer. Press “Sweep again” for the current settings."}
           </MDTypography>
         ) : null}
         {err ? (
-          <MDTypography variant="caption" sx={{ fontSize: 12, display: "block", mt: 1,
+          <MDTypography variant="caption" sx={{ fontSize: 14, display: "block", mt: 1,
             color: PAL.ink }}>
             {`The sweep could not be computed: ${err}`}
           </MDTypography>
         ) : null}
         {result && result.message ? (
           <MDTypography variant="caption" color="dark"
-            sx={{ fontSize: 12, display: "block", mt: 1, fontStyle: "italic" }}>
+            sx={{ fontSize: 14, display: "block", mt: 1, fontStyle: "italic" }}>
             {result.message}
           </MDTypography>
         ) : null}
@@ -305,12 +305,12 @@ function BandTimeSweepPanel({ participantUid, requestParams, availableMetrics, p
         {sw && notes.length ? (
           <MDBox mt={2} sx={{ borderLeft: `1px solid ${PAL.rule}`, pl: 2 }}>
             <MDTypography variant="caption" fontWeight="bold" color="dark"
-              sx={{ fontSize: 12, display: "block", mb: 0.5 }}>
+              sx={{ fontSize: 14, display: "block", mb: 0.5 }}>
               {"How to read the two tables below"}
             </MDTypography>
             {notes.map((n, i) => (
               <MDTypography key={i} variant="caption" color="dark"
-                sx={{ fontSize: 12, display: "block", mb: 0.4, lineHeight: 1.45 }}>
+                sx={{ fontSize: 14, display: "block", mb: 0.4, lineHeight: 1.45 }}>
                 {`• ${n}`}
               </MDTypography>
             ))}
@@ -327,7 +327,7 @@ function BandTimeSweepPanel({ participantUid, requestParams, availableMetrics, p
                 </MDTypography>
                 <ServerFigure figure={figures.correlation} />
                 <MDTypography variant="caption" color="dark"
-                  sx={{ fontSize: 12, display: "block", fontStyle: "italic" }}>
+                  sx={{ fontSize: 14, display: "block", fontStyle: "italic" }}>
                   {"The colour scale is centred on 0, which is the value that means no relationship "
                    + "for this quantity. Grey columns mark band centres whose 5 Hz window reaches "
                    + "outside the 8–30 Hz range the firmware can place an adaptive sensing band in."}
@@ -340,7 +340,7 @@ function BandTimeSweepPanel({ participantUid, requestParams, availableMetrics, p
                 </MDTypography>
                 <ServerFigure figure={figures.auc} />
                 <MDTypography variant="caption" color="dark"
-                  sx={{ fontSize: 12, display: "block", fontStyle: "italic" }}>
+                  sx={{ fontSize: 14, display: "block", fontStyle: "italic" }}>
                   {"The colour scale is centred on 0.5, which is the value that means no "
                    + "discrimination for this quantity — NOT 0. Above 0.5 the band power is higher "
                    + "on the high-pain reports and below 0.5 it is lower; both are relationships, "
@@ -365,7 +365,7 @@ function BandTimeSweepPanel({ participantUid, requestParams, availableMetrics, p
                 </MDTypography>
                 <BestTable rows={sw.best_auc_rows} kind="auc" nullValue={0.5} />
                 <MDTypography variant="caption" color="dark"
-                  sx={{ fontSize: 12, display: "block", mt: 0.4, fontStyle: "italic" }}>
+                  sx={{ fontSize: 14, display: "block", mt: 0.4, fontStyle: "italic" }}>
                   {"The number in brackets is the same value with its direction folded away, which "
                    + "is what a fitted one-predictor logistic regression returns in sample. That "
                    + "number cannot fall below 0.5, so for it 0.5 is a floor rather than a neutral "
@@ -377,7 +377,7 @@ function BandTimeSweepPanel({ participantUid, requestParams, availableMetrics, p
             {/* WHAT ACTUALLY RAN. Printed rather than assumed, so a reader can check that the
                 settings at the top of the page reached this section. */}
             <MDBox mt={2}>
-              <MDTypography variant="caption" color="dark" sx={{ fontSize: 12, display: "block" }}>
+              <MDTypography variant="caption" color="dark" sx={{ fontSize: 14, display: "block" }}>
                 {`Contact pair ${channel}. Pain score: ${(result && result.metric_label)
                   || metricLabel || metric}. `}
                 {applied ? (
@@ -400,7 +400,7 @@ function BandTimeSweepPanel({ participantUid, requestParams, availableMetrics, p
           </>
         ) : (sw ? (
           <MDTypography variant="caption" color="dark"
-            sx={{ fontSize: 12, display: "block", mt: 1, fontStyle: "italic" }}>
+            sx={{ fontSize: 14, display: "block", mt: 1, fontStyle: "italic" }}>
             {sw.why || "Nothing could be computed for this contact pair."}
           </MDTypography>
         ) : null)}

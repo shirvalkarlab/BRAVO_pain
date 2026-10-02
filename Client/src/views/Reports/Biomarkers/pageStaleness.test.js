@@ -114,7 +114,7 @@ async function renderPage({ gridSettings = GRID_REQ, scan = false, controls = nu
         </PlatformContextProvider>
       </ThemeProvider>);
   });
-  await waitFor(() => expect(screen.getAllByText(/How to read this/).length).toBeGreaterThan(0), { timeout: 10000 });
+  await waitFor(() => expect(screen.getAllByText(/Reading guide/).length).toBeGreaterThan(0), { timeout: 10000 });
   return utils;
 }
 
@@ -219,7 +219,7 @@ describe("5. the last scan's settings", () => {
 
   test("no fold opens on an empty sliding correlation", async () => {
     await renderPage({ scan: true, controls, gridSettings: { ...GRID_REQ, PercentileLow: 25, PercentileHigh: 75 } });
-    expect(document.body.textContent).not.toMatch(/How each band's link with pain changed over time/);
+    expect(document.body.textContent).not.toMatch(/Band–pain link over time/);
   });
 });
 

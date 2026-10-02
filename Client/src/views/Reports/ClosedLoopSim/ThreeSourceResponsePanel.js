@@ -426,7 +426,7 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
           </Box>
         ) : null}
 
-        <Fold show="Why agreement here is not three confirmations" hide="Hide" dense>
+        <Fold show="Agreement caveat" hide="Hide" dense>
           <Typography sx={{ ...TYPE.body, display: "block", color: PAL.ink2 }}>
             {footer || ("The three columns are not independent: the device computes its own band "
               + "power from the voltage trace the first column reads, so agreement checks the "

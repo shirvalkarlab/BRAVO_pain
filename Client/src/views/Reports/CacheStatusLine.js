@@ -35,7 +35,7 @@ export default function CacheStatusLine({ status }) {
     : "No stored results under the current key yet: this page was computed from the recordings for this request.";
   return (
     <MDBox pt={0.5} pb={1}>
-      <MDTypography variant="caption" sx={{ ...TYPE.caption, display: "block", color: T.ink3 }}>
+      <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", color: T.ink3 }}>
         {head} {status.what_it_means ? `Here that means ${status.what_it_means}.` : ""}
         {status.note && !(status.exists && when) ? ` (${status.note})` : ""}
       </MDTypography>

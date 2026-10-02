@@ -280,7 +280,7 @@ function Numbers({ c, lfp }) {
               <span style={NOTE}>{`${Math.round(num(ev.n_power_unavailable))} not measurable`}</span>
             )}
           </MDBox>
-          <SizedFold show="Show the bands, drawn" hide="Hide the bands" dense mt={0.4}>
+          <SizedFold show="Bands, drawn" hide="Hide the bands" dense mt={0.4}>
             {rows
               ? <BandResponseStrip rows={rows} minSep={ev.min_sep_d} best={ev.best_center_hz} />
               : <BandTicks verdicts={ev.verdicts} best={null} />}
@@ -397,7 +397,7 @@ export default function ClosedLoopChecks({ plan }) {
                   {CHECK_LABELS[c.name] || String(c.name || "").replace(/_/g, " ")}
                   {c.overridden ? <span style={{ color: T.caution, marginLeft: 6 }}><span aria-hidden="true">▲ </span>[overridden]</span> : null}
                 </MDTypography>
-                <SizedFold show="The check, in one sentence" hide="Hide" dense mt={0.3}>
+                <SizedFold show="Check" hide="Hide" dense mt={0.3}>
                   <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2 }}>
                     {c.detail || "no reason was returned"}
                   </MDTypography>

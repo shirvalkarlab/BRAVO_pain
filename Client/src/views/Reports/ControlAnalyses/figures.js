@@ -27,7 +27,7 @@ import {
 
 export { pairName };
 
-const CAPTION = { ...TYPE.caption, color: T.ink3, marginTop: SPACE.xxs, maxWidth: "68ch" };
+const CAPTION = { ...TYPE.body, color: T.ink3, marginTop: SPACE.xxs, maxWidth: "68ch" };
 const BODY = { ...TYPE.body, color: T.ink2 };
 const SELECT = {
   ...TYPE.body, color: T.ink, background: T.surface, border: `1px solid ${T.ink3}`,
@@ -38,7 +38,7 @@ const SELECT = {
 /** A key in HTML, for series that cannot carry a label at their end (interleaved dots). */
 function InlineKey({ items }) {
   return (
-    <div style={{ ...TYPE.caption, color: T.ink, display: "flex", flexWrap: "wrap", gap: `${SPACE.xxs}px ${SPACE.sm}px`, marginTop: SPACE.xxs }}>
+    <div style={{ ...TYPE.body, color: T.ink, display: "flex", flexWrap: "wrap", gap: `${SPACE.xxs}px ${SPACE.sm}px`, marginTop: SPACE.xxs }}>
       {items.map(([text, color]) => (
         <span key={text} style={{ display: "inline-flex", alignItems: "center", gap: SPACE.xxs }}>
           <span aria-hidden="true" style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: color }} />

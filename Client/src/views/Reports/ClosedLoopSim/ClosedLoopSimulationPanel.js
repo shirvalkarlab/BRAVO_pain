@@ -492,7 +492,7 @@ export default function ClosedLoopSimulationPanel({ sim, hemisphere, contactLabe
           </Caption>
         </MDBox>
 
-        <Fold show="How this was worked out (the model, the record, the controller settings)" hide="Hide the method" mt={2} dense>
+        <Fold show="Method" hide="Hide the method" mt={2} dense>
           <Line>{`timing settings drawn above: ${RUN_TAB_LABEL[effective]} · ${run.timing_source || ""}`}</Line>
           <Line>{`response curve: ${MODEL_WORDS[act] || act} ${run.curves && run.curves[act] ? run.curves[act].source : ""} · change in band power per milliamp ${fmtNum(run.curves && run.curves[act] && run.curves[act].slope_per_mA, 3)} ± ${fmtNum(run.curves && run.curves[act] && run.curves[act].slope_stderr, 3)} device units · fitted on ${run.n_points_in_curve} points, ${run.n_runs_in_curve} runs`}</Line>
           <Line>{`peaked response: ${run.curves && run.curves.M2 ? "in use" : (run.m2_absent_reason || "not in use")}`}</Line>

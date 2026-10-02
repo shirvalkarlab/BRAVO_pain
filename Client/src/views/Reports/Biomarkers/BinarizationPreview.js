@@ -494,7 +494,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         <MDTypography component="h3" sx={{ ...TYPE.body, fontWeight: 600, color: T.ink, m: 0 }}>
           {matchedMode ? "Readings available to split into high and low pain" : "Preview of the high / low pain split"}
         </MDTypography>
-        <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3 }}>
+        <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3 }}>
           {headerCaption}
         </MDTypography>
       </MDBox>
@@ -504,7 +504,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
           pool is mostly TD (streaming and montage recordings), so the count is broken down by source and
           uses the modality-neutral noun "band-power readings". aria-live announces updates to readers. */}
       {matchedMode && su ? (
-        <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink2, mb: 0.25 }}
+        <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink2, mb: 0.25 }}
                       aria-live="polite">
           {dir === "pro_first" ? (
             <>
@@ -532,7 +532,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         </MDTypography>
       ) : null}
       {matchedMode ? (
-        <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink2, mb: 0.25, display: "block" }}
+        <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink2, mb: 0.25, display: "block" }}
                       aria-live="polite">
           {`Split → `}
           <span style={{ color: HI_TEXT, fontWeight: 600 }}>{`${(counts.n_high ?? 0).toLocaleString()} high pain`}</span>
@@ -553,13 +553,13 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       ) : null}
       {balanceFlag ? (
         <MDTypography variant="caption" data-testid="class-balance-caution"
-          sx={{ ...TYPE.caption, color: STATE.caution.ink, mb: 0.25, display: "block" }}>
+          sx={{ ...TYPE.body, color: STATE.caution.ink, mb: 0.25, display: "block" }}>
           <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.caution.glyph}</span>
           {balanceFlag}
         </MDTypography>
       ) : null}
       {matchedMode ? (
-        <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3, mb: 0.25, display: "block" }}>
+        <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3, mb: 0.25, display: "block" }}>
           {"Pooled: TD (up to 30 s around the rating) from streaming, montage and survey recordings, and PSD from patient events. "}
           {"The device's own band-power readings cover one band, not every frequency, so they are not pooled here."}
         </MDTypography>
@@ -574,7 +574,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         // window, which is a measured result the reader can fix by widening the window. Announcing
         // a missing input instead sends them looking for a data problem that does not exist. The
         // scan model now reports which situation it is in, so each gets its own sentence.
-        <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink2, mb: 0.25 }}>
+        <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink2, mb: 0.25 }}>
           {(loading || matchedLoading)
             ? "Loading band-power reading availability…"
             : (scanModel && scanModel.matchable)
@@ -602,13 +602,13 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       {(hasFigure && cuts.kind === "two-cut" && setPercentileLow && setPercentileHigh) ? (
         <MDBox sx={{ px: 1, pt: 0.5, pb: 0.25 }}>
           <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="baseline">
-            <MDTypography variant="caption" sx={{ ...TYPE.caption, fontWeight: 600, color: LO_TEXT }}>
+            <MDTypography variant="caption" sx={{ ...TYPE.body, fontWeight: 600, color: LO_TEXT }}>
               {`low: ${(strategy === "tertile" ? 33 : Number(Number(percentileLow).toFixed(1)))}th percentile and below`}
             </MDTypography>
-            <MDTypography variant="caption" sx={{ ...TYPE.caption, color: SUBTLE }}>
+            <MDTypography variant="caption" sx={{ ...TYPE.body, color: SUBTLE }}>
               {"drag the two handles to set the cuts"}
             </MDTypography>
-            <MDTypography variant="caption" sx={{ ...TYPE.caption, fontWeight: 600, color: HI_TEXT }}>
+            <MDTypography variant="caption" sx={{ ...TYPE.body, fontWeight: 600, color: HI_TEXT }}>
               {`high: ${(strategy === "tertile" ? 67 : Number(Number(percentileHigh).toFixed(1)))}th and above`}
             </MDTypography>
           </MDBox>
@@ -648,7 +648,7 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
       <div ref={ref} data-testid="split-figure" data-empty={hasFigure ? "false" : "true"}
         style={hasFigure ? { flex: 1, width: "100%", minHeight: 340 } : { width: "100%", height: 0 }} />
       {hasFigure ? (
-        <MDTypography variant="caption" sx={{ ...TYPE.caption, color: T.ink3, textAlign: "center" }}>
+        <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3, textAlign: "center" }}>
           {footerCaption}
         </MDTypography>
       ) : (

@@ -102,7 +102,7 @@ async function renderGrid({ participantUid = UID } = {}) {
   ));
   // The first channel of the response (R 0⁻3⁺, the contact with 358 snapshot-served reports) is
   // the one the drawer opens on.
-  await waitFor(() => expect(screen.getByText(/How to read this/)).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByText(/Reading guide/)).toBeInTheDocument());
   return utils;
 }
 
@@ -125,7 +125,7 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
   // the note, the caption is the only place the count lives.
   it("item 3: no drawer bullet says the reports were answered from FFT snapshots", async () => {
     const { container } = await renderGrid();
-    fireEvent.click(screen.getByText(/^How to read this$/));
+    fireEvent.click(screen.getByText(/^Reading guide$/));
     const bullets = Array.from(container.querySelectorAll("*"))
       .filter((el) => el.children.length === 0 && /^• /.test(el.textContent || ""))
       .map((el) => el.textContent);
@@ -134,13 +134,13 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
   });
 
   // CHANGED ON PURPOSE, decision 304 (the PI, 2026-09-26: "yes to all six", the review's B1). The
-  // seven lines moved out of "How to read this" into their own fold, closed on load, still bold, for
+  // seven lines moved out of "Reading guide" into their own fold, closed on load, still bold, for
   // RCS08 only; the drawer now opens on the backend's own first note. Every line's content below is
   // the pin decisions 229, 235(c) and 246(d) set; the search's counts were re-run on 2026-09-26
   // under the exact rotation test (decision 315) and the pins moved with them.
   it("the L 1-3+ search summary sits in its own fold, at weight 400, for RCS08, with its settings, and for no other participant", async () => {
     const { container } = await renderGrid();
-    fireEvent.click(screen.getByText(/^How to read this$/));
+    fireEvent.click(screen.getByText(/^Reading guide$/));
     fireEvent.click(screen.getByText(/^The 2026-09-21 search on L/));
     const lines = Array.from(container.querySelectorAll('[data-testid="l13-search-line"]')).map((el) => el.textContent);
     expect(lines.length).toBe(7);
@@ -189,14 +189,14 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
     // another participant sees none of it
     container.ownerDocument.body.innerHTML = "";
     const other = await renderGrid({ participantUid: "0000000000000000000000000000dead" });
-    fireEvent.click(screen.getByText(/^How to read this$/));
+    fireEvent.click(screen.getByText(/^Reading guide$/));
     expect(other.container.querySelectorAll('[data-testid="l13-search-line"]').length).toBe(0);
     expect(other.container.querySelector('[data-testid="l13-search-fold"]')).toBeNull();
   });
 
   it("item 3, the other half: the orange caption still prints the snapshot count, exactly once on the card", async () => {
     const { container } = await renderGrid();
-    fireEvent.click(screen.getByText(/^How to read this$/));
+    fireEvent.click(screen.getByText(/^Reading guide$/));
     const expected = deviceSpectrumBullets(sweep.band_time_sweep.ZERO_THREE_RIGHT);
     expect(expected[0]).toMatch(/^358 of \d+ matched reports \(\d+%\)/);
     const items = Array.from(container.querySelectorAll("li")).map((el) => el.textContent);
@@ -209,7 +209,7 @@ describe("the calibrated heat-map card (BiomarkerHeatmapGrids)", () => {
 
   it("the drawer's first note speaks of the circled cell and nine lengths (decision 172), a pin", async () => {
     const { container } = await renderGrid();
-    fireEvent.click(screen.getByText(/^How to read this$/));
+    fireEvent.click(screen.getByText(/^Reading guide$/));
     const text = container.textContent;
     expect(text).toMatch(/circled cell in each column/);
     expect(text).not.toMatch(/ten lengths/i);

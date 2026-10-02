@@ -12,7 +12,7 @@
  * notation); the 22 band centres as a strip, all of them analysed, clear ones in ink and the ones
  * within 2.5 Hz of a harmonic of the rate flagged and greyed -- flagged, never dropped: the PI's
  * advisory ruling of 2026-09-06 and decision 220 (a warning, not a refusal); the reasons folded
- * under "Why this design". One line at the
+ * under "Design rationale". One line at the
  * bottom says what the record holds on that contact today against what the session yields, and
  * whether the margin can be switched on. The page's type scale (typeScale.js) and formatters
  * (stimFormat.js) are used throughout; nothing under 11 px.
@@ -38,7 +38,7 @@
  *     the export button that already makes the sheet: "Make Google sheet" exports them, and the
  *     page shows them one click away;
  *   - each side's explanatory prose (the rate, the ladder, the hold, the sensing contact, the
- *     harmonic paragraph) moves into that side's own "Why this design" fold; the values stay open;
+ *     harmonic paragraph) moves into that side's own "Design rationale" fold; the values stay open;
  *   - the session conditions both ladders share print once, under both columns;
  *   - the ceiling is stated once, in the header strip ("ceiling L 4.5 mA · R 4.5 mA");
  *   - THE HOME SCHEDULE IS INSIDE THIS CARD as its second fold (it was a card of its own, kept
@@ -51,7 +51,7 @@
  * ladders drawn as step plots of current against step number, the safe ceiling dashed and the side
  * held still named; the band centres on an 8–30 Hz axis, a flagged centre a hollow ring and each
  * folded multiple of the rate labelled ("rate ×4 → 30 Hz"); the exploratory ladder below a
- * hairline, not in a box; one "Why this design" fold for both sides. Colours and sizes from the
+ * hairline, not in a box; one "Design rationale" fold for both sides. Colours and sizes from the
  * shared tokens; the PI's harmonic wording is kept word for word.
  */
 import React, { memo, useState } from "react";
@@ -356,7 +356,7 @@ function SideColumn({ side, plan, shared = [], todayShared = false }) {
   );
 }
 
-/** One side's reasons, for the section's one "Why this design" fold. */
+/** One side's reasons, for the section's one "Design rationale" fold. */
 function WhySide({ side, plan }) {
   if (!plan) return null;
   const c = plan.sensing_contact;
@@ -483,7 +483,7 @@ function ProposedColumn({ p }) {
           <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.4 }}>{`time: ${p.session_time.why}`}</MDTypography>
         ) : null}
       </Fold>
-      <Fold show="Why this design" hide="Hide" mt={0.6}>
+      <Fold show="Design rationale" hide="Hide" mt={0.6}>
         <MDBox component="dl" sx={DL}>
           {sp.why ? <><dt>stimulate on, why</dt><dd>{`${sp.display_short || sp.channel}: ${sp.why}`}</dd></> : null}
           {num(c.n_qualifying) !== null ? (
@@ -690,9 +690,9 @@ function TitrationSessionCard({ plan, participantUid, homeSchedule = null }) {
                 </MDBox>
               </MDBox>
             )}
-            {/* ONE "Why this design" fold for both sides (SPEC.md section 5.3, §4). */}
+            {/* ONE "Design rationale" fold for both sides (SPEC.md section 5.3, §4). */}
             {(left || right) && (
-              <Fold show="Why this design" hide="Hide why this design" mt={1.5}>
+              <Fold show="Design rationale" hide="Hide why this design" mt={1.5}>
                 <WhySide side="Left" plan={left} />
                 <WhySide side="Right" plan={right} />
               </Fold>
@@ -768,7 +768,7 @@ function TitrationSessionCard({ plan, participantUid, homeSchedule = null }) {
                 {`${margin.available ? "✓" : "▲"} ${marginLine}`}
               </span>
             </MDTypography>
-            <Fold show="Where this protocol and the sheet template come from" hide="Hide" mt={1}>
+            <Fold show="Protocol and template source" hide="Hide" mt={1}>
               <MDTypography variant="caption" component="div" sx={{ ...SMALL }}>
                 {`protocol: ${plan.protocol_source || EMPTY}`}
               </MDTypography>

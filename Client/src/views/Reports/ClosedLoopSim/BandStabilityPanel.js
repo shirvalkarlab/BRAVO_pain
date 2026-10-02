@@ -262,7 +262,7 @@ export default function BandStabilityPanel({ stability, cacheStatus, painScore }
 
       {s && s.test_ran ? (
         <MDBox mb={2}>
-          <Fold show="How this was worked out (what the answer rests on, how the ranges were computed)"
+          <Fold show="Method"
             hide="Hide how this was worked out" mt={0}>
             <MDBox mt={0.5}>
               {isNum(s.largest_difference) ? (

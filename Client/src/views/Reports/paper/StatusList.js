@@ -64,7 +64,7 @@ export default function StatusList({ items, showKey, label }) {
         </ul>
       )}
       {showKey && (
-        <p style={{ margin: `${SPACE.xs}px 0 0`, ...TYPE.caption, color: STATE.notChecked.ink }}>
+        <p style={{ margin: `${SPACE.xs}px 0 0`, ...TYPE.body, color: STATE.notChecked.ink }}>
           {STATUS_KEY.map((k, i) => (
             <span key={k.state}>
               {i > 0 ? " · " : ""}

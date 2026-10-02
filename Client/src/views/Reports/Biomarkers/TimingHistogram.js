@@ -87,7 +87,7 @@ export default function TimingHistogram({ scanIndex, painSeries, windowMin, matc
       <div ref={ref} style={{ width: "100%", height: offsets.length ? height : 0 }}
         data-testid="timing-histogram" data-empty={offsets.length ? "false" : "true"} />
       {offsets.length ? (
-      <MDBox component="p" m={0} sx={{ ...TYPE.caption, color: T.ink }}>
+      <MDBox component="p" m={0} sx={{ ...TYPE.body, color: T.ink }}>
         {SOURCE_SERIES.map((s, i) => (
           <span key={s.key}>
             {i > 0 ? " \u00b7 " : ""}

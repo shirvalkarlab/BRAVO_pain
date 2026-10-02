@@ -595,7 +595,7 @@ export default function EvidenceTrianglePanel({ report }) {
       <CoherenceReading coherence={data.coherence} edges={edges} />
 
       <MDBox mt={2}>
-        <Fold show="How this was worked out (counts, the reading with the current taken out, how the sign agreement was tested)"
+        <Fold show="Method"
           hide="Hide how this was worked out" mt={0}>
           {["E1", "E2", "E3"].map((k) => <LinkMethod key={k} k={k} e={edges[k]} />)}
           {edges.E2 && edges.E2.adjusted ? (

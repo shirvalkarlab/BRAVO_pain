@@ -1,5 +1,5 @@
 /**
- * The "How each band's link with pain changed over time" section (BiomarkerAnalytics.js) drew its
+ * The "Band–pain link over time" section (BiomarkerAnalytics.js) drew its
  * sliding-correlation heat map with a save-as-PNG/zoom/pan toolbar until the minimalist redesign
  * of 2026-09-26 (SPEC.md section 3) took it off every figure that had one, with no way for a
  * reviewer to get a copy of the figure out of the browser for the deployment record. The PI put

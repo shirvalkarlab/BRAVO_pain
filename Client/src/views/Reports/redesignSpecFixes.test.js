@@ -111,7 +111,7 @@ describe("E3: the line under the title names the study code", () => {
     expect(contextLine("RCS08", "Left Leg VAS")).toBe("RCS08 · pain score Left Leg VAS");
     expect(contextLine(null, "NRS (0-10)")).toBe("pain score NRS (0-10)");
     const { container } = rtlRender(wrap(
-      <PageHead title="Which brain signal tracks pain?" participant="RCS08" painScore="Left Leg VAS" />));
+      <PageHead title="Brain signal vs. pain" participant="RCS08" painScore="Left Leg VAS" />));
     expect(container.textContent).toContain("RCS08 · pain score Left Leg VAS");
   });
 

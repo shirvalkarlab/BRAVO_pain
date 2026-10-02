@@ -152,13 +152,13 @@ describe("C8: the research checks are asked for when their fold is first opened"
   it("sends one request when the fold is opened, and shows the card", async () => {
     renderPage();
     await untilLoaded();
-    fireEvent.click(screen.getByRole("button", { name: /Checks against chance and against the current \(run offline\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Chance and current checks \(offline\)/ }));
     await waitFor(() => expect(screen.getByTestId("control-analyses-card")).toBeInTheDocument());
     expect(screen.getByTestId("control-analyses-card")).toHaveTextContent("Time of day and weekends");
     expect(checksRequests()).toBe(1);
     // Closing and opening again asks nothing more.
     fireEvent.click(screen.getByRole("button", { name: /Hide the research checks/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Checks against chance and against the current \(run offline\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Chance and current checks \(offline\)/ }));
     await new Promise((r) => setTimeout(r, 20));
     expect(checksRequests()).toBe(1);
   });

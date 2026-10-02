@@ -78,7 +78,7 @@ async function renderGrid() {
       </PlatformContextProvider>
     </ThemeProvider>,
   );
-  await waitFor(() => expect(screen.getByText(/How to read this/)).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByText(/Reading guide/)).toBeInTheDocument());
   await waitFor(() => expect(global.__layoutCalls.some((c) => HEATMAPS.includes(c.divId))).toBe(true));
 }
 

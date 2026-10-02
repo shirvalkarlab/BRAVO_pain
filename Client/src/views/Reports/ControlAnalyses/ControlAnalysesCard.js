@@ -21,7 +21,7 @@ const ENDPOINT = "/api/queryControlAnalyses";
 const SELECT_ID = "control-analysis-select";
 
 /** The card's title, in the spec's words for "Control analyses" (SPEC.md section 6). */
-export const CARD_TITLE = "Checks against chance and against the current (run offline)";
+export const CARD_TITLE = "Chance and current checks (offline)";
 
 function stamp(snap, nRuns) {
   const when = snap.run_at ? new Date(snap.run_at) : null;
@@ -47,7 +47,7 @@ function linesFor(snap, clinicSheets) {
   };
 }
 
-const CAPTION = { ...TYPE.caption, color: T.ink3, margin: 0 };
+const CAPTION = { ...TYPE.body, color: T.ink3, margin: 0 };
 const PROSE = { maxWidth: LAYOUT.proseMax };
 
 /** `plain`: drawn as a plain row of a page's Background group, with no card around it (taste audit

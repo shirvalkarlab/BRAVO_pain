@@ -1,5 +1,5 @@
 /**
- * The Biomarkers page: "Which brain signal tracks pain?" (Shirvalkar Lab).
+ * The Biomarkers page: "Brain signal vs. pain" (Shirvalkar Lab).
  *
  * Laid out by the redesign of 2026-09-26 (artifacts/design_2026-09-26_minimalist_redesign/SPEC.md
  * section 5.1): the question as the page title, the pain-score selector first ("Every chart below
@@ -73,7 +73,7 @@ const DEFAULT_METRIC_OPTIONS = PAIN_SCORE_OPTIONS;
 // keeps this title style, and its items are plain rows under it, not cards (C12).
 const SECTION_TITLE_SX = { ...TYPE.title, color: T.ink, m: 0 };
 const LABEL_SX = { ...TYPE.body, fontWeight: 600, color: T.ink, display: "block", mb: 0.25 };
-const NOTE_SX = { ...TYPE.caption, color: T.ink3, display: "block" };
+const NOTE_SX = { ...TYPE.body, color: T.ink3, display: "block" };
 
 // How the continuous pain score is turned into the binary high/low pain_level the detector trains
 // on (sent as LabelStrategy). "tertile" (default) splits low/high and drops the ambiguous middle —
@@ -714,7 +714,7 @@ function Biomarkers() {
                 is read on; the status sentence is the heat maps' own answer, read off the grid. */}
             <Grid item xs={12} sx={{ mb: 4 }}>
               <MDBox data-testid="grid-status">
-                <PageHead title="Which brain signal tracks pain?"
+                <PageHead title="Brain signal vs. pain"
                   participant={participantCode}
                   painScore={previewMetricLabel}
                   status={gridStatus ? gridStatus.sentence : null}
@@ -741,7 +741,7 @@ function Biomarkers() {
                     ))}
                   </Select>
                 </FormControl>
-                <MDTypography component="span" sx={{ ...TYPE.caption, color: T.ink3 }}>
+                <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink3 }}>
                   {"Every chart below uses this score."}
                 </MDTypography>
               </MDBox>
@@ -761,7 +761,7 @@ function Biomarkers() {
                 onRecompute={compute}
               />
               <MDBox data-testid="developer-details">
-                <Fold show="Stored results and memory use" hide="Hide stored results and memory use">
+                <Fold show="Stored results, memory" hide="Hide stored results and memory use">
                   <CacheStatusLine status={data ? data.cache_status : null} />
                   {/* RETENTION STATUS, WHICH HAS THREE ANSWERS. `underMemoryPressure()` returns false
                       both when the heap is comfortably below the eviction ratio and when the browser
@@ -769,7 +769,7 @@ function Biomarkers() {
                       the measurement is read first and its absence is its own state. */}
                   {data && !computing ? (() => {
                     const mi = memoryInfo();
-                    const sx = { ...TYPE.caption, display: "block", color: T.ink3 };
+                    const sx = { ...TYPE.body, display: "block", color: T.ink3 };
                     if (mi === null) {
                       return (
                         <MDTypography variant="caption" sx={sx}>
@@ -798,7 +798,7 @@ function Biomarkers() {
             </Grid>
 
             {/* ── §1 THE CALIBRATED HEAT MAPS, THE HEADLINE (PRD decision 62; SPEC.md section 5.1
-                item 2): "Does band power rise or fall with pain?". Runs on page load from the live
+                item 2): "Power–pain heat maps". Runs on page load from the live
                 controls (`heatmapRequestParams`, debounced like the live scan model), never waiting
                 for the older all-band scan. The card is the component's own. */}
             <Grid item xs={12}>
@@ -819,12 +819,12 @@ function Biomarkers() {
                 }} />
             </Grid>
 
-            {/* ── §2 "How are reports paired with recordings?" (SPEC.md section 5.1 item 3): the
+            {/* ── §2 "Report–recording pairing" (SPEC.md section 5.1 item 3): the
                 coverage sentence as the answer, the timing histogram as the figure, then one large
                 "Adjust matching parameters" button (closed by default; the PI, 2026-09-26) opening a
                 compact panel with every matching control, the extra options and the high / low split. */}
             <Grid item xs={12}>
-              <Section id="biomarker-pairing" question="How are reports paired with recordings?">
+              <Section id="biomarker-pairing" question="Report–recording pairing">
                 <MDBox>
                   <MatchWindowBand
                     coverage={reportCoverageLive}
@@ -867,11 +867,11 @@ function Biomarkers() {
               </Section>
             </Grid>
 
-            {/* ── §3 "What was recorded, and when?" (SPEC.md section 5.1 item 4): the acquisition
+            {/* ── §3 "Recording timeline" (SPEC.md section 5.1 item 4): the acquisition
                 timeline (always shown; decision 216). The pain row follows the selector live. Falls
                 back to the older timeline only when no availability payload came back at all. */}
             <Grid item xs={12}>
-              <Section id="biomarker-timeline" question="What was recorded, and when?">
+              <Section id="biomarker-timeline" question="Recording timeline">
                 <MDBox>
                   {timelineData && timelineData.availability && timelineData.availability.records
                         && timelineData.availability.records.length > 0 ? (
@@ -932,7 +932,7 @@ function Biomarkers() {
               {data && data.summary ? (
                 <MDBox mt={2}>
                   <ReportSharingNote summary={data.summary} />
-                  <Fold show="Settings of the last all-band scan" hide="Hide the last scan's settings">
+                  <Fold show="Last scan settings" hide="Hide the last scan's settings">
                     {data.label_metric ? (
                       <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink2, display: "block" }}>
                         {"Pain score: "}
@@ -985,7 +985,7 @@ function Biomarkers() {
                   calibrated grids above). Only after a Recompute; folded (decision 304). */}
               {data && hasSlidingCorrelation(data.analytics) ? (
                 <MDBox mt={2}>
-                  <Fold show="How each band's link with pain changed over time"
+                  <Fold show="Band–pain link over time"
                     inside="from the all-band scan" hide="Hide how each band's link changed over time">
                     <Grid container spacing={2}>
                       <BiomarkerAnalytics analytics={data.analytics}
@@ -1009,7 +1009,7 @@ function Biomarkers() {
                 sx={{ borderTop: `1px solid ${T.rule}` }}>
                 {/* The spec's plain title (SPEC 2026-09-26 section 6, "Control analyses"), set by
                     WP7 with the pin in `foldedDeveloperLines.source.test.js`. */}
-                <Fold show="Checks against chance and against the current (run offline)"
+                <Fold show="Chance and current checks (offline)"
                   inside="saved research checks; nothing on this page reads them"
                   hide="Hide the checks against chance and against the current"
                   onChange={(open) => { if (open) setChecksOpened(true); }}>

@@ -421,7 +421,7 @@ function DecisionStrip({ arms, plan, planLoading, planErr, inForce }) {
           245(b), and moved into a fold on 2026-09-26 ("yes to all six"): what "proven better"
           means, how many times that comparison ran and what 1 SD exposes across them (the
           server's own sentence), and the search's own stopping rule. */}
-      <SizedFold show="What “proven better” means, and when to stop searching" hide="Hide">
+      <SizedFold show="Superiority and stopping rule" hide="Hide">
         <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2 }}>
           Proven better means the predicted change in pain against today's setting is larger than 1
           standard deviation of that difference; not proven means it was measured and is smaller; not

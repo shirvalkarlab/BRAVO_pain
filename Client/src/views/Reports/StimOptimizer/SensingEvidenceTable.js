@@ -35,7 +35,7 @@
  *
  * THE MINIMALIST REDESIGN OF 2026-09-26 (SPEC.md section 5.3, §3): the rows on the pairs the device
  * allows are sentence blocks, each opening with ✓ usable or ✕ not usable and closing with its
- * "Why not usable" fold; the other combinations stay in a folded table with sentence-case headers
+ * "Exclusion reason" fold; the other combinations stay in a folded table with sentence-case headers
  * whose two technical columns are defined once above it. Colours and sizes from the shared tokens.
  */
 import { memo } from "react";
@@ -83,7 +83,7 @@ function UnderRow({ c }) {
         <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, maxWidth: "80ch", color: T.ink2 }}>{c.harmonic_note}</MDTypography>
       ) : null}
       {reason ? (
-        <SizedFold show="Why not usable" hide="Hide" dense mt={0.25}>
+        <SizedFold show="Exclusion reason" hide="Hide" dense mt={0.25}>
           <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, maxWidth: "80ch", color: T.ink2 }}>{reason}</MDTypography>
         </SizedFold>
       ) : null}
@@ -357,7 +357,7 @@ function SensingEvidenceTable({ closedLoop }) {
       )}
 
       {/* The explanatory paragraphs, in one fold (the design review of 2026-09-26, S3). */}
-      <SizedFold show="What “usable” requires, and why the current limit is flat" hide="Hide">
+      <SizedFold show="Usability criteria" hide="Hide">
         <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2 }}>
           {`A combination is usable when at least one band both falls with current after removing the differences between clinic visits (a significant negative slope of band power on current) and rises with pain on the Biomarkers grid (a positive correlation with the pain score whose interval lies wholly above zero), on the one sensing pair the device allows while today's contacts stimulate (the two contacts flanking them). That is the device's fixed control polarity: more current, less power, less pain. Evidence counts only from currents at or below the module's ${fmtMa(cl.amp_hard_limit_mA)} hard limit, which is not the safe ceiling for programming. One band is enough (the PI's ruling of 2026-09-17; until then half the bands had to respond).`}
         </MDTypography>

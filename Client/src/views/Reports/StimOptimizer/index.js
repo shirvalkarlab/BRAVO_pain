@@ -216,7 +216,7 @@ export default function StimOptimizer() {
         </PageHead>
 
         {/* The Recompute control (the PI's own file, unchanged): every section below is served from
-            memory until it is pressed. When the stored results were built: one click away. */}
+            memory until it is pressed. Stored-result build times: one click away. */}
         <MDBox mb={4}>
           <RecomputeBar
             title="stim parameter optimizer"
@@ -229,7 +229,7 @@ export default function StimOptimizer() {
             onRecompute={() => recomputeSlots(participant_uid, STIM_OPTIMIZER_SLOTS)}
           />
           {data && data.cache_status ? (
-            <SizedFold show="When the stored results were built" hide="Hide" dense mt={0.5}>
+            <SizedFold show="Stored-result build times" hide="Hide" dense mt={0.5}>
               <MDBox data-testid="cache-status-fold-body">
                 <CacheStatusLine status={data.cache_status} />
               </MDBox>
@@ -291,7 +291,7 @@ export default function StimOptimizer() {
         {/* ---------- the research checks: saved, dated, run offline; they feed nothing above.
             Folded and still mounted; their request goes out the first time the fold is opened
             (speed-up item C8, 2026-10-02). ---------- */}
-        <SizedFold show="Checks against chance and against the current (run offline)" hide="Hide the research checks" mt={3}
+        <SizedFold show="Chance and current checks (offline)" hide="Hide the research checks" mt={3}
           onChange={(open) => { if (open) setChecksOpened(true); }}>
           <SectionRevealedContext.Provider value={checksOpened}>
             <ControlAnalysesSection participantUid={participant_uid} page="stim_optimizer" />

@@ -13,7 +13,7 @@
  *   4. the developer lines (when the stored results were built, the browser's memory use) sit in one
  *      fold, and the "computed on N samples" line and the recorded-channel list are not on view;
  *   5. the calibration section says "composed" once on load and "not measured" once in all;
- *   6. the 2026-09-21 search lines are in their own fold, not in "How to read this";
+ *   6. the 2026-09-21 search lines are in their own fold, not in "Reading guide";
  *   7. the pairs the device refuses with today's contacts carry a red bullet and a cross, when the
  *      response says which pairs the device allows (and nothing is marked when it does not);
  *   8. "TD" says which TD: up to 30 s around the rating on the matching card, 3 s pieces on the grid.
@@ -118,7 +118,7 @@ async function renderPage(grid = sweep) {
         </PlatformContextProvider>
       </ThemeProvider>);
   });
-  await waitFor(() => expect(screen.getAllByText(/How to read this/).length).toBeGreaterThan(0));
+  await waitFor(() => expect(screen.getAllByText(/Reading guide/).length).toBeGreaterThan(0));
   await waitFor(() => expect(screen.getAllByText(/345\.59/).length).toBeGreaterThan(0));
   return utils;
 }
@@ -229,7 +229,7 @@ describe("5. the calibration section says composed once", () => {
 });
 
 describe("6. the 2026-09-21 search lines have their own fold", () => {
-  test("closed on load, seven lines inside, none of them in 'How to read this'", async () => {
+  test("closed on load, seven lines inside, none of them in 'Reading guide'", async () => {
     const { container } = await renderPage();
     const lines = Array.from(container.querySelectorAll("[data-testid='l13-search-line']"));
     expect(lines).toHaveLength(7);
