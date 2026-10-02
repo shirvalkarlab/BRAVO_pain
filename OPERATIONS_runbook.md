@@ -111,14 +111,15 @@ Set only in Jetstream2's `docker-compose.override.yml` (not in git; backup in
 | Setting | Jetstream2 | What it bounds |
 |---|---|---|
 | gunicorn `-w` | 16 | web workers (each ~0.5 GB once warmed) |
-| `BRAVO_POOL_JOBS` | 31 | worker processes in each web worker's one pool (~0.24 GB each) |
+| `BRAVO_POOL_JOBS` | 16 | worker processes in each web worker's one pool (~0.22 GB each; 16 and 31 time the same, decision 376) |
 | `BRAVO_WARMUP_POOL` | auto | start that pool when the web worker starts (`BRAVO/warmup.py`) |
 | `BRAVO_POOL_IDLE_SECONDS` | 86400 | an idle pool stays a day (joblib's default is 300 s) |
 | `BRAVO_RECORDING_CACHE_MB` | 3000 | unpacked recordings kept per web worker |
 
-Held when idle: 16 x (0.5 + 31 x 0.24) GB ~ 127 GB; recording caches at most 48 GB more; ~175 GB of
-245 GB in the worst case, leaving room for requests (the heaviest peaked at 10.8 GB). To change the
-budget, keep `web workers x (0.5 + pool x 0.24) + web workers x cache` under ~200 GB.
+Measured on 2026-10-02 after every web worker had warmed (pool 16, recording cache 3,000 MB, the
+participants step of decision 375): 162 GB used of 245, 83 GB available. Each web worker holds ~4.9 GB
+(data caches) + up to 2.7 GB of recording cache; each pool process ~0.22 GB. The heaviest request
+peaked at 10.8 GB. To change the budget, keep the measured figure under ~200 GB.
 
 ## 4. Making a frontend change actually take effect
 
