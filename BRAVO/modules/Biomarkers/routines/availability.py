@@ -22,11 +22,15 @@ converts to the TABLET's clock before decoding (`MedtronicPercept/TabletClock.py
 that start plus its index over the sampling rate.
 """
 import datetime
+import logging
+import os
 import warnings
 
 import numpy as np
 
 from . import analytics
+
+_log = logging.getLogger(__name__)
 
 # THE CANONICAL DECODED FORM (Track B). Both spellings on purpose: the container's path root makes
 # the package `modules.DecodeCommon`, the host suite's root makes it `DecodeCommon`.
@@ -1133,13 +1137,25 @@ def _td_tiles_batched(td_out, col, miss, fs, t0, src, centers, *, window_s, half
     of them) are transformed together (`analytics.td_transform_band_power_batch`); the rest take the
     single call as before. The rows keep their form: a list per piece, None where there is no value.
     """
+    vals = _td_tile_values(col, miss, fs, centers, window_s=window_s, half=half,
+                           max_missing_frac=max_missing_frac, saturation_uv=saturation_uv)
+    _append_tile_rows(td_out, vals, t0, fs, src)
+
+
+def _td_tile_values(col, miss, fs, centers, *, window_s, half, max_missing_frac, saturation_uv):
+    """The numbers behind one recording's tiles, as arrays (None when the recording has no piece).
+
+    This is the half of `_td_tiles_batched` that does the work (the gates and the transforms); it
+    takes only the recording's own arrays, so it can run in a worker process. `_append_tile_rows`
+    turns what it returns into the rows the product holds.
+    """
     nsamp = col.shape[0]
     nC = centers.size
     win_tile = int(round(fs * window_s))
     step_sub = int(round(fs * analytics.TRANSFORM_STEP_SECONDS))
     min_finite = int(round(fs * analytics.TRANSFORM_WIN_SECONDS))
     if win_tile <= 0 or nsamp == 0:
-        return
+        return None
     starts = np.arange(0, nsamp, win_tile)
     ends = np.minimum(starts + win_tile, nsamp)
     length = ends - starts
@@ -1174,6 +1190,17 @@ def _td_tiles_batched(td_out, col, miss, fs, t0, src, centers, *, window_s, half
         lsb[i] = np.atleast_1d(analytics.td_transform_band_power(
             col[starts[i]:ends[i]], fs, centers, half_hz=half, step_samples=step_sub, agg="median"))
     lsb = np.where(np.isfinite(lsb) & (lsb > 0), analytics.LSB_PER_UV2_TRANSFORM * lsb, np.nan)
+    return {"starts": starts, "ends": ends, "n_fin": n_fin, "saturated": saturated,
+            "passes": passes, "lsb": lsb}
+
+
+def _append_tile_rows(td_out, vals, t0, fs, src):
+    """One recording's tile rows appended to `td_out` from `_td_tile_values`' arrays, in piece order."""
+    if vals is None:
+        return
+    starts, ends, n_fin = vals["starts"], vals["ends"], vals["n_fin"]
+    saturated, passes, lsb = vals["saturated"], vals["passes"], vals["lsb"]
+    nC = lsb.shape[1]
     good = np.isfinite(lsb)
     rows = lsb.tolist()
     for i, j in zip(*np.nonzero(~good & passes[:, None])):
@@ -1188,6 +1215,66 @@ def _td_tiles_batched(td_out, col, miss, fs, t0, src, centers, *, window_s, half
         td_out["source"].append(src)
         td_out["n_finite_s"].append(round(int(n_fin[i]) / fs, 3))
         td_out["ok"].append(bool(ok[i]))
+
+
+#: BRAVO_TILE_JOBS=1 (or 0) cuts every recording's tiles in the calling process, as before; any other
+#: whole number is the worker count; unset, the shared pool size (`DecodeCommon.parallel.pool_jobs()`).
+TILE_JOBS_ENV = "BRAVO_TILE_JOBS"
+#: Below this many samples (all of one pair's recordings together) the pool costs more than it saves.
+TILE_MIN_SAMPLES_FOR_WORKERS = 2_000_000
+#: How many times a cold build went to the pool, and how many times the pool failed (for tests and logs).
+TILE_POOL_RUNS = {"workers": 0, "failed": 0}
+
+
+def _tile_jobs():
+    raw = os.environ.get(TILE_JOBS_ENV, "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    try:
+        from modules.DecodeCommon import parallel as _PAR
+    except ImportError:
+        from DecodeCommon import parallel as _PAR
+    return _PAR.pool_jobs()
+
+
+def _tile_values_chunk(chunk, centers, kw):
+    """`_td_tile_values` for a run of neighbouring recordings; runs in a worker process."""
+    return [_td_tile_values(col, miss, fs, centers, **kw) for col, miss, fs in chunk]
+
+
+def _tile_values_in_workers(traces, centers, kw):
+    """`_td_tile_values` for every trace, in the traces' own order, from the shared worker pool;
+    None when the pool is not used (switch, small input) or fails, so the caller does it here."""
+    k = _tile_jobs()
+    total = sum(int(t[0].shape[0]) for t in traces)
+    if k <= 1 or len(traces) < 2 or total < TILE_MIN_SAMPLES_FOR_WORKERS:
+        return None
+    n_chunks = min(len(traces), 4 * k)
+    # contiguous runs holding about equal numbers of samples
+    cum = np.cumsum([int(t[0].shape[0]) for t in traces])
+    cuts = [0] + [int(np.searchsorted(cum, total * (i + 1) / n_chunks, side="left")) + 1
+                  for i in range(n_chunks - 1)] + [len(traces)]
+    cuts = sorted(set(min(max(c, 0), len(traces)) for c in cuts))
+    try:
+        import joblib
+        try:                                      # the shared pool settings (decision 369)
+            from modules.DecodeCommon import parallel as _PAR
+        except ImportError:
+            from DecodeCommon import parallel as _PAR
+        parts = joblib.Parallel(n_jobs=k, backend=_PAR.loky_backend())(
+            joblib.delayed(_tile_values_chunk)(
+                [(c, m, f) for c, m, f, _t0, _src in traces[a:b]], centers, kw)
+            for a, b in zip(cuts[:-1], cuts[1:]) if b > a)
+        TILE_POOL_RUNS["workers"] += 1
+        return [v for part in parts for v in part]
+    except Exception as exc:                      # noqa: BLE001 -- no pool: cut them here
+        TILE_POOL_RUNS["failed"] += 1
+        _log.warning("tiles are cut one recording at a time: the worker processes failed (%s: %s)",
+                     type(exc).__name__, exc)
+        return None
 
 
 def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
@@ -1279,10 +1366,18 @@ def raw_lsb_spectrum_cache(channel, centers_hz, *, band_half_hz=2.5,
             col = data[:, ci]
             yield col, _missing_per_sample(r.get("Missing"), col.shape[0]), fs, t0, r.get("product")
 
-    for col, miss, fs, t0, product in _prepared_traces():
-        _td_tiles_batched(td_out, col, miss, fs, t0, TD_PRODUCT_SOURCE_LABEL.get(product, product or "time-domain"),
-                          centers, window_s=window_s, half=half, max_missing_frac=max_missing_frac,
-                          saturation_uv=saturation_uv)
+    traces = [(col, miss, fs, t0, TD_PRODUCT_SOURCE_LABEL.get(product, product or "time-domain"))
+              for col, miss, fs, t0, product in _prepared_traces()]
+    tile_kw = dict(window_s=window_s, half=half, max_missing_frac=max_missing_frac,
+                   saturation_uv=saturation_uv)
+    # The recordings' tiles are cut in worker processes when there is enough to cut (the arrays come
+    # back in the recordings' own order); the rows are made here either way.
+    done = _tile_values_in_workers(traces, centers, tile_kw)
+    for i, (col, miss, fs, t0, src) in enumerate(traces):
+        if done is not None:
+            _append_tile_rows(td_out, done[i], t0, fs, src)
+        else:
+            _td_tiles_batched(td_out, col, miss, fs, t0, src, centers, **tile_kw)
 
     # ---- PSD-derived windows (one per event) ------------------------------------------------------
     for ev in (event_psd_recordings or []):
