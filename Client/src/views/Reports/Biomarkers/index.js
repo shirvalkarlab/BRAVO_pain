@@ -763,7 +763,7 @@ function Biomarkers() {
               />
               <MDBox data-testid="developer-details">
                 <Fold show="Stored results, memory" hide="Hide stored results and memory use">
-                  <CacheStatusLine status={data ? data.cache_status : null} />
+                  <CacheStatusLine status={data ? data.cache_status : null} loading={!!computing} />
                   {/* RETENTION STATUS, WHICH HAS THREE ANSWERS. `underMemoryPressure()` returns false
                       both when the heap is comfortably below the eviction ratio and when the browser
                       does not expose heap figures at all (`performance.memory` is Chromium-only), so
