@@ -148,6 +148,16 @@ def test_a_tie_at_the_top_is_said_and_no_single_block_is_offered_as_the_models_p
     assert "cannot rank" in out["ranking_note"] and "6" in out["ranking_note"]
 
 
+def test_the_tie_note_says_the_tied_blocks_are_untested_and_the_number_is_a_bound_not_a_prediction():
+    # the live page said "30 blocks tie ... 3.09 NRS points" above a table whose every row was
+    # WORSE than today: the 3.09 is the prior bound of the untested blocks, not an improvement
+    # anyone measured (decision 386)
+    out = BC.rank_blocks([], in_force=IN_FORCE, contacts_used=["L C+2-"], rates=[55.0, 110.0],
+                         ceilings={"Left": 4.5, "Right": 4.5}, prior_sd=1.0)
+    note = out["ranking_note"]
+    assert "untested" in note and "not a prediction" in note and "measured blocks rank below" in note
+
+
 def test_a_clear_winner_is_offered_with_its_ladder_and_no_tie_note():
     good = _surface(mu=lambda i, j: -2.0, sd=lambda i, j: 0.5)      # bound 3.0 > prior 2.0
     out = BC.rank_blocks([_row("L C+2-", 55.0, fitted=True, surface=good)], in_force=IN_FORCE,

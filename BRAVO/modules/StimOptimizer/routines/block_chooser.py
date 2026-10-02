@@ -229,9 +229,11 @@ def rank_blocks(rate_rows, *, in_force, contacts_used, rates, ceilings, prior_sd
         next_block = dict(top, ladder=TP.ladder((ceilings or {}).get("Left")),
                           right_held_mA=_f((f.get("Right") or {}).get("amplitude_mA")))
     elif top is not None:
-        note = (f"{n_tied} blocks tie at the top with the same plausible improvement "
-                f"({top['optimistic_improvement']:.2f} NRS points); the model cannot rank them, "
-                f"so it offers no single next block")
+        # the tied blocks are the untested ones (no surface, so they all carry the prior bound);
+        # the bound is what could still be plausible, never a measured gain (decision 386)
+        note = (f"{n_tied} untested blocks tie at the top at the prior bound of "
+                f"{top['optimistic_improvement']:.2f} NRS points (not a prediction); measured blocks "
+                f"rank below; the model cannot rank the tied ones, so it offers no single next block")
     return {"available": bool(blocks), "blocks": blocks, "next_block": next_block,
             "n_tied_at_top": int(n_tied), "ranking_note": note,
             "pulse_widths_us": {"Left": pwl, "Right": pwr}, "rates_left_out": left_out,
