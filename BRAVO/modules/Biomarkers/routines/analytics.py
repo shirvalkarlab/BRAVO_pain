@@ -5936,13 +5936,19 @@ def band_sweep_lsb_ceiling(participant_uid, channel, centre_hz):
 CHUNK_N_MAD = 7.0
 
 
-def chunk_upper_bounds(raw_cache, centers_hz, n_mad=None):
+def chunk_upper_bounds(raw_cache, centers_hz, n_mad=None, family="td"):
     """Per band, the highest single-chunk band power that is kept: median + n_mad x MAD of this
     contact's own 3 s chunk values at that band (every usable chunk of the contact, the population
     the old 99.5% ceilings were built from). Median and MAD are `stats_utils.mad_outlier_flags`'s:
     raw values, MAD unscaled; a value is dropped when v - median > n_mad x MAD (strict), and
     nothing is dropped when the MAD is zero or fewer than 4 values exist (bound infinite).
-    Returns one bound per entry of `centers_hz`."""
+    Returns one bound per entry of `centers_hz`.
+
+    `family="psd"` builds the bound from this contact's own device PSD snapshots instead (the PI,
+    2026-10-03, decision 411): a rating with no voltage trace in its window is answered from them,
+    and they are a different measurement on their own scale, so they are judged against their own
+    values, never against the TD chunks' bound. PSD snapshots carry no quality gate (`ok`); every
+    finite value counts."""
     from . import availability as _av
     n_mad = float(CHUNK_N_MAD if n_mad is None else n_mad)
     cc = np.atleast_1d(np.asarray(raw_cache.get("centers_hz") or [], dtype=float))
@@ -5950,9 +5956,11 @@ def chunk_upper_bounds(raw_cache, centers_hz, n_mad=None):
     hi = np.full(centers.size, np.inf)
     if cc.size == 0 or centers.size == 0:
         return hi
-    td = raw_cache.get("td") or {}
-    mat = _av._lsb_family_mat(td, cc.size)
-    ok = np.atleast_1d(np.asarray(td.get("ok") or [], dtype=bool))
+    if family not in ("td", "psd"):
+        raise ValueError(f"family must be 'td' or 'psd', got {family!r}")
+    fam = raw_cache.get(family) or {}
+    mat = _av._lsb_family_mat(fam, cc.size)
+    ok = np.atleast_1d(np.asarray(fam.get("ok") or [], dtype=bool))
     if mat.shape[0] == 0:
         return hi
     if ok.size == mat.shape[0]:

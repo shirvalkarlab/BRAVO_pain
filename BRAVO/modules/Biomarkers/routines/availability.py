@@ -1723,7 +1723,7 @@ def _whole_matrix_nanmedian(values, keep):
 
 def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, centers_hz,
                                     band_ceilings, allow_window_reuse=False,
-                                    match_direction="nearest"):
+                                    match_direction="nearest", psd_band_ceilings=None):
     """Band power per pain report and per length of signal, excluding contaminated 3 s chunks
     BEFORE they are averaged, and taking the next-nearest clean chunk in place of each one dropped.
 
@@ -1753,7 +1753,9 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
     `_nearest_pro_idx`), so only the surviving-chunk step differs between the two paths.
 
     `band_ceilings` is one ceiling per entry of `centers_hz`, `np.inf` where that centre has none
-    (that band then keeps every chunk). Nothing is written back into `raw_cache`.
+    (that band then keeps every chunk). `psd_band_ceilings` is the same for the device PSD
+    snapshots (decision 411: their own bound, from their own values); `None` judges them against
+    `band_ceilings`, as before 411. Nothing is written back into `raw_cache`.
 
     Returns `(power_by_length, info, stats_by_length)`. `power_by_length` maps each requested length
     in seconds to an (n_ratings x n_centres) array of linear device-LSB band power, NaN where a
@@ -1772,7 +1774,8 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
     nP = pro.size
     lengths = [float(s) for s in lengths_s]
     out = {s: np.full((nP, nCs), np.nan, dtype=float) for s in lengths}
-    info = {"n_chunk_band_values_excluded": 0, "n_chunks_eligible": 0,
+    info = {"n_chunk_band_values_excluded": 0, "n_psd_band_values_excluded": 0,
+            "n_chunks_eligible": 0,
             "n_cells_short_of_requested": 0, "tol_s": float(tol_s),
             "allow_window_reuse": bool(allow_window_reuse),
             # WHICH RATINGS THE LENGTH-OF-SIGNAL AXIS DOES NOT APPLY TO (open item 26). One entry
@@ -1788,6 +1791,7 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
 
     col = np.asarray([int(np.argmin(np.abs(centers_cache - c))) for c in sweep_c], dtype=int)
     ceil = np.asarray(band_ceilings, dtype=float)
+    psd_ceil = ceil if psd_band_ceilings is None else np.asarray(psd_band_ceilings, dtype=float)
     caps = [max(1, int(round(s / window_s))) for s in lengths]
     cap_max = max(caps) if caps else 1
 
@@ -1890,9 +1894,10 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
             PSsafe = np.maximum(PS, 0)
             for j in range(nCs):
                 pv = np.where(preal, psd_mat[PSsafe, col[j]], np.nan)
-                pbad = preal & np.isfinite(pv) & (pv > ceil[j])
+                pbad = preal & np.isfinite(pv) & (pv > psd_ceil[j])
                 pgood = preal & ~pbad
                 info["n_chunk_band_values_excluded"] += int(pbad.sum())
+                info["n_psd_band_values_excluded"] += int(pbad.sum())
                 prank = np.cumsum(pgood, axis=1)
                 for s, need in zip(lengths, psd_caps):
                     keep = pgood & (prank <= need)

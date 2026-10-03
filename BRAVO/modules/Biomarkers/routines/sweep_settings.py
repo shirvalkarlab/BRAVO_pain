@@ -46,7 +46,7 @@ STABILITY_GRID_RULE_VERSION = "v7_grid_own_pain_score"  # 2026-09-26: answers on
 # source; v22: effective count on each cell; v21: outlier rule on raw power; v20: cell p-values,
 # decision 188.
 GRID_KIND = "biomarker_band_sweep"
-GRID_RULE_VERSION = "v26_chunk_seven_mad_above"  # 2026-10-03: single 3 s chunks dropped only when more than 7 MAD above their contact's own median, every contact of every participant (decision 410); v25 3 MAD both sides; v24 exact rotation null, tablet clock  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+GRID_RULE_VERSION = "v27_psd_own_bound"  # 2026-10-03: device PSD snapshots judged by 7 MAD above their own median, not the TD chunks' (decision 411); v26: single 3 s chunks dropped only when more than 7 MAD above their contact's own median, every contact of every participant (decision 410); v25 3 MAD both sides; v24 exact rotation null, tablet clock  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 # The two raw inputs every grid names in its chain, in the order its key carries them: the saved
 # 3-second tiles (`bravo_service._RAW_LSB_SHARED_KIND`) and the pain-report snapshot.
 GRID_INPUT_KINDS = ("raw_lsb_tiles", "redcap_reports")

@@ -7801,11 +7801,14 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
     pt = np.asarray(pro_times, dtype=float)
 
     # THE 7-MAD-ABOVE CHUNK RULE: one upper bound per band, from this contact's own chunks.
+    # The device PSD snapshots that answer a rating with no voltage trace get their own bound, from
+    # their own values (decision 411).
     ceilings = analytics.chunk_upper_bounds(raw_cache, centers)
+    psd_ceilings = analytics.chunk_upper_bounds(raw_cache, centers, family="psd")
     power, excl, stats = availability.live_lsb_band_medians_by_length(
         pt, raw_cache, tol_s=tol_s, lengths_s=secs, centers_hz=centers,
-        band_ceilings=list(ceilings), allow_window_reuse=allow_window_reuse,
-        match_direction=match_direction)
+        band_ceilings=list(ceilings), psd_band_ceilings=list(psd_ceilings),
+        allow_window_reuse=allow_window_reuse, match_direction=match_direction)
     # LIFTED OUT of the exclusion block rather than left in it. `chunk_exclusion` is copied into the
     # served response whole, so leaving the per-report list there would ship one boolean per pain
     # report per contact pair -- 4,584 of them on RCS08 on 2026-09-15, growing with every report

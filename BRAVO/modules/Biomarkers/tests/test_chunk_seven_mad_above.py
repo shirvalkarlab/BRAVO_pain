@@ -76,3 +76,49 @@ def test_the_sweep_route_reads_the_seven_mad_bound_and_no_ceiling_table():
     src = inspect.getsource(BS._band_time_sweep_power_by_seconds)
     assert "chunk_upper_bounds(" in src
     assert "band_sweep_ceiling_table(" not in src and "live_lsb_spectrum_match(" not in src.split('"""')[2]
+
+
+# ---- PSD snapshots get their own bound (the PI, 2026-10-03, decision 411) ----------------------
+# A rating with no voltage trace in its window is answered from the device's own 30 s PSD
+# snapshots. Until 411 those were judged against the bound built from the TD chunks, a different
+# measurement on its own scale; now each family is judged against median + 7 MAD of its own values.
+
+def _psd_cache(psd_vals):
+    """One TD chunk far from the report (so the report is served from PSD) and PSD snapshots."""
+    td_t = [T0 + 50_000.0 + 3.0 * k for k in range(20)]
+    td_lsb = [_row(100.0 + (k % 3)) for k in range(20)]
+    psd_t = [T0 + 30.0 * k for k in range(len(psd_vals))]
+    return _cache(td_t, td_lsb, psd_t=psd_t, psd_lsb=[_row(v) for v in psd_vals])
+
+
+def test_the_psd_bound_comes_from_the_psd_snapshots():
+    vals = [1000.0 + 10.0 * (k % 5) for k in range(20)]
+    cache = _psd_cache(vals)
+    hi_psd = A.chunk_upper_bounds(cache, CENTERS, family="psd")
+    hi_td = A.chunk_upper_bounds(cache, CENTERS)
+    for j in range(len(CENTERS)):
+        col = np.array([v + j for v in vals])
+        _f, info = SU.mad_outlier_flags(col, n_mad=7.0)
+        assert np.isclose(hi_psd[j], info["median"] + 7.0 * info["mad"])
+        assert hi_td[j] < 200.0 < hi_psd[j]            # two different scales, two bounds
+
+
+def test_psd_snapshots_on_their_own_scale_are_kept_and_a_psd_spike_is_dropped():
+    vals = [1000.0 + 10.0 * (k % 5) for k in range(20)]
+    vals[0] = 90_000.0                                 # the snapshot nearest the report
+    cache = _psd_cache(vals)
+    power, info, _s = av.live_lsb_band_medians_by_length(
+        [T0 + 1.0], cache, tol_s=600.0, lengths_s=[30.0], centers_hz=CENTERS,
+        band_ceilings=list(A.chunk_upper_bounds(cache, CENTERS)),
+        psd_band_ceilings=list(A.chunk_upper_bounds(cache, CENTERS, family="psd")),
+        allow_window_reuse=True)
+    assert info["n_psd_band_values_excluded"] == len(CENTERS)   # the spike, at every band
+    row = power[30.0][0]
+    assert np.all((row > 900.0) & (row < 1100.0)), row          # the next snapshot, not dropped
+
+
+def test_the_sweep_passes_the_psd_bound():
+    import inspect
+    from .. import bravo_service as BS
+    src = inspect.getsource(BS._band_time_sweep_power_by_seconds).split('"""')[2]
+    assert 'family="psd"' in src and "psd_band_ceilings=" in src
