@@ -6,9 +6,9 @@ Keyed on the contact alone, a second participant with the same six names would h
 numbers applied to their own band powers, silently. The table is now keyed on the participant
 first, and the sweep looks it up through one function.
 
-Pinned on the sweep's own return value: for `ZERO_THREE_RIGHT` under a made-up participant the
-per-piece ceiling rule does not run (`chunk_exclusion` is None -- the MAD rule's path), under
-RCS08's uid it does (a dict). Plain asserts; the container runner has no pytest.
+Since 2026-10-03 (decision 410) the sweep reads no ceiling table: every contact of every
+participant is judged by its own 7-MAD-above bound. The table stays as the measured record of
+decision 94, and its lookup still refuses another participant. Plain asserts.
 """
 from ..routines import analytics as A
 from .test_device_spectrum_mark import _sweep_power, COVERED_UID, COVERED_CHANNEL
@@ -27,37 +27,23 @@ def test_the_table_is_keyed_on_rcs08_and_holds_its_six_contacts():
     assert A.band_sweep_ceiling_table(RCS08, "ZERO_THREE_RIGHT")[24.5] == 498.6
 
 
-def test_another_participant_with_the_same_contact_name_takes_the_mad_rule():
-    *_rest, chunk_excl, _flags = _sweep_power("ZERO_THREE_RIGHT", participant_uid="another-participant")
-    assert chunk_excl is None, "RCS08's ceilings ran for a participant they were not measured on"
-    *_rest, chunk_excl, _flags = _sweep_power("ZERO_THREE_RIGHT", participant_uid=None)
-    assert chunk_excl is None, "no participant named, so no participant's ceilings may run"
+def test_the_lookup_never_hands_rcs08s_numbers_to_another_participant():
     assert A.band_sweep_ceiling_table("another-participant", "ZERO_THREE_RIGHT") is None
     assert A.band_sweep_lsb_ceiling("another-participant", "ZERO_THREE_RIGHT", 24.5) is None
+    assert A.band_sweep_ceiling_table(None, "ZERO_THREE_RIGHT") is None
 
 
-def test_rcs08_still_takes_its_own_ceilings():
-    *_rest, chunk_excl, _flags = _sweep_power("ZERO_THREE_RIGHT", participant_uid=RCS08)
-    assert isinstance(chunk_excl, dict), chunk_excl
-    assert chunk_excl.get("rule") or chunk_excl, "the per-piece ceiling rule reports itself"
-    # and a contact RCS08's table does not name still takes the MAD rule
-    *_rest, chunk_excl, _flags = _sweep_power("A_CONTACT_WITH_NO_CEILING_TABLE", participant_uid=RCS08)
-    assert chunk_excl is None
-
-
-def test_the_service_reads_the_table_through_the_one_lookup_only():
-    """The dict is read in one place (`analytics.band_sweep_ceiling_table`); the service does not
-    index it itself, so the participant key cannot be dropped at one call site (review B9.2)."""
+def test_the_sweep_no_longer_reads_the_table():
+    """Since 2026-10-03 (decision 410) every contact of every participant is judged by its own
+    7-MAD-above bound (`analytics.chunk_upper_bounds`); the table chooses nothing in the sweep."""
     import inspect
     from .. import bravo_service as B
-    src = inspect.getsource(B._band_time_sweep_power_by_seconds)
-    assert "band_sweep_ceiling_table(participant_uid, channel)" in src
-    assert "BAND_SWEEP_LSB_CEILINGS.get(" not in src
+    src = inspect.getsource(B._band_time_sweep_power_by_seconds).split('"""')[2]
+    assert "band_sweep_ceiling_table(" not in src and "BAND_SWEEP_LSB_CEILINGS" not in src
 
 
 if __name__ == "__main__":
     test_the_table_is_keyed_on_rcs08_and_holds_its_six_contacts()
-    test_another_participant_with_the_same_contact_name_takes_the_mad_rule()
-    test_rcs08_still_takes_its_own_ceilings()
-    test_the_service_reads_the_table_through_the_one_lookup_only()
+    test_the_lookup_never_hands_rcs08s_numbers_to_another_participant()
+    test_the_sweep_no_longer_reads_the_table()
     print("All ceiling-keyed-on-participant tests passed.")

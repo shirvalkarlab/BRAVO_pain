@@ -7766,37 +7766,28 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
     """One band-power matrix per length of signal, each with one row per pain report and one column
     per band centre.
 
-    THE MATCHING IS THE MODULE'S OWN, CALLED ONCE PER LENGTH OF SIGNAL, NOT REIMPLEMENTED.
-    `availability.live_lsb_spectrum_match` is the function the page's full-spectrum scan already
-    uses to decide which pieces of recording serve which pain report; it takes the length of signal
-    as `td_quantity_s`, so sweeping that argument is exactly what this section needs and no new
-    matching rule is introduced. Calling it once per length is cheap because the expensive work --
-    slicing the recording history into 3 s pieces and computing a spectrum for each -- happened when
-    the cache was built and is not repeated.
+    THERE IS NO LOOP OVER BANDS ANYWHERE. Every band centre arrives as a column of one matrix, so
+    every statistic downstream is a matrix operation across all bands at once.
 
-    THERE IS NO LOOP OVER BANDS ANYWHERE. Each call returns every band centre in the cache for every
-    pain report, so the band axis arrives as columns of a matrix and every statistic downstream is a
-    matrix operation across all bands at once.
-
-    A (`participant_uid`, `channel`) that `analytics.BAND_SWEEP_LSB_CEILINGS` covers takes a
-    different route entirely (the table is keyed on the participant first, review B3 -- the six
-    contact names are every participant's, the numbers are one participant's):
-    `availability.live_lsb_band_medians_by_length` drops each contaminated 3 s piece BEFORE any of
-    them are averaged and backfills with the next closest clean one, so no outlier rule is left to
-    apply to the finished cell (PI, 2026-09-09). Every other channel keeps the original path
-    unchanged, which is what gates this to the sweep's own real contacts and leaves every other
-    panel that calls `live_lsb_spectrum_match` reading exactly what it read before.
+    EVERY CONTACT OF EVERY PARTICIPANT TAKES ONE ROUTE (the PI, 2026-10-03, decision 410).
+    `availability.live_lsb_band_medians_by_length` drops a single 3 s chunk's value at a band when
+    it sits more than `analytics.CHUNK_N_MAD` (7) median absolute deviations ABOVE this contact's
+    own median at that band (`analytics.chunk_upper_bounds`), BEFORE any chunks are averaged, and
+    takes the next-nearest clean chunk in its place (PI, 2026-09-09). Nothing is dropped for being
+    low. Until 2026-10-03 only the contacts in RCS08's historical 99.5% ceiling table took this
+    route, and every other contact took `live_lsb_spectrum_match` with 5 MAD applied to the
+    finished cells; that second route is gone from the sweep. Which pieces of recording serve which
+    pain report is decided by the same helpers on both, so only the dropped chunks differ.
+    `participant_uid` and `channel` no longer select anything here; they are kept for the callers.
 
     Returns `(power_by_seconds, stats_by_seconds, centers_used_hz, column_index, chunk_exclusion,
-    from_device_spectrum)`. `chunk_exclusion` is `None` on the original path.
+    from_device_spectrum)`. `chunk_exclusion` is always a dict now; its presence tells
+    `analytics.band_time_sweep_from_power` that the chunks were already cleaned, so no cell-level
+    outlier rule runs on top.
 
     `from_device_spectrum` is one flag per pain report, True where that report's band power came
     from the device's OWN spectrum rather than from the voltage trace. It is returned as its own
-    value rather than folded into `chunk_exclusion` because that argument is a switch as well as a
-    payload -- `analytics.band_time_sweep_from_power` reads its mere presence as "the per-piece
-    ceiling rule already ran, do not apply the median-absolute-deviation rule on top" -- so putting
-    this flag there would silently turn that second rule off for every contact the ceiling table
-    does not cover.
+    value rather than folded into `chunk_exclusion`, which is copied into the served response whole.
     """
     secs = list(analytics.BAND_TIME_SWEEP_SECONDS if seconds is None else seconds)
     cache_centers = np.asarray(raw_cache.get("centers_hz") or [], dtype=float)
@@ -7809,53 +7800,19 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
     col = np.asarray([int(np.argmin(np.abs(cache_centers - c))) for c in centers], dtype=int)
     pt = np.asarray(pro_times, dtype=float)
 
-    ceiling_table = analytics.band_sweep_ceiling_table(participant_uid, channel)
-    if ceiling_table:
-        # A centre the table does not name gets no ceiling (np.inf excludes nothing), which is
-        # what `analytics.band_sweep_lsb_ceiling` means by returning None for that centre.
-        # THE 3-MAD CHUNK RULE (the PI, 2026-10-03): each band keeps the chunks within 3 median
-        # absolute deviations of this contact's own median; it replaced the historical 99.5%
-        # ceilings, which now only decide that a contact takes this route.
-        floors, ceilings = analytics.chunk_mad_bounds(raw_cache, centers)
-        power, excl, stats = availability.live_lsb_band_medians_by_length(
-            pt, raw_cache, tol_s=tol_s, lengths_s=secs, centers_hz=centers,
-            band_ceilings=list(ceilings), band_floors=list(floors),
-            allow_window_reuse=allow_window_reuse, match_direction=match_direction)
-        # LIFTED OUT of the exclusion block rather than left in it. `chunk_exclusion` is copied
-        # into the served response whole, so leaving the per-report list there would ship one
-        # boolean per pain report per contact pair -- 4,584 of them on RCS08 today, growing with
-        # every report filed -- for a fact the grids already carry summarised per cell. It is also
-        # not an exclusion, and a field is easiest to misread when it sits under the wrong name.
-        return (power, stats, centers, col,
-                {k: v for k, v in excl.items() if k != "from_device_spectrum"},
-                list(excl.get("from_device_spectrum") or []))
-
-    power, stats = {}, {}
-    from_device = []
-    for s in secs:
-        recs, st = availability.live_lsb_spectrum_match(
-            pt, raw_cache, tol_s=tol_s, td_quantity_s=float(s),
-            allow_window_reuse=allow_window_reuse, match_direction=match_direction)
-        # WHICH TIER A RATING LANDS ON DOES NOT DEPEND ON THE LENGTH OF SIGNAL, on either path: the
-        # voltage trace wins whenever any of it is eligible, and eligibility is decided by the
-        # match-tolerance setting alone. The length only ever caps how many already-eligible pieces
-        # are averaged. So this is read once and is the same on every pass of this loop.
-        if not from_device:
-            from_device = [bool(r.get("tier") == availability.PRO_LSB_TIER_BRIDGE)
-                           for r in (recs or [])]
-        mat = np.full((pt.size, centers.size), np.nan, dtype=float)
-        for i, rec in enumerate(recs or []):
-            if i >= pt.size:
-                break
-            vec = rec.get("lsb")
-            if not vec:
-                continue
-            v = np.asarray([np.nan if x is None else float(x) for x in vec], dtype=float)
-            take = col[col < v.size]
-            mat[i, : take.size] = v[take]
-        power[float(s)] = mat
-        stats[float(s)] = st
-    return power, stats, centers, col, None, from_device
+    # THE 7-MAD-ABOVE CHUNK RULE: one upper bound per band, from this contact's own chunks.
+    ceilings = analytics.chunk_upper_bounds(raw_cache, centers)
+    power, excl, stats = availability.live_lsb_band_medians_by_length(
+        pt, raw_cache, tol_s=tol_s, lengths_s=secs, centers_hz=centers,
+        band_ceilings=list(ceilings), allow_window_reuse=allow_window_reuse,
+        match_direction=match_direction)
+    # LIFTED OUT of the exclusion block rather than left in it. `chunk_exclusion` is copied into the
+    # served response whole, so leaving the per-report list there would ship one boolean per pain
+    # report per contact pair -- 4,584 of them on RCS08 on 2026-09-15, growing with every report
+    # filed -- for a fact the grids already carry summarised per cell.
+    return (power, stats, centers, col,
+            {k: v for k, v in excl.items() if k != "from_device_spectrum"},
+            list(excl.get("from_device_spectrum") or []))
 
 
 def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_reuse,
