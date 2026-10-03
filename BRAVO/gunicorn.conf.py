@@ -14,6 +14,19 @@ Keep this file free of imports at the top: gunicorn's main process reads it too.
 
 def post_worker_init(worker):
     """Runs in each new web worker, once, before it serves anything. Never stops a worker starting."""
+    # The worker's pool must stop before a reload's SIGTERM ends the worker (2026-10-03): that path
+    # skips worker_exit below (see `DecodeCommon.parallel.stop_pool_on_signals`).
+    try:
+        try:
+            from DecodeCommon.parallel import stop_pool_on_signals
+        except ImportError:
+            from modules.DecodeCommon.parallel import stop_pool_on_signals
+        stop_pool_on_signals()
+    except Exception as exc:                                   # noqa: BLE001
+        try:
+            worker.log.warning("BRAVO pool signal handler not installed: %s: %s", type(exc).__name__, exc)
+        except Exception:                                      # noqa: BLE001
+            pass
     try:
         from BRAVO.warmup import warm_up
         report = warm_up()
@@ -22,5 +35,23 @@ def post_worker_init(worker):
     except Exception as exc:                                   # noqa: BLE001
         try:
             worker.log.warning("BRAVO warm-up skipped: %s: %s", type(exc).__name__, exc)
+        except Exception:                                      # noqa: BLE001
+            pass
+
+
+def worker_exit(server, worker):
+    """Runs in each web worker as it exits (a reload, a timeout, a stop): stops the worker's process
+    pool, which is kept for a day and would otherwise outlive the worker with no parent (2026-10-02:
+    one reload left 850 such processes, 84 GB). Never stops the exit."""
+    try:
+        try:
+            from DecodeCommon.parallel import shutdown_pool
+        except ImportError:
+            from modules.DecodeCommon.parallel import shutdown_pool
+        stopped = shutdown_pool()
+        worker.log.info("BRAVO pool at worker exit: %s", "stopped" if stopped else "none running")
+    except Exception as exc:                                   # noqa: BLE001
+        try:
+            worker.log.warning("BRAVO pool at worker exit not stopped: %s: %s", type(exc).__name__, exc)
         except Exception:                                      # noqa: BLE001
             pass

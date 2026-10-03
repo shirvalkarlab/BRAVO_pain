@@ -2294,39 +2294,8 @@ def test_deployment_reports_both_weightings_and_their_difference():
     assert "rating-equal" in d["auc_weighting"]
 
 
-# --- F10: the outlier rule's influence must be visible on the exploration path -----------------
-@live
-def test_exploration_publishes_an_outlier_sensitivity_block():
-    """The rule's median and MAD come from the same sample the exclusion then alters, and neither
-    the Fisher-z interval nor the permutation p accounts for that. The headline stays filtered
-    (an exploration correlation is associational) but the unfiltered counterpart must be reported."""
-    import sys
-    sys.path.insert(0, "/usr/src/BRAVO"); sys.path.insert(0, "/usr/src/BRAVO/modules")
-    from modules.Biomarkers import bravo_service as bs
-
-    def find(o, key, path=""):
-        if isinstance(o, dict):
-            if key in o:
-                yield o
-            for k, v in o.items():
-                yield from find(v, key, path + "." + k)
-        elif isinstance(o, list):
-            for v in o[:3]:
-                yield from find(v, key, path)
-
-    r = bs.run_for_participant({"ParticipantId": "2e3c75c00d7f4f37b53a048d195f11da",
-                                "source": "timedomain", "LabelMetric": "nrs"})
-    hits = list(find(r, "outlier_sensitivity"))
-    assert hits, "no outlier_sensitivity block published"
-    blk = hits[0]["outlier_sensitivity"]
-    if blk is None:
-        return
-    for k in ("r_filtered", "r_unfiltered", "n_filtered", "n_unfiltered", "n_excluded",
-              "delta_r", "note"):
-        assert k in blk, f"{k} missing from the sensitivity block"
-    assert blk["n_unfiltered"] >= blk["n_filtered"]
-    assert blk["n_excluded"] == blk["n_unfiltered"] - blk["n_filtered"]
-    assert "same sample" in blk["note"]
+# (F10's outlier-sensitivity test removed 2026-10-03: the block it checked went with the 1,000-shuffle
+# band inference in decision 341; that commit removed its other tests but missed this live-only one.)
 
 
 # --- the rotation null's resolution limit (2026-09-02; decision 315) -----------------------------

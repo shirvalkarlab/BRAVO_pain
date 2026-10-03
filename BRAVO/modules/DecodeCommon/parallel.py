@@ -49,3 +49,56 @@ def loky_backend():
     """joblib's process-pool backend with BRAVO's idle time: pass as `backend=` to every pool call."""
     from joblib.parallel import LokyBackend
     return LokyBackend(idle_worker_timeout=pool_idle_seconds())
+
+
+def shutdown_pool() -> bool:
+    """Stop this process's joblib pool and its worker processes, if there is one.
+
+    The pool is kept for a day on purpose (`pool_idle_seconds`), so when a gunicorn worker is
+    replaced (a reload with `kill -HUP 1`) nothing else ends it, and its processes outlive the worker
+    with no parent: 850 of them, 84 GB, after one reload on the Jetstream2 BRAVO (2026-10-02).
+    gunicorn's `worker_exit` hook (`gunicorn.conf.py`) calls this. Returns True when a pool was
+    stopped, False when there was none; never raises.
+    """
+    try:
+        from joblib.externals.loky import reusable_executor as _re
+        ex = getattr(_re, "_executor", None)
+        if ex is None:
+            return False
+        ex.shutdown(wait=True, kill_workers=True)
+        _re._executor = None
+        return True
+    except Exception:                                          # noqa: BLE001
+        return False
+
+
+def stop_pool_on_signals(signals=None) -> None:
+    """Stop this process's pool before a terminating signal ends it (2026-10-03).
+
+    A reload ends each old web worker by SIGTERM in a way no exit hook sees: uvicorn shuts its server
+    down, then sends the signal again with the default action, so gunicorn's `worker_exit` and
+    Python's own exit routines never run and the pool is left with no parent (850 processes, 84 GB,
+    after one reload on 2026-10-02). gunicorn's `post_worker_init` calls this once per worker. The
+    handler stops the pool, puts back the handler it replaced and sends the signal again, so the
+    worker still ends exactly as before. uvicorn keeps it aside while serving and calls it last.
+    A SIGKILL (a worker past its timeout) cannot be caught.
+    """
+    import os
+    import signal as _signal
+    sigs = signals if signals is not None else tuple(
+        s for s in (getattr(_signal, n, None) for n in ("SIGTERM", "SIGQUIT", "SIGINT")) if s is not None)
+    for sig in sigs:
+        previous = _signal.getsignal(sig)
+
+        def _handler(signum, frame, _previous=previous):
+            shutdown_pool()
+            _signal.signal(signum, _previous if _previous is not None else _signal.SIG_DFL)
+            if callable(_previous):
+                _previous(signum, frame)
+            else:
+                os.kill(os.getpid(), signum)
+
+        try:
+            _signal.signal(sig, _handler)
+        except (ValueError, OSError):                          # not the main thread, or not allowed
+            pass
