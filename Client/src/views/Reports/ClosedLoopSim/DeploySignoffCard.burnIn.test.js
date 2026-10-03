@@ -62,3 +62,21 @@ describe("the sign-off card's mixed-effects burn-in sentence (P-04)", () => {
     expect(text).not.toMatch(/leaves out the first/);
   });
 });
+
+describe("the sign-off record names its pain score on its own line, in bold (the PI, 2026-10-03)", () => {
+  // The odds ratio and the AUCs on this card share one feature and one pain score; the score is said
+  // once, by name, before any number, rather than as a code inside the device-target table.
+  it("prints 'Pain score: Overall VAS' in bold, and never the bare code", () => {
+    const { container } = rtlRender(wrap(
+      <DeploySignoffCard participantUid="uid" bandCandidate={BC}
+        summary={{ ...summaryWith({}), data: { ...summaryWith({}).data,
+          identity: { pro_metric: "vas", binarization: "median", hemisphere: "Left", contact: "ZERO_THREE_LEFT" },
+          device_control: { polarity: "positive", suggested_mode: "Dual" } } }}
+        deploymentReport={REPORT} />));
+    const line = container.querySelector('[data-testid="signoff-pain-score"]');
+    expect(line).toBeTruthy();
+    expect(line.textContent).toBe("Pain score: Overall VAS");
+    expect(window.getComputedStyle(line).fontWeight).toBe("600");          // the house bold (D6: 400 and 600 only)
+    expect(container.textContent).toMatch(/Pain score \/ high-low split.*Overall VAS \/ median/);
+  });
+});

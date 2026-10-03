@@ -4623,30 +4623,18 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
         return {"available": False, "reason": f"pymer4 unavailable: {e}"}
     if not td_detail:
         return {"available": False, "reason": "no detail"}
-    f = np.asarray(td_detail.get("f_set"), dtype=float)
-    psd = np.asarray(td_detail.get("psd"), dtype=float)
     labels = np.asarray(td_detail.get("labels"), dtype=float)
-    chans = td_detail.get("chan_order", [])
     times = td_detail.get("times")
-    # Resolve the channel index from the raw name (or the formatted short).
-    ci = None
-    for i, raw in enumerate(chans):
-        if raw == channel_raw or format_channel(raw)["short"] == channel_raw:
-            ci = i
-            break
-    if ci is None:
-        return {"available": False, "reason": f"channel {channel_raw} not found"}
-    w = float(band_width_hz)
-    bmask = (f >= center_hz - w / 2.0) & (f < center_hz + w / 2.0)
-    if not bmask.any():
-        return {"available": False, "reason": "empty band"}
-    with np.errstate(invalid="ignore", divide="ignore"):
-        sub = np.nanmean(psd[:, ci, bmask], axis=1)
-        bp = sub          # raw band power, as the pooled detail holds it (decision 204: no logarithm)
-    # PARITY (audit §6b): binarize on THIS CHANNEL's own labels, not the global pooled cut. The
-    # offline validated set (phase2) cuts the tertile on labels restricted to the rows where this
-    # channel's band power is finite; a global cut flips borderline samples high/low between the two
-    # and changes n / OR / p. _binarize_labels with an explicit channel mask reproduces phase2.
+    # THE AUC'S OWN FEATURE (the PI, 2026-10-03): the band power is read by the function
+    # `deployment_roc` calls, not by a second copy of its formula, and the pain metric comes in
+    # through the same pooled detail; so the model and the AUCs read one feature and one score.
+    feat = _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz)
+    if feat is None:
+        return {"available": False, "reason": f"channel {channel_raw} or its band was not found"}
+    bp = np.asarray(feat[0], dtype=float)
+    # The finite rows of THIS channel's band power: the rows the model can use. (The pain cut drawn
+    # on them alone, audit §6b's parity with the offline phase2 set, was replaced by the AUCs' cut
+    # on 2026-10-03, decision 406; see the cut below.)
     chan_finite = np.isfinite(bp)
 
     # THE DECLARED BURN-IN EXCLUSION (see VALIDATION_EXCLUDE_FIRST_WEEKS), applied HERE — before

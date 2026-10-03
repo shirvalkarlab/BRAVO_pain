@@ -2798,3 +2798,14 @@ def test_mixed_model_refuses_when_the_smaller_pain_group_has_under_ten_samples()
     assert g["available"] is True and g["too_few_in_smaller_group"] is True
     assert g["n_low"] == 7 and g["odds_ratio"] is None and g["p"] is None
     assert "low-pain" in g["note"]
+
+
+def test_mixed_model_reads_the_aucs_own_band_power_feature():
+    """The PI, 2026-10-03: the model uses the AUC's feature and pain metric, not a copy. The pain
+    metric comes in through the one pooled detail both read; the band power is now read by the
+    same function `deployment_roc` calls, rather than by a second copy of its formula."""
+    import inspect
+    from modules.Biomarkers.routines import analytics
+    src = inspect.getsource(analytics.band_mixedmodel_inference)
+    assert "_band_feature_from_detail(" in src
+    assert "np.nanmean(psd[:, ci, bmask]" not in src
