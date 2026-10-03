@@ -2758,3 +2758,43 @@ def test_the_old_straight_line_calculation_is_gone_from_this_page():
     for gone in ("band_pain_tracking", "band_pain_tracking_from_detail", "PAIN_TRACKING_TRACKS",
                  "PAIN_TRACKING_NOT_RESOLVED", "PAIN_TRACKING_NOT_ASSESSED"):
         assert not hasattr(analytics, gone), f"{gone} is still on the biomarker page"
+
+
+def test_mixed_model_draws_its_pain_cut_as_the_aucs_do_one_score_per_report():
+    """The PI, 2026-10-03 (93 vs 92 on the sign-off card): the model cut pain into thirds weighting
+    every sample, the AUCs one score per pain report. A report matched to many samples pulled the
+    model's cut its way, so the two kept different samples (live: 92 vs 118 on L 1-3+ 24.5 Hz NRS).
+    The model now cuts as `deployment_roc` does, and keeps exactly the samples the AUC keeps."""
+    import numpy as np
+    from modules.Biomarkers.routines import analytics
+    det = _ten_week_detail()
+    n = len(det["labels"])
+    # report 0 holds 60 samples at a high score; the other 180 samples are one report each
+    rg = np.concatenate([np.zeros(60, int), np.arange(1, n - 59)])
+    labels = np.asarray(det["labels"], float).copy()
+    labels[:60] = 9.5
+    det = {**det, "labels": labels, "rating_group": rg}
+    bp, lab, groups, _t = analytics._band_feature_from_detail(det, "ZERO_TWO_LEFT", 20.0)
+    y_auc = analytics._binarize_labels(lab, strategy="tertile", rating_group=groups)
+    n_auc = int((np.isfinite(bp) & np.isfinite(y_auc)).sum())
+    g = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0)
+    if g.get("available"):
+        assert g["n"] == n_auc
+
+
+def test_mixed_model_refuses_when_the_smaller_pain_group_has_under_ten_samples():
+    """The PI, 2026-10-03: the chosen band (L 0-3+ 25.5 Hz Overall VAS, median split) had 31 high
+    and 7 low samples, and the fit ran away (OR 2.6e9, interval 0 to 2e22) with no warning from
+    lme4. About 10 in the smaller group per predictor is the usual rule for logistic regression
+    (Peduzzi et al. 1996); one predictor here. Below it: no odds ratio, interval or p, and why."""
+    import numpy as np
+    from modules.Biomarkers.routines import analytics
+    det = _ten_week_detail()
+    labels = np.full(len(det["labels"]), 8.0)
+    labels[:7] = 2.0                                   # 7 low against the rest high
+    det = {**det, "labels": labels}
+    g = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0, strategy="median")
+    assert analytics.MIXED_MODEL_MIN_PER_GROUP == 10
+    assert g["available"] is True and g["too_few_in_smaller_group"] is True
+    assert g["n_low"] == 7 and g["odds_ratio"] is None and g["p"] is None
+    assert "low-pain" in g["note"]

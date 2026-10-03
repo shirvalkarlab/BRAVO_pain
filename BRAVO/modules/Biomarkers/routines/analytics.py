@@ -1426,6 +1426,11 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
 #: this one.
 VALIDATION_EXCLUDE_FIRST_WEEKS = 0
 
+#: The fewest samples the smaller pain group (high or low) may have before the mixed-effects model
+#: is fitted (the PI, 2026-10-03): about 10 per predictor in the smaller group, the usual rule for
+#: logistic regression (Peduzzi et al., J Clin Epidemiol 1996); the model has one predictor.
+MIXED_MODEL_MIN_PER_GROUP = 10
+
 
 def _elapsed_week_cluster(times, n):
     """Integer elapsed-week index from the first sample, as the offline validation (phase2) derives
@@ -4683,13 +4688,44 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
                            f"this channel and band; nothing is left to fit, which is reported "
                            f"rather than silently falling back to the full record")}
 
+    # THE AUC'S CUT (the PI, 2026-10-03): one score per pain report over every matched sample, as
+    # `deployment_roc` draws it, so the model and the AUCs keep the same samples (live, L 1-3+
+    # 24.5 Hz NRS: 92 against 118 before). It used to be this pair's samples, each counted, which
+    # let a report matched to many samples pull the cut its way. A caller's week exclusion still
+    # leaves those weeks out of the cut.
+    _rg_cut = (np.asarray(_rg_all) if _rg_all is not None and len(_rg_all) == len(bp)
+               else np.arange(len(bp)))
     y = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
-                         pain_cutoff=pain_cutoff, finite_mask=chan_finite)
+                         pain_cutoff=pain_cutoff, rating_group=_rg_cut,
+                         finite_mask=(keep_week if burn_in > 0 else None))
     # PARITY (audit §6a): cluster = integer ELAPSED-week index from the first sample (phase2),
     # not the ISO-calendar-week string. Elapsed-week buckets that straddle a Monday split across two
     # ISO weeks (and vice versa), giving a different random-intercept structure -> different SE/p/CI.
     cl = _cl_all
     m = np.isfinite(bp) & np.isfinite(y) & chan_finite
+    # TOO FEW IN THE SMALLER PAIN GROUP (the PI, 2026-10-03): about 10 per predictor in the smaller
+    # group is the usual rule for logistic regression (Peduzzi et al. 1996); one predictor here.
+    # Below it the fit can run away with no warning from lme4 (L 0-3+ 25.5 Hz Overall VAS, median
+    # split: 31 high, 7 low, OR 2.6e9, interval 0 to 2e22), so no odds ratio, interval or p.
+    n_high_m, n_low_m = int(np.sum(y[m] == 1)), int(np.sum(y[m] == 0))
+    if m.sum() >= 12 and n_high_m > 0 and n_low_m > 0 and min(n_high_m, n_low_m) < MIXED_MODEL_MIN_PER_GROUP:
+        smaller = "low" if n_low_m < n_high_m else "high"
+        n_clusters = int(len(np.unique(cl[m])))
+        return {
+            "available": True, "model": "glmer logistic (lme4 via pymer4)",
+            "formula": None, "n": int(m.sum()), "n_clusters": n_clusters,
+            "n_high": n_high_m, "n_low": n_low_m,
+            "excluded_first_weeks": burn_in, "n_excluded_burn_in": n_dropped_burn_in,
+            "n_weeks_before_exclusion": n_weeks_before,
+            "one_block_per_report": _one_block_summary(weeks=_one_week),
+            "coef": None, "odds_ratio": None, "or_lo": None, "or_hi": None, "z": None, "p": None,
+            "separation": False, "singular": False, "converged": None, "fit_warnings": [],
+            "too_few_in_smaller_group": True, "smaller_group": smaller,
+            "min_per_group": int(MIXED_MODEL_MIN_PER_GROUP),
+            "note": (f"Not fitted: {min(n_high_m, n_low_m)} {smaller}-pain samples, fewer than the "
+                     f"{int(MIXED_MODEL_MIN_PER_GROUP)} the model needs in its smaller group, so it gives "
+                     f"no odds ratio, interval or p."),
+        }
     if m.sum() < 12 or len(np.unique(y[m])) < 2:
         return {"available": False,
                 "reason": ("too few matched samples for a mixed model"

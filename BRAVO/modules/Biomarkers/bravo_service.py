@@ -5052,6 +5052,8 @@ def _band_decide_verdict(g, h):
         return "failed (singular random effect)"
     if g.get("converged") is False:
         return "failed (did not converge)"
+    if g.get("too_few_in_smaller_group"):
+        return f"failed (too few {g.get('smaller_group') or 'low'}-pain samples)"
     p = g.get("p")
     if p is None or not isinstance(p, (int, float)) or p >= 0.05:
         return "candidate (mixed-effects n.s.)"

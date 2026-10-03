@@ -83,6 +83,10 @@ def test_decide_verdict_branches():
     assert bs._band_decide_verdict(
         {"available": True, "separation": False, "singular": False, "converged": False, "p": 0.0},
         {}) == "failed (did not converge)"
+    # too few in the smaller pain group (2026-10-03): named, never a number
+    assert bs._band_decide_verdict(
+        {"available": True, "separation": False, "singular": False, "too_few_in_smaller_group": True,
+         "smaller_group": "low", "p": 0.15}, {}) == "failed (too few low-pain samples)"
     # n.s. p
     assert bs._band_decide_verdict(
         {"available": True, "separation": False, "singular": False, "p": 0.2}, {}
