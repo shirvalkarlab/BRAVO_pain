@@ -1723,7 +1723,7 @@ def _whole_matrix_nanmedian(values, keep):
 
 def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, centers_hz,
                                     band_ceilings, allow_window_reuse=False,
-                                    match_direction="nearest"):
+                                    match_direction="nearest", band_floors=None):
     """Band power per pain report and per length of signal, excluding contaminated 3 s chunks
     BEFORE they are averaged, and taking the next-nearest clean chunk in place of each one dropped.
 
@@ -1788,6 +1788,9 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
 
     col = np.asarray([int(np.argmin(np.abs(centers_cache - c))) for c in sweep_c], dtype=int)
     ceil = np.asarray(band_ceilings, dtype=float)
+    # the lower bound of the kept range per band (3-MAD chunk rule, 2026-10-03); none = -inf
+    floor = (np.asarray(band_floors, dtype=float) if band_floors is not None
+             else np.full(ceil.shape, -np.inf))
     caps = [max(1, int(round(s / window_s))) for s in lengths]
     cap_max = max(caps) if caps else 1
 
@@ -1823,7 +1826,7 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
 
         for j in range(nCs):
             vals = np.where(real, td_mat[Ssafe, col[j]], np.nan)
-            bad = real & np.isfinite(vals) & (vals > ceil[j])
+            bad = real & np.isfinite(vals) & ((vals > ceil[j]) | (vals < floor[j]))
             good = real & ~bad
             info["n_chunk_band_values_excluded"] += int(bad.sum())
             rank = np.cumsum(good, axis=1)
@@ -1890,7 +1893,7 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
             PSsafe = np.maximum(PS, 0)
             for j in range(nCs):
                 pv = np.where(preal, psd_mat[PSsafe, col[j]], np.nan)
-                pbad = preal & np.isfinite(pv) & (pv > ceil[j])
+                pbad = preal & np.isfinite(pv) & ((pv > ceil[j]) | (pv < floor[j]))
                 pgood = preal & ~pbad
                 info["n_chunk_band_values_excluded"] += int(pbad.sum())
                 prank = np.cumsum(pgood, axis=1)

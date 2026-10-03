@@ -7813,11 +7813,14 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
     if ceiling_table:
         # A centre the table does not name gets no ceiling (np.inf excludes nothing), which is
         # what `analytics.band_sweep_lsb_ceiling` means by returning None for that centre.
-        ceilings = [ceiling_table.get(round(float(c), 1), np.inf) for c in centers]
+        # THE 3-MAD CHUNK RULE (the PI, 2026-10-03): each band keeps the chunks within 3 median
+        # absolute deviations of this contact's own median; it replaced the historical 99.5%
+        # ceilings, which now only decide that a contact takes this route.
+        floors, ceilings = analytics.chunk_mad_bounds(raw_cache, centers)
         power, excl, stats = availability.live_lsb_band_medians_by_length(
             pt, raw_cache, tol_s=tol_s, lengths_s=secs, centers_hz=centers,
-            band_ceilings=ceilings, allow_window_reuse=allow_window_reuse,
-            match_direction=match_direction)
+            band_ceilings=list(ceilings), band_floors=list(floors),
+            allow_window_reuse=allow_window_reuse, match_direction=match_direction)
         # LIFTED OUT of the exclusion block rather than left in it. `chunk_exclusion` is copied
         # into the served response whole, so leaving the per-report list there would ship one
         # boolean per pain report per contact pair -- 4,584 of them on RCS08 today, growing with

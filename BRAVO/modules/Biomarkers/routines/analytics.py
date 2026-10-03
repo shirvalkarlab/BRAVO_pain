@@ -5924,6 +5924,42 @@ def band_sweep_lsb_ceiling(participant_uid, channel, centre_hz):
     return table.get(round(float(centre_hz), 1))
 
 
+#: The MAD rule for single 3 s chunks of recording, before they are averaged (the PI, 2026-10-03,
+#: after seeing the heat maps with and without the historical 99.5% ceilings). Only this step uses
+#: 3; every other outlier rule on the plate stays at `OUTLIER_N_MAD` (5, the 2026-08-30 decision).
+CHUNK_N_MAD = 3.0
+
+
+def chunk_mad_bounds(raw_cache, centers_hz, n_mad=None):
+    """Per band, the range of single-chunk band power that is kept: median +/- n_mad x MAD of this
+    contact's own 3 s chunk values at that band (the population the 99.5% ceilings were built
+    from). The rule is `stats_utils.mad_outlier_flags`'s: raw values, MAD unscaled, a value is
+    excluded when |v - median| > n_mad x MAD, nothing excluded when the MAD is zero (both bounds
+    infinite). Returns (floors, ceilings), one per entry of `centers_hz`."""
+    from . import availability as _av
+    n_mad = float(CHUNK_N_MAD if n_mad is None else n_mad)
+    cc = np.atleast_1d(np.asarray(raw_cache.get("centers_hz") or [], dtype=float))
+    centers = np.atleast_1d(np.asarray(centers_hz, dtype=float))
+    lo = np.full(centers.size, -np.inf)
+    hi = np.full(centers.size, np.inf)
+    if cc.size == 0 or centers.size == 0:
+        return lo, hi
+    td = raw_cache.get("td") or {}
+    mat = _av._lsb_family_mat(td, cc.size)
+    ok = np.atleast_1d(np.asarray(td.get("ok") or [], dtype=bool))
+    if mat.shape[0] == 0:
+        return lo, hi
+    if ok.size == mat.shape[0]:
+        mat = mat[ok]
+    for j, c in enumerate(centers):
+        col = mat[:, int(np.argmin(np.abs(cc - c)))]
+        _flags, info = mad_outlier_flags(col, n_mad=n_mad, scale="raw")
+        if info.get("skipped") is None and info.get("median") is not None:
+            lo[j] = info["median"] - n_mad * info["mad"]
+            hi[j] = info["median"] + n_mad * info["mad"]
+    return lo, hi
+
+
 #: The sentence that travels with the device-spectrum mark wherever it is reported. Written once so
 #: the page, the notes and any exported copy cannot drift into three different explanations.
 DEVICE_SPECTRUM_AXIS_NOTE = (
@@ -6221,7 +6257,7 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     outlier_rule = "none"
     if chunk_exclusion:
         n_excluded = int(chunk_exclusion.get("n_chunk_band_values_excluded") or 0)
-        outlier_rule = "historical_99p5_ceiling_per_chunk"
+        outlier_rule = "3_mad_per_chunk"
     elif n_mad > 0:
         # Applied separately for each band centre and each length of signal, because band powers
         # differ by orders of magnitude between bands and a threshold pooled across bands would be
@@ -6799,10 +6835,10 @@ def _sweep_notes(requested, delivered, tiles, tile_s, n_times, n_centers, n_mad,
     notes.append(f"The {n_times * n_centers} cells ({n_times} lengths x {n_centers} centres, "
                  f"{BAND_TIME_SWEEP_WIDTH_HZ:g} Hz wide, 1 Hz apart) overlap heavily and are not "
                  f"independent.")
-    if outlier_rule == "historical_99p5_ceiling_per_chunk":
-        notes.append(f"{n_excluded} single {tile_s:g} s pieces above this contact's fixed historical "
-                     f"ceiling (top 0.5% of its own record, per band) were dropped before averaging "
-                     f"and replaced by the next clean piece, so every cell keeps its row's count.")
+    if outlier_rule == "3_mad_per_chunk":
+        notes.append(f"{n_excluded} single {tile_s:g} s pieces more than {CHUNK_N_MAD:g} median absolute "
+                     f"deviations from this contact's own median (per band) were dropped before "
+                     f"averaging and replaced by the next clean piece, so every cell keeps its row's count.")
     elif n_mad > 0:
         notes.append(f"{n_excluded} measurements were excluded as outliers ({n_mad:g} median "
                      f"absolute deviations on the {o_scale} scale), per band and length.")
