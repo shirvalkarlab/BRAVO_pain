@@ -682,7 +682,8 @@ function PlotlyViolin({ divId, highVals, lowVals, side }) {
     // hover-activated modebar with no override in the shared render-manager class; re-apply the
     // same data/layout with it switched off, and with the responsive resize this component exists
     // for, scoped to just this one div.
-    Plotly.react(divId, fig.traces, fig.layout, { ...PLOTLY_CONFIG, doubleClick: false });
+    // Drag to zoom, double-click back to the full view, no toolbar (the PI, 2026-10-03).
+    Plotly.react(divId, fig.traces, fig.layout, { ...PLOTLY_CONFIG, doubleClick: "reset+autosize" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [divId, highVals, lowVals, side]);
 
@@ -690,8 +691,8 @@ function PlotlyViolin({ divId, highVals, lowVals, side }) {
     // Guarded: Plotly'''s own .purge() throws (uncaught, since this runs in an effect cleanup with
     // no React error boundary anywhere in this app) if the div it manages is already gone from the
     // DOM -- observed live on a native double-click, which Plotly'''s own internal click pipeline
-    // can apparently unmount/rebuild around even with the built-in reset-on-dblclick action turned
-    // off (doubleClick: false, set on the Plotly.react calls below). Checking first makes this
+    // can apparently unmount/rebuild around (this plot's reset-on-double-click is on since
+    // 2026-10-03; the heat maps keep it off). Checking first makes this
     // cleanup robust to that regardless of why the div is already gone, rather than chasing the
     // exact internal Plotly sequence that removes it.
     if (figRef.current && document.getElementById(divId)) figRef.current.purge();
@@ -938,7 +939,8 @@ function PlotlyScatter({ divId, cell, pinnedCell, side, metricLabel }) {
       showlegend: false,
     });
     fig.render();
-    Plotly.react(divId, fig.traces, fig.layout, { ...PLOTLY_CONFIG, doubleClick: false });
+    // Drag to zoom, double-click back to the full view, no toolbar (the PI, 2026-10-03).
+    Plotly.react(divId, fig.traces, fig.layout, { ...PLOTLY_CONFIG, doubleClick: "reset+autosize" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [divId, points, side, metricLabel]);
 
@@ -946,8 +948,8 @@ function PlotlyScatter({ divId, cell, pinnedCell, side, metricLabel }) {
     // Guarded: Plotly'''s own .purge() throws (uncaught, since this runs in an effect cleanup with
     // no React error boundary anywhere in this app) if the div it manages is already gone from the
     // DOM -- observed live on a native double-click, which Plotly'''s own internal click pipeline
-    // can apparently unmount/rebuild around even with the built-in reset-on-dblclick action turned
-    // off (doubleClick: false, set on the Plotly.react calls below). Checking first makes this
+    // can apparently unmount/rebuild around (this plot's reset-on-double-click is on since
+    // 2026-10-03; the heat maps keep it off). Checking first makes this
     // cleanup robust to that regardless of why the div is already gone, rather than chasing the
     // exact internal Plotly sequence that removes it.
     if (figRef.current && document.getElementById(divId)) figRef.current.purge();
