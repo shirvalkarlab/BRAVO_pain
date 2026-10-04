@@ -385,9 +385,9 @@ function ClosedLoopSim() {
   useEffect(() => {
     if (!reportReady || !summaryReady || !bc || !prefetchGrid) return;
     prefetchNeighbours({ participantUid: participant_uid, grid: prefetchGrid, channel: bc.contact,
-      centreHz: bc.center_freq_hz, includeSheets, inherited, reportMatching });
+      centreHz: bc.center_freq_hz, includeSheets, inherited, reportMatching, bc, requestParams });
   }, [reportReady, summaryReady, bc, prefetchGrid, participant_uid, includeSheets, inherited,
-    reportMatching]);
+    reportMatching, requestParams]);
 
   // THE POOLED THREE-SOURCE VIEW, fetched AFTER the report has answered (the PI, 2026-09-11:
   // "prefetch the data after the first figures load"). It reads two stored tables and groups

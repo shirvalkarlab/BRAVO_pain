@@ -695,6 +695,9 @@ KEEP_NEWEST_BY_KIND = {
     # bands a reader explores and their neighbours. About 1-5 MB each.
     "closed_loop_report": 200,
     "deployment_summary": 200,
+    "deployment_roc": 200,
+    "deployment_roc_by_era": 200,
+    "band_lsb_power": 200,
     # The Stim Optimizer page makes TWO requests, plain and with the two-stage plan, and each is
     # its own key; under a limit of one they evicted each other, so the second page load rebuilt
     # what the first had just stored (watched live 2026-09-12: plain, two-stage, plain again --

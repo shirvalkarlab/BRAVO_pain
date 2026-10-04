@@ -64,6 +64,12 @@ beforeEach(() => {
       return answer({ available: true, recorded: true }, 2);
     }
     // The stand-in server answers for the band it was asked about, as the real one does.
+    if (url === "/api/queryDeploymentROC") {
+      return answer({ available: true, roc: { available: true, auc: 0.7, prevalence: 0.5, n_clusters: 30,
+        fpr: [0, 0.5, 1], tpr: [0, 0.8, 1], thr: [9, 2, 0],
+        operating_points: { youden: { threshold: 2.0 + Number(body.CenterHz) / 100, rule: "youden",
+          fpr: 0.5, tpr: 0.8, sensitivity: 0.8, specificity: 0.5 }, f1: null, cost: [] } } }, 5);
+    }
     if (url === "/api/queryDeploymentSummary") {
       return answer({ ...SUMMARY, identity: { ...SUMMARY.identity, contact: body.Channel,
         center_freq_hz: Number(body.CenterHz) } }, 5);
@@ -132,4 +138,40 @@ it("asks ahead for the two bands either side, exactly as ticking them would", as
     && (a.body.Candidates || []).length && !a.body.ClosedLoopSimulation
     && [23.5, 26.5].includes(centres(a.body)));
   expect(again.length).toBe(0);
+});
+
+
+it("asks ahead for the Background panels of the chosen band and its neighbours, as the panels will (decision 428)", async () => {
+  const uid = "PANELS";
+  window.localStorage.setItem(`bravo.bandCandidate.${uid}`,
+    JSON.stringify({ band_candidate: LOCAL_BC, participant_uid: uid, committed_at: 2 }));
+  render(
+    <ThemeProvider theme={theme}>
+      <PlatformContextProvider initialStates={{ darkMode: false }}>
+        <MemoryRouter initialEntries={[`/reports/closedloop/${uid}`]}>
+          <Routes>
+            <Route path="/reports/closedloop/:participant_uid" element={<ClosedLoopSim />} />
+          </Routes>
+        </MemoryRouter>
+      </PlatformContextProvider>
+    </ThemeProvider>);
+  await settle(40);
+  const hz = (url) => asked.filter((a) => a.url === url).map((a) => Number(a.body.CenterHz)).sort((a, b) => a - b);
+  expect(hz("/api/queryDeploymentROC")).toEqual([22.5, 23.5, 24.5, 25.5, 26.5]);
+  expect(hz("/api/queryDeploymentRocByEra")).toEqual([22.5, 23.5, 24.5, 25.5, 26.5]);
+  expect(hz("/api/queryLsbPower")).toEqual([22.5, 23.5, 24.5, 25.5, 26.5]);
+  const lsb245 = asked.find((a) => a.url === "/api/queryLsbPower" && Number(a.body.CenterHz) === 24.5).body;
+  expect(lsb245.Cutpoint).toBeCloseTo(2.245, 12);                   // the ROC's own default point
+  const ahead = (url) => asked.find((a) => a.url === url && Number(a.body.CenterHz) === 24.5).body;
+  const before = asked.length;
+  const show = Array.from(document.querySelectorAll("button"))
+    .find((b) => /Show the background/.test(b.textContent));
+  await act(async () => { fireEvent.click(show); });
+  await settle(40);
+  const opened = asked.slice(before);
+  ["/api/queryDeploymentROC", "/api/queryDeploymentRocByEra", "/api/queryLsbPower"].forEach((url) => {
+    const mine = opened.filter((a) => a.url === url && Number(a.body.CenterHz) === 24.5);
+    expect(mine.length).toBe(1);
+    expect(mine[0].body).toEqual(ahead(url));
+  });
 });

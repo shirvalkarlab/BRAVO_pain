@@ -203,3 +203,22 @@ export function reportCandidateFromBand(bc) {
     thresholdMode: bc.threshold_mode || "dual",
   };
 }
+
+/** The three Background panels' request settings (the body minus the participant), in one place
+ *  for the panels and the pre-compute (decision 428), so the server's saved answers match. */
+const bandFields = (bc) => {
+  const b = bc || {};
+  return { Channel: b.contact, CenterHz: b.center_freq_hz == null ? null : Number(b.center_freq_hz),
+    BandWidthHz: Number(b.bandwidth_hz || 5.0) };
+};
+export function rocSettings(bc, matchDir, requestParams) {
+  return { ...bandFields(bc), MatchDirection: matchDir, ...requestParams };
+}
+export function eraSettings(bc, requestParams) {
+  return { ...bandFields(bc), ...requestParams };
+}
+export function lsbSettings(bc, cutpoint, requestParams) {
+  const cutThr = cutpoint ? cutpoint.threshold : null;
+  return { ...bandFields(bc), MatchDirection: cutpoint ? cutpoint.matchDir : "prior",
+    Cutpoint: cutThr == null ? null : Number(cutThr), ...requestParams };
+}

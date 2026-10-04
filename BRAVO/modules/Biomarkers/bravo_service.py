@@ -6687,7 +6687,7 @@ def _threshold_mode_block(request_data, center_hz, threshold_lsb):
     }
 
 
-def band_deployment_roc(request_data):
+def _band_deployment_roc_build(request_data):
     """Rating-clustered deployment ROC + cut-point table for ONE committed band (Phase B).
 
     Reuses `_validate_band_core` so the band feature + pooled detail are byte-identical to the
@@ -6891,7 +6891,7 @@ def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, center_hz, 
     return thr_estimate
 
 
-def band_lsb_and_power(request_data):
+def _band_lsb_and_power_build(request_data):
     """Phase C: anchor a Phase-B cut-point to deployable device units and report power / sample-size.
 
     Three products, in order of how much weight the clinician should put on them:
@@ -7141,7 +7141,7 @@ def band_lsb_and_power(request_data):
     }
 
 
-def band_deployment_roc_by_era(request_data):
+def _band_deployment_roc_by_era_build(request_data):
     """Phase D: refit the deployment ROC + cut-point WITHIN each stim era (OFF/LOW/HIGH).
 
     Reuses _validate_band_core (same band feature + pooled detail + chronic stim trajectory as the
@@ -7251,29 +7251,65 @@ def summary_input_fingerprints(participant_uid, request_data):
     }
 
 
-@_pro_scoped
-def deployment_summary(request_data):
-    """The deployment summary, saved on the server (decision 423): worked out once
-    (`_deployment_summary_build`) and served to every request with the same inputs
-    (`summary_input_fingerprints` plus the code). A failure to build the label builds the
-    summary as before. Inside one request scope, so the pain reports are fetched once."""
+def _serve_saved_band_answer(kind, request_data, build):
+    """``build(request)`` saved on the server under `summary_input_fingerprints` plus the code
+    (decisions 423, 428): worked out once and served to every request with the same inputs. A
+    request with no participant, or whose label cannot be built (an unknown participant), is
+    built and not saved."""
     rd = dict(request_data or {})
     uid = rd.get("ParticipantId")
     if not uid:
-        return _deployment_summary_build(rd)
+        return build(rd)
     try:
         inputs = summary_input_fingerprints(uid, rd)
-    except Exception:                                      # noqa: BLE001 - the summary stands
-        _log.warning("Biomarkers: the saved-summary label could not be built for %s", uid,
-                     exc_info=True)
-        return _deployment_summary_build(rd)
+    except Exception:                                      # noqa: BLE001 - the answer stands
+        _log.warning("Biomarkers: the saved-answer label for %s could not be built for %s", kind,
+                     uid, exc_info=True)
+        return build(rd)
     try:
         from modules.CacheStore import saved_answers as _saved
     except ImportError:                                    # pragma: no cover - host spelling
         from CacheStore import saved_answers as _saved
-    return _saved.serve_or_build(DEPLOYMENT_SUMMARY_KIND, uid, inputs,
-                                 lambda: _deployment_summary_build(rd), writer="biomarkers",
+    return _saved.serve_or_build(kind, uid, inputs, lambda: build(rd), writer="biomarkers",
                                  root=_SHARED_CACHE_DIR_OVERRIDE)
+
+
+@_pro_scoped
+def deployment_summary(request_data):
+    """The deployment summary, saved on the server (decision 423): worked out once
+    (`_deployment_summary_build`) and served to every request with the same inputs
+    (`summary_input_fingerprints` plus the code). Inside one request scope, so the pain reports
+    are fetched once."""
+    return _serve_saved_band_answer(DEPLOYMENT_SUMMARY_KIND, request_data,
+                                    lambda rd: _deployment_summary_build(rd))
+
+
+#: The Closed-Loop panels saved on the server (decision 428; measured 3.9, 4.2 and 11-13 s on every
+#: request before), by endpoint.
+PANEL_KINDS = {"band_deployment_roc": "deployment_roc",
+               "band_deployment_roc_by_era": "deployment_roc_by_era",
+               "band_lsb_and_power": "band_lsb_power"}
+
+
+@_pro_scoped
+def band_deployment_roc(request_data):
+    """The deployment ROC panel, saved on the server (decision 428); `_band_deployment_roc_build`."""
+    return _serve_saved_band_answer(PANEL_KINDS["band_deployment_roc"], request_data,
+                                    lambda rd: _band_deployment_roc_build(rd))
+
+
+@_pro_scoped
+def band_deployment_roc_by_era(request_data):
+    """The month-by-month panel, saved on the server (decision 428)."""
+    return _serve_saved_band_answer(PANEL_KINDS["band_deployment_roc_by_era"], request_data,
+                                    lambda rd: _band_deployment_roc_by_era_build(rd))
+
+
+@_pro_scoped
+def band_lsb_and_power(request_data):
+    """The band-power / device-unit panel, saved on the server (decision 428)."""
+    return _serve_saved_band_answer(PANEL_KINDS["band_lsb_and_power"], request_data,
+                                    lambda rd: _band_lsb_and_power_build(rd))
 
 
 def _deployment_summary_build(request_data):

@@ -19,6 +19,7 @@ import { Card } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
+import { lsbSettings } from "./candidateRequestParams";
 import { SessionController } from "database/session-control";
 import { useCachedResult } from "database/useCachedResult";
 
@@ -55,22 +56,13 @@ function LsbPowerPanel({ participantUid, bandCandidate, requestParams, cutpoint,
   const bc = bandCandidate || {};
   const channelRaw = bc.contact;
   const centerHz = bc.center_freq_hz;
-  const bandWidthHz = bc.bandwidth_hz || 5.0;
   const cutThr = cutpoint ? cutpoint.threshold : null;
-  const matchDir = cutpoint ? cutpoint.matchDir : "prior";
   const cutDegenerate = !!(cutpoint && cutpoint.degenerate);
 
   // The request, minus the participant, is the cache key. The operating point is IN it, because
   // this panel exists to anchor that particular cut-point to device units — a different cut-point
   // is a different question, not a different view of the same answer.
-  const settings = {
-    Channel: channelRaw,
-    CenterHz: centerHz == null ? null : Number(centerHz),
-    BandWidthHz: Number(bandWidthHz),
-    MatchDirection: matchDir,
-    Cutpoint: cutThr == null ? null : Number(cutThr),
-    ...requestParams,
-  };
+  const settings = lsbSettings(bc, cutpoint, requestParams);
 
   const cached = useCachedResult({
     moduleKey: CL.lsbPower,

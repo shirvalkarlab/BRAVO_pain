@@ -24,6 +24,7 @@ import { useCachedResult } from "database/useCachedResult";
 
 import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
 import PanelStaleNote from "./PanelStaleNote";
+import { eraSettings } from "./candidateRequestParams";
 import PAL from "./palette";
 import { TYPE, WRAP, CARD, STATE } from "assets/theme/base/tokens";
 import { plotlyLayout, REF_LINE, wrapLabel } from "views/Reports/figureStyle";
@@ -80,17 +81,11 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
   const bc = bandCandidate || {};
   const channelRaw = bc.contact;
   const centerHz = bc.center_freq_hz;
-  const bandWidthHz = bc.bandwidth_hz || 5.0;
 
   // The request, minus the participant, is the cache key. See useDeploymentReport for why that
   // rule rather than a hand-kept list: the body is the complete statement of what changes the
   // answer, so a key derived from it cannot fall behind the request.
-  const settings = {
-    Channel: channelRaw,
-    CenterHz: centerHz == null ? null : Number(centerHz),
-    BandWidthHz: Number(bandWidthHz),
-    ...requestParams,
-  };
+  const settings = eraSettings(bc, requestParams);
 
   const cached = useCachedResult({
     moduleKey: CL.era,

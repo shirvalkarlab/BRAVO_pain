@@ -23,6 +23,7 @@ import { useCachedResult } from "database/useCachedResult";
 
 import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
 import PanelStaleNote from "./PanelStaleNote";
+import { rocSettings } from "./candidateRequestParams";
 import PAL from "./palette";
 import RocCurrentRemovedLine from "./RocCurrentRemovedLine";
 import { TYPE, WRAP, CARD, STATE } from "assets/theme/base/tokens";
@@ -130,7 +131,6 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
   const bc = bandCandidate || {};
   const channelRaw = bc.contact;
   const centerHz = bc.center_freq_hz;
-  const bandWidthHz = bc.bandwidth_hz || 5.0;
 
   // THE REQUEST, MINUS THE PARTICIPANT, IS THE CACHE KEY.
   //
@@ -140,13 +140,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
   // and it is part of the request. The decision rule and the cost ratio only choose a point ON the
   // curve the server already returned; that solve happens in this browser, so putting either in the
   // key would throw away a curve and refit it in order to move a marker along it.
-  const settings = {
-    Channel: channelRaw,
-    CenterHz: centerHz == null ? null : Number(centerHz),
-    BandWidthHz: Number(bandWidthHz),
-    MatchDirection: matchDir,
-    ...requestParams,
-  };
+  const settings = rocSettings(bc, matchDir, requestParams);
 
   const cached = useCachedResult({
     moduleKey: CL.roc,

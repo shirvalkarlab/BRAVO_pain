@@ -15,7 +15,8 @@
 import { SessionController } from "database/session-control";
 
 import { bandRecordFromGrid, gridCentres } from "./BandSweepGridPanel";
-import { bandPainScore, reportCandidateFromBand, summaryRequestParams } from "./candidateRequestParams";
+import { bandPainScore, eraSettings, lsbSettings, reportCandidateFromBand, rocSettings,
+  summaryRequestParams } from "./candidateRequestParams";
 import { deploymentReportBody } from "./useDeploymentReport";
 import { deploymentSummaryBody } from "./useDeploymentSummary";
 
@@ -46,25 +47,52 @@ export function neighbourRequests({ participantUid, grid, channel, centreHz, inc
   };
 }
 
-/** Send the neighbours' requests not yet sent; the answers are saved by the server. */
+function send(url, body) {
+  const key = `${url}|${JSON.stringify(body)}`;
+  if (SENT.has(key)) return null;
+  SENT.add(key);
+  return Promise.resolve()
+    .then(() => SessionController.query(url, body))
+    .catch(() => { SENT.delete(key); return null; });   // a failed ask may be tried again later
+}
+
+/**
+ * The Background panels for one band (decision 428): the ROC and the month-by-month check at once,
+ * then the band-power panel with the ROC's own default operating point (Youden, "next report"),
+ * the point the ROC panel starts on and hands that panel. `bc` and `requestParams` are the band's
+ * own, as the page will hold them when the band is chosen.
+ */
+function prefetchPanels(participantUid, bc, requestParams) {
+  const roc = send("/api/queryDeploymentROC",
+    { ParticipantId: participantUid, ...rocSettings(bc, "prior", requestParams) });
+  send("/api/queryDeploymentRocByEra", { ParticipantId: participantUid, ...eraSettings(bc, requestParams) });
+  if (!roc) return;
+  roc.then((res) => {
+    const env = res && res.data;
+    const yd = env && env.available && env.roc && env.roc.available && env.roc.operating_points
+      && env.roc.operating_points.youden;
+    if (!yd || !Number.isFinite(yd.threshold)) return;
+    send("/api/queryLsbPower", { ParticipantId: participantUid,
+      ...lsbSettings(bc, { threshold: yd.threshold, matchDir: "prior" }, requestParams) });
+  });
+}
+
+/** Send the requests not yet sent: the neighbours' report and summary, and the Background panels
+ *  of the chosen band (`bc`, `requestParams`, the page's own) and of each neighbour. */
 export function prefetchNeighbours(opts) {
-  const { grid, channel, centreHz } = opts;
+  const { grid, channel, centreHz, participantUid, bc, requestParams } = opts;
   if (!grid || !channel || centreHz == null) return 0;
-  let n = 0;
+  const before = SENT.size;
+  if (bc && requestParams) prefetchPanels(participantUid, bc, requestParams);
   neighbourCentres(grid, channel, centreHz).forEach((c) => {
     const { report, summary } = neighbourRequests({ ...opts, centreHz: c });
-    [["/api/queryClosedLoopDeployment", report], ["/api/queryDeploymentSummary", summary]]
-      .forEach(([url, body]) => {
-        const key = `${url}|${JSON.stringify(body)}`;
-        if (SENT.has(key)) return;
-        SENT.add(key);
-        n += 1;
-        Promise.resolve()
-          .then(() => SessionController.query(url, body))
-          .catch(() => SENT.delete(key));          // a failed ask may be tried again later
-      });
+    send("/api/queryClosedLoopDeployment", report);
+    send("/api/queryDeploymentSummary", summary);
+    const nbc = bandRecordFromGrid(grid, channel, c);
+    prefetchPanels(participantUid, nbc,
+      summaryRequestParams(nbc, opts.includeSheets, bandPainScore(nbc).key, opts.inherited));
   });
-  return n;
+  return SENT.size - before;
 }
 
 /** For tests: forget what was sent. */
