@@ -1534,6 +1534,9 @@ def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_
     t = f["t"].to_numpy(dtype=float)
     chan = f["channel"].to_numpy()
     src = f["source"].to_numpy() if "source" in f.columns else np.array([None] * len(f), dtype=object)
+    # Which measurement each row is (TD chunk or device PSD snapshot): the 7-MAD-above chunk rule
+    # judges each against its own family's bound (decisions 411, 412).
+    fam = f["family"].to_numpy() if "family" in f.columns else None
     for c in centers:
         col = f"{_CAL_LSB_PREFIX}{float(c):g}"
         if col not in f.columns:
@@ -1542,6 +1545,8 @@ def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_
         block = {"t": t, "channel": chan, "source": src, "setting_epoch": ep_idx,
                  "center_hz": np.full(len(f), float(c)), "band_width_hz": np.full(len(f), width),
                  "power_linear": lin}
+        if fam is not None:
+            block["family"] = fam
         nat = f"{_CAL_NATIVE_PREFIX}{float(c):g}"
         if nat in f.columns:
             block["device_native"] = f[nat].to_numpy(dtype=bool)
@@ -1561,6 +1566,69 @@ def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_
     T.attrs["band_power_source"] = "calibrated"
     return T
 
+
+
+#: The frame's family labels -> the family names `analytics.chunk_upper_bounds` builds a bound for.
+_CHUNK_RULE_FAMILY = {"td_transform": "td", "device_psd": "psd"}
+
+
+def chunk_bounds_for_candidates(raw_cache, candidates):
+    """The 7-MAD-above chunk bounds (decisions 410-412) for each candidate's contact and band:
+    ``{channel: {"td": {centre: bound}, "psd": {centre: bound}}}``.
+
+    Built by `Biomarkers.routines.analytics.chunk_upper_bounds` from the contact's tile cache, so
+    the bound comes from every usable chunk of the contact (the heat maps' own population), never
+    from the rows a caller happens to hold. A contact with no cache, or a candidate naming no
+    contact or band, gets no entry, and its rows are then left as they are."""
+    try:
+        from modules.Biomarkers.routines import analytics as _an
+    except ImportError:                                # pragma: no cover - the host runner's spelling
+        from Biomarkers.routines import analytics as _an
+    out = {}
+    for cd in (candidates or ()):
+        ch = (cd or {}).get("channel")
+        try:
+            c = float((cd or {}).get("center_hz"))
+        except (TypeError, ValueError):
+            continue
+        entry = (raw_cache or {}).get(str(ch)) if ch is not None else None
+        if not isinstance(entry, dict):
+            continue
+        by_fam = out.setdefault(str(ch), {"td": {}, "psd": {}})
+        for fam in ("td", "psd"):
+            by_fam[fam][c] = float(_an.chunk_upper_bounds(entry, [c], family=fam)[0])
+    return out
+
+
+def drop_chunks_above_bounds(T, bounds):
+    """A COPY of the joined table without the rows whose band power is above their own family's
+    7-MAD-above bound (decision 412). Only E2 and the threshold capture pair read it (the PI's
+    choice, 2026-10-03); E1 and everything else keep the whole table, which is shared between
+    requests and is never changed here.
+
+    ``bounds`` is `chunk_bounds_for_candidates`'s output. A row whose contact, family or band has
+    no bound is kept. Nothing is dropped for being low. The counts land on
+    ``attrs["chunk_rule"]``."""
+    n = len(T)
+    drop = np.zeros(n, dtype=bool)
+    counts = {"n_td_rows_dropped": 0, "n_psd_rows_dropped": 0, "n_rows_judged": 0}
+    if n and bounds and "family" in T.columns:
+        ch = T["channel"].astype(str).to_numpy()
+        fam = T["family"].map(_CHUNK_RULE_FAMILY).to_numpy()
+        cen = T["center_hz"].to_numpy(dtype=float)
+        pw = pd.to_numeric(T["power_linear"], errors="coerce").to_numpy(dtype=float)
+        for contact, by_fam in bounds.items():
+            for f_name, by_c in by_fam.items():
+                for c, b in by_c.items():
+                    m = (ch == contact) & (fam == f_name) & np.isclose(cen, c)
+                    counts["n_rows_judged"] += int(m.sum())
+                    hit = m & (pw > b)
+                    counts[f"n_{f_name}_rows_dropped"] += int(hit.sum())
+                    drop |= hit
+    K = T.loc[~drop].reset_index(drop=True)
+    K.attrs = dict(T.attrs)
+    K.attrs["chunk_rule"] = counts
+    return K
 
 
 # `scale_disagreement(T)` -- how often the linear and mean-of-log scales picked a different winning
@@ -3662,10 +3730,30 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     def _place(rep_, cands_):
         return _place_thresholds_from_record(participant, rep_, cands_, hemisphere=hemisphere,
                                              loaded=_3loaded, epochs=eps)
+    # THE 7-MAD-ABOVE CHUNK BOUNDS for E2 and the capture pair (decision 412), from the
+    # candidate's contact's own tile cache, the same request every page makes. A failure is logged
+    # and named on the manifest; the run then applies no chunk rule, as before.
+    _chunk_bounds, _chunk_why = None, None
+    try:
+        try:
+            from modules.Biomarkers import bravo_service as _bs_cr
+        except ImportError:                               # pragma: no cover - host spelling
+            from Biomarkers import bravo_service as _bs_cr
+        _chunk_bounds = chunk_bounds_for_candidates(
+            _sa._calibrated_lsb_cache(getattr(participant, "uid", participant), _bs_cr), cands[:1])
+        if not _chunk_bounds:
+            _chunk_why = "no tile cache for the candidate's contact"
+    except Exception as _cr_exc:                       # noqa: BLE001 -- the report stands without it
+        _log.warning("closed-loop report: the chunk bounds could not be built for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        _chunk_why = f"the chunk bounds could not be built: {_cr_exc!r}"
     rep = _pl.run(getattr(participant, "uid", participant), psd_frame=psd, epochs=eps,
                   design_matrix=dm, candidates=cands, hemisphere=hemisphere,
                   power_scale=power_scale, device_facts=dev, pooled_e1=_pooled_e1,
-                  place_thresholds=_place, pain_score=_pain["key"])
+                  place_thresholds=_place, pain_score=_pain["key"],
+                  chunk_bounds=_chunk_bounds)
+    if _chunk_why and isinstance(rep.manifest, dict):
+        rep.manifest["chunk_rule"] = {"applied": False, "reason": _chunk_why}
     out = report_to_dict(rep)
     out["pain_score"] = _pain
     # The matching settings the band-to-pain readings that match reports to recordings (the

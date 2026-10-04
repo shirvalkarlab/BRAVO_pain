@@ -149,7 +149,7 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None, threshold=None
 def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro_frame=None,
         candidates=(), washin_s=60.0, amp_limit_ma=5.0, power_scale="power_linear",
         hemisphere="Left", strict=True, n_boot=500, seed=0, device_facts=None,
-        pooled_e1=None, place_thresholds=None, pain_score="nrs"):
+        pooled_e1=None, place_thresholds=None, pain_score="nrs", chunk_bounds=None):
     """Build the deployment report for one participant.
 
     ``pain_score`` (the PI, 2026-09-25 night): the pain-score column the band-to-pain reading (E2)
@@ -163,6 +163,11 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     the card recommends. The adapter passes its record-based step
     (`adapter._place_thresholds_from_record`); ``None`` keeps the capture pair. The placement dict
     is kept on ``rep.threshold_placement``.
+
+    ``chunk_bounds`` (decision 412): `adapter.chunk_bounds_for_candidates`'s output. When given,
+    E2 and the threshold capture pair read the joined table after the 7-MAD-above chunk rule
+    (`adapter.drop_chunks_above_bounds`); E1 always reads the whole table (the PI's choice,
+    2026-10-03). ``None`` applies no rule, as before.
 
     ``psd_frame`` and ``epochs`` are what ``StimOptimizer.adapter.evidence_inputs`` returns. They are
     passed in rather than fetched here so this function stays testable without a database, and so
@@ -254,7 +259,13 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     _e2_amp_col = adapter.canonical_amp_col(hemisphere)
     if _e2_amp_col not in T.columns:
         _e2_amp_col = adapter.resolve_setting_column(T.columns, "amp", hemisphere)
-    e2 = E.state_edge(T, channel=ch, center_hz=fc, outcome=pain_score, scale=power_scale,
+    # THE 7-MAD-ABOVE CHUNK RULE (decision 412) on a copy that only E2 and the capture pair read.
+    T_pain = T
+    if chunk_bounds:
+        T_pain = adapter.drop_chunks_above_bounds(T, chunk_bounds)
+        rep.manifest["chunk_rule"] = dict(T_pain.attrs.get("chunk_rule") or {},
+                                          applies_to=["E2", "threshold capture pair"])
+    e2 = E.state_edge(T_pain, channel=ch, center_hz=fc, outcome=pain_score, scale=power_scale,
                       adjust_for_column=_e2_amp_col)
     # E3 ON THE ACTUATED SIDE'S CURRENT (review C1). ``therapy_edge`` defaults to the left column;
     # the design matrix carries one amplitude column per side, and the side the loop would drive
@@ -270,6 +281,11 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
 
     # --- control authority and threshold placement ----------------------------------------------
     d = T[(T.channel == ch) & (np.isclose(T.center_hz, fc))].dropna(subset=[power_scale])
+    # The capture means read the rows left after the chunk rule (decision 412); the controller
+    # replay and the prescription's power series below keep every row, as the device sees them.
+    d_place = (d if T_pain is T else
+               T_pain[(T_pain.channel == ch)
+                      & (np.isclose(T_pain.center_hz, fc))].dropna(subset=[power_scale]))
     # THE COLUMN NAME COMES FROM THE ADAPTER, NOT FROM AN f-STRING HERE. Fixed 2026-09-04.
     #
     # This read `f"amp_{hemisphere}"` while the joined table spells the column `amp_mA_Left`, with
@@ -325,11 +341,14 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
         else:
             lo_a, hi_a = therapeutic.min(), therapeutic.max()
         if np.isfinite(lo_a) and np.isfinite(hi_a) and hi_a > lo_a:
+            # the currents were read from every row above; the arms from the rows the chunk
+            # rule left (decision 412), with the same therapeutic restriction
+            amps = d_place[amp_col].astype(float)
             rep.threshold = A.threshold_placement(
-                d.loc[(amps > 0) & (amps <= lo_a), power_scale].to_numpy(),
-                d.loc[(amps > 0) & (amps >= hi_a), power_scale].to_numpy(),
+                d_place.loc[(amps > 0) & (amps <= lo_a), power_scale].to_numpy(),
+                d_place.loc[(amps > 0) & (amps >= hi_a), power_scale].to_numpy(),
                 amp_low=float(lo_a), amp_high=float(hi_a),
-                expected_sign=-1, observed_series=d[power_scale].to_numpy(),
+                expected_sign=-1, observed_series=d_place[power_scale].to_numpy(),
                 pooled_slope=pooled_edge)
             # THE PAIR FROM THE RECORD (decision 180): re-placed here, so the ledger, the replay
             # and the rows below all read the pair the card recommends, with the capture pair
