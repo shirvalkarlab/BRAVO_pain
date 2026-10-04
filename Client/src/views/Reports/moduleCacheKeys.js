@@ -114,6 +114,20 @@ export function recomputeClosedLoop(uid) {
   recomputeSlots(uid, CLOSED_LOOP_SLOTS);
 }
 
+/** The deployment slots whose answer is about the chosen band: every slot but the grid (browsed
+ *  to choose a band) and the pooled three-source view (every visit, every band). */
+export const CLOSED_LOOP_BAND_SLOTS = CLOSED_LOOP_SLOTS.filter((k) => k !== CL.grid && k !== CL.pooled);
+
+/**
+ * A band was chosen on this page (decision 418): the reader's explicit act, so every answer about
+ * the band is computed for the new one, exactly as Recompute would, rather than the previous band's
+ * answers being shown marked stale until Recompute is pressed (the cache never fetches on a changed
+ * request by itself).
+ */
+export function newBandForClosedLoop(uid) {
+  recomputeSlots(uid, CLOSED_LOOP_BAND_SLOTS);
+}
+
 /**
  * Declare that every deployment answer for one participant now rests on a changed input, without
  * discarding any of them.

@@ -59,7 +59,7 @@ import DatabaseLayout from "layouts/DatabaseLayout";
 import RecomputeBar from "views/Reports/RecomputeBar";
 import CacheStatusLine from "views/Reports/CacheStatusLine";
 import Fold from "./Fold";
-import { recomputeClosedLoop } from "views/Reports/moduleCacheKeys";
+import { newBandForClosedLoop, recomputeClosedLoop } from "views/Reports/moduleCacheKeys";
 
 import {
   loadBandCandidate, parseUploadedCandidate, syncChosenBand, recordChosenBand, recordClearedBand,
@@ -284,6 +284,8 @@ function ClosedLoopSim() {
   }, []);
 
   const bc = envelope && envelope.band_candidate;
+  // The pain score chosen on this page, until another band is chosen (see below).
+  const [painScoreChoice, setPainScoreChoice] = useState(null);
   // THE CHOSEN BAND AS THE GRID AND THE THREE-SOURCE PANEL READ IT, built once per band rather than
   // as a new object on every render (speed-up item C6, 2026-10-02): a new object each time made the
   // grid rebuild on every re-render of the page although the band had not changed.
@@ -294,15 +296,19 @@ function ClosedLoopSim() {
     () => (hasBand ? { contact: bandContact, centerHz: bandCentreHz } : null),
     [hasBand, bandContact, bandCentreHz]);
   // The grid's two callbacks, the same functions from render to render for the same reason.
-  const onGridCandidateChosen = useCallback(
-    () => setEnvelope(loadBandCandidate(participant_uid)), [participant_uid]);
+  // Choosing a band computes it (decision 418): the pain score starts again from the new band's own
+  // in the same render, and every answer about the band is fetched for it.
+  const onGridCandidateChosen = useCallback(() => {
+    setPainScoreChoice(null);
+    setEnvelope(loadBandCandidate(participant_uid));
+    newBandForClosedLoop(participant_uid);
+  }, [participant_uid]);
   const onGridChoiceRecorded = useCallback(({ status }) => setBandRecord(status), []);
 
   // THE PAIN SCORE EVERY BAND-TO-PAIN READING ON THIS PAGE IS COMPUTED ON (the PI, 2026-09-25
   // night). Starts on the band's own (its grid's, decision 254), NRS when it carries none; a choice
   // made here holds until another band is chosen.
   const bandDefaultPain = useMemo(() => bandPainScore(bc), [bc]);
-  const [painScoreChoice, setPainScoreChoice] = useState(null);
   const bandIdentity = bc ? `${bc.contact}|${bc.center_freq_hz}|${bandDefaultPain.key}` : "";
   useEffect(() => { setPainScoreChoice(null); }, [bandIdentity]);
   const painScore = painScoreChoice || bandDefaultPain.key;
@@ -670,7 +676,8 @@ function ClosedLoopSim() {
                 {analystRevealed ? (
                   <Grid container spacing={3} mt={1}>
                     <Grid item xs={12} md={6} id="cl-roc">
-                      <DeploymentRocPanel participantUid={participant_uid} bandCandidate={bc}
+                      <DeploymentRocPanel key={bc ? `${bc.contact}|${bc.center_freq_hz}` : "none"}
+                        participantUid={participant_uid} bandCandidate={bc}
                         requestParams={requestParams} onCutpoint={setCutpoint}
                         lsbThreshold={lsbThreshold} currentRemoved={matchWindowAuc} />
                     </Grid>
