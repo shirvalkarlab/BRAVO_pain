@@ -99,5 +99,10 @@ def test_the_server_starts_the_loop():
     bridge = os.path.join(here, "..", "..", "..", "_agent_bridge")
     boot = open(os.path.join(bridge, "boot.sh")).read()
     assert "saved_answers_refresh_loop.sh" in boot
+    # Jetstream2 starts gunicorn directly (its compose command, not boot.sh): gunicorn's start-up
+    # hook launches the loop there; the loop's pid lock keeps it to one where both run
+    conf = open(os.path.join(bridge, "..", "gunicorn.conf.py")).read()
+    hook = conf.split("def when_ready(server):", 1)[1]
+    assert "saved_answers_refresh_loop.sh" in hook and "SAVED_ANSWERS_REFRESH" in hook
     loop = open(os.path.join(bridge, "saved_answers_refresh_loop.sh")).read()
     assert "SAVED_ANSWERS_REFRESH" in loop and "refresh_saved_answers" in loop

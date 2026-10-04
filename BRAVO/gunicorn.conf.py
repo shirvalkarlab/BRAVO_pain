@@ -5,11 +5,42 @@ container commands start it in /usr/src/BRAVO (this folder, mounted live), so bo
 at the next start of gunicorn's main process (`kill -HUP 1` in the container, or a restart); no
 compose file changes. Options on the command line (`-w`, `--timeout`, `--reload` ...) still win.
 
-Only one thing is set here: each new web worker is warmed (`BRAVO/warmup.py`: R started, the numba
+Each new web worker is warmed (`BRAVO/warmup.py`: R started, the numba
 loops compiled, the libraries a request imports loaded) after Django is set up and before the worker
 accepts a request (speed-up item B9, 2026-10-02). `BRAVO_WARMUP=0` in the environment turns it off.
+And when gunicorn starts, the loop that rebuilds saved band answers after data change is launched
+(`when_ready`, decision 435; `SAVED_ANSWERS_REFRESH=0` turns it off).
 Keep this file free of imports at the top: gunicorn's main process reads it too.
 """
+
+
+def when_ready(server):
+    """Runs once in gunicorn's main process when it starts (not on a reload). Starts the loop that
+    works saved band answers out again when a participant's data change (decision 435). The
+    Jetstream2 server starts gunicorn directly, not through `_agent_bridge/boot.sh`, so this is
+    where the loop starts there; the loop's own pid lock stops a second copy where both run.
+    `SAVED_ANSWERS_REFRESH=0` turns it off. Never stops gunicorn starting."""
+    import os
+    import subprocess
+    if os.environ.get("SAVED_ANSWERS_REFRESH", "1") == "0":
+        return
+    here = os.path.dirname(os.path.abspath(__file__))
+    loop = os.path.join(here, "_agent_bridge", "saved_answers_refresh_loop.sh")
+    logs = os.path.join(here, "_agent_bridge", "logs")
+    try:
+        if not os.path.isfile(loop):
+            return
+        os.makedirs(logs, exist_ok=True)
+        with open(os.path.join(logs, "saved_answers_refresh.boot.log"), "ab") as out:
+            proc = subprocess.Popen(["bash", loop], stdout=out, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL, start_new_session=True)
+        server.log.info("BRAVO saved-answer refresh loop launched (pid %s)", proc.pid)
+    except Exception as exc:                                   # noqa: BLE001
+        try:
+            server.log.warning("BRAVO saved-answer refresh loop not started: %s: %s",
+                               type(exc).__name__, exc)
+        except Exception:                                      # noqa: BLE001
+            pass
 
 
 def post_worker_init(worker):
