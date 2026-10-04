@@ -7066,12 +7066,15 @@ def _band_lsb_and_power_build(request_data):
     # montage's configured sensing bands — and units-consistent (replaces the retired µV²-cut-point
     # estimate_lsb fallback, removed 2026-06-28). `td_for_modeled` is ALL raw-µV TD (streaming +
     # montage/survey); chronic/powerdomain are power-domain, not TD, and excluded by the helper guards.
-    # Used only if there's no native threshold.
-    mvals = _modeled_lsb_values(core["participant_uid"], channel, center_hz, td_for_modeled, half)
-    n_modeled = int(mvals.size)
-    if mvals.size >= 8 and percentile is not None:
-        modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
-    if band_lsb_vals is not None and band_lsb_vals.size >= 20 and percentile is not None:
+    # Used only if there's no native threshold, so worked out only then (decision 434: on RCS08 the
+    # device sensed 46 of the 132 grid bands often enough, and their modelled values went unread).
+    native_ok = band_lsb_vals is not None and band_lsb_vals.size >= 20 and percentile is not None
+    if not native_ok:
+        mvals = _modeled_lsb_values(core["participant_uid"], channel, center_hz, td_for_modeled, half)
+        n_modeled = int(mvals.size)
+        if mvals.size >= 8 and percentile is not None:
+            modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
+    if native_ok:
         # MEASURED, native device-sensed threshold — the deployable number, always preferred.
         thr_lsb = float(np.percentile(band_lsb_vals, percentile))
         threshold_lsb = {
@@ -7502,10 +7505,13 @@ def _deployment_summary_build(request_data):
     # consistent (replaces the retired µV²-cut-point estimate_lsb fallback, removed 2026-06-28).
     # `td_for_modeled` is ALL raw-µV TD (streaming + montage/survey); chronic/powerdomain are
     # power-domain, not TD. Gathered regardless; used only if there's no native threshold (below).
-    mvals = _modeled_lsb_values(core["participant_uid"], channel, center_hz, td_for_modeled, half)
-    n_modeled = int(mvals.size)
-    if mvals.size >= 8 and percentile is not None:
-        modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
+    # Read only when there is no measured threshold (`_modeled_lsb_threshold_estimate`), so worked
+    # out only then (decision 434).
+    if thr_lsb is None:
+        mvals = _modeled_lsb_values(core["participant_uid"], channel, center_hz, td_for_modeled, half)
+        n_modeled = int(mvals.size)
+        if mvals.size >= 8 and percentile is not None:
+            modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
 
     # Fallback (audit: deployment_fallback): the device never sensed THIS (channel, band) long
     # enough to read a threshold straight off its own LSB Timeline (thr_lsb is None) -- but we still
