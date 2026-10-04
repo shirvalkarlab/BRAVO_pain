@@ -60,6 +60,12 @@ def shutdown_pool() -> bool:
     gunicorn's `worker_exit` hook (`gunicorn.conf.py`) calls this. Returns True when a pool was
     stopped, False when there was none; never raises.
     """
+    # The side-process helper (decision 427) is stopped on every exit path this one is.
+    try:
+        from . import side_process as _side
+        _side.shutdown()
+    except Exception:                                          # noqa: BLE001
+        pass
     try:
         from joblib.externals.loky import reusable_executor as _re
         ex = getattr(_re, "_executor", None)

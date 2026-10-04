@@ -3584,6 +3584,53 @@ def rate_commitment_from_active_group(candidate_rate_hz, active_group):
                 f"group and a new threshold capture (PI decision 2026-09-12, option a)")}
 
 
+#: How long the report waits for its helper's stability answer before computing it here instead.
+STABILITY_HELPER_WAIT_S = 600.0
+
+
+def _validate_band_core_here(body):
+    """The stability model in this process, as the report always computed it."""
+    try:
+        from modules.Biomarkers import bravo_service as _bsvc
+    except ImportError:                                   # pragma: no cover - host spelling
+        from Biomarkers import bravo_service as _bsvc
+    return _bsvc._validate_band_core(body)
+
+
+def _submit_stability(participant, cands, pain_key, rd):
+    """Hand the first candidate's stability model to this worker's helper process (decision 427):
+    ``(future or None, body or None)``. None when the candidate names no band or no helper runs."""
+    first = (cands[0] or {}) if cands else {}
+    ch, fc = first.get("channel"), first.get("center_hz")
+    if ch is None or fc is None:
+        return None, None
+    body = stability_request_body(getattr(participant, "uid", participant), ch, float(fc),
+                                  float(first.get("band_width_hz", 5.0)), pain_score=pain_key,
+                                  matching=rd)
+    try:
+        try:
+            from modules.DecodeCommon import side_process as _side
+        except ImportError:                               # pragma: no cover
+            from DecodeCommon import side_process as _side
+        from . import stability_helper as _sh
+        return _side.submit(_sh.stability_core, body, _sh.current_overrides()), body
+    except Exception:                                     # noqa: BLE001 -- computed here instead
+        _log.warning("closed-loop report: the stability model could not be handed to the helper",
+                     exc_info=True)
+        return None, body
+
+
+def _stability_result(future, body):
+    """The helper's stability answer, or the model computed here when there is no helper answer."""
+    if future is not None:
+        try:
+            return future.result(timeout=STABILITY_HELPER_WAIT_S)
+        except Exception:                                 # noqa: BLE001 -- computed here instead
+            _log.warning("closed-loop report: the helper's stability answer failed; computing it "
+                         "here", exc_info=True)
+    return _validate_band_core_here(body)
+
+
 def report_for_participant(participant, request_data=None, *, candidates=None, hemisphere="Left",
                            power_scale="power_linear", force_refresh=None):
     """Fetch this participant's data from the platform and build the report.
@@ -3656,6 +3703,9 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                           "evaluated for a specific configuration, not for a participant.",
                 "band_sweep_grid": _grid_export,
                 "cache_status": _status}
+    # THE STABILITY MODEL STARTS NOW, IN THE HELPER PROCESS (decision 427), and is read below where
+    # it used to be computed, so its seconds overlap the rest of the report.
+    _stab_future, _stab_body = _submit_stability(participant, cands, _pain["key"], rd)
     # THE TWO SIDES OF THE FIRST CANDIDATE, resolved once here and used everywhere below (review
     # C1, 2026-09-12). Until then one name, ``_hemi``, preferred the ACTUATED side and was used
     # for the impedance and the survey facts too, and the page always sent
@@ -3977,9 +4027,10 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         _ch, _fc = _first.get("channel"), _first.get("center_hz")
         if _ch is not None and _fc is not None:
             _bw = float(_first.get("band_width_hz", 5.0))
-            _core = _bsvc._validate_band_core(stability_request_body(
-                getattr(participant, "uid", participant), _ch, float(_fc), _bw,
-                pain_score=_pain["key"], matching=rd))
+            _core = _stability_result(_stab_future, _stab_body if _stab_body is not None else
+                                      stability_request_body(
+                                          getattr(participant, "uid", participant), _ch,
+                                          float(_fc), _bw, pain_score=_pain["key"], matching=rd))
             _raw = (_core.get("stim") or {}) if _core.get("available") else {
                 "available": False,
                 "reason": (_core.get("reason") or "the biomarkers path returned nothing usable"),
