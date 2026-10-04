@@ -373,7 +373,10 @@ function ClosedLoopSim() {
   // TRACK D: fetched independently of any committed candidate -- see useBandSweepGrid.js for why
   // gating this on useDeploymentReport's own enabled condition would make it unreachable from the
   // one screen that needs it (choosing a first candidate).
-  const bandSweepGrid = useBandSweepGrid({ participantUid: participant_uid });
+  // The grid follows the pain-score dropdown once a band is chosen (the dropdown is shown only
+  // then); before that it is the Biomarkers page's last-run score.
+  const bandSweepGrid = useBandSweepGrid({ participantUid: participant_uid,
+    painScore: bc ? painScore : null });
 
   // THE POOLED THREE-SOURCE VIEW, fetched AFTER the report has answered (the PI, 2026-09-11:
   // "prefetch the data after the first figures load"). It reads two stored tables and groups
