@@ -9,13 +9,9 @@ below 55 Hz is lifted to 55 with the reason; the harmonic-avoidance lists for 55
 are pinned centre by centre; a step is a ramp row then a test row, 60 s each; the points-yield
 arithmetic; `post_ramp.margin_becomes_available` on a constructed table with a 6-setting run
 (False) and an 8-setting run (True); the joint-corners block caps, dedupes and excludes; the flat
-clinic-sheet rows carry the real workbook's own column order and the "L x / R y" bilateral form;
-and the service response carries `titration_plan` for both sides with every `source` non-empty.
+clinic-sheet rows carry the real workbook's own column order and the "L x / R y" bilateral form.
+The service response's `titration_plan` is no longer tested end to end here (decision 426).
 """
-import shutil
-import sys
-import tempfile
-import types
 
 import numpy as np
 import pandas as pd
@@ -501,196 +497,11 @@ def test_the_left_ladder_varies_left_and_holds_right_at_its_own_current():
         assert r["Amp (mA)"] == f"L {cur:g} / R 2"    # right held at 2.0 mA throughout
 
 
-# ---------------------------------------------------------------------------------------------
-# the service response carries the block for both sides
-# ---------------------------------------------------------------------------------------------
-def _matrix(n=8):
-    rows = []
-    for k in range(n):
-        rows.append(dict(epoch=float(k + 1), freq_hz=55.0, pw_us_Left=100.0, pw_us_Right=150.0,
-                         amp_mA_Left=1.0 + 0.5 * (k % 4), amp_mA_Right=1.5 + 0.5 * (k % 3),
-                         cathode_Left="2a-2b-2c", cathode_Right="1a-1b-1c",
-                         n=8.0, dur_h=200.0, state="bilateral_active",
-                         left_leg_vas=50.0 + k, left_leg_vas_sd=8.0, back_vas=40.0 + k, back_vas_sd=8.0))
-    d = pd.DataFrame(rows)
-    d["t0"] = pd.date_range("2025-07-01", periods=len(d), freq="3D", tz="UTC")
-    d["t_end"] = d["t0"] + pd.Timedelta(days=2)
-    return d
-
-
-def _screen():
-    return pd.DataFrame([
-        dict(channel="ONE_THREE_LEFT", hemisphere="Left", rate_hz=55.0, n_bands=18, n_responding=12,
-             responding_fraction=0.667, median_separation_d=0.9, laterality="ipsilateral",
-             sensing_side="Left", deployable=True),
-        dict(channel="ZERO_THREE_RIGHT", hemisphere="Right", rate_hz=55.0, n_bands=18, n_responding=4,
-             responding_fraction=0.222, median_separation_d=0.3, laterality="ipsilateral",
-             sensing_side="Right", deployable=False),
-    ])
-
-
-class _Arm:
-    def __init__(self, hemi):
-        self.site, self.hemisphere = "left_leg", hemi
-        self.queue = pd.DataFrame({"rank": [1], "freq_hz": [55.0], "amp_mA": [2.0], "score": [0.3]})
-        self.batch = self.queue.copy()
-        self.meta = {"incumbent_mu": 0.4, "mu_star": -0.6, "sd_star": 0.9, "incumbent_sd": 0.9,
-                     "x_star": [55.0, 2.0], "data_horizon": "h", "washin_min": 1.0,
-                     "amp_col": f"amp_mA_{hemi}", "n_epochs_fitted": 8, "kernel": "rbf",
-                     "safe_is_contiguous": True, "safe_contiguous_ceiling": float("nan")}
-        self.ctx = types.SimpleNamespace(meta=self.meta)
-
-    def surface_can_resolve_its_optimum(self, k=1.0):
-        return False
-
-
-class _Report:
-    def __init__(self):
-        self.arms = {"left_leg__Left": _Arm("Left"), "left_leg__Right": _Arm("Right")}
-        self.summary = pd.DataFrame({"arm": list(self.arms), "n_epochs": [8, 8]})
-        self.manifest = {"declared": "stub"}
-
-    def recommendation_is_supported(self):
-        return False
-
-
-@pytest.fixture
-def bench(monkeypatch):
-    import importlib
-    from StimOptimizer import adapter as AD
-    from StimOptimizer import bravo_service as BS
-    st = BS._cache_store
-    _ledger = importlib.import_module(st.__name__.rsplit(".", 1)[0] + ".ledger")
-    root = tempfile.mkdtemp(prefix="bravo_so_titration_")
-    monkeypatch.setattr(BS, "_SHARED_CACHE_DIR_OVERRIDE", root)
-    monkeypatch.setattr(AD, "_SHARED_CACHE_DIR_OVERRIDE", root)
-    monkeypatch.setattr(_ledger, "ENABLED", False)
-    monkeypatch.setattr(st, "ENABLED", True)
-    models = types.ModuleType("Server.models")
-    models.Participant = types.SimpleNamespace(find=lambda uid: types.SimpleNamespace(uid=uid))
-    server = types.ModuleType("Server"); server.models = models
-    monkeypatch.setitem(sys.modules, "Server", server)
-    monkeypatch.setitem(sys.modules, "Server.models", models)
-    stream = pd.DataFrame({"t": pd.to_datetime(["2026-01-01"], utc=True)})
-    monkeypatch.setattr(AD, "settings_stream", lambda p, **kw: stream)
-    es = _matrix()
-    monkeypatch.setattr(AD, "build_design_matrix", lambda p, rd=None, **kw: es.copy())
-    monkeypatch.setattr(AD, "evidence_inputs", lambda p, **kw: (None, None))
-    monkeypatch.setattr(BS, "_tiles_key_for", lambda p: (None, "no tiles in this test"))
-    monkeypatch.setattr(BS, "_blockers", lambda rep, arms, observed=None: [])
-    monkeypatch.setattr(BS.pipeline, "run", lambda es, **kw: _Report())
-
-    def readiness(p, es, include=True, inputs=None, screen_out=None, **kw):
-        if screen_out is not None:
-            screen_out["screen"] = _screen()
-        return {"available": True, "ready": True, "verdict": "stubbed"}
-    monkeypatch.setattr(BS, "closed_loop_readiness", readiness)
-    yield types.SimpleNamespace(root=root, es=es, BS=BS)
-    shutil.rmtree(root, ignore_errors=True)
-
-
-def test_the_response_carries_a_titration_plan_for_both_sides_with_every_source_non_empty(bench):
-    out = bench.BS.run_for_participant({"ParticipantId": "P", "Backend": "none",
-                                        "Hemispheres": ["Left", "Right"]})
-    assert out.get("available") is True, out.get("reason")
-    tp = out["titration_plan"]
-    assert tp["available"] is True
-    assert set(tp["sides"]) == {"Left", "Right"}
-    for side, p in tp["sides"].items():
-        assert p["side"] == side
-        assert p["rate_hz"] == 55.0 and p["rate_lifted"] is False
-        assert p["pulse_width_us"] == (100.0 if side == "Left" else 150.0)   # each side's OWN column
-        assert p["ceiling_mA"] == 5.0                                        # the module hard limit fallback
-        assert "no PI-stated ceiling" in p["sources"]["ceiling_mA"]
-        assert p["ladder"]["n_steps"] == 16 and p["hold"]["seconds"] == 60.0
-        assert p["step_timing"]["total_s"] == 120.0
-        # found 2026-09-25: 22.5-24.5 Hz are newly avoided too (the fifth multiple of 55 Hz folds
-        # to 25 Hz, which harmonic_avoidance used to miss)
-        assert p["bands"]["avoid_hz"] == [11.5, 12.5, 13.5, 14.5, 15.5, 22.5, 23.5, 24.5, 25.5, 26.5,
-                                          27.5, 28.5, 29.5]
-        for k, v in p["sources"].items():
-            assert isinstance(v, str) and v.strip(), (side, k)
-        assert "setting in force on the" in p["sources"]["rate_hz"]
-        # the other side is held at its own current in force, read from the same matrix
-        assert p["held_other_side"]["current_mA"] is not None
-    # the Left side's best deployable cell; the Right side's cell did not pass and is named as such
-    assert tp["sides"]["Left"]["sensing_contact"]["channel"] == "ONE_THREE_LEFT"
-    assert tp["sides"]["Left"]["sensing_contact"]["n_responding"] == 12
-    assert "best deployable cell" in tp["sides"]["Left"]["sources"]["sensing_contact"]
-    assert "at the session's rate, 55 Hz" in tp["sides"]["Left"]["sources"]["sensing_contact"]
-    assert tp["sides"]["Right"]["sensing_contact"]["channel"] == "ZERO_THREE_RIGHT"
-    assert "did not pass" in tp["sides"]["Right"]["sensing_contact"]["note"] or \
-        "no contact on this side passed" in tp["sides"]["Right"]["sensing_contact"]["note"]
-    # no stored tables in the scratch root: said, not counted as zero
-    assert tp["margin"]["table_stored"] is False and tp["margin"]["available"] is False
-    assert "no entry is stored" in tp["stored_tables"]["pooled"] and "no entry is stored" in tp["stored_tables"]["run_points"]
-    assert tp["sides"]["Left"]["yield"]["record_today"]["points"] is None
-    # the joint corners and the flat sheet rows are both present
-    assert tp["joint_corners"]["optional"] is True
-    assert isinstance(tp["sheet_rows"], list) and len(tp["sheet_rows"]) > 0
-    assert tp["sheet_columns"] == list(TP.SHEET_COLUMNS)
-    n_left = tp["sides"]["Left"]["ladder"]["n_steps"]
-    n_right = tp["sides"]["Right"]["ladder"]["n_steps"]
-    n_joint = len(tp["joint_corners"]["points"])
-    base_rows = [r for r in tp["sheet_rows"] if not str(r["block"]).startswith("exploratory")]
-    assert len(base_rows) == 2 * (n_left + n_right + n_joint)
-    assert tp["session_time"]["n_steps_total"] == n_left + n_right + n_joint
-    # THE EXPLORATORY LADDER (2026-09-21): the Right side's best pair is R 0-3+, which needs
-    # stimulation on rings 1 and 2, while the bench's Right side stimulates on ring 1 alone; the
-    # Left side's best pair (L 1-3+) needs ring 2, which is in force, so no proposal there.
-    assert set(tp["proposed"]) == {"Right"}
-    pr = tp["proposed"]["Right"]
-    assert pr["stimulation"]["contacts_short"] == "R C+1-2-" and pr["stimulation"]["in_force_rings"] == [1]
-    assert pr["sensing_pair"]["channel"] == "ZERO_THREE_RIGHT" and pr["rate_hz"] == 55.0
-    assert pr["first_exposure"]["ever_powered"] is False and "never" in pr["first_exposure"]["sentence"]
-    assert pr["held_other_side"]["current_mA"] is not None
-    expl = [r for r in tp["sheet_rows"] if str(r["block"]).startswith("exploratory_right")]
-    assert len(expl) == 2 * pr["ladder"]["n_steps"] + 3
-    assert expl[0]["Contacts"].endswith("/ R C+1-2-")
-    assert tp["session_time"]["total_minutes"] > tp["session_time"]["steps_minutes"]
-    # JSON-safe: no numpy scalars anywhere
-    def walk(o):
-        if isinstance(o, dict):
-            for v in o.values():
-                walk(v)
-        elif isinstance(o, list):
-            for v in o:
-                walk(v)
-        else:
-            assert not isinstance(o, (np.generic,)), type(o)
-    walk(tp)
-
-
-def test_a_contact_that_passed_only_at_another_rate_is_named_with_that_rate(bench, monkeypatch):
-    BS = bench.BS
-
-    def readiness(p, es, include=True, inputs=None, screen_out=None, **kw):
-        sc = _screen()
-        sc.loc[sc["hemisphere"] == "Left", "rate_hz"] = 165.0
-        if screen_out is not None:
-            screen_out["screen"] = sc
-        return {"available": True}
-    monkeypatch.setattr(BS, "closed_loop_readiness", readiness)
-    out = BS.run_for_participant({"ParticipantId": "P", "Backend": "none", "Hemispheres": ["Left"]})
-    p = out["titration_plan"]["sides"]["Left"]
-    assert p["rate_hz"] == 55.0
-    assert p["sensing_contact"]["channel"] == "ONE_THREE_LEFT" and p["sensing_contact"]["rate_hz"] == 165.0
-    assert "no cell on this side passed at the session's rate of 55 Hz" in p["sources"]["sensing_contact"]
-    assert "from 165 Hz" in p["sources"]["sensing_contact"]
-
-
-def test_the_plan_is_in_the_stored_response_and_a_readiness_failure_does_not_remove_it(bench, monkeypatch):
-    BS = bench.BS
-    monkeypatch.setattr(BS, "closed_loop_readiness",
-                        lambda p, es, include=True, **kw: {"available": False, "reason": "stubbed off"})
-    out = BS.run_for_participant({"ParticipantId": "P", "Backend": "none", "Hemispheres": ["Left"]})
-    tp = out["titration_plan"]
-    assert tp["available"] is True and set(tp["sides"]) == {"Left"}
-    assert tp["sides"]["Left"]["sensing_contact"] is None
-    assert "no sensing contact is named" in tp["sides"]["Left"]["sensing_contact_note"]
-    assert tp["sides"]["Left"]["ladder"]["n_steps"] == 16
-    # a single side means no joint corners rows in the flat sheet
-    assert all(r["block"] != "joint_corners" for r in tp["sheet_rows"])
+# The three end-to-end tests of the titration plan through `run_for_participant` (and their `bench`
+# fixture) were deleted on 2026-10-04 at the PI's instruction (decision 426): the fixture redirected
+# the Stim Optimizer's store but not the Biomarkers module's, so each run downloaded the real REDCap
+# project for a stand-in participant "P" and saved it into the live store (14 snapshots since
+# 2026-09-27). The plan's own contents stay covered by the tests below.
 
 
 # ---------------------------------------------------------------------------------------------
