@@ -4358,7 +4358,8 @@ def _band_pain_auc_with_covariate_removed(d, *, covariate_column, shape, pain_co
     }
 
 
-def _partial_corr_report_bootstrap(x, y, cov, groups, *, shape, n_boot, seed, alpha, blas_threads=1):
+def _partial_corr_report_bootstrap_loop(x, y, cov, groups, *, shape, n_boot, seed, alpha,
+                                       blas_threads=1):
     """Interval on the partial correlation, resampling WHOLE PAIN REPORTS with replacement.
 
     The fits run on `blas_threads` linear-algebra threads (speed-up item 5, 2026-09-25): a
@@ -4391,6 +4392,74 @@ def _partial_corr_report_bootstrap(x, y, cov, groups, *, shape, n_boot, seed, al
     if len(vals) < BOOT_CI_VALID_FLOOR:
         return (None, None)
     v = np.asarray(vals, dtype=float)
+    return (float(np.percentile(v, 100.0 * alpha / 2.0)),
+            float(np.percentile(v, 100.0 * (1.0 - alpha / 2.0))))
+
+
+def _partial_corr_report_bootstrap(x, y, cov, groups, *, shape, n_boot, seed, alpha, blas_threads=1):
+    """Interval on the partial correlation, resampling WHOLE PAIN REPORTS with replacement.
+
+    VECTORISED for the straight-line shape (the PI, 2026-10-04, decision 422): a resample of whole
+    reports is a vector of counts, one per report, so every resample's two least-squares fits and
+    correlation come from per-report sums in one matrix product, instead of 500 fits on tens of
+    thousands of rows each. The resamples are the same draws from the same generator as before;
+    the order of the arithmetic differs, so the interval ends agree with the loop to about 1e-12
+    (the PI accepted agreement to six or seven digits for this change). The refusals are the same:
+    fewer than four rows, no spread in the covariate, or nothing left of either variable once the
+    covariate is taken out. Other shapes keep the loop (`_partial_corr_report_bootstrap_loop`)."""
+    if shape != "line":
+        return _partial_corr_report_bootstrap_loop(x, y, cov, groups, shape=shape, n_boot=n_boot,
+                                                   seed=seed, alpha=alpha,
+                                                   blas_threads=blas_threads)
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    c = np.asarray(cov, dtype=float)
+    groups = np.asarray(groups)
+    ids = np.unique(groups)
+    if ids.size < 2:
+        return (None, None)
+    rng = np.random.default_rng(int(seed))
+    pos = np.searchsorted(ids, groups)
+    B = int(n_boot)
+    counts = np.zeros((B, ids.size))
+    for b in range(B):                                 # the same draws, in the same order
+        pick = rng.choice(ids, size=ids.size, replace=True)
+        counts[b] = np.bincount(np.searchsorted(ids, pick), minlength=ids.size)
+    fin = np.isfinite(x) & np.isfinite(y) & np.isfinite(c)
+    if not fin.any():
+        return (None, None)
+    # per-report sums of the centred values (centred on the finite rows' means, to keep the
+    # products small and the subtractions below exact to the last few digits)
+    xm, ym, cm = x[fin].mean(), y[fin].mean(), c[fin].mean()
+    xs, ys, cs, g = x[fin] - xm, y[fin] - ym, c[fin] - cm, pos[fin]
+    def gsum(v):
+        return np.bincount(g, weights=v, minlength=ids.size)
+    G = np.stack([gsum(np.ones_like(xs)), gsum(xs), gsum(ys), gsum(cs), gsum(xs * xs),
+                  gsum(ys * ys), gsum(cs * cs), gsum(xs * cs), gsum(ys * cs), gsum(xs * ys)],
+                 axis=1)
+    S = counts @ G                                       # (B, 10): every resample's totals
+    n, sx, sy, sc, sxx, syy, scc, sxc, syc, sxy = S.T
+    with np.errstate(invalid="ignore", divide="ignore"):
+        Sxx = sxx - sx * sx / n
+        Syy = syy - sy * sy / n
+        Scc = scc - sc * sc / n
+        Sxc = sxc - sx * sc / n
+        Syc = syc - sy * sc / n
+        Sxy = sxy - sx * sy / n
+        rxx = Sxx - Sxc * Sxc / Scc                      # what is left of x once c is taken out
+        ryy = Syy - Syc * Syc / Scc
+        rxy = Sxy - Sxc * Syc / Scc
+        r = rxy / np.sqrt(rxx * ryy)
+        # a resample whose reports all share one current has no spread in it (the loop's exact
+        # zero, which centred sums reach only to rounding)
+        spread = Scc > 1e-12 * np.maximum(scc + sc * sc / n, 1e-300)
+        ok = ((n >= 4) & spread
+              & (np.sqrt(np.maximum(rxx, 0.0) / n) > 1e-10 * (np.sqrt(np.maximum(Sxx, 0.0) / n) + 1e-300))
+              & (np.sqrt(np.maximum(ryy, 0.0) / n) > 1e-10 * (np.sqrt(np.maximum(Syy, 0.0) / n) + 1e-300))
+              & np.isfinite(r))
+    v = r[ok]
+    if v.size < BOOT_CI_VALID_FLOOR:
+        return (None, None)
     return (float(np.percentile(v, 100.0 * alpha / 2.0)),
             float(np.percentile(v, 100.0 * (1.0 - alpha / 2.0))))
 
