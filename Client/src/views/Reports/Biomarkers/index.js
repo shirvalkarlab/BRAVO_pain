@@ -26,6 +26,7 @@ import ReportSharingNote from "./ReportSharingNote";
 import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
 import BiomarkerAnalytics, { hasSlidingCorrelation } from "./BiomarkerAnalytics";
 import BinarizationPreview from "./BinarizationPreview";
+import lastComputedLine from "./lastComputedLine";
 import MatchWindowBand from "./MatchWindowBand";
 import Fold from "./Fold";
 // BandTimeSweepPanel (the older, non-interactive tables-and-server-figures rendering of this
@@ -701,10 +702,7 @@ function Biomarkers() {
 
       {data && data.live_match_stats && (
         <MDTypography component="span" sx={NOTE_SX}>
-          {`Last computed: ${data.live_match_stats.n_pro_td || 0} ratings matched to TD, `
-           + `${data.live_match_stats.n_pro_psd || 0} to a PSD`
-           + `${data.live_match_stats.n_pro_unmatched != null ? `, ${data.live_match_stats.n_pro_unmatched} with nothing in the window` : ""}`
-           + `${data.live_match_stats.n_td_used != null ? ` (${data.live_match_stats.n_td_used} 3 s TD pieces and ${data.live_match_stats.n_psd_used || 0} PSDs used).` : "."}`}
+          {lastComputedLine(data.live_match_stats)}
         </MDTypography>
       )}
     </MDBox>
