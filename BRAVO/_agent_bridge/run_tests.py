@@ -67,6 +67,8 @@ if SHARD is None and not LIVE_ONLY and N_SHARDS != 1:
 
 sys.path.insert(0, "/usr/src/BRAVO")
 os.environ.setdefault("DJANGO_SETTINGS_MODULE","BRAVO.settings")
+# Tests never add requests to the live server's list of requests to replay (decision 435).
+os.environ.setdefault("BRAVO_REMEMBER_REQUESTS", "0")
 import django; django.setup()
 import importlib
 # reload analytics to pick up edit

@@ -183,9 +183,11 @@ def _run_for_participant(request_data):
                          participant_uid, exc_info=True)
             return _build()
         try:
-            from modules.CacheStore import saved_answers as _saved
+            from modules.CacheStore import saved_answers as _saved, request_memory as _memory
         except ImportError:                            # pragma: no cover - host spelling
-            from CacheStore import saved_answers as _saved
+            from CacheStore import saved_answers as _saved, request_memory as _memory
+        # remembered, so the server can work it out again when the data change (decision 435)
+        _memory.remember(REPORT_KIND, participant_uid, request_data)
         # THE BAND GRID LEAVES A BAND'S REPORT (decision 431): the page reads the grid from its own
         # request (the one with no band), never from here, and re-reading it for a served report
         # cost about 1.8 s. The report still reads the grid while it is built (its direction check).

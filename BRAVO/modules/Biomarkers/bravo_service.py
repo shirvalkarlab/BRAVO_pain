@@ -7364,9 +7364,11 @@ def _serve_saved_band_answer(kind, request_data, build):
                      uid, exc_info=True)
         return build(rd)
     try:
-        from modules.CacheStore import saved_answers as _saved
+        from modules.CacheStore import saved_answers as _saved, request_memory as _memory
     except ImportError:                                    # pragma: no cover - host spelling
-        from CacheStore import saved_answers as _saved
+        from CacheStore import saved_answers as _saved, request_memory as _memory
+    # remembered, so the server can work it out again when the data change (decision 435)
+    _memory.remember(kind, uid, rd)
     return _saved.serve_or_build(kind, uid, inputs, lambda: build(rd), writer="biomarkers",
                                  root=_SHARED_CACHE_DIR_OVERRIDE)
 

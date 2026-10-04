@@ -87,3 +87,29 @@ def test_the_grid_alone_still_carries_the_grid():
         finally:
             undo()
     assert out["band_sweep_grid"] == {"g": 0}
+
+
+def test_a_band_report_request_is_remembered_and_the_grid_alone_is_not():
+    """Decision 435: the server replays remembered band requests when the data change."""
+    import os
+    from modules.CacheStore import locks, request_memory as rm
+    from modules.CacheStore.tests.test_request_memory import FakeRedis
+    fake = FakeRedis()
+    saved, saved_env = locks.CLIENT_FACTORY, os.environ.get(rm.OFF_ENV)
+    locks.CLIENT_FACTORY, os.environ[rm.OFF_ENV] = (lambda: fake), "1"
+    try:
+        with _Sandbox():
+            calls, undo = _patched(["p1"])
+            try:
+                BS._run_for_participant(dict(REQ))
+                BS._run_for_participant({"ParticipantId": UID, "Candidates": []})
+            finally:
+                undo()
+        got = rm.recent(UID)
+    finally:
+        locks.CLIENT_FACTORY = saved
+        if saved_env is None:
+            os.environ.pop(rm.OFF_ENV, None)
+        else:
+            os.environ[rm.OFF_ENV] = saved_env
+    assert [(g["kind"], g["body"]) for g in got] == [(BS.REPORT_KIND, REQ)]
