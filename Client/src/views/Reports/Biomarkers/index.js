@@ -386,13 +386,15 @@ function Biomarkers() {
   useEffect(() => {
     if (!participant_uid) return;
     setPainLoading(true);
-    SessionController.query("/api/queryPainScores", { ParticipantId: participant_uid })
+    // With the clinic-sheet switch on, the sheets' ratings too, flagged `sheet` (decision 436).
+    SessionController.query("/api/queryPainScores",
+      { ParticipantId: participant_uid, IncludeClinicSheetRatings: includeClinicSheetRatings })
       .then((response) => {
         setPainScores(response.data);
         setPainLoading(false);
       })
       .catch(() => { setPainLoading(false); /* preview is optional — degrade silently */ });
-  }, [participant_uid]);
+  }, [participant_uid, includeClinicSheetRatings]);
 
 
   // THE ACQUISITION TIMELINE (decision 216): the participant and nothing else. The endpoint carries
@@ -415,10 +417,11 @@ function Biomarkers() {
   const [scanIndexData, setScanIndexData] = useState(null);
   useEffect(() => {
     if (!participant_uid) return;
-    SessionController.query("/api/queryPsdScanIndex", { ParticipantId: participant_uid, LabelMetric: metric })
+    SessionController.query("/api/queryPsdScanIndex", { ParticipantId: participant_uid, LabelMetric: metric,
+      IncludeClinicSheetRatings: includeClinicSheetRatings })
       .then((response) => setScanIndexData((response && response.data) || null))
       .catch(() => setScanIndexData(null));
-  }, [participant_uid, metric]);
+  }, [participant_uid, metric, includeClinicSheetRatings]);
 
   // The object handed to the timeline: the acquisition-timeline endpoint's own payload. Until
   // 2026-09-21 (decision 226) the Compute response carried a second copy of it as a fallback; a
@@ -436,7 +439,8 @@ function Biomarkers() {
     if (metric === "composite_mpq_leftleg") {
       const get = (k) => {
         const m = painScores.metrics.find((x) => x.key === k);
-        return m ? m.points : [];
+        // the sheets carry no MPQ, so the server adds none to the composite (decision 436)
+        return m ? m.points.filter((p) => !p.sheet) : [];
       };
       const zStats = (pts) => {
         const vs = pts.map((p) => p.v).filter((v) => v != null && Number.isFinite(v));
@@ -526,9 +530,11 @@ function Biomarkers() {
       maxPerRatingD, refractoryMinD, matchDirection, allowWindowReuse]);
   // The coverage sentence at the top of the Binarization card (the PI, 2026-09-21): follows the
   // window slider live, from the same two inputs the model reads.
-  const reportCoverageLive = useMemo(
-    () => reportCoverage({ scanIndex, painSeries: painSeriesLive, toleranceMin: matchTolerance }),
-    [scanIndex, painSeriesLive, matchTolerance]);
+  const reportCoverageLive = useMemo(() => {
+    const c = reportCoverage({ scanIndex, painSeries: painSeriesLive, toleranceMin: matchTolerance });
+    // how many of the reports are clinic-sheet ratings (decision 436)
+    return c && { ...c, n_clinic: previewPoints.filter((p) => p && p.sheet).length };
+  }, [scanIndex, painSeriesLive, matchTolerance, previewPoints]);
 
   // TRACK A, TASK A1: THE CALIBRATED GRID'S OWN REQUEST, BUILT FROM THE LIVE CONTROLS.
   //

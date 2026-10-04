@@ -105,4 +105,17 @@ def test_the_server_starts_the_loop():
     hook = conf.split("def when_ready(server):", 1)[1]
     assert "saved_answers_refresh_loop.sh" in hook and "SAVED_ANSWERS_REFRESH" in hook
     loop = open(os.path.join(bridge, "saved_answers_refresh_loop.sh")).read()
-    assert "SAVED_ANSWERS_REFRESH" in loop and "refresh_saved_answers" in loop
+    assert "SAVED_ANSWERS_REFRESH" in loop
+    # as a module from the code root: run by its path, the job's folder comes first on Python's
+    # path and its `types.py` hides the standard library's (every pass failed at import, 2026-10-04)
+    assert "-m modules.ClosedLoopDeployment.refresh_saved_answers" in loop
+    assert "modules/ClosedLoopDeployment/refresh_saved_answers.py" not in loop
+
+
+def test_gunicorn_also_starts_the_daily_loop():
+    """The daily pass (every pain score's heat maps, the stability column, the clinic-sheet sync)
+    was started only by boot.sh, which Jetstream2 never runs (the PI, 2026-10-04: "yes")."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    conf = open(os.path.join(here, "..", "..", "..", "gunicorn.conf.py")).read()
+    hook = conf.split("def when_ready(server):", 1)[1].split("\ndef ", 1)[0]
+    assert "stability_precompute_loop.sh" in hook and "STABILITY_PRECOMPUTE" in hook

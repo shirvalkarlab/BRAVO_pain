@@ -8,39 +8,44 @@ compose file changes. Options on the command line (`-w`, `--timeout`, `--reload`
 Each new web worker is warmed (`BRAVO/warmup.py`: R started, the numba
 loops compiled, the libraries a request imports loaded) after Django is set up and before the worker
 accepts a request (speed-up item B9, 2026-10-02). `BRAVO_WARMUP=0` in the environment turns it off.
-And when gunicorn starts, the loop that rebuilds saved band answers after data change is launched
-(`when_ready`, decision 435; `SAVED_ANSWERS_REFRESH=0` turns it off).
+And when gunicorn starts, `when_ready` launches the two background loops boot.sh launches on the Mac
+(the saved-answer refresh, decision 435, and the daily pass), since Jetstream2 does not run boot.sh.
 Keep this file free of imports at the top: gunicorn's main process reads it too.
 """
 
 
 def when_ready(server):
-    """Runs once in gunicorn's main process when it starts (not on a reload). Starts the loop that
-    works saved band answers out again when a participant's data change (decision 435). The
-    Jetstream2 server starts gunicorn directly, not through `_agent_bridge/boot.sh`, so this is
-    where the loop starts there; the loop's own pid lock stops a second copy where both run.
-    `SAVED_ANSWERS_REFRESH=0` turns it off. Never stops gunicorn starting."""
+    """Runs once in gunicorn's main process when it starts (not on a reload). Starts the two
+    background loops `_agent_bridge/boot.sh` starts on the Mac, because the Jetstream2 server starts
+    gunicorn directly and never runs boot.sh (found 2026-10-04): the loop that works saved band
+    answers out again when a participant's data change (decision 435; `SAVED_ANSWERS_REFRESH=0`
+    turns it off) and the daily pass -- every pain score's heat maps, the stability column, the
+    clinic-sheet sync from Drive (decision 97; `STABILITY_PRECOMPUTE=0` turns it off, the PI's
+    "yes", 2026-10-04). Each loop's own pid lock stops a second copy where boot.sh also runs.
+    Never stops gunicorn starting."""
     import os
     import subprocess
-    if os.environ.get("SAVED_ANSWERS_REFRESH", "1") == "0":
-        return
     here = os.path.dirname(os.path.abspath(__file__))
-    loop = os.path.join(here, "_agent_bridge", "saved_answers_refresh_loop.sh")
     logs = os.path.join(here, "_agent_bridge", "logs")
-    try:
-        if not os.path.isfile(loop):
-            return
-        os.makedirs(logs, exist_ok=True)
-        with open(os.path.join(logs, "saved_answers_refresh.boot.log"), "ab") as out:
-            proc = subprocess.Popen(["bash", loop], stdout=out, stderr=subprocess.STDOUT,
-                                    stdin=subprocess.DEVNULL, start_new_session=True)
-        server.log.info("BRAVO saved-answer refresh loop launched (pid %s)", proc.pid)
-    except Exception as exc:                                   # noqa: BLE001
+    for script, off_switch, log_name in (
+            ("saved_answers_refresh_loop.sh", "SAVED_ANSWERS_REFRESH", "saved_answers_refresh.boot.log"),
+            ("stability_precompute_loop.sh", "STABILITY_PRECOMPUTE", "stability_precompute.boot.log")):
+        if os.environ.get(off_switch, "1") == "0":
+            continue
+        loop = os.path.join(here, "_agent_bridge", script)
         try:
-            server.log.warning("BRAVO saved-answer refresh loop not started: %s: %s",
-                               type(exc).__name__, exc)
-        except Exception:                                      # noqa: BLE001
-            pass
+            if not os.path.isfile(loop):
+                continue
+            os.makedirs(logs, exist_ok=True)
+            with open(os.path.join(logs, log_name), "ab") as out:
+                proc = subprocess.Popen(["bash", loop], stdout=out, stderr=subprocess.STDOUT,
+                                        stdin=subprocess.DEVNULL, start_new_session=True)
+            server.log.info("BRAVO %s launched (pid %s)", script, proc.pid)
+        except Exception as exc:                               # noqa: BLE001
+            try:
+                server.log.warning("BRAVO %s not started: %s: %s", script, type(exc).__name__, exc)
+            except Exception:                                  # noqa: BLE001
+                pass
 
 
 def post_worker_init(worker):

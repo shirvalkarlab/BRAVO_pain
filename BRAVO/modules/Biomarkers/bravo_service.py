@@ -4485,6 +4485,12 @@ def psd_scan_index_for_participant(request_data):
     Participant = models.Participant.find(uid=participant_uid)
     pro_df = _load_pros(request_data, Participant)
     pro_df, label_metric, _ = _resolve_biomarker_metric(request_data, pro_df)
+    metric_label = next((m["label"] for m in BIOMARKER_METRICS if m["key"] == label_metric),
+                        str(label_metric))
+    # The clinic sheets' ratings as extra reports when the switch is on (decision 436), the rows
+    # the heat maps add (decision 186); they reach the key through the table's digest.
+    pro_df, sheet_block = _merge_clinic_sheet_ratings_into_pro_df(
+        participant_uid, label_metric, metric_label, pro_df, request_data)
     pro_digest = _pro_table_digest(pro_df) if pro_df is not None and len(pro_df) else "empty"
     recording_set = _recording_set_identity(participant_uid)
     key = ("scan_index_v1", recording_set, label_metric, pro_digest)
@@ -4510,7 +4516,8 @@ def psd_scan_index_for_participant(request_data):
     except Exception as e:                                # noqa: BLE001 -- the warm is an adjunct
         _log.warning("Biomarkers: PSD cache warm dispatch failed (%s)", e)
     out = json_compliant_handler({"psd_scan_index": idx, "label_metric": label_metric,
-                                  "n_reports": int(len(pro_df)) if pro_df is not None else 0})
+                                  "n_reports": int(len(pro_df)) if pro_df is not None else 0,
+                                  "n_clinic_sheet": int((sheet_block or {}).get("n_added") or 0)})
     with _SCAN_INDEX_MEMO_LOCK:
         if key not in _SCAN_INDEX_MEMO and len(_SCAN_INDEX_MEMO) >= _SCAN_INDEX_MEMO_MAX:
             _SCAN_INDEX_MEMO.pop(next(iter(_SCAN_INDEX_MEMO)))
@@ -7975,6 +7982,14 @@ def pain_scores_for_participant(request_data):
     # Canonical UTC instant (prefers the ingestion-normalized _pro_time_utc column; DST-aware
     # CA-local -> UTC), so the pain trace shares the device's UTC time axis.
     t = _pro_times_utc_series(pro)
+    _sheet_points, _sheet_added = {}, {}
+    if _include_clinic_sheet_ratings_param(request_data):
+        _steps, _why = load_clinic_sheet_steps(participant_uid)
+        if _steps is not None:
+            for key in sheet_ratings.SHEET_COLUMN_FOR_METRIC:
+                st, sv, _setting = sheet_ratings.sheet_ratings_for_metric(_steps, key)
+                if st.size:
+                    _sheet_points[key] = list(zip(st.tolist(), sv.tolist()))
     metrics = []
     for key, label, rng_ in PAIN_METRICS:
         if key not in pro.columns:
@@ -7988,6 +8003,14 @@ def pain_scores_for_participant(request_data):
         # which would re-apply a local tz). Clients should match/plot on t_epoch. (FIXHANDOUT tz.)
         pts = [{"t": str(tt), "t_epoch": _f(tt.value / 1e9), "v": _f(v)}
                for tt, v in zip(t, vals) if pd.notna(tt) and pd.notna(v)]
+        # WITH THE CLINIC-SHEET SWITCH ON, this score's sheet ratings too (decision 436), on the
+        # page's scale and flagged `sheet`, so the pain row, the coverage sentence and the
+        # binarization card count what the heat maps count (decision 186).
+        for st, sv in _sheet_points.get(key, ()):
+            pts.append({"t": str(pd.Timestamp(st, unit="s")), "t_epoch": _f(st), "v": _f(sv),
+                        "sheet": True})
+        if _sheet_points.get(key):
+            _sheet_added[key] = len(_sheet_points[key])
         if pts:
             pts.sort(key=lambda p: p["t_epoch"])
             metrics.append({"key": key, "label": label, "range": rng_, "points": pts})
@@ -8008,7 +8031,8 @@ def pain_scores_for_participant(request_data):
     stages = request_data.get("Stages") or []
 
     return {"metrics": metrics, "n_reports": int(t.notna().sum()), "correlation": correlation,
-            "stages": stages,
+            "stages": stages, "clinic_sheets": {"included": bool(_include_clinic_sheet_ratings_param(
+                request_data)), "n_added": _sheet_added},
             "message": ""}
 
 

@@ -2,7 +2,7 @@
 # Every 10 minutes, work the remembered band answers out again for any participant whose data
 # changed (decision 435, the PI 2026-10-04: "yes do 3b"). Started by boot.sh.
 #
-# The job (`modules/ClosedLoopDeployment/refresh_saved_answers.py`) compares each participant's data
+# The job (`python3 -m modules.ClosedLoopDeployment.refresh_saved_answers`) compares each participant's data
 # fingerprint -- recordings, settings files, pain reports fetched fresh from REDCap, clinic sheets,
 # code -- with the one of its last pass, and only when it moved replays the requests the pages sent
 # (summary, the three Closed-Loop panels, the Closed-Loop report, including those sent ahead), at most
@@ -43,14 +43,21 @@ trap 'rm -f "$LOCK"' EXIT
 
 say "started (pid $$); first pass in ${FIRST_DELAY}s, then every ${INTERVAL}s, ${WORKERS} replays at once"
 sleep "$FIRST_DELAY"
+ERR="$BRAVO_DIR/_agent_bridge/logs/.saved_answers_refresh.stderr"
 while true; do
   cd "$BRAVO_DIR" || { sleep "$INTERVAL"; continue; }
-  # Only the job's JSON lines (one per participant) and failures reach the log.
-  if python3 -B -W ignore modules/ClosedLoopDeployment/refresh_saved_answers.py --all \
-       --workers "$WORKERS" 2>/dev/null | grep --line-buffered '^{' >> "$LOG"; then
-    :
-  else
-    say "pass finished with no participant line (no remembered requests, or the job failed)"
+  # As a module from the code root: run by its path, the job's folder would come first on Python's
+  # path and its `types.py` would hide the standard library's (every pass failed that way at first).
+  # The job's JSON lines (one per participant) reach the log; on a failure, its last error lines.
+  OUT="$(python3 -B -W ignore -m modules.ClosedLoopDeployment.refresh_saved_answers --all \
+         --workers "$WORKERS" 2> "$ERR")"
+  RC=$?
+  printf '%s\n' "$OUT" | grep '^{' >> "$LOG"
+  if [ "$RC" -ne 0 ]; then
+    say "PASS FAILED (exit $RC); its last error lines:"
+    grep -v ' DEBUG ' "$ERR" | tail -n 20 >> "$LOG"
+  elif ! printf '%s\n' "$OUT" | grep -q '^{'; then
+    say "pass finished: no participant has remembered requests yet"
   fi
   sleep "$INTERVAL"
 done
