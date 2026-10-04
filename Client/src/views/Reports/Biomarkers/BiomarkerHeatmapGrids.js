@@ -50,6 +50,7 @@ import MDButton from "components/MDButton";
 import Plotly from "plotly.js-dist";
 import { PlotlyRenderManager } from "graphing-utility/Plotly";
 import { SessionController } from "database/session-control";
+import { prefetchClosedLoopFromBiomarkers } from "views/Reports/ClosedLoopSim/neighbourPrefetch";
 import { useCachedResult } from "database/useCachedResult";
 // Read only (the PI's file, not edited): the settings the shown grid was computed under.
 import { getResult, settingsKey } from "database/resultCache";
@@ -66,6 +67,9 @@ import Section from "views/Reports/paper/Section";
 import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB, BIN_MID, diverging } from "./binarizationModel";
 import { contactSortKey } from "./contactOrder";
 import { bestCellReadout, cellNP, fmtP, pEquals, hoverCustomData, tierBullets, deviceSpectrumBullets, needsMultiplePsds, stabilityMark, stabilityBullet, clinicSheetBullets, sourceSplitLine } from "./gridReadouts";
+
+/** Participants whose likeliest Closed-Loop bands were asked for in this page load (decision 430). */
+const CL_PREFETCHED = new Set();
 
 // The heat maps' hover text, a size under the figure text (the PI, 2026-09-26: "reduce font size");
 // 11 px is the page's floor (decision 258).
@@ -1249,6 +1253,20 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
     // the object itself would fire on every render (a new reference each time).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [participantUid, reqKey, metric, loading, options, cachedGrid.stale]);
+
+  // THE CLOSED-LOOP ANSWERS FOR THE LIKELIEST BANDS, asked for from here (decision 430): once this
+  // grid is in and current, and 5 s after, so the reader's own requests go first. Once per page
+  // load per participant; the server saves the answers, so choosing one of these bands on the
+  // Closed-Loop page is served at once.
+  useEffect(() => {
+    if (!participantUid || loading || cachedGrid.stale || !cachedGrid.data) return undefined;
+    if (CL_PREFETCHED.has(participantUid)) return undefined;
+    const t = setTimeout(() => {
+      CL_PREFETCHED.add(participantUid);
+      prefetchClosedLoopFromBiomarkers(participantUid).catch(() => {});
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [participantUid, loading, cachedGrid.stale, cachedGrid.data]);
 
   const corrSweeps = (corrResult && corrResult.band_time_sweep) || {};
   const aucSweeps = (aucResult && aucResult.band_time_sweep) || {};
