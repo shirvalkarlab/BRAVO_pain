@@ -3102,8 +3102,11 @@ def _psd_matrix_signature_orm(participant_uid, pro_times=None):
     try:
         Participant = models.Participant.find(uid=participant_uid)
         SourceFiles = models.SourceFile.find_all(owner=Participant) if Participant else []
-        ev_parts = sorted(f"event:{getattr(r, 'uid', '')}:{str(getattr(r, 'hashed', '') or '')[:16]}"
-                          for r in _patient_event_rows(SourceFiles, participant_uid)) if SourceFiles else []
+        # Only the two columns the key reads (decision 429): loading whole event rows decoded each
+        # row's spectrum in its metadata, about 3,200 of them, to read two short strings.
+        ev_parts = sorted(f"event:{u}:{str(h or '')[:16]}"
+                          for u, h in _patient_event_rows(SourceFiles, participant_uid)
+                          .values_list("uid", "hashed")) if SourceFiles else []
         parts = parts + ev_parts
     except Exception as ex:
         _log.warning("Biomarkers: event signature component failed (%s); cache may miss new events", ex)
@@ -3332,7 +3335,51 @@ def _adaptive_is_active(status):
     return s not in ("NOT_CONFIGURED", "OFF", "DISABLED", "NONE", "")
 
 
+#: The saved programmed adaptive thresholds (decision 429).
+PROGRAMMED_THRESHOLDS_KIND = "programmed_adaptive_thresholds"
+_PROGRAMMED_THRESHOLDS_RULE = "v1"
+
+
+def _therapy_history_label(participant):
+    """What the programmed thresholds depend on, from the database rows alone (decision 429): every
+    source file's uid and content hash, and the therapy groups' count and highest id (a re-ingest
+    that rewrites the therapy rows moves the id)."""
+    import hashlib
+    from Server.models import SourceFile
+    from Server.models.Therapy import ElectricalTherapy
+    from django.db.models import Count, Max
+    rows = sorted((str(u), str(h)) for u, h in
+                  SourceFile.objects.filter(owner=participant).values_list("uid", "hashed"))
+    blob = "|".join("~".join(r) for r in rows).encode("utf8")
+    agg = ElectricalTherapy.objects.filter(therapy__source__owner=participant).aggregate(
+        n=Count("id"), last=Max("id"))
+    return (hashlib.blake2b(blob, digest_size=16).hexdigest(), int(agg["n"] or 0),
+            int(agg["last"] or 0))
+
+
 def _programmed_adaptive_thresholds(participant):
+    """`_programmed_adaptive_thresholds_build`, saved per participant under `_therapy_history_label`
+    (decision 429: it took about 2.3 s of every band-power request). An empty answer is not saved,
+    and a label that cannot be built works it out as before."""
+    if participant is None:
+        return {}
+    uid = str(getattr(participant, "uid", participant))
+    try:
+        sig = (PROGRAMMED_THRESHOLDS_KIND, _PROGRAMMED_THRESHOLDS_RULE, uid,
+               _therapy_history_label(participant))
+    except Exception:                                      # noqa: BLE001 - worked out as before
+        return _programmed_adaptive_thresholds_build(participant)
+    got = _cache_store.load(PROGRAMMED_THRESHOLDS_KIND, uid, sig, root=_SHARED_CACHE_DIR_OVERRIDE)
+    if got is not None:
+        return dict(got)
+    out = _programmed_adaptive_thresholds_build(participant)
+    if out:
+        _cache_store.store(PROGRAMMED_THRESHOLDS_KIND, uid, sig, dict(out), writer="biomarkers",
+                           provenance=[], trigger="band_power", root=_SHARED_CACHE_DIR_OVERRIDE)
+    return out
+
+
+def _programmed_adaptive_thresholds_build(participant):
     """Latest PROGRAMMED adaptive-DBS detection threshold per hemisphere — ONLY when closed loop is
     active on that hemisphere. Returns {hemi: {lower, upper, measured_lower, measured_upper, status,
     date}} for hemispheres whose most-recent therapy group has adaptive therapy configured & running.

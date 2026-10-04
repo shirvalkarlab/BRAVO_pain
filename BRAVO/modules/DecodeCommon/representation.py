@@ -219,6 +219,113 @@ def power_center_freqs(powerdomain_list):
 
 def native_lsb_by_channel(chronic_recordings, powerdomain_recordings):
     """The device's OWN sensed band-power series (Power-Domain streaming + Chronic Timeline),
+    grouped by canonical channel, values UNCONVERTED -- `_native_lsb_by_channel_loop`'s answer,
+    field for field and in the same order, a column at a time (decision 429: the per-sample loop
+    took about 4.7 s of the band-power panel, 421,000 samples on RCS08). Within one Power-Domain
+    column the band centre is fixed, so it is snapped once; within one Chronic recording it is a
+    step function of time (the frequency schedule), so it is looked up for all samples at once and
+    each distinct value snapped once. See the reference for the full contract.
+    """
+    out = {}
+
+    def _extend(ch, t, y, hz_list, src):
+        if not hz_list:
+            return                                 # the loop makes no entry for a column with no sample
+        d = out.setdefault(ch, {"t": [], "y": [], "center_hz": [], "source": []})
+        d["t"].extend(np.asarray(t, dtype=float).tolist())
+        d["y"].extend(np.asarray(y, dtype=float).tolist())
+        d["center_hz"].extend(hz_list)
+        d["source"].extend([src] * len(hz_list))
+
+    pd_center = power_center_freqs(powerdomain_recordings)
+    for r in powerdomain_recordings or []:
+        if not isinstance(r, dict) or "Data" not in r:
+            continue
+        names = list(r.get("ChannelNames", []) or [])
+        data = np.asarray(r.get("Data"), dtype=float)
+        if data.ndim != 2 or data.shape[0] == 0:
+            continue
+        n, ncols = data.shape
+        fs = float(r.get("SamplingRate") or 2.0) or 2.0
+        start = to_epoch(r.get("StartTime"))
+        if start is None:
+            continue
+        times = start + np.arange(n) / fs
+        missing = np.asarray(r.get("Missing", np.zeros_like(data)), dtype=float)
+        if missing.shape != data.shape:
+            missing = np.zeros_like(data)
+        for pi, nm in enumerate(names):
+            if pi >= ncols or "POWER" not in str(nm).upper():
+                continue
+            contact = str(nm).rsplit(" ", 1)[0] if " " in str(nm) else str(nm)
+            hz = snap_freq(pd_center.get(contact))
+            col = data[:, pi]
+            bad = (missing[:, pi] > 0) | (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
+            keep = np.where(~bad)[0]
+            _extend(contact, times[keep], col[keep], [hz] * keep.size, "streaming")
+
+    hemi_contact = {}
+    for contact in pd_center.keys():
+        cu = str(contact).upper()
+        side = "LEFT" if "LEFT" in cu else ("RIGHT" if "RIGHT" in cu else "")
+        if side and side not in hemi_contact:
+            hemi_contact[side] = contact
+    for r in chronic_recordings or []:
+        if not isinstance(r, dict) or "Data" not in r:
+            continue
+        names = list(r.get("ChannelNames", []) or [])
+        data = np.asarray(r.get("Data"), dtype=float)
+        tarr = np.asarray(r.get("Time", []), dtype=float)
+        if data.ndim != 2 or data.shape[0] == 0 or len(tarr) != data.shape[0]:
+            continue
+        desc = r.get("Descriptor")
+        therapy = desc.get("Therapy") if isinstance(desc, dict) else None
+        hemi_hz = {}
+        if isinstance(therapy, dict):
+            hemi_hz = {"LEFT": sensing_center_hz(therapy.get("Left")),
+                       "RIGHT": sensing_center_hz(therapy.get("Right"))}
+        chan = names[0] if names else "LFP"
+        cu = str(chan).upper()
+        hemi = "LEFT" if "LEFT" in cu else ("RIGHT" if "RIGHT" in cu else "")
+        key = hemi_contact.get(hemi, chan)
+
+        sched_raw = r.get("FreqScheduleHz")
+        sched = []
+        if isinstance(sched_raw, (list, tuple)):
+            for item in sched_raw:
+                try:
+                    ts, shz = float(item[0]), snap_freq(item[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if shz is not None:
+                    sched.append((ts, shz))
+            sched.sort(key=lambda p: p[0])
+        scalar_hz = snap_freq(r.get("CenterFrequencyHz"))
+        fallback_hz = scalar_hz if scalar_hz is not None else (hemi_hz.get(hemi) if hemi else None)
+
+        col = data[:, 0]
+        bad = (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
+        keep = np.where(~bad)[0]
+        tk = tarr[keep]
+        if sched:
+            # the loop's `_hz_at`: the last change at or before the sample, else the first change
+            starts = np.asarray([c for c, _ in sched], dtype=float)
+            idx = np.searchsorted(starts, tk, side="right") - 1
+            idx[idx < 0] = 0
+            snapped = [snap_freq(h) for _, h in sched]
+            hz_list = [snapped[i] for i in idx.tolist()]
+        else:
+            hz_list = [snap_freq(fallback_hz)] * keep.size
+        _extend(key, tk, col[keep], hz_list, "chronic")
+
+    return out
+
+
+def _native_lsb_by_channel_loop(chronic_recordings, powerdomain_recordings):
+    """THE REFERENCE, one sample at a time: `native_lsb_by_channel` before decision 429, kept so
+    the column-at-a-time version is tested against it (DecodeCommon/tests/test_native_lsb_vectorised.py).
+
+    The device's OWN sensed band-power series (Power-Domain streaming + Chronic Timeline),
     grouped by canonical channel, values UNCONVERTED.
 
     THIS IS THE "ADDED AS-IS" TIER. Unlike the montage/event-PSD modeled tiers in
