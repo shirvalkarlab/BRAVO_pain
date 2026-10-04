@@ -205,12 +205,22 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
             cen.add(float(cd.get("center_hz")))
         except (TypeError, ValueError, AttributeError):
             pass
+    # Only the first candidate's contact and band are read below (decision 419); the manifest still
+    # states the whole table's size. A candidate naming no contact or band builds the whole table.
+    _c0 = (candidates[0] if candidates and isinstance(candidates[0], dict) else {}) or {}
+    _ch0, _fc0 = _c0.get("channel"), _c0.get("center_hz")
+    try:
+        _fc0 = None if _fc0 is None else float(_fc0)
+    except (TypeError, ValueError):
+        _fc0 = None
     T = adapter.joined_table_cached(psd_frame, epochs, pro_frame=pro_frame,
-                                    centers=tuple(sorted(cen)))
+                                    centers=tuple(sorted(cen)),
+                                    channels=None if (_ch0 is None or _fc0 is None) else (str(_ch0),),
+                                    only_center=None if (_ch0 is None or _fc0 is None) else _fc0)
     rep.manifest = {
         "n_psd_rows": 0 if psd_frame is None else int(len(psd_frame)),
         "n_epochs": 0 if epochs is None else int(len(epochs)),
-        "n_table_rows": int(len(T)),
+        "n_table_rows": int(T.attrs.get("n_rows_all_contacts_bands", len(T))),
         "power_scale": power_scale, "washin_s": float(washin_s),
         "amp_limit_ma": float(amp_limit_ma), "hemisphere": hemisphere,
         "pain_score": pain_score,

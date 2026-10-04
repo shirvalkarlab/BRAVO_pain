@@ -1349,7 +1349,7 @@ def clear_response_cache(*, shared=False):
 
 
 def joined_table_cached(psd_frame, epochs, *, centers=None, width=DEFAULT_BAND_WIDTH_HZ,
-                        force_refresh=False, **kwargs):
+                        force_refresh=False, channels=None, only_center=None, **kwargs):
     """``joined_table`` with a content-keyed memo. Returns the SAME object to every caller.
 
     Callers must therefore treat the result as read-only, or copy it before mutating. That is the
@@ -1362,13 +1362,16 @@ def joined_table_cached(psd_frame, epochs, *, centers=None, width=DEFAULT_BAND_W
     pro = kwargs.get("pro_frame")
     pro_fp = None if pro is None else _frame_fingerprint(
         pro, ("epoch",), also=("report_id",) + PAIN_SCORE_KEYS)
-    sig = (_joined_signature(psd_frame, epochs, cen, width), pro_fp)
+    sig = (_joined_signature(psd_frame, epochs, cen, width), pro_fp,
+           None if channels is None else tuple(str(c) for c in channels),
+           None if only_center is None else float(only_center))
     if not force_refresh:
         with _JOINED_MEMO_LOCK:
             hit = _JOINED_MEMO.get(sig)
         if hit is not None:
             return hit
-    out = joined_table(psd_frame, epochs, centers=cen, width=width, **kwargs)
+    out = joined_table(psd_frame, epochs, centers=cen, width=width, channels=channels,
+                       only_center=only_center, **kwargs)
     with _JOINED_MEMO_LOCK:
         if sig not in _JOINED_MEMO and len(_JOINED_MEMO) >= _JOINED_MEMO_MAX:
             _JOINED_MEMO.pop(next(iter(_JOINED_MEMO)), None)
@@ -1423,7 +1426,7 @@ def _attach_setting_pain(T, pro_frame):
 
 
 def joined_table(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ,
-                 width=DEFAULT_BAND_WIDTH_HZ, pro_frame=None):
+                 width=DEFAULT_BAND_WIDTH_HZ, pro_frame=None, channels=None, only_center=None):
     """The Phase 0 table: one row per (PSD sample, band).
 
     Long rather than wide in the band dimension. Wide would mean 18 columns per power scale and a
@@ -1437,7 +1440,8 @@ def joined_table(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ,
     if psd_frame is None or len(psd_frame) == 0:
         return pd.DataFrame()
     if calibrated_centres(psd_frame):
-        return _joined_table_calibrated(psd_frame, epochs, centers=centers, pro_frame=pro_frame)
+        return _joined_table_calibrated(psd_frame, epochs, centers=centers, pro_frame=pro_frame,
+                                        channels=channels, only_center=only_center)
     ep_idx = _assign_epoch(psd_frame["t"].to_numpy(), epochs)
 
     rows = []
@@ -1478,7 +1482,8 @@ def joined_table(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ,
     return _attach_setting_pain(T, pro_frame)
 
 
-def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ, pro_frame=None):
+def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ, pro_frame=None,
+                             channels=None, only_center=None):
     """``joined_table`` for the calibrated frame: one row per (tile, band), power read from the
     band's own column rather than integrated from a spectrum.
 
@@ -1493,6 +1498,12 @@ def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_
 
     THE BAND WIDTH is the frame's own (twice ``band_half_hz``); a ``centers`` entry the frame does
     not carry yields no rows for that centre, never a neighbour's value.
+
+    ONE CONTACT AND BAND (decision 419). ``channels`` keeps only those contacts' rows and
+    ``only_center`` only that band's: the report reads nothing else, and the whole table was 8.5 s
+    of its 40. The rows kept are the whole table's rows for them, in the same order.
+    ``attrs["n_rows_all_contacts_bands"]`` is the size the whole table (every contact, every
+    ``centers`` entry the frame carries) would have had, which the manifest states.
     """
     f = psd_frame
     keep = np.ones(len(f), dtype=bool)
@@ -1500,8 +1511,14 @@ def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_
         keep &= f["tile_ok"].to_numpy(dtype=bool)
     if "tile_saturated" in f.columns:
         keep &= ~f["tile_saturated"].to_numpy(dtype=bool)
+    n_all_tiles = int(keep.sum())
+    n_all_centres = sum(1 for c in centers if f"{_CAL_LSB_PREFIX}{float(c):g}" in f.columns)
+    if channels is not None:
+        keep &= f["channel"].astype(str).isin([str(c) for c in channels]).to_numpy()
+    if only_center is not None:
+        centers = [c for c in centers if np.isclose(float(c), float(only_center))]
     f = f.loc[keep].reset_index(drop=True)
-    n_dropped = int((~keep).sum())
+    n_dropped = int(len(keep) - n_all_tiles)
     if len(f) == 0:
         T = pd.DataFrame()
         T.attrs["rows_dropped_by_tile_gate"] = n_dropped
@@ -1564,6 +1581,7 @@ def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_
     T = _attach_setting_pain(T, pro_frame)
     T.attrs["rows_dropped_by_tile_gate"] = n_dropped
     T.attrs["band_power_source"] = "calibrated"
+    T.attrs["n_rows_all_contacts_bands"] = n_all_tiles * n_all_centres
     return T
 
 
