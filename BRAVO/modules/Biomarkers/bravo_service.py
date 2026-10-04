@@ -512,45 +512,46 @@ def _load_recordings_uncached(participant_uid, types):
     Recordings = list(models.Recording.find_all(source__in=SourceFiles, type__in=types))
     if not Recordings:
         return []
+    loaded = _decoded_with_row_labels(participant_uid, Recordings)
+    return _trim_chronic_before(loaded, _data_start.data_start_s(participant_uid))
 
-    # Decode the .bdat files concurrently — independent reads, so this scales with cores. Only
-    # the file pointer/hash (already-fetched attrs) are touched per task, so no ORM call runs in
-    # a worker thread. Each task returns the decoded payload (or None on failure).
-    def _decode(rec):
+
+#: ==========================================================================================
+#: DECODED RECORDINGS HELD ONCE FOR EVERY WORKER (the PI, 2026-10-04, decision 414).
+#: Each of the 16 web workers used to decode a participant's recordings into its own memory
+#: (`_RECORDING_CACHE`, up to `BRAVO_RECORDING_CACHE_MB` a worker, every caller handed a deep copy)
+#: and the memos below kept further private copies: about 6.7 GB a worker on RCS08. Now the first
+#: worker to need a set of recordings decodes it and saves it in the store's mapped format, filed
+#: under exactly those recordings (their ids and content hashes); every worker then reads the arrays
+#: from the same disk-cache pages, and each read is its own copy-on-write view, so a caller changing
+#: what it got changes nothing anyone else gets. What the database rows say about a recording (its
+#: centre frequency, schedules and type) is put on after every read, never saved, so a change to a
+#: row reaches the next load. A load in which any file failed to decode is not saved. Set False to
+#: decode privately as before.
+#: ==========================================================================================
+MAPPED_RECORDINGS = True
+DECODED_RECORDINGS_KIND = "decoded_recordings"
+DECODED_RECORDINGS_LOCK_TTL_S = 900.0
+DECODED_RECORDINGS_LOCK_WAIT_S = 300.0
+
+
+def _decoded_recordings_signature(recs):
+    """The label a saved set of decoded recordings is filed under: the decoder's version and every
+    recording's id and content hash, sorted. Nothing else changes what decoding produces."""
+    return ("decoded_recordings_v1",
+            tuple(sorted((str(r.uid), str(r.hashed)) for r in recs)))
+
+
+def _decode_files(recs, *, kept):
+    """``{recording id: decoded payload, or None where the file could not be decoded}``, decoded
+    concurrently (independent reads, so this scales with cores). ``kept`` goes through the
+    worker-private copies (`_load_source_file_kept`); otherwise each file is read once and nothing
+    is kept in this worker."""
+    def one(rec):
         try:
-            data = _load_source_file_kept(rec.pointer, rec.hashed)
-            # Carry the chronic-trend sensing CENTER FREQUENCY forward. It is stored on the
-            # Recording.metadata (stamped at decode time from the GROUP-level config) rather than in
-            # the .bdat payload, so merge it onto the loaded dict(s) here so the report can label the
-            # chronic trend with its sensing frequency.
-            chz = None
-            fsched = None
-            csched = None
-            md = getattr(rec, "metadata", None)
-            if isinstance(md, dict):
-                chz = md.get("CenterFrequencyHz")
-                fsched = md.get("FreqScheduleHz")
-                csched = md.get("ContactSchedule")
-            if chz is not None or fsched is not None or csched is not None:
-                for d in (data if isinstance(data, list) else [data]):
-                    if isinstance(d, dict):
-                        if chz is not None:
-                            d.setdefault("CenterFrequencyHz", chz)
-                        if fsched is not None:
-                            d.setdefault("FreqScheduleHz", fsched)
-                        if csched is not None:
-                            d.setdefault("ContactSchedule", csched)
-            # Stamp the AUTHORITATIVE DB recording type onto every decoded dict. The .bdat payload
-            # carries no type/Source field (BrainSenseTimeDomain and IndefiniteStream decode to the
-            # IDENTICAL key set), so the only reliable BrainSense-vs-Indefinite discriminator is the
-            # Recording.type from the query — without this, indefinite streams are indistinguishable
-            # from BrainSense streaming downstream and silently mislabel.
-            rtype = getattr(rec, "type", None)
-            if rtype is not None:
-                for d in (data if isinstance(data, list) else [data]):
-                    if isinstance(d, dict):
-                        d.setdefault("RecordingType", rtype)
-            return data
+            data = (_load_source_file_kept(rec.pointer, rec.hashed) if kept
+                    else Database.loadSourceFile(rec.pointer, rec.hashed))
+            return str(rec.uid), data
         except Exception:
             # Per-file resilience: one corrupt/undecodable recording must not sink the whole
             # threaded load. But log it (pointer only, never the payload) so a SYSTEMATIC decode
@@ -558,17 +559,98 @@ def _load_recordings_uncached(participant_uid, types):
             # identical to "no recordings".
             _log.warning("Biomarkers: failed to decode recording %r; skipping",
                          getattr(rec, "pointer", "?"), exc_info=True)
-            return None
-
-    workers = max(1, min(len(Recordings), _loader_threads()))
-    loaded = []
+            return str(rec.uid), None
+    workers = max(1, min(len(recs), _loader_threads()))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for data in pool.map(_decode, Recordings):
-            if isinstance(data, list):
-                loaded.extend([d for d in data if isinstance(d, dict)])
-            elif isinstance(data, dict):
-                loaded.append(data)
-    return _trim_chronic_before(loaded, _data_start.data_start_s(participant_uid))
+        return dict(pool.map(one, recs))
+
+
+def _decoded_payloads(participant_uid, recs):
+    """The decoded payload of every recording in ``recs``, keyed by recording id: read from the
+    saved mapped copy when one is filed under exactly these recordings, otherwise decoded (by one
+    worker at a time, under the store's build lock) and saved. See `MAPPED_RECORDINGS`."""
+    if not MAPPED_RECORDINGS or not recs:
+        return _decode_files(recs, kept=True)
+    sig = _decoded_recordings_signature(recs)
+    root = _SHARED_CACHE_DIR_OVERRIDE
+    got = _cache_store.load(DECODED_RECORDINGS_KIND, participant_uid, sig, root=root)
+    if got is not None:
+        return got
+    lock_name = "cachestore:build:%s:%s:%s" % (DECODED_RECORDINGS_KIND, participant_uid,
+                                                _cache_store.signature_key(sig))
+
+    def _ready():
+        return _cache_store.read_stamp(DECODED_RECORDINGS_KIND, participant_uid, sig,
+                                       root=root) is not None
+
+    with _locks.build_lock(lock_name, ttl_s=DECODED_RECORDINGS_LOCK_TTL_S,
+                           wait_s=DECODED_RECORDINGS_LOCK_WAIT_S, ready=_ready) as lk:
+        if lk.role == "served":
+            got = _cache_store.load(DECODED_RECORDINGS_KIND, participant_uid, sig, root=root)
+            if got is not None:
+                return got
+        decoded = _decode_files(recs, kept=False)
+        if any(v is None for v in decoded.values()):
+            return decoded                      # a failed file is never saved as part of a set
+        wrote = _cache_store.store(
+            DECODED_RECORDINGS_KIND, participant_uid, sig, decoded, fmt="mapped",
+            writer="biomarkers", provenance=[], trigger="recording_load",
+            n_recordings=len(recs), root=root,
+            extra={"keep_group": ",".join(sorted({str(getattr(r, "type", "")) for r in recs}))})
+    if wrote:
+        # Hand back the saved copy, so this worker too holds views of the shared pages rather than
+        # the private copy it just decoded.
+        got = _cache_store.load(DECODED_RECORDINGS_KIND, participant_uid, sig, root=root)
+        if got is not None:
+            return got
+    return decoded
+
+
+def _decoded_with_row_labels(participant_uid, recs):
+    """Every recording's decoded dicts, in ``recs`` order, with what its database row says put on
+    them (unchanged from the loader of 2026-10-02, now applied after every read)."""
+    decoded = _decoded_payloads(participant_uid, recs)
+    loaded = []
+    for rec in recs:
+        data = decoded.get(str(rec.uid))
+        if data is None:
+            continue
+        # Carry the chronic-trend sensing CENTER FREQUENCY forward. It is stored on the
+        # Recording.metadata (stamped at decode time from the GROUP-level config) rather than in
+        # the .bdat payload, so merge it onto the loaded dict(s) here so the report can label the
+        # chronic trend with its sensing frequency.
+        chz = None
+        fsched = None
+        csched = None
+        md = getattr(rec, "metadata", None)
+        if isinstance(md, dict):
+            chz = md.get("CenterFrequencyHz")
+            fsched = md.get("FreqScheduleHz")
+            csched = md.get("ContactSchedule")
+        if chz is not None or fsched is not None or csched is not None:
+            for d in (data if isinstance(data, list) else [data]):
+                if isinstance(d, dict):
+                    if chz is not None:
+                        d.setdefault("CenterFrequencyHz", chz)
+                    if fsched is not None:
+                        d.setdefault("FreqScheduleHz", fsched)
+                    if csched is not None:
+                        d.setdefault("ContactSchedule", csched)
+        # Stamp the AUTHORITATIVE DB recording type onto every decoded dict. The .bdat payload
+        # carries no type/Source field (BrainSenseTimeDomain and IndefiniteStream decode to the
+        # IDENTICAL key set), so the only reliable BrainSense-vs-Indefinite discriminator is the
+        # Recording.type from the query — without this, indefinite streams are indistinguishable
+        # from BrainSense streaming downstream and silently mislabel.
+        rtype = getattr(rec, "type", None)
+        if rtype is not None:
+            for d in (data if isinstance(data, list) else [data]):
+                if isinstance(d, dict):
+                    d.setdefault("RecordingType", rtype)
+        if isinstance(data, list):
+            loaded.extend([d for d in data if isinstance(d, dict)])
+        elif isinstance(data, dict):
+            loaded.append(data)
+    return loaded
 
 
 def _load_patient_events(participant_uid):

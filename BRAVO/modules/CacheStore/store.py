@@ -75,7 +75,11 @@ FORMAT_VERSION = 1
 #: through `MAX_BYTES_BY_KIND`.
 MAX_BYTES_DEFAULT = 1024 * 1024 * 1024
 
-MAX_BYTES_BY_KIND = {}
+MAX_BYTES_BY_KIND = {
+    # The decoded recordings, saved once for every worker (decision 414): RCS08's time-domain set
+    # alone is about 3.8 GB, and the copy on disk is what replaces 16 private copies in memory.
+    "decoded_recordings": 64 * 1024 * 1024 * 1024,
+}
 
 #: The subdirectory each kind lives in. A kind not named here gets a directory of its own name.
 #: `raw_lsb_tiles` keeps its historical directory AND its historical file naming, because that
@@ -228,12 +232,12 @@ def _stem(kind, participant_uid, signature, root=None):
     return os.path.join(d, f"{kind}.v{FORMAT_VERSION}.{uid}.{key}")
 
 
-_EXT_FOR_FORMAT = {"parquet": ".parquet", "npz": ".npz", "pickle": ".pkl"}
+_EXT_FOR_FORMAT = {"parquet": ".parquet", "npz": ".npz", "pickle": ".pkl", "mapped": ".bmap"}
 _FORMAT_FOR_EXT = {v: k for k, v in _EXT_FOR_FORMAT.items()}
 
 
 def _existing_payload_path(stem):
-    for ext in (".parquet", ".npz", ".pkl"):
+    for ext in (".parquet", ".npz", ".pkl", ".bmap"):
         p = stem + ext
         if os.path.exists(p):
             return p
@@ -433,6 +437,10 @@ def load_newest(kind, participant_uid, *, consumer=None, root=None, match=None):
         if fmt == "pickle" and isinstance(payload, dict) \
                 and "signature" in payload and "payload" in payload:
             payload = payload["payload"]
+    except MapUnavailable as exc:
+        _log.warning("CacheStore: could not map %s (%r); a miss, the entry is kept", path, exc)
+        _bump("misses")
+        return None, stamp
     except Exception as exc:                                    # noqa: BLE001
         _bump("unreadable")
         _discard_entry(stem, repr(exc))
@@ -441,7 +449,106 @@ def load_newest(kind, participant_uid, *, consumer=None, root=None, match=None):
     return payload, stamp
 
 
+# --------------------------------------------------------------------------------------------
+# the mapped format: one copy on disk, read by every worker through the disk cache
+# --------------------------------------------------------------------------------------------
+#
+# WHY (the PI, 2026-10-04, decision 414). Each web worker held its own decoded copy of a
+# participant's recordings (RCS08: about 6.7 GB a worker, 16 workers). In this format the arrays sit
+# in one file and are mapped, not read: every worker's pages are the same disk-cache pages, so the
+# copy is held once. Measured with 4 processes mapping the same files: 6,621 MB shared and 129 MB
+# private each, against 6,733 MB private for a process holding its own copy.
+#
+# THE FILE: a fixed header, the payload pickled with protocol 5 and every contiguous array taken
+# OUT of the pickle (`buffer_callback`), then those arrays one after another, each starting on a
+# 64-byte boundary. Reading maps the file COPY-ON-WRITE and hands the arrays back as views of the
+# map, so each read is its own copy: a page a caller writes into becomes private to that read and
+# never reaches the file or any other read (the loaders change recordings in place, which is why
+# every caller used to get a deep copy). Only a caller that asks for it (`fmt="mapped"`) gets it.
+_MAPPED_MAGIC = b"BRAVOMP1"
+_MAPPED_ALIGN = 64
+
+
+class MapUnavailable(OSError):
+    """The process could not map a file (out of file handles or address space). Not a sign of a
+    damaged entry, so the entry is kept and the read is a miss."""
+
+
+def _raise_open_file_limit():
+    """Each live map holds one file handle, so lift this process's soft limit to its hard limit
+    (capped at 65,536; the server's workers start at 1,024 with a hard limit of 524,288)."""
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        want = 65536 if hard == resource.RLIM_INFINITY else min(hard, 65536)
+        if soft != resource.RLIM_INFINITY and soft < want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+    except Exception:                                   # noqa: BLE001 -- the limit is a convenience
+        pass
+
+
+_raise_open_file_limit()
+
+
+def _aligned(n):
+    return (n + _MAPPED_ALIGN - 1) // _MAPPED_ALIGN * _MAPPED_ALIGN
+
+
+def _write_mapped(tmp, payload):
+    """Write ``payload`` in the mapped format and return the file size in bytes."""
+    import struct
+    buffers = []
+    skeleton = pickle.dumps(payload, protocol=5, buffer_callback=buffers.append)
+    raws = [b.raw() for b in buffers]
+    head = 8 + 16 + 16 * len(raws)
+    pos = _aligned(head + len(skeleton))
+    table = []
+    for r in raws:
+        table.append((pos, r.nbytes))
+        pos = _aligned(pos + r.nbytes)
+    with open(tmp, "wb") as fh:
+        fh.write(_MAPPED_MAGIC)
+        fh.write(struct.pack("<QQ", len(raws), len(skeleton)))
+        for off, n in table:
+            fh.write(struct.pack("<QQ", off, n))
+        fh.write(skeleton)
+        for (off, _n), r in zip(table, raws):
+            fh.write(b"\0" * (off - fh.tell()))
+            fh.write(r)
+    return os.path.getsize(tmp)
+
+
+def _read_mapped(path):
+    """The payload, its arrays views of a copy-on-write map of ``path`` (see above)."""
+    import mmap
+    import struct
+    with open(path, "rb") as fh:
+        size = os.fstat(fh.fileno()).st_size
+        if size < 24:
+            raise ValueError("the mapped file is shorter than its header")
+        try:
+            mm = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_COPY)
+        except OSError as exc:
+            raise MapUnavailable(str(exc)) from exc
+    if mm[:8] != _MAPPED_MAGIC:
+        raise ValueError("the mapped file does not start with its marker")
+    n_buf, n_skel = struct.unpack_from("<QQ", mm, 8)
+    head = 8 + 16 + 16 * n_buf
+    if head + n_skel > size:
+        raise ValueError("the mapped file is shorter than its header says")
+    view = memoryview(mm)
+    buffers = []
+    for i in range(n_buf):
+        off, n = struct.unpack_from("<QQ", mm, 24 + 16 * i)
+        if off + n > size:
+            raise ValueError("an array runs past the end of the mapped file")
+        buffers.append(view[off:off + n])
+    return pickle.loads(view[head:head + n_skel], buffers=buffers)
+
+
 def _load_payload(path, fmt):
+    if fmt == "mapped":
+        return _read_mapped(path)
     if fmt == "parquet":
         import pandas as pd
         return pd.read_parquet(path)
@@ -530,6 +637,10 @@ def load(kind, participant_uid, signature, *, consumer=None, root=None):
                 raise                       # a refusal is a decision and must not look like a miss
         except ImportError:
             pass
+        if isinstance(exc, MapUnavailable):
+            _log.warning("CacheStore: could not map %s (%r); a miss, the entry is kept", path, exc)
+            _bump("misses")
+            return None
         _log.warning("CacheStore: discarding an unusable entry %s (%r)", path, exc)
         _bump("unreadable")
         for p in (path, _meta_path(stem)):
@@ -596,6 +707,11 @@ KEEP_NEWEST_BY_KIND = {
     # reading "not tested" on all 132 rows). The decision-107 lesson a fourth time. 0.13 MB an
     # entry, so about 1.6 MB a participant.
     "biomarker_band_stability_grid": 12,
+    # The decoded recordings (decision 414): one entry per set of recording types, kept apart by
+    # `keep_group` (the types), so the time-domain set does not evict the chronic one. Each new
+    # ingest files a new entry and the superseded one of its group goes; a worker still reading a
+    # removed file keeps its pages until it lets go of them.
+    "decoded_recordings": 2,
 }
 
 
@@ -706,6 +822,8 @@ def _write_payload(tmp, payload, fmt, signature):
         with open(tmp, "wb") as fh:
             np.savez_compressed(fh, **payload)
         return os.path.getsize(tmp)
+    if fmt == "mapped":
+        return _write_mapped(tmp, payload)
     blob = pickle.dumps({"signature": signature, "payload": payload}, protocol=5)
     with open(tmp, "wb") as fh:
         fh.write(blob)
