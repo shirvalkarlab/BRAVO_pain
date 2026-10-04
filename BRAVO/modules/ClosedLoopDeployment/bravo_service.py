@@ -186,13 +186,18 @@ def _run_for_participant(request_data):
             from modules.CacheStore import saved_answers as _saved
         except ImportError:                            # pragma: no cover - host spelling
             from CacheStore import saved_answers as _saved
+        # THE BAND GRID LEAVES A BAND'S REPORT (decision 431): the page reads the grid from its own
+        # request (the one with no band), never from here, and re-reading it for a served report
+        # cost about 1.8 s. The report still reads the grid while it is built (its direction check).
+        def _build_without_grid():
+            out = _build()
+            if isinstance(out, dict):
+                out.pop("band_sweep_grid", None)
+            return out
         return _saved.serve_or_build(
-            REPORT_KIND, participant_uid, inputs, _build, writer="closed_loop",
-            volatile=("band_sweep_grid", "cache_status"),
-            refresh=lambda: {
-                "band_sweep_grid": _adapter.band_sweep_grid_for_closed_loop(participant_uid,
-                                                                             request_data),
-                "cache_status": _adapter._cache_status_or_reason(participant)},
+            REPORT_KIND, participant_uid, inputs, _build_without_grid, writer="closed_loop",
+            volatile=("cache_status",),
+            refresh=lambda: {"cache_status": _adapter._cache_status_or_reason(participant)},
             root=_adapter._SHARED_CACHE_DIR_OVERRIDE)
     except Exception as exc:                           # noqa: BLE001
         # THE LINE THAT WAS MISSING FOR FIVE DAYS. `exception` rather than `warning`, so the

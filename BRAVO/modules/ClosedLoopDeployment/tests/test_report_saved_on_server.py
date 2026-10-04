@@ -36,7 +36,7 @@ def _patched(pain):
     return calls, undo
 
 
-def test_worked_out_once_then_served_with_fresh_grid():
+def test_worked_out_once_then_served_without_the_grid():
     with _Sandbox():
         pain = ["p1"]
         calls, undo = _patched(pain)
@@ -48,7 +48,10 @@ def test_worked_out_once_then_served_with_fresh_grid():
     assert len(calls) == 1
     assert a["n"] == b["n"] == 1
     assert b["saved_answer"]["served"] is True
-    assert b["band_sweep_grid"] == {"g": "fresh"} and b["cache_status"] == {"c": "fresh"}
+    # the band grid leaves a band's report (decision 431: the page reads the grid from its own
+    # request, never from here), so a served report re-reads only the stored-results line
+    assert "band_sweep_grid" not in a and "band_sweep_grid" not in b
+    assert b["cache_status"] == {"c": "fresh"}
 
 
 def test_a_new_pain_report_is_worked_out_again():
@@ -74,3 +77,13 @@ def test_the_grid_alone_is_never_saved():
         finally:
             undo()
     assert len(calls) == 2
+
+
+def test_the_grid_alone_still_carries_the_grid():
+    with _Sandbox():
+        calls, undo = _patched(["p1"])
+        try:
+            out = BS._run_for_participant({"ParticipantId": UID, "Candidates": []})
+        finally:
+            undo()
+    assert out["band_sweep_grid"] == {"g": 0}
