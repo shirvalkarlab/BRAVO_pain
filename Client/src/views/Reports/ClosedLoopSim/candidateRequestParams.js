@@ -188,3 +188,18 @@ export function summaryCutpoint(cutpoint, bandKey) {
   return own ? { cutThr: own.threshold, matchDir: own.matchDir || "prior" }
     : { cutThr: null, matchDir: "prior" };
 }
+
+/** The report's candidate for a chosen band, in one place: the page's report and simulation
+ *  requests, and the neighbour pre-compute (decision 425), so all three name the band alike. */
+export function reportCandidateFromBand(bc) {
+  if (!bc) return null;
+  return {
+    channel: bc.contact,
+    centerHz: bc.center_freq_hz,
+    bandWidthHz: bc.bandwidth_hz || 5.0,
+    sensingHemisphere: bc.hemisphere,
+    rateHz: bc.rate_hz,
+    pulseWidthUs: bc.pulse_width_us,
+    thresholdMode: bc.threshold_mode || "dual",
+  };
+}

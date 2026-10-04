@@ -272,6 +272,35 @@ const HEAD = { ...TYPE.caption, fontWeight: 600, color: PAL.ink3, backgroundColo
   alignItems: "flex-end", justifyContent: "center" };
 const CELL_H = 22;
 
+/** Every band centre on one contact's grid, ascending (the rows a reader can tick). */
+export function gridCentres(grid, channel) {
+  const sw = ((grid && grid.band_time_sweep) || {})[channel] || {};
+  return mergedRows(sw).map((r) => Number(r.band_center_hz)).filter(Number.isFinite)
+    .sort((a, b) => a - b);
+}
+
+/**
+ * THE BAND A GRID ROW RECORDS when ticked, in one place (decision 425): the tick writes it, and the
+ * neighbour pre-compute builds the same record for the bands either side, so the requests it sends
+ * are exactly the ones a tick would send and the server's saved answers match.
+ */
+export function bandRecordFromGrid(grid, channel, centreHz) {
+  const s = ((grid && grid.band_time_sweep) || {})[channel] || {};
+  const hemisphere = s.display_hemisphere
+    || (/LEFT/i.test(channel) ? "Left" : (/RIGHT/i.test(channel) ? "Right" : null));
+  return {
+    contact: channel,
+    contact_label: s.display_short || String(channel || "").replace(/_/g, " "),
+    center_freq_hz: centreHz,
+    bandwidth_hz: Number(s.band_width_hz || 5.0),
+    hemisphere,
+    threshold_mode: "dual",
+    schema_version: "bandcandidate_v1",
+    label: {},
+    grid_settings: (grid && grid.grid_settings) || null,
+  };
+}
+
 function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen,
   onChoiceRecorded }) {
   // Memoised, because a fresh `{}` on every render (when there is no grid yet) would make every
@@ -316,19 +345,10 @@ function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen
     // Written to this browser at once (so the page moves on the click) and recorded on the server
     // (the PI's ruling 8); the promise reports whether the server took it. `grid_settings` is the
     // server's own tag of the grid the band was picked from, carried so the sign-off sheet can say
-    // which grid that was (panel D item 8). It reaches no request: the report is built from named
-    // fields of the band, never from the band object whole.
-    const recorded = recordChosenBand(participantUid, {
-      contact: channel,
-      contact_label: labelOf(channel),
-      center_freq_hz: row.band_center_hz,
-      bandwidth_hz: bandWidthHz,
-      hemisphere,
-      threshold_mode: "dual",
-      schema_version: "bandcandidate_v1",
-      label: {},
-      grid_settings: (grid && grid.grid_settings) || null,
-    }, "grid");
+    // which grid that was (panel D item 8). The record is `bandRecordFromGrid`'s, the one the
+    // neighbour pre-compute builds too (decision 425).
+    const recorded = recordChosenBand(participantUid,
+      bandRecordFromGrid(grid, channel, row.band_center_hz), "grid");
     if (onChoiceRecorded) recorded.then(onChoiceRecorded);
     if (onCandidateChosen) {
       onCandidateChosen({ channel, centerHz: row.band_center_hz, bandWidthHz,

@@ -83,8 +83,11 @@ def serve_or_build(kind, participant_uid, inputs, build, *, writer, volatile=(),
     """The saved answer for ``inputs`` when there is one, otherwise ``build()``'s, saved when it is
     available. ``refresh()`` returns the ``volatile`` fields, worked out fresh, for a served answer."""
     sig = label(kind, participant_uid, inputs)
-    got = _store.load(kind, participant_uid, sig, root=root)
-    if got is not None:
+
+    def _served():
+        got = _store.load(kind, participant_uid, sig, root=root)
+        if got is None:
+            return None
         out = dict(got)
         if volatile and refresh is not None:
             out.update(refresh() or {})
@@ -92,6 +95,33 @@ def serve_or_build(kind, participant_uid, inputs, build, *, writer, volatile=(),
         out["saved_answer"] = {"served": True, "written_utc": stamp.get("written_utc"),
                                "key": _store.product_key(kind, participant_uid, sig)}
         return out
+
+    hit = _served()
+    if hit is not None:
+        return hit
+    # ONE BUILD AT A TIME PER ANSWER (decision 425): a request arriving while another worker builds
+    # the same answer (a neighbour being pre-computed, then clicked) waits for it and is served,
+    # instead of doing the same 20 s of work twice. Redis down or a long wait: built as before.
+    from . import locks as _locks
+    name = "cachestore:build:%s:%s:%s" % (kind, participant_uid, _store.signature_key(sig))
+    with _locks.build_lock(name, ttl_s=BUILD_LOCK_TTL_S, wait_s=BUILD_LOCK_WAIT_S,
+                           ready=lambda: _store.read_stamp(kind, participant_uid, sig,
+                                                           root=root) is not None) as lk:
+        if lk.role == "served":
+            hit = _served()
+            if hit is not None:
+                return hit
+        return _build_and_save(kind, participant_uid, sig, inputs, build, writer=writer,
+                               volatile=volatile, provenance=provenance, root=root)
+
+
+#: How long one answer's build may hold its lock, and how long another request waits for it.
+BUILD_LOCK_TTL_S = 300.0
+BUILD_LOCK_WAIT_S = 240.0
+
+
+def _build_and_save(kind, participant_uid, sig, inputs, build, *, writer, volatile, provenance,
+                    root):
     out = build()
     if isinstance(out, dict) and out.get("available") is True:
         saved = {k: v for k, v in out.items() if k not in set(volatile) and k != "saved_answer"}

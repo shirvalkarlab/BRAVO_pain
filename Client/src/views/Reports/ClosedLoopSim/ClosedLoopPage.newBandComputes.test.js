@@ -116,13 +116,14 @@ it("computes the newly chosen band instead of showing the old one as stale", asy
   await act(async () => { fireEvent.click(other); });
   await settle();
 
+  // the chosen band's own requests come first; the neighbours' (decision 425) follow once they are in
   const newReports = reportAsks().slice(reportsBefore);
-  expect(newReports.length).toBe(1);
   const cand = newReports[0].body.Candidates[0];
   expect(cand.center_hz).not.toBe(LOCAL_BC.center_freq_hz);
+  expect(newReports.filter((a) => a.body.Candidates[0].center_hz === cand.center_hz).length).toBe(1);
   const newSummaries = asked.filter((a) => a.url === "/api/queryDeploymentSummary").slice(summariesBefore);
-  expect(newSummaries.length).toBe(1);
   expect(Number(newSummaries[0].body.CenterHz)).toBe(cand.center_hz);
+  expect(newSummaries.filter((a) => Number(a.body.CenterHz) === cand.center_hz).length).toBe(1);
   expect(asked.filter((a) => a.url === "/api/queryClosedLoopDeployment"
     && !(a.body.Candidates || []).length && !a.body.ThreeSourcePooled).length).toBe(gridsBefore);
   expect(document.body.textContent).not.toMatch(/settings have changed since/);

@@ -60,6 +60,7 @@ import RecomputeBar from "views/Reports/RecomputeBar";
 import CacheStatusLine from "views/Reports/CacheStatusLine";
 import Fold from "./Fold";
 import { newBandForClosedLoop, recomputeClosedLoop } from "views/Reports/moduleCacheKeys";
+import { prefetchNeighbours } from "./neighbourPrefetch";
 
 import {
   loadBandCandidate, parseUploadedCandidate, syncChosenBand, recordChosenBand, recordClearedBand,
@@ -89,8 +90,8 @@ import { FigureRecordContext } from "./figureSnapshots";
 import CeilingLine from "views/Reports/paper/CeilingLine";
 import { useStudyCode } from "views/Reports/paper/studyCode";
 import "./deployPrint.css";
-import { bandPainScore, summaryCutpoint, summaryRequestParams, withheldIfOtherBand }
-  from "./candidateRequestParams";
+import { bandPainScore, reportCandidateFromBand, summaryCutpoint, summaryRequestParams,
+  withheldIfOtherBand } from "./candidateRequestParams";
 import PainScoreSelect, { pageHeadPainLabel } from "./PainScoreSelect";
 import { PAIN_SCORE_OPTIONS } from "views/Reports/painScores";
 import { inheritedMatching, inheritedMatchingLine, matchingRequestKeys, MATCHING_KEYS }
@@ -343,15 +344,7 @@ function ClosedLoopSim() {
   // law. Both must clear, and they can disagree.
   // One candidate object for the report AND the simulation fetch, so the two cannot name
   // different bands (the simulation is read back BY candidate since 2026-09-11).
-  const reportCandidate = bandSynced && bc ? {
-    channel: bc.contact,
-    centerHz: bc.center_freq_hz,
-    bandWidthHz: bc.bandwidth_hz || 5.0,
-    sensingHemisphere: bc.hemisphere,
-    rateHz: bc.rate_hz,
-    pulseWidthUs: bc.pulse_width_us,
-    thresholdMode: bc.threshold_mode || "dual",
-  } : null;
+  const reportCandidate = bandSynced && bc ? reportCandidateFromBand(bc) : null;
   const deploymentReport = useDeploymentReport({
     participantUid: participant_uid,
     bandCandidate: reportCandidate,
@@ -383,6 +376,18 @@ function ClosedLoopSim() {
   // then); before that it is the Biomarkers page's last-run score.
   const bandSweepGrid = useBandSweepGrid({ participantUid: participant_uid,
     painScore: bc ? painScore : null });
+
+  // THE BANDS EITHER SIDE, ASKED FOR AHEAD (decision 425) once this band's report and summary are in,
+  // so ticking a neighbour is served the server's saved answer.
+  const reportReady = !!(report && report.data && !report.loading);
+  const summaryReady = !!(summaryForBand && summaryForBand.data && !summaryForBand.loading);
+  const prefetchGrid = bandSweepGrid.grid;
+  useEffect(() => {
+    if (!reportReady || !summaryReady || !bc || !prefetchGrid) return;
+    prefetchNeighbours({ participantUid: participant_uid, grid: prefetchGrid, channel: bc.contact,
+      centreHz: bc.center_freq_hz, includeSheets, inherited, reportMatching });
+  }, [reportReady, summaryReady, bc, prefetchGrid, participant_uid, includeSheets, inherited,
+    reportMatching]);
 
   // THE POOLED THREE-SOURCE VIEW, fetched AFTER the report has answered (the PI, 2026-09-11:
   // "prefetch the data after the first figures load"). It reads two stored tables and groups

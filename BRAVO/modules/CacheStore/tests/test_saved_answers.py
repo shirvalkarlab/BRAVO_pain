@@ -94,3 +94,29 @@ def test_the_label_carries_the_code_fingerprint():
         finally:
             SA.code_digest = real
         assert len(calls) == 2
+
+
+def test_a_second_request_waits_for_the_first_build_instead_of_duplicating_it():
+    """Two requests for the same answer at once (a neighbour being pre-computed and the reader
+    clicking it): the second waits for the first and is served its answer (decision 425)."""
+    import threading
+    import time
+    from modules.CacheStore import locks as L
+    if not L.ENABLED or L._client() is None:
+        return                                     # no Redis here: the lock cannot be tested
+    with _Sandbox():
+        calls = []
+
+        def slow():
+            calls.append(1)
+            time.sleep(1.5)
+            return {"available": True, "v": len(calls)}
+        out = {}
+        t = threading.Thread(target=lambda: out.setdefault("a", SA.serve_or_build(
+            KIND, UID, {"wait": 1}, slow, writer="closed_loop")))
+        t.start()
+        time.sleep(0.3)
+        out["b"] = SA.serve_or_build(KIND, UID, {"wait": 1}, slow, writer="closed_loop")
+        t.join()
+        assert len(calls) == 1
+        assert out["b"]["v"] == 1 and out["b"]["saved_answer"]["served"] is True
