@@ -7223,7 +7223,60 @@ def _summary_cutpoint(rd, roc):
     return float(thr), "roc_default_youden"
 
 
+#: The saved deployment summary (decision 423).
+DEPLOYMENT_SUMMARY_KIND = "deployment_summary"
+
+
+def summary_input_fingerprints(participant_uid, request_data):
+    """Everything besides the code that can change a deployment summary (decision 423): the
+    request, the recordings, the stimulation-settings files, the pain reports (fetched fresh, and
+    shared with the summary inside the request), and the newest clinic sheets."""
+    try:
+        from modules.StimOptimizer import adapter as _so
+    except ImportError:                                   # pragma: no cover - host spelling
+        from StimOptimizer import adapter as _so
+    participant = models.Participant.find(uid=participant_uid)
+    if not participant:
+        # nothing is saved for a participant the database does not hold
+        raise LookupError(f"no participant {participant_uid!r}")
+    pro = _load_pros(request_data, participant)
+    sheets = _cache_store.newest_stamp(CLINIC_SHEET_STEPS_KIND, str(participant_uid),
+                                       root=_SHARED_CACHE_DIR_OVERRIDE) or {}
+    return {
+        "request": {k: v for k, v in sorted((request_data or {}).items()) if k != "ParticipantId"},
+        "recordings": repr(_recording_set_identity(participant_uid)),
+        "settings_files": repr(_so.source_file_signature(participant)) if participant else None,
+        "pain_reports": _pro_table_digest(pro) if pro is not None and len(pro) else "none",
+        "clinic_sheets": sheets.get("signature_key"),
+    }
+
+
+@_pro_scoped
 def deployment_summary(request_data):
+    """The deployment summary, saved on the server (decision 423): worked out once
+    (`_deployment_summary_build`) and served to every request with the same inputs
+    (`summary_input_fingerprints` plus the code). A failure to build the label builds the
+    summary as before. Inside one request scope, so the pain reports are fetched once."""
+    rd = dict(request_data or {})
+    uid = rd.get("ParticipantId")
+    if not uid:
+        return _deployment_summary_build(rd)
+    try:
+        inputs = summary_input_fingerprints(uid, rd)
+    except Exception:                                      # noqa: BLE001 - the summary stands
+        _log.warning("Biomarkers: the saved-summary label could not be built for %s", uid,
+                     exc_info=True)
+        return _deployment_summary_build(rd)
+    try:
+        from modules.CacheStore import saved_answers as _saved
+    except ImportError:                                    # pragma: no cover - host spelling
+        from CacheStore import saved_answers as _saved
+    return _saved.serve_or_build(DEPLOYMENT_SUMMARY_KIND, uid, inputs,
+                                 lambda: _deployment_summary_build(rd), writer="biomarkers",
+                                 root=_SHARED_CACHE_DIR_OVERRIDE)
+
+
+def _deployment_summary_build(request_data):
     """Phase E: one authoritative Deploy-to-Percept review payload for a committed band.
 
     Calls _validate_band_core ONCE and runs every deployment analytic on the shared pooled detail

@@ -3400,6 +3400,42 @@ def cache_status_for_page(participant):
                                         root=_SHARED_CACHE_DIR_OVERRIDE)
 
 
+#: The stored tables a report reads by "newest" rather than by a key it rebuilds, so their newest
+#: entries are part of a saved report's label (decision 423).
+REPORT_READS_NEWEST = ("amplitude_effect_by_band", "within_visit_pooled_shape",
+                       "three_source_run_points", "ground_truth_verdict", "clinic_pain_steps",
+                       "session_report_summary")
+
+
+def report_input_fingerprints(participant, request_data):
+    """Everything besides the code that can change a report (decision 423): the request, the
+    recordings, the stimulation-settings files, the pain reports (fetched fresh; inside a request
+    the fetch is shared with the report itself), the 3 s chunk table, and the newest entry of each
+    stored table the report reads by "newest"."""
+    try:
+        from modules.Biomarkers import bravo_service as _bs
+    except ImportError:                                   # pragma: no cover - host spelling
+        from Biomarkers import bravo_service as _bs
+    try:
+        from modules.StimOptimizer import adapter as _sa
+    except ImportError:                                   # pragma: no cover
+        from StimOptimizer import adapter as _sa
+    uid = str(getattr(participant, "uid", participant))
+    pro = _bs._load_pros({}, participant)
+    newest = {}
+    for kind in REPORT_READS_NEWEST:
+        st = _cache_store.newest_stamp(kind, uid, root=_SHARED_CACHE_DIR_OVERRIDE) or {}
+        newest[kind] = st.get("signature_key")
+    return {
+        "request": {k: v for k, v in sorted((request_data or {}).items()) if k != "ParticipantId"},
+        "recordings": repr(recording_set_signature(participant)),
+        "settings_files": repr(_sa.source_file_signature(participant)),
+        "pain_reports": (_bs._pro_table_digest(pro) if pro is not None and len(pro) else "none"),
+        "tiles": _tiles_key_for(participant),
+        "newest_tables": newest,
+    }
+
+
 def _cache_status_or_reason(participant):
     """`cache_status_for_page`, but it can never be the thing that breaks a report.
 

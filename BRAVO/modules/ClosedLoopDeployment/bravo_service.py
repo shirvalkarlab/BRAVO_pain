@@ -92,6 +92,10 @@ def _request_scope():
     return _bs.pro_request_scope()
 
 
+#: The saved Closed-Loop report (decision 423).
+REPORT_KIND = "closed_loop_report"
+
+
 def run_for_participant(request_data):
     """Build the Closed-Loop Deployment report for one participant, inside one request scope."""
     with _request_scope():
@@ -158,12 +162,38 @@ def _run_for_participant(request_data):
             return {"available": False,
                     "reason": f"the stored simulation could not be read: {exc!r}"}
 
-    try:
+    def _build():
         return _adapter.report_for_participant(
             participant, request_data,
             candidates=(request_data or {}).get("Candidates"),
             hemisphere=request_hemisphere(request_data),
             power_scale=(request_data or {}).get("PowerScale", DEFAULT_POWER_SCALE))
+
+    try:
+        # SAVED ON THE SERVER (decision 423): a report for a band is worked out once and served to
+        # every request with the same inputs (`adapter.report_input_fingerprints` plus the code).
+        # The band grid and the stored-results line are read fresh each time. The grid alone (no
+        # band) is not saved. A failure to build the label builds the report as before.
+        if not (request_data or {}).get("Candidates"):
+            return _build()
+        try:
+            inputs = _adapter.report_input_fingerprints(participant, request_data)
+        except Exception:                              # noqa: BLE001 - the report stands without it
+            _log.warning("closed-loop: the saved-report label could not be built for %s",
+                         participant_uid, exc_info=True)
+            return _build()
+        try:
+            from modules.CacheStore import saved_answers as _saved
+        except ImportError:                            # pragma: no cover - host spelling
+            from CacheStore import saved_answers as _saved
+        return _saved.serve_or_build(
+            REPORT_KIND, participant_uid, inputs, _build, writer="closed_loop",
+            volatile=("band_sweep_grid", "cache_status"),
+            refresh=lambda: {
+                "band_sweep_grid": _adapter.band_sweep_grid_for_closed_loop(participant_uid,
+                                                                             request_data),
+                "cache_status": _adapter._cache_status_or_reason(participant)},
+            root=_adapter._SHARED_CACHE_DIR_OVERRIDE)
     except Exception as exc:                           # noqa: BLE001
         # THE LINE THAT WAS MISSING FOR FIVE DAYS. `exception` rather than `warning`, so the
         # traceback goes with it: the failure this replaces was an ImportError raised at module

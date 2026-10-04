@@ -234,8 +234,10 @@ def _summary_with(stream):
         bs.availability.lsb_series = lambda *a, **k: {}
         bs.availability.modeled_lsb_at_center = lambda *a, **k: np.zeros(0)
         sc.settings_stream_for = lambda uid: stream
-        return bs.deployment_summary({"ParticipantId": "u", "Channel": CH, "CenterHz": 24.5,
-                                      "NBoot": 200})
+        # the summary's own computation, not the saved copy (decision 423): the two calls differ
+        # only in stand-ins, which no saved-answer label can see
+        return bs._deployment_summary_build({"ParticipantId": "u", "Channel": CH, "CenterHz": 24.5,
+                                             "NBoot": 200})
     finally:
         for k, v in saved.items():
             setattr(bs, k, v)
