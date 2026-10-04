@@ -250,10 +250,8 @@ describe("D14 and D5: the refused ink only with ✕ or a ceiling line; no pastel
     const v = PAGE_FILES.map(rel).filter((f) => !allowed.includes(f)).flatMap((f) => codeLines(read(path.join(SRC, f)))
       .map((line, i) => ({ file: f, line: i + 1, text: line }))
       .filter((x) => /<Chip\b|<MDBadge\b|borderRadius:\s*["']?(999|9999|50%|1\d\d)/.test(x.text)
-        && !/ClinicSheetsSummaryButton/.test(x.file)
         && !/width:\s*\d{1,2},\s*height:\s*\d{1,2}/.test(x.text)));
-    // ClinicSheetsSummaryButton: the round knob of an on / off switch (50%), not a tag; a round
-    // swatch of at most 99 px square (a legend key's dot) is not a tag either
+    // a round swatch of at most 99 px square (a legend key's dot) is not a tag
     expect(report(v)).toBe("");
   });
 

@@ -92,7 +92,6 @@ import "./deployPrint.css";
 import { bandPainScore, summaryRequestParams, withheldIfOtherBand } from "./candidateRequestParams";
 import PainScoreSelect, { pageHeadPainLabel } from "./PainScoreSelect";
 import { PAIN_SCORE_OPTIONS } from "views/Reports/painScores";
-import ClinicSheetsSummaryButton from "./ClinicSheetsSummaryButton";
 import { inheritedMatching, inheritedMatchingLine, matchingRequestKeys, MATCHING_KEYS }
   from "./inheritedMatching";
 
@@ -222,13 +221,10 @@ function ClosedLoopSim() {
   // page prints which in one line (`inheritedMatching.js` says what each request takes).
   const inherited = useMemo(() => inheritedMatching(participant_uid), [participant_uid]);
   const reportMatching = useMemo(() => matchingRequestKeys(inherited, MATCHING_KEYS), [inherited]);
-  // The clinic-sheet ratings in the deployment summary, or not (the PI, 2026-09-24): since decision
-  // 331 it starts where the Biomarkers page's last run left it; the button changes it for this visit
-  // only (the page's own memory of it, 2026-09-24 to 09-26, is no longer read).
-  const inheritedSheets = !!reportMatching.IncludeClinicSheetRatings;
-  const [includeSheets, setIncludeSheets] = useState(inheritedSheets);
-  const onToggleSheets = (on) => { setIncludeSheets(on); };
-  useEffect(() => { setIncludeSheets(inheritedSheets); }, [participant_uid, inheritedSheets]);
+  // The clinic-sheet ratings in the deployment summary: the Biomarkers page's last run decides, as it
+  // does for the grid and the stability card (the PI, 2026-10-04: "follow biomarkers page - remove
+  // toggle here"; the switch of 2026-09-24 is gone).
+  const includeSheets = !!reportMatching.IncludeClinicSheetRatings;
   const [cutpoint, setCutpoint] = useState(retained.cutpoint || null);   // chosen operating point, lifted from the ROC
   // The resolved device-LSB threshold, lifted from the LSB panel so the ROC's feature histogram can
   // annotate its cut line with the same value.
@@ -521,7 +517,6 @@ function ClosedLoopSim() {
                   || PAIN_SCORE_OPTIONS}
                 onChange={setPainScoreChoice} />
             ) : null}
-            <ClinicSheetsSummaryButton on={includeSheets} onToggle={onToggleSheets} />
             <MDBox ml="auto">
               <DeveloperMenu
                 onLoad={() => fileRef.current && fileRef.current.click()}
@@ -547,10 +542,7 @@ function ClosedLoopSim() {
           </MDBox>
           {/* Which matching settings this page took from the Biomarkers page (decision 331). */}
           <MDTypography data-testid="inherited-matching" sx={{ ...TYPE.body, color: PAL.ink2, mt: 1.5 }}>
-            {inheritedMatchingLine(inherited)
-              + (includeSheets !== inheritedSheets
-                ? ` Clinic sheets ${includeSheets ? "in" : "out"} for the summary.`
-                : "")}
+            {inheritedMatchingLine(inherited)}
           </MDTypography>
           {bc ? <ContentsRow /> : null}
         </PageHead>
