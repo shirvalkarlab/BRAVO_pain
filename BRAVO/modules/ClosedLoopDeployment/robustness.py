@@ -722,6 +722,46 @@ def _choose_from_precompute(pre: Dict[str, Any], gap_between: np.ndarray, gap_n_
 # =================================================================================================
 # THE ONE ENTRY POINT A CALLER NEEDS
 # =================================================================================================
+def stretches_from_series(t, p, a):
+    """``(stretches, None, info)``, or ``([], reason, info)``: the series sorted, readings that
+    share a time averaged, and cut into continuous stretches on its own median interval
+    (`simulation.regrid_stretches`); ``info`` holds that interval (``dt_s``) and the regridding's
+    empty and merged cell counts. Shared by `robustness_for_series` and `band_timing`."""
+    info = {"dt_s": None, "n_empty": 0, "n_merged": 0}
+    t = np.asarray(t, dtype=float)
+    p = np.asarray(p, dtype=float)
+    a = np.asarray(a, dtype=float)
+    if a.size != t.size:
+        a = np.full(t.size, np.nan)
+    ok = np.isfinite(t) & np.isfinite(p)
+    t_ok, p_ok, a_ok = t[ok], p[ok], a[ok]
+    if t_ok.size < 3:
+        return [], (f"only {t_ok.size} distinct samples with a finite power reading, too few to "
+                    "split into stretches"), info
+    order = np.argsort(t_ok, kind="stable")
+    t_ok, p_ok, a_ok = t_ok[order], p_ok[order], a_ok[order]
+    if np.any(np.diff(t_ok) == 0):
+        uniq, idx = np.unique(t_ok, return_inverse=True)
+
+        def _mean_by(v):
+            s_ = np.zeros(uniq.size)
+            c = np.zeros(uniq.size)
+            fin = np.isfinite(v)
+            np.add.at(s_, idx[fin], v[fin])
+            np.add.at(c, idx[fin], 1.0)
+            return np.where(c > 0, s_ / np.maximum(c, 1.0), np.nan)
+        p_ok, a_ok, t_ok = _mean_by(p_ok), _mean_by(a_ok), uniq
+    gaps = np.diff(t_ok)
+    pos = gaps[gaps > 0]
+    if pos.size == 0:
+        return [], "the time base has no positive interval", info
+    dt_s = float(np.median(pos))
+    stretches, n_empty, n_merged, _bounds = _sim.regrid_stretches(t_ok, p_ok, a_ok, dt_s)
+    info = {"dt_s": dt_s, "n_empty": n_empty, "n_merged": n_merged}
+    if not stretches:
+        return [], "no stretches could be built from this series", info
+    return stretches, None, info
+
 def robustness_for_series(t, power, amp_obs, *, upper, lower, amp_low, amp_high,
                           n_boot: int = DEFAULT_N_BOOT, seed: int = RNG_SEED,
                           train_frac: float = TRAIN_FRAC,
@@ -755,32 +795,10 @@ def robustness_for_series(t, power, amp_obs, *, upper, lower, amp_low, amp_high,
         return {"refused": True,
                 "reason": "no adaptive amplitude limits (capture range) are available"}
 
-    ok = np.isfinite(t) & np.isfinite(p)
-    t_ok, p_ok, a_ok = t[ok], p[ok], a[ok]
-    if t_ok.size < 3:
-        return {"refused": True, "reason": f"only {t_ok.size} distinct samples with a finite "
-                "power reading, too few to split into stretches"}
-    order = np.argsort(t_ok, kind="stable")
-    t_ok, p_ok, a_ok = t_ok[order], p_ok[order], a_ok[order]
-    if np.any(np.diff(t_ok) == 0):
-        uniq, idx = np.unique(t_ok, return_inverse=True)
-
-        def _mean_by(v):
-            s_ = np.zeros(uniq.size)
-            c = np.zeros(uniq.size)
-            fin = np.isfinite(v)
-            np.add.at(s_, idx[fin], v[fin])
-            np.add.at(c, idx[fin], 1.0)
-            return np.where(c > 0, s_ / np.maximum(c, 1.0), np.nan)
-        p_ok, a_ok, t_ok = _mean_by(p_ok), _mean_by(a_ok), uniq
-    gaps = np.diff(t_ok)
-    pos = gaps[gaps > 0]
-    if pos.size == 0:
-        return {"refused": True, "reason": "the time base has no positive interval"}
-    dt_s = float(np.median(pos))
-    stretches, n_empty, n_merged, _bounds = _sim.regrid_stretches(t_ok, p_ok, a_ok, dt_s)
-    if not stretches:
-        return {"refused": True, "reason": "no stretches could be built from this series"}
+    stretches, why, _info = stretches_from_series(t, p, a)
+    if why is not None:
+        return {"refused": True, "reason": why}
+    dt_s, n_empty, n_merged = _info["dt_s"], _info["n_empty"], _info["n_merged"]
 
     train, test = split_stretches_by_time(stretches, train_frac)
     if not train:

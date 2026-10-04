@@ -1303,7 +1303,10 @@ def test_every_report_section_reaches_the_payload():
     # `protocol` and `edges_historical` (panel D item 10, 2026-09-23): no page, module or server read
     # either on the response, so they left it; both stay on the report object with their own tests
     # (`test_unread_fields_leave_the_response.py`, `test_pooled_e1.py`).
-    WITHHELD = {"candidates", "manifest", "participant", "blockers", "protocol", "edges_historical"}
+    # `band_timing` (decision 417): the band's onset reaches the page through the parameter card's
+    # timing rows and `threshold_placement.band_timing`; its full replay table is read by nothing.
+    WITHHELD = {"candidates", "manifest", "participant", "blockers", "protocol", "edges_historical",
+                "band_timing"}
 
     src = open(AD.__file__).read()
     i = src.index("def report_to_dict(rep)")

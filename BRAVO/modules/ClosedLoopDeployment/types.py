@@ -303,6 +303,8 @@ class DeploymentReport:
     threshold: ThresholdPlan | None = None
     #: Decision 180: what the record-based placement did to ``threshold`` (or why it could not).
     threshold_placement: dict | None = None
+    #: The band's own onset (decision 417, `band_timing`), worked out by the record pair's step.
+    band_timing: dict | None = None
     replay: ReplayResult | None = None
     protocol: Protocol | None = None
     #: The programmable device parameters and the predicted duty cycle, from prescription.py.

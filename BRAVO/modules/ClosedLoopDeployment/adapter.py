@@ -2703,7 +2703,10 @@ def simulation_signature(participant, *, tiles_key, contact, centre_hz, hemisphe
     # edit to `RECORD_DERIVED_TIMING_MS` must invalidate a stored replay built under the old
     # numbers. `recording_set_signature` already changes when a new session report is ingested
     # (session reports are Recording rows), which is what invalidates the PROGRAMMED-timing half.
+    from . import band_timing as _bt_sig
+    # The band's onset rule (decision 417) is in the key too: it sets the recommended regime.
     return (_sim.KIND, _sim.RULE_VERSION, _amp_sig.POOLED_RULE_VERSION, _tr_sig.TABLE_VERSION,
+            _bt_sig.RULE_VERSION,
             str(getattr(participant, "uid", participant)), tiles_key,
             recording_set_signature(participant), str(contact), round(float(centre_hz), 3),
             str(hemisphere), str(power_scale),
@@ -2746,7 +2749,7 @@ def _simulation_params_from_timing_dict(values_by_field):
     return out
 
 
-def _timing_runs_for_simulation(uid, hemisphere, device_facts):
+def _timing_runs_for_simulation(uid, hemisphere, device_facts, band_timing=None):
     """The two timing regimes T2 replays (contest_2026-09-13_SYNTHESIS.md section 4): what the
     device is PROGRAMMED to run today on the candidate's own hemisphere, and this participant's
     record-derived RECOMMENDATION (decision 150). Reads `device_facts["active_sensing_group_timing"]`
@@ -2767,10 +2770,13 @@ def _timing_runs_for_simulation(uid, hemisphere, device_facts):
         "no active sensing group with a programmed timing was found for this hemisphere on this "
         "participant's newest session report; the white-paper Dual Threshold default is used")
 
-    rec_raw = _tr.for_participant(uid) or {}
+    # The band's own onset when the report worked one out (decision 417), else the table.
+    rec_raw = _tr.for_band(uid, band_timing) or {}
     rec_values = {k: (v or {}).get("value_ms") for k, v in rec_raw.items()}
     recommended_params = _simulation_params_from_timing_dict(rec_values) if rec_raw else dict(programmed_params)
-    recommended_source = (_tr.RECORD_DERIVED_PROVENANCE if rec_raw else
+    _band_prov = ((rec_raw.get("onset_upper_ms") or {}).get("provenance")
+                  if band_timing and band_timing.get("available") else None)
+    recommended_source = (_band_prov or _tr.RECORD_DERIVED_PROVENANCE if rec_raw else
                           "no record-derived recommendation is on file for this participant; the "
                           "same timing as \"as programmed today\" is used instead")
 
@@ -2875,7 +2881,8 @@ def write_simulation(participant, *, rep, build, candidate, hemisphere, power_sc
     # record-derived recommendation, so the card can show both rather than silently replacing one
     # with the other. `run_models` already accepts `params=`; each regime just supplies a different
     # (possibly partial) override of `replay.DEFAULT_PARAMS`.
-    timing = _timing_runs_for_simulation(uid, hemisphere, device_facts)
+    timing = _timing_runs_for_simulation(uid, hemisphere, device_facts,
+                                         band_timing=getattr(rep, "band_timing", None))
     runs = {}
     for _key, _meta in timing.items():
         runs[_key] = _sim.run_models(inputs["t"], inputs["power"], inputs["amp_obs"], plan, pooled_row,
@@ -3012,18 +3019,34 @@ def _place_thresholds_from_record(participant, rep, cands, *, hemisphere, loaded
                                                                 "contact or band centre"}), \
             {"available": False, "reason": "the candidate carries no sensing contact or band centre"}
     uid = str(getattr(participant, "uid", participant))
-    timing = _tr.for_participant(uid) or {}
-    avg_ms = (timing.get("averaging_ms") or {}).get("value_ms")
-    onset_ms = (timing.get("onset_upper_ms") or {}).get("value_ms")
-    if not avg_ms or not onset_ms:
-        pl = {"available": False, "rule": "record",
-              "reason": "no recommended averaging or onset duration is in force for this participant"}
-        return _tpl.apply(plan, pl), pl
     inputs = simulation_inputs_for_participant(uid, contact=contact, centre_hz=float(centre),
                                                loaded=loaded, hemisphere=hemisphere, epochs=epochs)
     if inputs.get("absent_reason") or not len(inputs["t"]):
         pl = {"available": False, "rule": "record",
               "reason": inputs.get("absent_reason") or "no usable pieces for this contact"}
+        return _tpl.apply(plan, pl), pl
+    # THE BAND'S OWN ONSET (decision 417), worked out at the current limits the card programs (the
+    # capture currents held at or below the safe ceiling) and kept on the report, so the card, this
+    # pair and the simulation all read the same onset. Without it, the participant's table.
+    from . import safe_current as _safe_bt
+    _lo_bt, _hi_bt = _safe_bt.apply_to_plan(plan, uid, hemisphere).amplitude_limits()
+    try:
+        band = write_band_timing(participant, candidate=c0, hemisphere=hemisphere, amp_low=_lo_bt,
+                                 amp_high=_hi_bt, inputs=inputs)
+    except Exception as _bt_exc:                         # noqa: BLE001 - the table stands in
+        _log.warning("closed-loop: the band's onset could not be worked out for %s", uid,
+                     exc_info=True)
+        band = {"available": False, "reason": f"could not be worked out: {_bt_exc!r}"}
+    try:
+        rep.band_timing = band
+    except Exception:                                    # noqa: BLE001 - a read-only report
+        pass
+    timing = _tr.for_band(uid, band) or {}
+    avg_ms = (timing.get("averaging_ms") or {}).get("value_ms")
+    onset_ms = (timing.get("onset_upper_ms") or {}).get("value_ms")
+    if not avg_ms or not onset_ms:
+        pl = {"available": False, "rule": "record",
+              "reason": "no recommended averaging or onset duration is in force for this participant"}
         return _tpl.apply(plan, pl), pl
     med = _tpl.median_level(inputs["t"], inputs["power"], averaging_s=float(avg_ms) / 1000.0)
     if not med.get("available"):
@@ -3036,6 +3059,8 @@ def _place_thresholds_from_record(participant, rep, cands, *, hemisphere, loaded
                                    threshold_plan=provisional, loaded=loaded, epochs=epochs)
     dr_payload = design_rule_if_stored(participant, c0, hemisphere=hemisphere)
     rows = [] if not dr_payload or dr_payload.get("refused") else (dr_payload.get("table") or [])
+    if band.get("available") and band.get("design_rows"):
+        rows = band["design_rows"]             # the separations the band's onset was chosen on
     placement = _tpl.record_pair(median=med["median"], design_rows=rows,
                                  averaging_ms=avg_ms, onset_ms=onset_ms)
     placement["median"] = med
@@ -3044,9 +3069,94 @@ def _place_thresholds_from_record(participant, rep, cands, *, hemisphere, loaded
                                 "refused": bool((dr_payload or {}).get("refused")) if dr_payload else None,
                                 "reason": dr_summary.get("reason")}
     placement["capture_upper"], placement["capture_lower"] = plan.upper, plan.lower
+    placement["band_timing"] = {k: band.get(k) for k in ("available", "onset_s",
+                                                         "zero_undone_reached", "reason")}
     new_plan = _tpl.apply(plan, placement, observed_series=inputs["power"])
     placement["placement_rule"] = new_plan.placement_rule
     return new_plan, placement
+
+
+def band_timing_signature(participant, *, tiles_key, contact, centre_hz, hemisphere, amp_low,
+                          amp_high):
+    """The key of the band's onset (decision 417): the tiles and recording set (the series), the
+    band and side, the current limits the replay runs with, and the two rule versions it rests on."""
+    from . import band_timing as _bt
+    from . import design_rule as _dr
+    return (_bt.KIND, _bt.RULE_VERSION, _dr.RULE_VERSION,
+            str(getattr(participant, "uid", participant)), tiles_key,
+            recording_set_signature(participant), str(contact), round(float(centre_hz), 3),
+            str(hemisphere), round(float(amp_low), 6), round(float(amp_high), 6))
+
+
+def write_band_timing(participant, *, candidate, hemisphere, amp_low, amp_high, inputs=None,
+                      loaded=None, epochs=None):
+    """The band's onset (`band_timing.band_timing_for_series`), served when its key matches and
+    worked out and stored otherwise. ``inputs`` is `simulation_inputs_for_participant`'s output
+    when the caller already has it. Returns the payload, with its candidate."""
+    from . import band_timing as _bt
+    try:
+        from modules.CacheStore import provenance as _prov
+    except ImportError:                                # pragma: no cover - depends on the runner
+        from CacheStore import provenance as _prov
+    contact = (candidate or {}).get("channel")
+    centre = (candidate or {}).get("center_hz")
+    if contact is None or centre is None:
+        return {"available": False, "reason": "the candidate carries no sensing contact or band centre"}
+    if amp_low is None or amp_high is None:
+        return {"available": False, "reason": "no adaptive current limits to replay with"}
+    tiles_key = _tiles_key_for(participant)
+    if tiles_key is None:
+        return {"available": False, "reason": "no tile entry key, so nothing could be run or stored"}
+    uid = str(getattr(participant, "uid", participant))
+    sig = band_timing_signature(participant, tiles_key=tiles_key, contact=contact, centre_hz=centre,
+                                hemisphere=hemisphere, amp_low=amp_low, amp_high=amp_high)
+    tag = _simulation_candidate_tag(contact, centre, hemisphere)
+
+    def _build():
+        import time as _time
+        t0 = _time.perf_counter()
+        ins = inputs if inputs is not None else simulation_inputs_for_participant(
+            uid, contact=contact, centre_hz=float(centre), loaded=loaded, hemisphere=hemisphere,
+            epochs=epochs)
+        if ins.get("absent_reason") or not len(ins["t"]):
+            return {"available": False,
+                    "reason": ins.get("absent_reason") or "no usable pieces for this contact"}
+        out = _bt.band_timing_for_series(ins["t"], ins["power"], ins["amp_obs"],
+                                         amp_low=amp_low, amp_high=amp_high)
+        out["seconds"] = _time.perf_counter() - t0
+        return out
+
+    payload, _wrote = _cache_store.store_if_absent(
+        _bt.KIND, uid, sig, _build, writer="closed_loop", trigger="deployment_report",
+        provenance=_prov.flatten([_prov.entry(tiles_key, kind="raw_lsb_tiles", writer="biomarkers")]),
+        extra={"candidate": tag, "rule_version": _bt.RULE_VERSION},
+        root=_SHARED_CACHE_DIR_OVERRIDE)
+    payload = dict(payload or {"available": False, "reason": "nothing was worked out"})
+    payload["candidate"] = {"channel": str(contact), "center_hz": float(centre),
+                            "hemisphere": str(hemisphere)}
+    return payload
+
+
+def band_timing_if_stored(participant, candidate=None, *, hemisphere="Left"):
+    """The newest stored band onset for this candidate (matched on its sidecar tag), or None."""
+    from . import band_timing as _bt
+    if not candidate or candidate.get("channel") is None or candidate.get("center_hz") is None:
+        return None
+    want = _simulation_candidate_tag(candidate["channel"], candidate["center_hz"],
+                                     candidate.get("actuated_hemisphere")
+                                     or candidate.get("sensing_hemisphere") or hemisphere)
+    try:
+        payload, _stamp = _cache_store.load_newest(
+            _bt.KIND, str(getattr(participant, "uid", participant)), consumer="closed_loop",
+            root=_SHARED_CACHE_DIR_OVERRIDE,
+            match=lambda meta: (meta.get("extra") or {}).get("candidate") == want)
+    except Exception:                                  # noqa: BLE001 - a miss is not an error
+        return None
+    if payload is None:
+        return None
+    return dict(payload, candidate={"channel": str(candidate["channel"]),
+                                    "center_hz": float(candidate["center_hz"]),
+                                    "hemisphere": str(want["hemisphere"])})
 
 
 def write_design_rule(participant, *, candidate, hemisphere, threshold_plan, loaded=None,

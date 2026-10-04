@@ -123,3 +123,53 @@ def for_participant(participant_uid):
         out[k] = {"value_ms": float(v), "why": why, "confidence": conf,
                   "provenance": RECORD_DERIVED_PROVENANCE}
     return out
+
+
+#: The fields the record cannot decide (decision 150), kept as the participant's table has them when
+#: the onset is worked out per band (decision 417), and labelled as such on the card.
+SAME_FOR_EVERY_BAND = ("transition_up_ms", "transition_down_ms", "adaptive_startup_delay_ms")
+
+
+def for_band(participant_uid, band_timing):
+    """The card's timing for one band (decision 417): the band's own onset (`band_timing`), the
+    blanking equal to it, 3 s averaging, and the fields the record cannot decide from the
+    participant's table, labelled as the same for every band. Without a band answer, the
+    participant's table as before (`for_participant`)."""
+    base = for_participant(participant_uid)
+    if not band_timing or not band_timing.get("available"):
+        return base
+    from . import band_timing as _bt
+    cand = band_timing.get("candidate") or {}
+    where = (f"worked out for this band ({cand.get('channel')}, {cand.get('center_hz')} Hz) from "
+             f"its own record, decision 417")
+    onset_ms = float(band_timing["onset_s"]) * 1000.0
+    pick = band_timing.get("pick") or {}
+    reached = bool(band_timing.get("zero_undone_reached"))
+    onset_why = (
+        f"Of the onsets at {_bt.AVERAGING_S:g} s averaging with no switch undone within one onset "
+        f"when this band's own recorded power is replayed through the controller (its thresholds "
+        f"placed from its record: median +- the separation its noise model needs at that onset), "
+        f"the one with the fewest switches" + (
+            f": {pick.get('transitions_per_hour'):.1f} an hour over "
+            f"{band_timing.get('hours_replayed') or 0:.1f} h of recording."
+            if pick.get("transitions_per_hour") is not None else ".")
+        if reached else
+        f"No onset the tablet accepts reached zero undone switches on this band; this one undid "
+        f"the fewest ({pick.get('undone')}).")
+    out = {}
+    for k in ("onset_upper_ms", "onset_lower_ms"):
+        out[k] = {"value_ms": onset_ms, "why": onset_why,
+                  "confidence": "Medium" if reached else "Low", "provenance": where}
+    out["detection_blanking_ms"] = {
+        "value_ms": onset_ms, "provenance": where, "confidence": "Low",
+        "why": "Equal to this band's onset (the record cannot decide the blanking; equal to the "
+               "onset stops a decision being re-classified while its ramp runs)."}
+    out["averaging_ms"] = {
+        "value_ms": _bt.AVERAGING_S * 1000.0, "provenance": where,
+        "confidence": (base.get("averaging_ms") or {}).get("confidence", "High"),
+        "why": "The same for every band: the nearest device value to the validated feature's "
+               "4.1 s window, and the averaging this band's onset was worked out at."}
+    for k in SAME_FOR_EVERY_BAND:
+        if k in base:
+            out[k] = dict(base[k], why="The same for every band: " + base[k]["why"])
+    return out

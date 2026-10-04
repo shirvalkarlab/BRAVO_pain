@@ -449,7 +449,9 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
             # row of the parameter card, so the recommendation is shown against the current
             # programming (2026-09-13). Either may be absent; the card says so per row.
             _tr = _optional("timing_recommendation")
-            _record_timing = _tr.for_participant(participant_uid) if _tr is not None else {}
+            # The band's own onset when the record pair worked one out (decision 417).
+            _record_timing = (_tr.for_band(participant_uid, getattr(rep, "band_timing", None))
+                              if _tr is not None else {})
             _prog_all = (device_facts or {}).get("active_sensing_group_timing") or {}
             _programmed = _prog_all.get(hemisphere) if isinstance(_prog_all, dict) else None
             _all = presc.prescribe_all_modes(

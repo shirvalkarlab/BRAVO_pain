@@ -689,6 +689,8 @@ KEEP_NEWEST_BY_KIND = {
     # right candidates' answers evicted each other, so every switch of side rebuilt the other's
     # (found by decision 306's agent, 2026-09-26). The decision-107 lesson a fifth time.
     "closed_loop_robustness": 6,
+    # The band's onset (decision 417), keyed on the candidate like the three above.
+    "closed_loop_band_timing": 6,
     # The Stim Optimizer page makes TWO requests, plain and with the two-stage plan, and each is
     # its own key; under a limit of one they evicted each other, so the second page load rebuilt
     # what the first had just stored (watched live 2026-09-12: plain, two-stage, plain again --
