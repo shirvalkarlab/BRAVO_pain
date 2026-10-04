@@ -187,12 +187,17 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
   // while the on-curve marker (effect B) still tracks the slider live.
   useEffect(() => {
     if (!onCutpoint) return undefined;
+    // `forBand` and `isDefault` let the page send the summary a cut-point only when the reader
+    // moved this ROC off its defaults on this band (decision 416): the server takes the same default
+    // point itself, so sending it would only change the summary's request after it was computed.
     const payload = opThr != null ? { threshold: opThr, rule: opRule, matchDir, auc: rocAuc,
       sensitivity: op && op.sensitivity, specificity: op && op.specificity,
-      fpr: op && op.fpr, tpr: op && op.tpr, degenerate: op && op.degenerate } : null;
+      fpr: op && op.fpr, tpr: op && op.tpr, degenerate: op && op.degenerate,
+      forBand: `${channelRaw}|${centerHz}`,
+      isDefault: rule === "youden" && logCost === 0 && matchDir === "prior" } : null;
     const t = setTimeout(() => onCutpoint(payload), 250);
     return () => clearTimeout(t);
-  }, [opThr, opRule, matchDir, rocAuc]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [opThr, opRule, matchDir, rocAuc, rule, logCost, channelRaw, centerHz]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // (A) Draw the ROC BASE (chance line + curve + an empty cut-point trace) once per ROC dataset.
   // The cut-point marker is trace index CUTPOINT_TRACE; updated in place by effect (B) so changing rule

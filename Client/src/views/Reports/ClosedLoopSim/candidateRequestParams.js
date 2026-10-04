@@ -173,3 +173,18 @@ export function withheldIfOtherBand(result, bc, kind = "report", want = null) {
     bandMismatch: mis,
   };
 }
+
+/**
+ * The cut-point the deployment summary is sent (decision 416). The summary needs one for its
+ * switching value, and the server takes the ROC's own default point (Youden, "next report" matching)
+ * when none is sent -- the same point the ROC panel starts on. So the summary is sent the ROC's
+ * cut-point only when the reader moved the ROC off its defaults, and only on the band it was chosen
+ * on; otherwise none, so choosing a band and the ROC answering later never change the summary's
+ * request. `bandKey` is `${contact}|${centre Hz}`.
+ */
+export function summaryCutpoint(cutpoint, bandKey) {
+  const own = cutpoint && cutpoint.forBand === bandKey && !cutpoint.isDefault
+    && cutpoint.threshold != null ? cutpoint : null;
+  return own ? { cutThr: own.threshold, matchDir: own.matchDir || "prior" }
+    : { cutThr: null, matchDir: "prior" };
+}

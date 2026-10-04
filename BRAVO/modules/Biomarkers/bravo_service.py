@@ -7205,6 +7205,24 @@ def _summary_auc_current_removed(core, roc, n_boot):
         return deployment_current._refused(f"the reading could not be made: it raised {exc!r}")
 
 
+def _summary_cutpoint(rd, roc):
+    """``(cut-point, where it came from)`` for the deployment summary (decision 416): the request's
+    ``Cutpoint`` when one is sent; otherwise the Youden point of the ROC the summary itself builds,
+    which is the point the ROC panel starts on, so the page need not send it and a summary computed
+    on choosing a band is not changed by the ROC answering later. ``None`` with the reason when
+    there is neither."""
+    sent = _float_param(rd, "Cutpoint", default=None)
+    if sent is not None:
+        return sent, "sent"
+    if not (roc or {}).get("available"):
+        return None, "none: the ROC is not available"
+    yp = ((roc or {}).get("operating_points") or {}).get("youden") or {}
+    thr = yp.get("threshold")
+    if thr is None or not np.isfinite(float(thr)):
+        return None, "none: the ROC has no Youden point"
+    return float(thr), "roc_default_youden"
+
+
 def deployment_summary(request_data):
     """Phase E: one authoritative Deploy-to-Percept review payload for a committed band.
 
@@ -7257,7 +7275,8 @@ def deployment_summary(request_data):
         strategy=core["label_strategy"], low_pct=core["low_pct"], high_pct=core["high_pct"])
 
     # Cut-point -> percentile -> device-LSB threshold (Phase C logic, inline on the shared detail).
-    cutpoint = _float_param(rd, "Cutpoint", default=None)
+    # The one sent, else this summary's own ROC's Youden point (decision 416).
+    cutpoint, cutpoint_source = _summary_cutpoint(rd, roc)
     feat = analytics._band_feature_from_detail(pooled, channel, center_hz, band_width_hz)
     percentile = None
     if feat is not None and cutpoint is not None:
@@ -7647,7 +7666,8 @@ def deployment_summary(request_data):
         "threshold": {
             "available": thr_lsb is not None, "upper_lsb": thr_lsb,
             "percentile": round(percentile, 1) if percentile is not None else None,
-            "cutpoint_feature": _ff(cutpoint), "n_timeline_samples": n_tl,
+            "cutpoint_feature": _ff(cutpoint), "cutpoint_source": cutpoint_source,
+            "n_timeline_samples": n_tl,
             "method": "percentile-anchored on device Timeline LSB",
             # When the device never sensed this band, an ESTIMATED threshold from the frozen
             # PSD->LSB conversion model (flagged, with its fallback tier). Never overwrites a

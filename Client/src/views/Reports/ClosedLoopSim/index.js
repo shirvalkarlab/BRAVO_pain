@@ -89,7 +89,8 @@ import { FigureRecordContext } from "./figureSnapshots";
 import CeilingLine from "views/Reports/paper/CeilingLine";
 import { useStudyCode } from "views/Reports/paper/studyCode";
 import "./deployPrint.css";
-import { bandPainScore, summaryRequestParams, withheldIfOtherBand } from "./candidateRequestParams";
+import { bandPainScore, summaryCutpoint, summaryRequestParams, withheldIfOtherBand }
+  from "./candidateRequestParams";
 import PainScoreSelect, { pageHeadPainLabel } from "./PainScoreSelect";
 import { PAIN_SCORE_OPTIONS } from "views/Reports/painScores";
 import { inheritedMatching, inheritedMatchingLine, matchingRequestKeys, MATCHING_KEYS }
@@ -316,8 +317,11 @@ function ClosedLoopSim() {
   // ONE deployment-summary fetch for the whole page. Each call runs a mixed-effects fit through
   // rpy2's embedded R, which is single-threaded per worker, so duplicate concurrent calls starve
   // the worker pool and drop sibling requests.
-  const cutThr = cutpoint ? cutpoint.threshold : null;
-  const matchDir = cutpoint ? cutpoint.matchDir : "prior";
+  // The summary is sent a cut-point only when the reader moved the ROC off its defaults on this
+  // band (decision 416); the server takes the ROC's own default point otherwise.
+  const bandKey = bc ? `${bc.contact}|${bc.center_freq_hz}` : "";
+  const cutpointHere = cutpoint && cutpoint.forBand === bandKey ? cutpoint : null;
+  const { cutThr, matchDir } = summaryCutpoint(cutpoint, bandKey);
   const summary = useDeploymentSummary({
     participantUid: participant_uid,
     channel: bandSynced && bc ? bc.contact : null,
@@ -569,7 +573,7 @@ function ClosedLoopSim() {
               <FigureRecordContext.Provider value={drawFiguresForRecord}>
                 <DecisionCard participantUid={participant_uid} bandCandidate={bc} summary={summaryForBand}
                   deploymentReport={report} chosenBand={envelope} bandRecord={bandRecord}
-                  cutpoint={cutpoint} mode={thresholdMode} onMode={setThresholdMode}
+                  cutpoint={cutpointHere} mode={thresholdMode} onMode={setThresholdMode}
                   onRecompute={onRecomputePage} />
               </FigureRecordContext.Provider>
             </MDBox>
@@ -672,7 +676,7 @@ function ClosedLoopSim() {
                     </Grid>
                     <Grid item xs={12} md={6} id="cl-lsb">
                       <LsbPowerPanel participantUid={participant_uid} bandCandidate={bc}
-                        requestParams={requestParams} cutpoint={cutpoint}
+                        requestParams={requestParams} cutpoint={cutpointHere}
                         onLsbThreshold={setLsbThreshold} deploymentReport={report} />
                     </Grid>
                     <Grid item xs={12} id="cl-era">
