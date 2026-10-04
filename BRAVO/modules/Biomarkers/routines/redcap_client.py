@@ -53,6 +53,37 @@ def get_redcap_credentials(redcap_config=None):
     )
 
 
+#: How long one process keeps a REDCap project connection (decision 432). PyCap keeps the project's
+#: design on the connection once fetched -- its data dictionary (`metadata`) and form-event map --
+#: and a new connection per download fetched both again: two of every download's three calls
+#: (0.23-0.48 s and 0.22 s). The design changes only when the project is edited; the reports are
+#: fetched from the server on every download whatever this says.
+PROJECT_KEEP_SECONDS = 3600.0
+_PROJECTS = {}
+
+
+def _now():
+    import time
+    return time.monotonic()
+
+
+def forget_projects():
+    """Drop every kept REDCap connection (tests; or after the project's design is edited)."""
+    _PROJECTS.clear()
+
+
+def _project(api_url, api_key):
+    """This process's REDCap project connection for these credentials, made at most once an hour."""
+    import redcap  # PyCap; lazy so tests / library imports don't require it
+    key = (api_url, api_key)
+    hit = _PROJECTS.get(key)
+    if hit is not None and _now() - hit[0] <= PROJECT_KEEP_SECONDS:
+        return hit[1]
+    project = redcap.Project(api_url, api_key)
+    _PROJECTS[key] = (_now(), project)
+    return project
+
+
 def pull_redcap(redcap_config=None, save=False, save_path=None, fields=None, records=None):
     """
     Pull survey data from REDCap, returning a pandas DataFrame.
@@ -72,11 +103,11 @@ def pull_redcap(redcap_config=None, save=False, save_path=None, fields=None, rec
     tidy pain-report table is unchanged (proved cell-by-cell on the live RCS08 record: 760 rows,
     identical columns, zero differing cells).
     """
-    import redcap  # PyCap; lazy so tests / library imports don't require it
-
     api_url, api_key = get_redcap_credentials(redcap_config)
 
-    project = redcap.Project(api_url, api_key)
+    # The connection (with the project's design) is kept for up to an hour (decision 432); the
+    # reports below are fetched from the server on every call.
+    project = _project(api_url, api_key)
     export_kwargs = {}
     if fields:
         export_kwargs["fields"] = list(fields)
