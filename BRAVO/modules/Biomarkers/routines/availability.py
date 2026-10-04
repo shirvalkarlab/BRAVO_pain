@@ -926,6 +926,31 @@ def modeled_lsb_at_center(channel, center_hz, *, td_recordings=None, psd_recordi
     return np.asarray(vals, dtype=float)
 
 
+def modeled_lsb_by_centre(channel, centres, *, index, half_hz=2.5):
+    """`modeled_lsb_at_center(channel, c, index=index, half_hz=half_hz)` for every ``c`` in
+    ``centres``, TD tier only (both live callers pass no PSD records), from one FFT per trace
+    (decision 433). ``{float(c): ndarray}``; each array equals the one-centre call's exactly, in the
+    same trace order."""
+    cz = np.asarray([float(c) for c in centres], dtype=float)
+    vals = {float(c): [] for c in cz}
+    if cz.size == 0:
+        return {}
+    for trace in index.td(channel)["traces"]:
+        fs = trace["fs"]
+        if not np.isfinite(fs) or fs <= 0:
+            continue
+        col = np.asarray(trace["col"], dtype=float)
+        col = col[np.isfinite(col)]
+        min_n = int(round(fs * analytics.TRANSFORM_WIN_SECONDS))
+        if col.size < min_n:
+            continue
+        lsb = np.atleast_1d(analytics.td_to_lsb(col, fs, cz, half_hz=half_hz, each_center=True))
+        for c, v in zip(cz, lsb):
+            if np.isfinite(v) and v > 0:
+                vals[float(c)].append(float(v))
+    return {c: np.asarray(v, dtype=float) for c, v in vals.items()}
+
+
 def _modeled_lsb_at_center_scan(channel, center_hz, *, td_recordings=None, psd_recordings=None,
                                 half_hz=2.5):
     """DEPLOYMENT-ONLY: modeled device-LSB samples for ONE (channel, band center), via the SAME

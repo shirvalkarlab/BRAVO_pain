@@ -2287,7 +2287,8 @@ def _rcs_hann(nonzero):
 
 def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
                             win_samples=None, step_samples=None,
-                            n_fft=TRANSFORM_N_FFT, maxf=TRANSFORM_MAX_FREQ_HZ, agg="median"):
+                            n_fft=TRANSFORM_N_FFT, maxf=TRANSFORM_MAX_FREQ_HZ, agg="median",
+                            each_center=False):
     """Transform-DSP band power (µV²) of a time-domain µV trace — the PRIMARY TD→LSB front end.
 
     This is the percept-spectral-repro "transform": per sliding sub-window, mean-detrend → rcs-Hann
@@ -2318,6 +2319,11 @@ def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
         Zero-pad / FFT length. The transform calibration assumes 256.
     maxf : float, default 96.68
         Keep only FFT bins ≤ maxf (the repo's percept_frequency_bins ceiling).
+    each_center : bool, default False
+        Vector centres only: sum each centre's band on its own, as a scalar call does, so entry i
+        equals ``td_transform_band_power(..., centers[i])`` exactly while the FFT is still shared
+        (decision 433). The one product over all centres at once rounds differently in the last
+        digit (340 of 1,352 live values differed).
     agg : {"median","mean","none"}, default "median"
         Across-window aggregation. The repo and the deployed sweep both use the median. "none" returns
         the PER-WINDOW band power without aggregating — shape (W,) for a scalar center, (W, C) for a
@@ -2365,7 +2371,10 @@ def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
     # Band-mask matrix (C, Fb); one matmul → in-band summed power for every center at once.
     band = ((freqs[None, :] >= centers[:, None] - half_hz) &
             (freqs[None, :] <= centers[:, None] + half_hz)).astype(float)
-    pw = p2 @ band.T                                       # (W, C)
+    if each_center and centers.size > 1:
+        pw = np.concatenate([p2 @ band[i:i + 1].T for i in range(centers.size)], axis=1)
+    else:
+        pw = p2 @ band.T                                   # (W, C)
     if agg == "none":
         # per-window band power, no aggregation (sliding-window overlay / QC). (W,) scalar, (W,C) vector.
         return pw[:, 0] if scalar_in else pw

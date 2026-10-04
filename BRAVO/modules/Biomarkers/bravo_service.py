@@ -4527,6 +4527,55 @@ def _chronic_list_for(participant_uid):
     return _load_recordings(participant_uid, CHRONIC_TYPES)
 
 
+#: The saved table of modelled LSB at every standard band centre of one contact (decision 433).
+#: Recording-derived only: no pain rating in its label or contents.
+MODELED_LSB_TABLE_KIND = "modeled_lsb_by_centre"
+
+
+def _modeled_lsb_values(participant_uid, channel, center_hz, td_recordings, half_hz):
+    """`availability.modeled_lsb_at_center` for the deployment summary and the band-power panel,
+    read from the contact's saved table when the centre is one of the standard centres
+    (`_LSB_SPECTRUM_CENTERS`) and worked out directly otherwise (decision 433). The table is built
+    once per contact, recording set, band width and code version, and every value in it equals the
+    direct call's exactly. `td_recordings` is the voltage-trace list `_sign_off_recordings` gives
+    for this participant, which `_recording_set_identity` determines."""
+    def direct():
+        return availability.modeled_lsb_at_center(channel, center_hz, td_recordings=td_recordings,
+                                                  psd_recordings=None, half_hz=half_hz)
+    try:
+        cz = float(center_hz)
+    except (TypeError, ValueError):
+        return direct()
+    hit = [c for c in _LSB_SPECTRUM_CENTERS if abs(c - cz) < 1e-9]
+    if not td_recordings or not hit or not participant_uid:
+        return direct()
+    try:
+        inputs = {"channel": availability._canon_channel(channel), "half_hz": float(half_hz),
+                  "recording_set": str(_recording_set_identity(participant_uid)),
+                  "centres": [float(c) for c in _LSB_SPECTRUM_CENTERS]}
+    except Exception:                                      # noqa: BLE001 - worked out as before
+        return direct()
+
+    def build():
+        idx = availability.channel_index(td_recordings=td_recordings)
+        table = availability.modeled_lsb_by_centre(channel, _LSB_SPECTRUM_CENTERS, index=idx,
+                                                   half_hz=half_hz)
+        return {"available": True, "values": {repr(c): v for c, v in table.items()}}
+    try:
+        try:
+            from modules.CacheStore import saved_answers as _saved
+        except ImportError:                                # pragma: no cover - host spelling
+            from CacheStore import saved_answers as _saved
+        out = _saved.serve_or_build(MODELED_LSB_TABLE_KIND, participant_uid, inputs, build,
+                                    writer="biomarkers", root=_SHARED_CACHE_DIR_OVERRIDE)
+        got = (out or {}).get("values", {}).get(repr(float(hit[0])))
+    except Exception:                                      # noqa: BLE001 - worked out as before
+        _log.warning("Biomarkers: the modelled-LSB table for %s %s could not be read or built",
+                     participant_uid, channel, exc_info=True)
+        return direct()
+    return direct() if got is None else np.asarray(got, dtype=float)
+
+
 def _sign_off_recordings(participant_uid):
     """(chronic_list, powerdomain_list, streaming_td, psd_list) for the sign-off endpoints
     (`deployment_summary`, `band_lsb_and_power`): the same four lists they always loaded, from the
@@ -7018,9 +7067,7 @@ def _band_lsb_and_power_build(request_data):
     # estimate_lsb fallback, removed 2026-06-28). `td_for_modeled` is ALL raw-µV TD (streaming +
     # montage/survey); chronic/powerdomain are power-domain, not TD, and excluded by the helper guards.
     # Used only if there's no native threshold.
-    mvals = availability.modeled_lsb_at_center(channel, center_hz,
-                                      td_recordings=td_for_modeled,
-                                      psd_recordings=None, half_hz=half)
+    mvals = _modeled_lsb_values(core["participant_uid"], channel, center_hz, td_for_modeled, half)
     n_modeled = int(mvals.size)
     if mvals.size >= 8 and percentile is not None:
         modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
@@ -7455,9 +7502,7 @@ def _deployment_summary_build(request_data):
     # consistent (replaces the retired µV²-cut-point estimate_lsb fallback, removed 2026-06-28).
     # `td_for_modeled` is ALL raw-µV TD (streaming + montage/survey); chronic/powerdomain are
     # power-domain, not TD. Gathered regardless; used only if there's no native threshold (below).
-    mvals = availability.modeled_lsb_at_center(channel, center_hz,
-                                      td_recordings=td_for_modeled,
-                                      psd_recordings=None, half_hz=half)
+    mvals = _modeled_lsb_values(core["participant_uid"], channel, center_hz, td_for_modeled, half)
     n_modeled = int(mvals.size)
     if mvals.size >= 8 and percentile is not None:
         modeled_thr = round(float(np.percentile(mvals, percentile)), 1)

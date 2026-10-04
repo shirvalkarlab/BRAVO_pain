@@ -698,6 +698,8 @@ KEEP_NEWEST_BY_KIND = {
     "deployment_roc": 200,
     "deployment_roc_by_era": 200,
     "band_lsb_power": 200,
+    # one modelled-LSB table per contact, band width and recording set (decision 433)
+    "modeled_lsb_by_centre": 48,
     # The Stim Optimizer page makes TWO requests, plain and with the two-stage plan, and each is
     # its own key; under a limit of one they evicted each other, so the second page load rebuilt
     # what the first had just stored (watched live 2026-09-12: plain, two-stage, plain again --
