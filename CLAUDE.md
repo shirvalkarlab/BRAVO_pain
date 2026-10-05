@@ -169,3 +169,41 @@ Full rules, notations and edge cases: `docs/clinic_sheets_parsing.yaml` (machine
 - **Clinic and home streams are never merged**: clinic ratings choose, home ratings confirm.
 - Traps: "8/10" stored by Excel as 10 August; Left lead 0-3 and Right 8-11; text after "/" in old
   notation is sEEG; bipolar "1+2-"; the device record cannot tell bipolar from monopolar.
+
+## 11. Ingester, calibration and REDCap rules (the PI, 2026-10-05; decisions 436-448)
+
+**Ingester.**
+- Ingest ALL neural data of every type from every export: event PSDs, BrainSense time-domain and band
+  power, indefinite streaming, montages and every survey mode (time-domain and PSD), electrode
+  identifier, in-session signal checks, threshold band-power streams, the chronic LSB log.
+  **Never discard intact neural data of any kind.**
+- Drop only a bit-for-bit duplicate of an ingested recording; one value off means ingest, time-stamp,
+  use for matching. Compare device values at face value: never rescale, and never compute a spectrum
+  or "relative power" of our own to decide identity or which run a spectrum belongs to.
+- Copies of an item in several exports are merged, never first-copy-wins; the result must not depend
+  on the order exports arrive. One export at a time, in session order.
+- Every time on the TABLET clock, never the INS clock. A spectrum whose run cannot be told is kept,
+  stamped with the session start (tablet clock) and flagged run unknown.
+- An event with no neural data is dropped; a recording missing one data type keeps the others, and the
+  missing type contributes no time to matching. Ingest never depends on pain-rating matching.
+- Extractor failures are written on the export's row, never swallowed.
+- Fix the ingester and re-ingest the whole record; never backfill or patch piecemeal. Verify a
+  re-ingest in the scratch database (`BRAVOReingest`) against the exports type by type first, then
+  live after a backup.
+- Montage facts: one side's 6 contact pairs are recorded together; the two sides one after the other.
+
+**Calibration.**
+- Device values at face value, no scaling; log power enters no calculation (§7.13).
+- The threshold band-power streams check the PSD->LSB route (decision 447): measured LSB against the
+  bridge's prediction from a same-export device PSD on the same contact pair at the stream's sensing
+  frequency, on the Biomarkers calibration panel and wherever the conversion is shown.
+- Signal-check spectra are the same quantity as montage spectra and go through the same bridge,
+  unscaled.
+
+**REDCap.**
+- REDCap stores California wall-clock time; it is converted to UTC, the scale every device and tablet
+  time is stored on (BRAVO stores seconds since 1970, UTC).
+- Every rating counts: repeated identical reports are independent ratings; a daily survey filed once
+  (no repeat label) is kept. Any pain survey dated after the implant (2025-07-16) must be ingested;
+  the stage-0 pain surveys all predate it.
+- With the clinic-sheet switch on, sheet ratings reach every pain reader on the page (decision 436).
