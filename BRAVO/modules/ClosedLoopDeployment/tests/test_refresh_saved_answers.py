@@ -119,3 +119,34 @@ def test_gunicorn_also_starts_the_daily_loop():
     conf = open(os.path.join(here, "..", "..", "..", "gunicorn.conf.py")).read()
     hook = conf.split("def when_ready(server):", 1)[1].split("\ndef ", 1)[0]
     assert "stability_precompute_loop.sh" in hook and "STABILITY_PRECOMPUTE" in hook
+
+
+def test_a_replay_that_starts_the_helper_process_still_ends():
+    """A replay whose work starts the stability model's helper process (decision 427) must end.
+    Python waits for a replay process's children before it runs the code that stops them, so an
+    unstopped helper held the replay, and the whole pass, for 6.5 hours (2026-10-05, 15:10 UTC on)."""
+    import subprocess
+    import sys
+    import tempfile
+    import textwrap
+    modules_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    script = os.path.join(tempfile.mkdtemp(), "replay_with_helper.py")
+    with open(script, "w") as fh:
+        fh.write(textwrap.dedent(f"""
+            import sys
+            sys.path.insert(0, {os.path.dirname(modules_dir)!r})
+            sys.path.insert(1, {modules_dir!r})
+            from modules.ClosedLoopDeployment import refresh_saved_answers as job
+            import importlib
+
+            def uses_helper(kind, body):          # the helper module, under the name in `kind`
+                SP = importlib.import_module(kind)
+                return {{"kind": kind, "ok": True, "value": SP.submit(sorted, [2, 1]).result(timeout=60)}}
+
+            if __name__ == "__main__":
+                rows = [{{"kind": n, "body": {{}}}} for n in ("modules.DecodeCommon.side_process",
+                                                          "DecodeCommon.side_process")]
+                print(job._run_in_processes(rows, 1, replay=uses_helper))
+        """))
+    out = subprocess.run([sys.executable, "-B", script], capture_output=True, text=True, timeout=120)
+    assert out.stdout.count("'value': [1, 2]") == 2, out.stderr[-2000:]

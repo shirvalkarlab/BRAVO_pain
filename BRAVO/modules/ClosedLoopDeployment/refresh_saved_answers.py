@@ -111,14 +111,34 @@ def _run_here(rows, workers):
     return [_replay_one(r["kind"], r["body"]) for r in rows]
 
 
-def _run_in_processes(rows, workers):
+def _replay_process_init(parent_pid, sys_path):
+    """Set up one replay process. At its exit Python waits for the process's children BEFORE it runs
+    the code that stops them, so a helper (decision 427) or calculation pool left running holds the
+    replay, and the whole pass, for ever (6.5 hours on 2026-10-05). Stop them first: a step
+    registered here runs ahead of that wait."""
+    from multiprocessing import util
+    from modules.DecodeCommon import side_process
+    side_process._child_init(parent_pid, sys_path)
+    util.Finalize(None, _stop_helpers, exitpriority=100)
+
+
+def _stop_helpers():
+    """Stop the calculation pool and the helper, under each name the helper module was loaded as
+    ("DecodeCommon..." and "modules.DecodeCommon..." are two copies, each with its own helper)."""
+    from modules.DecodeCommon import parallel
+    parallel.shutdown_pool()
+    for name, mod in list(sys.modules.items()):
+        if name.endswith("DecodeCommon.side_process") and hasattr(mod, "shutdown"):
+            mod.shutdown()
+
+
+def _run_in_processes(rows, workers, replay=_replay_one):
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
-    from modules.DecodeCommon import side_process
     with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn"),
-                             initializer=side_process._child_init,
+                             initializer=_replay_process_init,
                              initargs=(os.getpid(), list(sys.path))) as ex:
-        futures = [ex.submit(_replay_one, r["kind"], r["body"]) for r in rows]
+        futures = [ex.submit(replay, r["kind"], r["body"]) for r in rows]
         return [f.result() for f in futures]
 
 

@@ -139,6 +139,11 @@ its line about `MEGA_HANDOFF.md`, archived), `jevgrep` (rule 14).
     (`views/Reports/paper/selectStyle.js`). Verdict words belong on the Closed-Loop page. Details:
     skill `bravo-stimoptimizer-figures`, "House style for every BRAVO page".
 
+16. **A stuck job is stopped the moment it is found, before any diagnosis** (the PI, 2026-10-05, after
+    a background pass sat locked for 6.5 hours while it was being diagnosed). Stop it by process
+    number, confirm none is left, then work out why from a reproduction. Before ending a turn, check
+    nothing of ours is running far past its normal time. Every background loop's pass has a time limit.
+
 ## 8. Read first, and on demand
 
 @HOUSE_RULES_writing_and_claims.md
