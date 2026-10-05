@@ -313,12 +313,71 @@ def extractPatientInformation(JSON):
 
     return PatientOverview
 
+def surveyExtraRecordings(Data, session_start):
+    """The recordings of the sections first read on 2026-10-05 (decision 443): the electrode survey's
+    own streams (those not identical to the montage), spectra whose run cannot be told (stamped with
+    the session start, tablet clock, flagged `RunUnknown`), in-session signal checks not identical to
+    another spectrum (session start), and the threshold band-power streams (their own start)."""
+    out = []
+    if Data.get("ElectrodeSurveyTD"):
+        out += [{"name": "", "type": "MedtronicElectrodeSurvey", "date": R["StartTime"], "recording": R,
+                 "metadata": {"ChannelNames": R["ChannelNames"], "Duration": R["Duration"]}}
+                for R in BrainSenseSurvey.saveBrainSenseSurvey(Data["ElectrodeSurveyTD"])]
+    for u in Data.get("SurveyPSDRunUnknown") or []:
+        R = {"StartTime": session_start, "Descriptor": {"MedtronicPSD": [u["PSD"]]}, "RunUnknown": True,
+             "CandidateRuns": list(u.get("candidate_runs") or []), "Source": u.get("source")}
+        out.append({"name": "", "type": "MedtronicSurveyPSD", "date": session_start, "recording": R,
+                    "metadata": {"Source": u.get("source"), "RunUnknown": True}})
+    for c in Data.get("SignalCheckPSD") or []:
+        R = {"StartTime": session_start, "Descriptor": {"SignalCheck": c}}
+        out.append({"name": "", "type": "MedtronicSignalCheckPSD", "date": session_start, "recording": R,
+                    "metadata": {"Channel": c.get("Channel")}})
+    for t in Data.get("ThresholdPower") or []:
+        R = dict(t, StartTime=t["FirstPacketDateTime"], ChannelNames=[t.get("Channel")],
+                 Duration=(len(t["Sequences"]) / t["SamplingRate"]) if t.get("SamplingRate") else None)
+        out.append({"name": "", "type": "MedtronicThresholdPowerDomain", "date": t["FirstPacketDateTime"],
+                    "recording": R, "metadata": {"ChannelNames": [t.get("Channel")], "Duration": R["Duration"]}})
+    return out
+
+
+def brainSenseStreamRecordings(Data, fix_breaking=False):
+    """The BrainSense streaming recordings of one export: time-domain and band power, each built
+    from whatever decoded (decision 440). Time-domain used to be stored only when band power also
+    decoded, so one bad band-power reading lost a whole export's time-domain streaming."""
+    TimeDomainRecordings, PowerDomainRecordings = [], []
+    if Data.get("StreamingTD") or Data.get("StreamingPower"):
+        TimeDomainRecordings, PowerDomainRecordings = BrainSenseStream.saveBrainSenseStreams(
+            list(Data.get("StreamingTD") or []), list(Data.get("StreamingPower") or []), FixBreaking=fix_breaking)
+    out_td = [{
+        "name": "",
+        "type": "MedtronicBrainSenseTimeDomain",
+        "date": Recording["StartTime"],
+        "recording": Recording,
+        "metadata": {
+            "ChannelNames": Recording["ChannelNames"],
+            "Duration": Recording["Duration"],
+        }
+    } for Recording in TimeDomainRecordings]
+    out_power = [{
+        "name": "",
+        "type": "MedtronicBrainSensePowerDomain",
+        "date": Recording["StartTime"],
+        "recording": Recording,
+        "metadata": {
+            "ChannelNames": Recording["ChannelNames"],
+            "Duration": Recording["Duration"],
+            "Therapy": Recording["Descriptor"]["Therapy"],
+        }
+    } for Recording in PowerDomainRecordings]
+    return out_td, out_power
+
+
 def decodeMedtronicJSON(JSON):
     Data = get_or_none(Percept.extractPerceptJSON)(JSON)
     if not Data:
         raise Exception("Medtronic Percept Content Extraction Error")
     
-    # TODO: Handle Process Failure
+    # Failures are carried to the export's row (decision 441), see the return below.
 
     # Extract Device/Patient Info
     SessionOverview = extractPatientInformation(JSON)
@@ -354,6 +413,13 @@ def decodeMedtronicJSON(JSON):
     
     # Process BrainSense Survey
     SurveyRecordings = []
+    # every section first read on 2026-10-05, at the session start where it has no time (decision 443)
+    _session_start = SessionOverview["SessionTimestamp"]
+    try:
+        _session_start = Percept.getTimestamp(JSON["SessionDate"]) if JSON.get("SessionDate") else _session_start
+    except Exception:
+        pass
+    SurveyRecordings += surveyExtraRecordings(Data, _session_start)
     if "ElectrodeIdentifierTD" in Data.keys():
         SurveyRecordings += [{
             "name": "",
@@ -416,32 +482,9 @@ def decodeMedtronicJSON(JSON):
             }
         } for Recording in IndefiniteStream.saveIndefiniteStreams(Data["IndefiniteStream"])]
         
-    # Process BrainSense Streams
-    TimeDomainRecordings = []
-    PowerDomainRecordings = []
-    if "StreamingTD" in Data.keys() and "StreamingPower" in Data.keys():
-        TimeDomainRecordings, PowerDomainRecordings = BrainSenseStream.saveBrainSenseStreams(Data["StreamingTD"], Data["StreamingPower"], FixBreaking=JSON["AutomaticStreamingFix"])
-        StreamingRecordings += [{
-            "name": "",
-            "type": "MedtronicBrainSenseTimeDomain",
-            "date": Recording["StartTime"],
-            "recording": Recording,
-            "metadata": {
-                "ChannelNames": Recording["ChannelNames"],
-                "Duration": Recording["Duration"],
-            }
-        } for Recording in TimeDomainRecordings]
-        StreamingRecordings += [{
-            "name": "",
-            "type": "MedtronicBrainSensePowerDomain",
-            "date": Recording["StartTime"],
-            "recording": Recording,
-            "metadata": {
-                "ChannelNames": Recording["ChannelNames"],
-                "Duration": Recording["Duration"],
-                "Therapy": Recording["Descriptor"]["Therapy"],
-            }
-        } for Recording in PowerDomainRecordings]
+    # Process BrainSense Streams: time-domain and band power each from whatever decoded (decision 440)
+    _td, _power = brainSenseStreamRecordings(Data, fix_breaking=JSON["AutomaticStreamingFix"])
+    StreamingRecordings += _td + _power
 
     # Stiore Chronic BrainSenses
     ChronicRecordings = []
@@ -505,5 +548,9 @@ def decodeMedtronicJSON(JSON):
         "SurveyRecordings": SurveyRecordings,
         "StreamingRecordings": StreamingRecordings,
         "ChronicRecordings": ChronicRecordings,
-        "EventRecordings": EventRecordings
+        "EventRecordings": EventRecordings,
+        # NOTHING SWALLOWED (decision 441): the extractors that failed and the band-power
+        # recordings set aside, written onto the export's row by the ingest.
+        "ProcessFailure": [str(f) for f in (Data.get("ProcessFailure") or [])],
+        "StreamingPowerSetAside": list(Data.get("StreamingPowerSetAside") or []),
     }

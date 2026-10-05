@@ -64,7 +64,10 @@ POWERDOMAIN_TYPES = ["MedtronicBrainSensePowerDomain"]
 # `metadata` carries, per hemisphere, the event DateTime + a full-band PSD (Frequency/FFTBinData).
 PATIENT_EVENT_TYPE = "PatientControllerEvent"
 AVAILABILITY_PSD_TYPES = ["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages",
-                          "MedtronicStimulationMontages"]
+                          "MedtronicStimulationMontages", "MedtronicElectrodeSurvey"]
+# Device spectra with no voltage trace, read only as spectra (decision 446): a spectrum whose run
+# cannot be told, at the session start, and the in-session signal check, at the session start.
+SPECTRUM_ONLY_TYPES = ["MedtronicSurveyPSD", "MedtronicSignalCheckPSD"]
 
 # ── PSD-source taxonomy — single source of truth (verified on RCS08 JSONs, 2026-06-27) ────────────
 # Several products carry a frequency-domain PSD. They differ along TWO axes that the pipeline must not
@@ -899,22 +902,37 @@ def _montage_psd_lsb_blocks(participant_uid, montage_recordings=None):
     MONTAGE_PSD_SOURCE so the cache/hover can distinguish montage from patient-event PSD.
     """
     if montage_recordings is None:
-        montage_recordings = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+        montage_recordings = (_load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+                              + _load_recordings(participant_uid, SPECTRUM_ONLY_TYPES))
     blocks = []
     for r in (montage_recordings or []):
         if not isinstance(r, dict):
             continue
-        mp = (r.get("Descriptor") or {}).get("MedtronicPSD")
-        if not isinstance(mp, list):
-            continue
+        desc = r.get("Descriptor") or {}
         t0 = availability._to_epoch(r.get("StartTime"))
         if t0 is None:
             continue
-        for e in mp:
+        # THE IN-SESSION SIGNAL CHECK (decision 446): its own channel name, frequencies and values
+        check = desc.get("SignalCheck")
+        if isinstance(check, dict):
+            ch = _canon_channel(str(check.get("Channel") or "").split(".")[-1])
+            if ch and check.get("SignalFrequencies") is not None and check.get("SignalPsdValues") is not None:
+                blocks.append({"channel": ch, "t": float(t0), "freq": check["SignalFrequencies"],
+                               "power": check["SignalPsdValues"], "source": MONTAGE_PSD_SOURCE,
+                               "origin": "signal check"})
+            continue
+        if r.get("RunUnknown"):
+            origin_of = {"MedtronicPSD": "run unknown"}
+        else:
+            origin_of = {"MedtronicPSD": "montage", "SurveyPSD": "electrode survey"}
+        entries = [(e, origin_of[k]) for k in origin_of for e in (desc.get(k) or [])
+                   if isinstance(desc.get(k), list)]
+        for e, origin in entries:
             if not isinstance(e, dict):
                 continue
-            freq = e.get("LFPFrequency")
-            power = e.get("LFPMagnitude")
+            # the montage and the survey spell the same fields differently (decision 446)
+            freq = e.get("LFPFrequency") if e.get("LFPFrequency") is not None else e.get("LFPFrequencyinHertz")
+            power = e.get("LFPMagnitude") if e.get("LFPMagnitude") is not None else e.get("LFPMagnitudeinMicroVoltPeak")
             if freq is None or power is None:
                 continue
             # Canonical channel from the device sensing config + hemisphere.
@@ -930,7 +948,7 @@ def _montage_psd_lsb_blocks(participant_uid, montage_recordings=None):
             if not ch:
                 continue
             blocks.append({"channel": ch, "t": float(t0),
-                           "freq": freq, "power": power, "source": MONTAGE_PSD_SOURCE})
+                           "freq": freq, "power": power, "source": MONTAGE_PSD_SOURCE, "origin": origin})
     return blocks
 
 
@@ -1060,7 +1078,8 @@ def _recordings_setup_cached(participant_uid, td=None, recording_set=None):
     psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
     sensing_idx = _build_sensing_config_index(list(td or []))
     event_blocks = _event_psd_lsb_blocks(participant_uid, sensing_index=sensing_idx)
-    montage_blocks = _montage_psd_lsb_blocks(participant_uid, montage_recordings=psd_list)
+    montage_blocks = _montage_psd_lsb_blocks(
+        participant_uid, montage_recordings=list(psd_list or []) + _load_recordings(participant_uid, SPECTRUM_ONLY_TYPES))
     chan_order = _derive_chan_order(td)
     channels = list(dict.fromkeys(availability._canon_channel(c) for c in (chan_order or [])))
     result = (td, psd_list, event_blocks, montage_blocks, chan_order, channels)
@@ -6875,9 +6894,80 @@ def psd_lsb_conversion_model(request_data):
     P = models.Participant.find(uid=participant)
     if P is not None:
         code = getattr(P, "code", None) or getattr(P, "name", None) or participant
-    return _cal.panel_payload(code, deployed_k=analytics.LSB_PER_UV2_TRANSFORM,
-                              deployed_bridge_ratio=analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO,
-                              deployed_bridge=analytics.LSB_PER_DEVICE_PSD)
+    out = _cal.panel_payload(code, deployed_k=analytics.LSB_PER_UV2_TRANSFORM,
+                             deployed_bridge_ratio=analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO,
+                             deployed_bridge=analytics.LSB_PER_DEVICE_PSD)
+    # the threshold band-power streams against the PSD->LSB route (decision 447)
+    try:
+        out["threshold_check"] = _cal.threshold_check(_threshold_check_rows(P) if P is not None else [])
+    except Exception as exc:                               # noqa: BLE001 - the panel stands without it
+        _log.warning("Biomarkers: the threshold check could not be built", exc_info=True)
+        out["threshold_check"] = {"available": False, "reason": f"could not be built ({type(exc).__name__})"}
+    return out
+
+
+THRESHOLD_POWER_TYPE = "MedtronicThresholdPowerDomain"
+
+
+def _threshold_check_rows(participant):
+    """One row per stored threshold band-power stream (decision 447): its side, contact pair and
+    sensing frequency (the export's own settings, kept on the stream at ingest), its measured LSB
+    (median of the side's readings), and the LSB the bridge predicts (`analytics.device_psd_to_lsb`)
+    from each device spectrum OF THE SAME EXPORT on the same contact pair: the signal check, the
+    montage or electrode survey on its run, a spectrum of unknown run. Device values only."""
+    from modules import Database
+    types = [THRESHOLD_POWER_TYPE] + list(AVAILABILITY_PSD_TYPES) + list(SPECTRUM_ONLY_TYPES)
+    recs = list(models.Recording.objects.filter(source__owner=participant, type__in=types)
+                .values_list("type", "source_id", "pointer", "hashed"))
+    by_source = {}
+    for typ, src, pointer, hashed in recs:
+        try:
+            by_source.setdefault(src, []).append((typ, Database.loadSourceFile(pointer, hashed)))
+        except Exception:                                  # noqa: BLE001 - an unreadable file is skipped
+            continue
+
+    def side_of(x):
+        t = str(x or "").upper()
+        return "LEFT" if "LEFT" in t else ("RIGHT" if "RIGHT" in t else None)
+
+    rows = []
+    for src, items in by_source.items():
+        for typ, th in items:
+            if typ != THRESHOLD_POWER_TYPE:
+                continue
+            setup = th.get("SensingSetup") or {}
+            side = side_of(th.get("Channel")) or side_of(setup.get("HemisphereLocation"))
+            pair = str(setup.get("Channel") or "").split(".")[-1]
+            fc = (setup.get("SensingSetup") or {}).get("FrequencyInHertz")
+            power = np.asarray(th.get("LeftPower" if side == "LEFT" else "RightPower"), dtype=float)
+            measured = float(np.nanmedian(power)) if np.isfinite(power).any() else float("nan")
+            short = f"{pair.replace('_AND_', '_')}_{side}" if pair and side else None
+            preds = {}
+            if fc and short:
+                for typ2, rec in items:
+                    desc = rec.get("Descriptor") or {}
+                    check = desc.get("SignalCheck")
+                    if isinstance(check, dict):
+                        if str(check.get("Channel") or "").split(".")[-1] == short:
+                            preds["signal check"] = float(analytics.device_psd_to_lsb(
+                                check["SignalFrequencies"], check["SignalPsdValues"], float(fc)))
+                        continue
+                    label = "run unknown" if rec.get("RunUnknown") else "montage"
+                    for e in list(desc.get("MedtronicPSD") or []) + list(desc.get("SurveyPSD") or []):
+                        if not isinstance(e, dict):
+                            continue
+                        if str(e.get("SensingElectrodes", "")).split(".")[-1] != pair or side_of(e.get("Hemisphere")) != side:
+                            continue
+                        f = e.get("LFPFrequency") if e.get("LFPFrequency") is not None else e.get("LFPFrequencyinHertz")
+                        m = e.get("LFPMagnitude") if e.get("LFPMagnitude") is not None else e.get("LFPMagnitudeinMicroVoltPeak")
+                        if f is not None and m is not None and label not in preds:
+                            preds[label] = float(analytics.device_psd_to_lsb(f, m, float(fc)))
+            rows.append({"time": availability._to_epoch(th.get("StartTime")), "side": side, "channel": short,
+                         "center_hz": fc, "measured_lsb": measured, "predicted_lsb": preds,
+                         "upper_threshold": setup.get("UpperLfpThreshold"),
+                         "lower_threshold": setup.get("LowerLfpThreshold")})
+    rows.sort(key=lambda r: (r["time"] or 0, r["side"] or ""))
+    return rows
 
 
 def _sensing_hz_for_pd(pd_rec, contact):

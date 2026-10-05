@@ -190,7 +190,18 @@ def process_redcap(redcap_data, field_map):
 
     instruments = field_map.get("instruments")
     if instruments and "redcap_repeat_instrument" in df.columns:
-        df = df[df["redcap_repeat_instrument"].isin(instruments)]
+        # A survey filed ONCE rather than as a repeat has no repeat label but is the same survey:
+        # its own timestamp and at least one score are filled (decision 448; one RCS08 rating of
+        # 2025-07-30 was dropped here).
+        cols = []
+        for v in metric_labels.values():
+            cols += list(v) if isinstance(v, (list, tuple)) else [v]
+        cols = [c for c in cols if c in df.columns]
+        one_off = df["redcap_repeat_instrument"].isna() | (df["redcap_repeat_instrument"].astype(str).str.strip() == "")
+        if timestamp_label in df.columns:
+            one_off &= df[timestamp_label].notna() & (df[timestamp_label].astype(str).str.strip() != "")
+        one_off &= df[cols].notna().any(axis=1) if cols else False
+        df = df[df["redcap_repeat_instrument"].isin(instruments) | one_off]
     record_id = field_map.get("pt", field_map.get("record_id"))
     if record_id is not None and "record_id" in df.columns:
         df = df[df["record_id"].astype(str) == str(record_id)]

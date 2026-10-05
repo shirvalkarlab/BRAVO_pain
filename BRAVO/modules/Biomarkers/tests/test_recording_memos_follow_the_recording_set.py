@@ -65,7 +65,8 @@ class _Stubs:
 _MEMOS = (
     ("availability recordings", lambda: bs._availability_recordings_cached(UID), 3),
     ("power list", lambda: bs._power_list_cached(UID), 2),
-    ("recordings setup", lambda: bs._recordings_setup_cached(UID), 2),
+    # time domain, the montage/survey types, and (decision 446) the spectrum-only types
+    ("recordings setup", lambda: bs._recordings_setup_cached(UID), 3),
 )
 
 
