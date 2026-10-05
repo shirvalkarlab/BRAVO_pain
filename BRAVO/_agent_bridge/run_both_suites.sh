@@ -44,6 +44,17 @@ HOST_TESTS="ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests Deco
 HOST_OPTS="-q -W ignore -p no:cacheprovider"
 T0=$(date +%s)
 
+# THE FAST RUN (`--fast`, decision 451): the routine check during work; leaves out the ControlAnalyses
+# package and the tests listed in modules/slow_tests.py (marked `slow`). The full run (no argument)
+# is the one before every commit.
+SLOW_FILTER=""
+CONT_FAST=""
+if [ "${1:-}" = "--fast" ]; then
+  SLOW_FILTER=" and not slow"
+  CONT_FAST="--fast"
+  HOST_TESTS="ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests"
+fi
+
 if [ "${1:-}" = "--live" ]; then
   ( cd modules && PYTHONPATH=. python3 -B -m pytest $HOST_TESTS $HOST_OPTS -m "live" > ../$LOGS/host_live.log 2>&1 ) &
   HOST=$!
@@ -60,12 +71,12 @@ fi
   cd modules || exit 1
   # pass 1: everything routine, across HOST_N processes, one maths thread each
   PYTHONPATH=. python3 -B -m pytest $HOST_TESTS $HOST_OPTS -n $HOST_N --dist worksteal \
-    -m "not live and not store" > ../$LOGS/host_parallel.log 2>&1
+    -m "not live and not store$SLOW_FILTER" > ../$LOGS/host_parallel.log 2>&1
   # pass 2: the store tests, one at a time, default threads
   PYTHONPATH=. python3 -B -m pytest $HOST_TESTS $HOST_OPTS -m "store and not live" > ../$LOGS/host_store.log 2>&1
 ) &
 HOST=$!
-( python3 _agent_bridge/run_tests.py --shards $CONT_N > $LOGS/container.log 2>&1 ) &
+( python3 _agent_bridge/run_tests.py --shards $CONT_N $CONT_FAST > $LOGS/container.log 2>&1 ) &
 CONT=$!
 wait $HOST; wait $CONT
 
@@ -85,4 +96,4 @@ print("%d passed, %d skipped, %d failed, %d errors" % (n["passed"], n["skipped"]
 echo "host:      $TOTAL  [parallel: $P1 | store, serial: $P2]"
 echo "container: $(rg 'PASS=|FAIL=' $LOGS/container.log | tail -1)"
 rg "slowest file" $LOGS/container.log | head -3
-echo "wall: $(( $(date +%s) - T0 )) s   (the live tests are not in this run: sh _agent_bridge/run_both_suites.sh --live)"
+echo "wall: $(( $(date +%s) - T0 )) s ${CONT_FAST:+(FAST run: slow tests left out; full run before committing)}  (the live tests are not in this run: sh _agent_bridge/run_both_suites.sh --live)"

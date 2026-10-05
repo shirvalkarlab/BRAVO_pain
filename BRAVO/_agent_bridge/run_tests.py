@@ -5,6 +5,11 @@ import os, sys, importlib, traceback, glob
 # Routine run: every live test is skipped and counted in LIVE_SKIPPED. `--live`: ONLY the live
 # tests run. The daily pass (`stability_precompute_loop.sh`) is what runs them with `--live`.
 LIVE_ONLY = "--live" in sys.argv[1:]
+# THE FAST RUN (decision 451): `--fast` leaves out what `modules/slow_tests.py` lists; the full run
+# (no argument) is the one before every commit.
+FAST = "--fast" in sys.argv[1:]
+sys.path.insert(0, "/usr/src/BRAVO/modules")
+from slow_tests import is_slow as _is_slow
 # SHARDS (2026-10-02, the PI: "parallelize all the tests and run them massively parallel"). A routine
 # run splits the test FILES across processes (`--shards N`, default: the core count, at most one per
 # file); each process runs its files' tests in file order, exactly as one process did, and the parent
@@ -33,12 +38,16 @@ def _units(files):
                            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith("test_"))
         except SyntaxError:
             names = ["<import>"]
+        if FAST:
+            names = [nm for nm in names if not _is_slow(f, nm)]
         out += [(pkg, f, nm) for nm in names] or [(pkg, f, "<import>")]
     return out
 
 def _files():
     out = []
     for _pkg in ["Biomarkers", "CacheStore", "DecodeCommon", "ControlAnalyses", "MedtronicPercept"]:
+        if FAST and _is_slow(f"/usr/src/BRAVO/modules/{_pkg}/tests/x.py", "x"):
+            continue
         out += [(_pkg, p) for p in sorted(glob.glob(f"/usr/src/BRAVO/modules/{_pkg}/tests/test_*.py"))]
     return out
 
@@ -47,7 +56,7 @@ if SHARD is None and not LIVE_ONLY and N_SHARDS != 1:
     n = N_SHARDS or (os.cpu_count() or 1)
     n = max(1, min(n, len(_units(_files()))))
     t0 = time.time()
-    procs = [subprocess.Popen([sys.executable, "-B", os.path.abspath(__file__), "--shard", f"{i}/{n}"],
+    procs = [subprocess.Popen([sys.executable, "-B", os.path.abspath(__file__), "--shard", f"{i}/{n}"] + (["--fast"] if FAST else []),
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
              for i in range(n)]
     tot = {"pass": 0, "fail": 0, "live": 0}; fails = []; slow = []; bad = 0
@@ -119,7 +128,8 @@ for pkg, f in files:
     except Exception as e:
         fails.append((mod,"IMPORT",repr(e))); nfail+=1; continue
     for nm in dir(m):
-        if nm.startswith("test_") and callable(getattr(m,nm)) and (_mine is None or nm in _mine[f]):
+        if nm.startswith("test_") and callable(getattr(m,nm)) and (_mine is None or nm in _mine[f]) \
+                and not (FAST and _is_slow(f, nm)):
             if _is_live(getattr(m, nm)) != LIVE_ONLY:
                 if not LIVE_ONLY:
                     nlive_skipped += 1

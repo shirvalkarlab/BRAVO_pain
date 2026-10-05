@@ -32,6 +32,7 @@ cd Client && export PATH="/usr/local/bin:$PATH" npm_config_cache=/tmp/npmcache \
 cd Client && CI=true npx react-scripts test --watchAll=false src/views/Reports/figureStyle.test.js
 ```
 
+- **Fast run while working, full run before every commit** (the PI, 2026-10-05): `sh _agent_bridge/run_both_suites.sh --fast` leaves out ControlAnalyses and the tests listed in `BRAVO/modules/slow_tests.py` (about 40 s against 59 s).
 - **Two suites; a green run of one is not a green platform.** `run_tests.py` (plain `assert`):
   Biomarkers, CacheStore, DecodeCommon, ControlAnalyses, MedtronicPercept. pytest:
   ClosedLoopDeployment, StimOptimizer, CacheStore, DecodeCommon, ControlAnalyses (the shared three
