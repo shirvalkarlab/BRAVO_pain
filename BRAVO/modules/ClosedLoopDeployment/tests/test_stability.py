@@ -11,8 +11,11 @@ much more interested in whether the three-way answer can be flattened by a calle
 None of these tests needs R. The statistical fits live in Biomarkers and are exercised there; here
 we feed the translation the shapes that test produces, including the shapes it produces when it
 fails, so the report's handling of a failure is tested rather than assumed.
+
+Merged here 2026-10-05: test_stability_odds_ratio_per_state.py, test_stability_in_helper.py.
 """
 import dataclasses
+import inspect
 
 import numpy as np
 import pytest
@@ -80,6 +83,10 @@ def test_the_finding_offers_no_true_or_false_summary_of_the_answer():
     # says whether the test ran, not what it concluded.
     booleans = [k for k, v in f.as_payload().items() if isinstance(v, bool)]
     assert booleans == ["test_ran"], f"unexpected true-or-false keys in the payload: {booleans}"
+    # ... and still none once the per-state odds ratios and their intervals are carried (P-03)
+    raw = _raw(or_by_era_ci={"OFF": [0.679, 2.199], "LOW": [0.554, 1.477], "HIGH": None})
+    p = ST.finding_from_stability_result(raw, "ONE_THREE_LEFT", 24.5).as_payload()
+    assert [k for k, v in p.items() if isinstance(v, bool)] == ["test_ran"]
 
 
 def test_asking_about_a_word_that_is_not_an_answer_is_an_error_not_a_no():
@@ -282,3 +289,129 @@ def test_nothing_here_imports_the_closed_loop_side_back_into_biomarkers():
             imported.add(node.module)
     offenders = sorted(m for m in imported if m.split(".")[0] == "ClosedLoopDeployment")
     assert offenders == [], f"Biomarkers must not import the closed-loop side: {offenders}"
+
+# ------------------------------------------------------------------------------------------------
+# The odds ratio in each stimulation state (from test_stability_odds_ratio_per_state.py, merged
+# 2026-10-05)
+# ------------------------------------------------------------------------------------------------
+# P-03 (June audit items [0] and [22], approved by the PI 2026-09-25): the stability answer on the
+# Closed-Loop report carries the odds ratio in each stimulation state WITH its interval, and says how
+# many pain reports had samples under two states before each was counted in one.
+#
+# The Biomarkers test computes both (`band_stim_stability`: `or_by_era`, `or_by_era_ci`,
+# `one_block_per_report`); until now the translation into the report dropped them, so the per-state
+# odds ratios reached no page for a band chosen on the grid. No R needed: these feed the translation
+# the shapes the Biomarkers test returns.
+
+
+def _raw(**extra):
+    slopes = {"OFF": {"slope_log_or": 0.2, "se": 0.3, "n": 60},
+              "LOW": {"slope_log_or": -0.1, "se": 0.25, "n": 80},
+              "HIGH": None}
+    eq = ST.stability_equivalence(slopes, 0.4)
+    out = {"available": True, "lrt_p": 0.4, "slope_by_era": slopes, "equivalence": eq,
+           "stability_verdict": eq["verdict"], "n": 140, "n_clusters": 9,
+           "era_counts": {"OFF": 60, "LOW": 80, "HIGH": 0},
+           "rate": {"available": False},
+           "or_by_era": {"OFF": 1.2214, "LOW": 0.9048, "HIGH": None}}
+    out.update(extra)
+    return out
+
+
+def test_each_state_carries_its_odds_ratio_interval_and_count():
+    raw = _raw(or_by_era_ci={"OFF": [0.679, 2.199], "LOW": [0.554, 1.477], "HIGH": None},
+               or_by_era_interval="95% Wald interval from each state's own logistic fit",
+               one_block_per_report={"n_reports_split_across_states": 3,
+                                     "n_reports_split_across_weeks": 0})
+    p = ST.finding_from_stability_result(raw, "ONE_THREE_LEFT", 24.5).as_payload()
+    per = p["odds_ratio_per_state"]
+    assert list(per) == ["stimulation off", "low current", "high current"], list(per)
+    assert per["stimulation off"] == {"odds_ratio": 1.2214, "low": 0.679, "high": 2.199, "n": 60,
+                                         "n_reports": None}
+    assert per["low current"] == {"odds_ratio": 0.9048, "low": 0.554, "high": 1.477, "n": 80,
+                                     "n_reports": None}
+    assert per["high current"] == {"odds_ratio": None, "low": None, "high": None, "n": 0,
+                                      "n_reports": None}
+    assert p["odds_ratio_interval_method"].startswith("95% Wald"), p["odds_ratio_interval_method"]
+    assert p["n_reports_split_across_states"] == 3
+    assert p["n_reports_split_across_weeks"] == 0
+
+
+def test_a_stored_answer_from_before_the_interval_says_none_rather_than_inventing_one():
+    """Answers stored before this change carry odds ratios but no interval and no split count."""
+    p = ST.finding_from_stability_result(_raw(), "ONE_THREE_LEFT", 24.5).as_payload()
+    assert p["odds_ratio_per_state"]["stimulation off"] == {
+        "odds_ratio": 1.2214, "low": None, "high": None, "n": 60, "n_reports": None}
+    assert p["odds_ratio_interval_method"] is None
+    assert p["n_reports_split_across_states"] is None
+
+
+def test_a_test_that_did_not_run_carries_no_odds_ratios():
+    p = ST.finding_from_stability_result({"available": False, "reason": "no stim series"},
+                                         "ONE_THREE_LEFT", 24.5).as_payload()
+    assert p["odds_ratio_per_state"] == {}
+    assert p["n_reports_split_across_states"] is None
+
+
+# ------------------------------------------------------------------------------------------------
+# The stability model in the worker's helper process (from test_stability_in_helper.py, merged
+# 2026-10-05)
+# ------------------------------------------------------------------------------------------------
+# The report's stability model runs in the worker's helper process, beside the rest of the report
+# (the PI, 2026-10-04, decision 427).
+#
+# Pinned: the report hands the stability body to the helper before its other work and reads the
+# helper's answer where it used to compute it; the helper task applies the parent's store settings
+# (so a test sandbox or a scratch store stays one) and returns the three fields the report reads; a
+# helper that fails, or is switched off, leaves the report computing stability in-process as before.
+
+
+def test_the_report_hands_stability_to_the_helper_before_its_other_work():
+    from modules.ClosedLoopDeployment import adapter as AD
+    src = inspect.getsource(AD.report_for_participant)
+    sub = src.index("= _submit_stability(participant")
+    run = src.index("rep = _pl.run(")
+    use = src.index("_core = _stability_result(")
+    assert sub < run < use
+
+
+def test_the_helper_answer_is_used_and_a_failed_helper_falls_back(monkeypatch):
+    from modules.ClosedLoopDeployment import adapter as AD
+    class Done:
+        def result(self, timeout=None):
+            return {"available": True, "reason": None, "stim": {"x": 1}}
+
+    class Broken:
+        def result(self, timeout=None):
+            raise RuntimeError("helper died")
+    calls = []
+    monkeypatch.setattr(AD, "_validate_band_core_here", lambda body: calls.append(body) or
+                        {"available": True, "stim": {"x": 2}})
+    assert AD._stability_result(Done(), {"b": 1})["stim"] == {"x": 1} and calls == []
+    assert AD._stability_result(Broken(), {"b": 1})["stim"] == {"x": 2} and calls == [{"b": 1}]
+    assert AD._stability_result(None, {"b": 2})["stim"] == {"x": 2}
+
+
+def test_the_task_applies_the_parents_store_settings(monkeypatch):
+    from modules.ClosedLoopDeployment import stability_helper as SH
+    import os
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "BRAVO.settings")
+    import django
+    django.setup()
+    from modules.CacheStore import store as ST, ledger as LG
+    from modules.Biomarkers import bravo_service as BS
+    seen = {}
+
+    def fake_core(body):
+        seen.update(store=ST.DIR_OVERRIDE, ledger=LG.ENABLED, bio=BS._SHARED_CACHE_DIR_OVERRIDE,
+                    body=body)
+        return {"available": True, "reason": None, "stim": {"ok": 1}, "pooled": "large"}
+    monkeypatch.setattr(BS, "_validate_band_core", fake_core)
+    old = (ST.DIR_OVERRIDE, LG.ENABLED, BS._SHARED_CACHE_DIR_OVERRIDE)
+    try:
+        out = SH.stability_core({"Channel": "X"}, {"store_dir": "/tmp/s", "ledger": False,
+                                                    "biomarkers_dir": "/tmp/b", "env": {}})
+    finally:
+        ST.DIR_OVERRIDE, LG.ENABLED, BS._SHARED_CACHE_DIR_OVERRIDE = old
+    assert seen == {"store": "/tmp/s", "ledger": False, "bio": "/tmp/b", "body": {"Channel": "X"}}
+    assert out == {"available": True, "reason": None, "stim": {"ok": 1}}

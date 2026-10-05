@@ -17,11 +17,10 @@ import fs from "fs";
 import path from "path";
 import "@testing-library/jest-dom";
 import { render as rtlRender } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
 
 import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 import { T } from "assets/theme/base/tokens";
+import { wrap, clone } from "testUtils/render";
 
 jest.mock("plotly.js-dist", () => ({
   react: jest.fn(), purge: jest.fn(), restyle: jest.fn(), relayout: jest.fn(), newPlot: jest.fn(),
@@ -50,13 +49,7 @@ import RIGHT from "./__fixtures__/rcs08_cl_R03_24p5_2026-09-25.json";
 // eslint-disable-next-line import/first
 import SUM_R from "./__fixtures__/rcs08_summary_R03_24p5_2026-09-25.json";
 
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 const render = (ui) => rtlRender(wrap(ui));
-const clone = (o) => JSON.parse(JSON.stringify(o));
 const src = (f) => fs.readFileSync(path.join(__dirname, f), "utf8");
 const pageFiles = fs.readdirSync(__dirname).filter((f) => f.endsWith(".js") && !f.endsWith(".test.js"));
 

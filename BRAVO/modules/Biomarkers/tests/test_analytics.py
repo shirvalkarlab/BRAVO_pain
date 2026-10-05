@@ -104,51 +104,45 @@ def test_td_sliding_corr_grid_reaches_last_session_drops_corrupt_dates():
     assert (last_real - starts.max()).days <= 30, "grid terminated before the last real session"
 
 
-def test_power_center_freqs_standard_path():
-    """Sensing-band center frequency is read from Descriptor.Therapy.<hemi>.SensingSetup and
-    matched to each power contact by its hemisphere token."""
-    rec = {"ChannelNames": ["ZERO_THREE_LEFT POWER", "ZERO_THREE_LEFT Stimulation",
-                            "ONE_THREE_RIGHT POWER", "ONE_THREE_RIGHT Stimulation"],
-           "Descriptor": {"Therapy": {
-               "Left":  {"SensingSetup": {"FrequencyInHertz": 22.46}},
-               "Right": {"SensingSetup": {"FrequencyInHertz": 9.77}}}}}
-    freqs = analytics.power_center_freqs([rec])
-    assert freqs == {"ZERO_THREE_LEFT": 22.46, "ONE_THREE_RIGHT": 9.77}
-
-
-def test_power_center_freqs_direct_hemisphere_key():
-    """Streaming Power-Domain (BrainSenseLfp) TherapySnapshot stores FrequencyInHertz DIRECTLY on
-    the hemisphere dict (not inside a SensingSetup subdict) — the real RCS08 shape. Verified values
-    from RCS008 raw export: ZERO_THREE_LEFT @ 12.7 Hz, ZERO_TWO_RIGHT @ 13.67 Hz."""
-    rec = {"ChannelNames": ["ZERO_THREE_LEFT Power", "ZERO_TWO_RIGHT Power"],
-           "Descriptor": {"Therapy": {
-               "Left":  {"FrequencyInHertz": 12.7, "FrequencyIndex": 13,
-                         "SensingChannel": "SensingChannelDef.ZERO_THREE_LEFT"},
-               "Right": {"FrequencyInHertz": 13.67, "FrequencyIndex": 14}}}}
-    assert analytics.power_center_freqs([rec]) == {"ZERO_THREE_LEFT": 12.7, "ZERO_TWO_RIGHT": 13.67}
-
-
-def test_power_center_freqs_nested_recordingconfig():
-    """Firmware variant: SensingSetup nested under RecordingConfiguration.Config still resolves."""
-    rec = {"ChannelNames": ["ZERO_TWO_LEFT POWER"],
-           "Descriptor": {"Therapy": {"Left": {
-               "RecordingConfiguration": {"Config": {"SensingSetup": {"FrequencyInHertz": 13.18}}}}}}}
-    assert analytics.power_center_freqs([rec]) == {"ZERO_TWO_LEFT": 13.18}
-
-
-def test_power_center_freqs_missing_is_safe():
-    """No Therapy / no SensingSetup / no hemisphere token -> no entry, never raises."""
-    assert analytics.power_center_freqs([{"ChannelNames": ["ZERO_TWO_LEFT POWER"]}]) == {}
-    assert analytics.power_center_freqs(
-        [{"ChannelNames": ["ZERO_TWO_LEFT POWER"], "Descriptor": {"Therapy": {"Left": {}}}}]) == {}
-    # POWER channel with no LEFT/RIGHT token cannot be matched to a hemisphere.
-    rec = {"ChannelNames": ["X POWER"],
-           "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 7.81}}}}}
-    assert analytics.power_center_freqs([rec]) == {}
-    # Non-finite / non-positive frequencies are rejected.
-    rec2 = {"ChannelNames": ["ZERO_TWO_LEFT POWER"],
-            "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 0}}}}}
-    assert analytics.power_center_freqs([rec2]) == {}
+def test_power_center_freqs_reads_every_descriptor_shape_and_missing_is_safe():
+    """The sensing-band centre frequency per power contact, matched by its hemisphere token:
+    - standard: Descriptor.Therapy.<hemi>.SensingSetup;
+    - streaming Power-Domain (BrainSenseLfp) TherapySnapshot: FrequencyInHertz DIRECTLY on the
+      hemisphere dict -- the real RCS08 shape (raw export: ZERO_THREE_LEFT @ 12.7 Hz, ZERO_TWO_RIGHT
+      @ 13.67 Hz);
+    - firmware variant: SensingSetup nested under RecordingConfiguration.Config;
+    - no Therapy / no SensingSetup / no hemisphere token / a non-positive frequency: no entry,
+      never raises."""
+    cases = [
+        ("standard", {"ChannelNames": ["ZERO_THREE_LEFT POWER", "ZERO_THREE_LEFT Stimulation",
+                                       "ONE_THREE_RIGHT POWER", "ONE_THREE_RIGHT Stimulation"],
+                      "Descriptor": {"Therapy": {
+                          "Left": {"SensingSetup": {"FrequencyInHertz": 22.46}},
+                          "Right": {"SensingSetup": {"FrequencyInHertz": 9.77}}}}},
+         {"ZERO_THREE_LEFT": 22.46, "ONE_THREE_RIGHT": 9.77}),
+        ("direct hemisphere key", {"ChannelNames": ["ZERO_THREE_LEFT Power", "ZERO_TWO_RIGHT Power"],
+                                   "Descriptor": {"Therapy": {
+                                       "Left": {"FrequencyInHertz": 12.7, "FrequencyIndex": 13,
+                                                "SensingChannel": "SensingChannelDef.ZERO_THREE_LEFT"},
+                                       "Right": {"FrequencyInHertz": 13.67, "FrequencyIndex": 14}}}},
+         {"ZERO_THREE_LEFT": 12.7, "ZERO_TWO_RIGHT": 13.67}),
+        ("nested RecordingConfiguration", {"ChannelNames": ["ZERO_TWO_LEFT POWER"],
+                                           "Descriptor": {"Therapy": {"Left": {
+                                               "RecordingConfiguration": {"Config": {
+                                                   "SensingSetup": {"FrequencyInHertz": 13.18}}}}}}},
+         {"ZERO_TWO_LEFT": 13.18}),
+        ("no Therapy", {"ChannelNames": ["ZERO_TWO_LEFT POWER"]}, {}),
+        ("no SensingSetup", {"ChannelNames": ["ZERO_TWO_LEFT POWER"],
+                             "Descriptor": {"Therapy": {"Left": {}}}}, {}),
+        ("no hemisphere token", {"ChannelNames": ["X POWER"],
+                                 "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 7.81}}}}},
+         {}),
+        ("non-positive frequency", {"ChannelNames": ["ZERO_TWO_LEFT POWER"],
+                                    "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 0}}}}},
+         {}),
+    ]
+    for name, rec, want in cases:
+        assert analytics.power_center_freqs([rec]) == want, name
 
 
 def _group(active, left_hz=None, right_hz=None):
@@ -162,27 +156,20 @@ def _group(active, left_hz=None, right_hz=None):
     return {"ActiveGroup": active, "ProgramSettings": {"SensingChannel": ch}}
 
 
-def test_chronic_center_freqs_group_level():
+def test_chronic_center_freqs_group_level_active_group_wins_and_missing_is_safe():
     """Chronic-trend sensing frequency comes from Groups.Final[].ProgramSettings.SensingChannel[]
-    keyed by HemisphereLocation, mapped to Left/RightHemisphere (the chronic ChannelNames tokens)."""
+    keyed by HemisphereLocation, mapped to Left/RightHemisphere (the chronic ChannelNames tokens).
+    When several groups carry a frequency for the same hemisphere, the ACTIVE group wins. Malformed
+    or absent structures return {} and never raise."""
     groups = {"Final": [_group(active=True, left_hz=10.74, right_hz=8.79)]}
     assert analytics.chronic_center_freqs(groups) == {"LeftHemisphere": 10.74, "RightHemisphere": 8.79}
     # A bare list of groups is also accepted.
     assert analytics.chronic_center_freqs([_group(True, left_hz=7.81)]) == {"LeftHemisphere": 7.81}
-
-
-def test_chronic_center_freqs_active_group_wins():
-    """When several groups carry a frequency for the same hemisphere, the ACTIVE group wins."""
     groups = {"Final": [_group(active=False, left_hz=5.0),
                         _group(active=True, left_hz=10.74)]}
-    assert analytics.chronic_center_freqs(groups) == {"LeftHemisphere": 10.74}
-
-
-def test_chronic_center_freqs_missing_is_safe():
-    """Malformed / absent structures return {} and never raise."""
-    assert analytics.chronic_center_freqs(None) == {}
-    assert analytics.chronic_center_freqs({}) == {}
-    assert analytics.chronic_center_freqs([1, 2, "x", {}]) == {}
+    assert analytics.chronic_center_freqs(groups) == {"LeftHemisphere": 10.74}, "the active group wins"
+    for malformed in (None, {}, [1, 2, "x", {}]):
+        assert analytics.chronic_center_freqs(malformed) == {}, malformed
     # hemisphere present but no finite frequency -> omitted
     assert analytics.chronic_center_freqs({"Final": [_group(True, left_hz=0)]}) == {}
 

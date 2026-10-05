@@ -23,21 +23,12 @@
  */
 import "@testing-library/jest-dom";
 import { render as rtlRender } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 
 import ClosedLoopChecks from "./ClosedLoopChecks";
 import TwoStagePlanCard from "./TwoStagePlanCard";
 import { TITRATION_CARD_TITLE } from "./TitrationSessionCard";
 import response from "./__fixtures__/rcs08_stim_optimizer_two_stage.json";
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
+import { wrap } from "testUtils/render";
 
 const plan = response.two_stage;
 

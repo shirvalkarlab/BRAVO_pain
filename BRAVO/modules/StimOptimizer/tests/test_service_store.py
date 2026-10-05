@@ -10,12 +10,9 @@ blank; an amplitude table with the same flaw is reported as refused.
 The pipeline fit, the design matrix and the platform lookups are stood in for. What runs for real
 is the service's wiring, the store, and the provenance rules.
 """
-import importlib
 import json
 import os
-import shutil
 import sys
-import tempfile
 import types
 
 import numpy as np
@@ -24,43 +21,15 @@ import pytest
 
 from StimOptimizer import adapter as AD
 from StimOptimizer import bravo_service as BS
+from StimOptimizer.tests import _helpers as H
 
 st = BS._cache_store
 prov = BS._provenance
-_ledger = importlib.import_module(st.__name__.rsplit(".", 1)[0] + ".ledger")
 
 UID = "PARTICIPANT"
 # the key the store itself would give the fixture's matched table, so it can be found by key
 MATCHED_KEY = st.product_key("therapy_pain_matched", UID, ("m", 1))
 TILES_KEY = "raw_lsb_tiles/PARTICIPANT/t1"
-
-
-class _Arm:
-    def __init__(self):
-        self.site, self.hemisphere = "left_leg", "Left"
-        # `rank` is the pipeline's own column, as on the live record; the first version of the
-        # write-back inserted a second one and pandas refused the whole write.
-        self.queue = pd.DataFrame({"rank": [1, 2], "freq_hz": [55.0, 110.0],
-                                   "amp_mA": [2.0, 2.5], "score": [0.3, 0.2]})
-        self.batch = self.queue.head(1).copy()
-        self.meta = {"incumbent_mu": 0.4, "mu_star": -0.6, "sd_star": 0.9, "incumbent_sd": 0.9,
-                     "x_star": [55.0, 2.0], "data_horizon": "h", "washin_min": 1.0,
-                     "amp_col": "amp_mA_Left", "n_epochs_fitted": 10, "kernel": "rbf",
-                     "safe_is_contiguous": True, "safe_contiguous_ceiling": float("nan")}
-        self.ctx = types.SimpleNamespace(meta=self.meta)
-
-    def surface_can_resolve_its_optimum(self, k=1.0):
-        return False
-
-
-class _Report:
-    def __init__(self):
-        self.arms = {"left_leg__Left": _Arm()}
-        self.summary = pd.DataFrame({"arm": ["left_leg__Left"], "n_epochs": [10]})
-        self.manifest = {"declared": "stub"}
-
-    def recommendation_is_supported(self):
-        return False
 
 
 class _Runs:
@@ -96,35 +65,13 @@ def _es():
 
 @pytest.fixture
 def bench(monkeypatch):
-    root = tempfile.mkdtemp(prefix="bravo_so_store_")
-    monkeypatch.setattr(BS, "_SHARED_CACHE_DIR_OVERRIDE", root)
-    monkeypatch.setattr(AD, "_SHARED_CACHE_DIR_OVERRIDE", root)
-    monkeypatch.setattr(_ledger, "ENABLED", False)
-    monkeypatch.setattr(st, "ENABLED", True)
-    models = types.ModuleType("Server.models")
-    models.Participant = types.SimpleNamespace(find=lambda uid: types.SimpleNamespace(uid=uid))
-    server = types.ModuleType("Server"); server.models = models
-    monkeypatch.setitem(sys.modules, "Server", server)
-    monkeypatch.setitem(sys.modules, "Server.models", models)
-    stream = pd.DataFrame({"t": pd.to_datetime(["2026-01-01"], utc=True)})
-    stream.attrs[st.STORE_KEY_ATTR] = "therapy_settings/PARTICIPANT/s1"
-    monkeypatch.setattr(AD, "settings_stream", lambda p, **kw: stream)
-    monkeypatch.setattr(AD, "build_design_matrix", lambda p, rd=None, **kw: _es())
-    monkeypatch.setattr(BS, "_tiles_key_for", lambda p: (TILES_KEY, None))
     # `inputs=` arrived 2026-09-12 (the evidence pair built once for this screen and the
     # two-stage path), so the stub takes and ignores keyword arguments. Counting, not just
     # stubbing, is what makes `bench.runs.calls` a real "was this recomputed" proxy -- see _Runs.
     runs = _Runs()
-    monkeypatch.setattr(BS, "closed_loop_readiness", runs)
-    # the matched table's own stamp, so the response can cite its chain
-    st.store("therapy_pain_matched", UID, ("m", 1), _es().drop(columns=["t0", "t_end"]),
-             writer="stim_optimizer", provenance=prov.flatten([
-                 prov.entry("therapy_settings/PARTICIPANT/s1", kind="therapy_settings",
-                            writer="stim_optimizer"),
-                 prov.entry("redcap_reports/PARTICIPANT/r1", kind="redcap_reports",
-                            writer="biomarkers")]), root=root)
-    yield types.SimpleNamespace(root=root, runs=runs)
-    shutil.rmtree(root, ignore_errors=True)
+    with H.service_bench(monkeypatch, _es, uid=UID, prefix="bravo_so_store_", tiles_key=TILES_KEY,
+                         readiness=runs) as b:
+        yield types.SimpleNamespace(root=b.root, runs=runs)
 
 
 REQ = {"ParticipantId": UID, "Backend": "none"}

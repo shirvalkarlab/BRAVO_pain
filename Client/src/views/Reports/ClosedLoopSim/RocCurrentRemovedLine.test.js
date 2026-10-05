@@ -5,19 +5,18 @@
  * summary already prints it with (decision 293). Descriptive only; a refusal prints its reason,
  * never a number; a response without the field prints nothing. Values below are RCS08's live
  * reading of 2026-09-26 (L 1-3+ 24.5 Hz, Left Leg VAS, tertile, 60 min, forecasting).
+ *
+ * Merged here 2026-10-05: DeploymentRocPanel.label.test.js. Each merged file's tests sit in a
+ * describe block named after it, with its reason above it.
  */
+
 import "@testing-library/jest-dom";
 import { render, screen } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 import RocCurrentRemovedLine from "./RocCurrentRemovedLine";
+import { wrap } from "testUtils/render";
+import fs from "fs";
+import path from "path";
 
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 const LIVE = {
   available: true, label: "with the stimulation current taken out", hemisphere: "Left",
   shape_words: "a straight line", auc: 0.5799, auc_low: 0.4269, auc_high: 0.7111,
@@ -56,4 +55,33 @@ test("the panel places the line under its ROC figure", () => {
   expect(src).toMatch(/<RocCurrentRemovedLine plainAuc=\{roc \? roc\.auc : null\} adjusted=\{currentRemoved \|\| null\} \/>/);
   expect(src.indexOf("<RocCurrentRemovedLine")).toBeGreaterThan(src.indexOf("<div ref={ref}"));
   expect(src.indexOf("<RocCurrentRemovedLine")).toBeLessThan(src.indexOf("<div ref={histRef}"));
+});
+
+/* From DeploymentRocPanel.label.test.js.
+ * P-02 (triage 06-25 and 06-27, audit [28]; `artifacts/pending_items_from_handoffs_2026-09-25.md`).
+ * The cut-point label on the deployment ROC panel read "oriented log-power units", left over from
+ * before decisions 202 and 204 took log power out of every calculation on this path. The feature
+ * the panel actually draws is standardised RAW power, oriented so AUC >= 0.5 (`analytics.
+ * deployment_roc`: "The band feature is standardised raw power oriented so AUC >= 0.5"), the same
+ * wording the panel's own feature-distribution histogram already uses ("Oriented band power
+ * (standardized, cut-point scale)"). This test reads the component source directly, the same way
+ * `DeploymentJumpLinks.order.test.js` pins page structure without rendering the panel (which needs
+ * a live ROC payload from `useCachedResult`/Plotly to mount).
+ */
+describe("from DeploymentRocPanel.label", () => {
+  const src = fs.readFileSync(path.join(__dirname, "DeploymentRocPanel.js"), "utf8");
+
+  describe("the deployment ROC panel's cut-point label", () => {
+    it("never says 'log-power' anywhere in the rendered label", () => {
+      // The visible label lives in one <span>; assert on that element's text directly so a future
+      // rewording of surrounding comments cannot make this pass by accident.
+      const labelMatch = src.match(
+        /<span style=\{\{ color: PAL.ink3 \}\}>\(([^)]*device LSB[^)]*)\)<\/span>/,
+      );
+      expect(labelMatch).not.toBeNull();
+      const label = labelMatch[1];
+      expect(label).not.toMatch(/log-power/i);
+      expect(label).toMatch(/oriented,? standardi[sz]ed band power units/i);
+    });
+  });
 });

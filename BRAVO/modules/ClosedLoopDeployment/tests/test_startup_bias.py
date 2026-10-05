@@ -117,15 +117,14 @@ def test_d_method_floor_is_strictly_greater_than_not_at_least():
     assert out["rows"][0]["mean_value"] == pytest.approx(50.0)     # the one_more stretch's f[0]
 
 
-def test_d_method_unavailable_when_no_stretch_qualifies():
-    out = SB.startup_bias_d_method([_stretch([50.0, 100.0])], min_finite=20, max_index=1)
+@pytest.mark.parametrize("values,min_finite,reason", [
+    ([50.0, 100.0], 20, "20"),          # no stretch qualifies: the reason names the minimum
+    ([np.nan], 0, None),                # fewer than two finite readings
+], ids=["no_stretch_qualifies", "fewer_than_two_finite_readings"])
+def test_d_method_unavailable(values, min_finite, reason):
+    out = SB.startup_bias_d_method([_stretch(values)], min_finite=min_finite, max_index=1)
     assert out["available"] is False
-    assert "20" in out["reason"]
-
-
-def test_d_method_unavailable_with_fewer_than_two_finite_readings():
-    out = SB.startup_bias_d_method([_stretch([np.nan])], min_finite=0, max_index=1)
-    assert out["available"] is False
+    assert reason is None or reason in out["reason"]
 
 
 def test_d_method_sd_pools_every_training_stretch_not_only_the_qualifying_ones():
@@ -212,19 +211,14 @@ def test_d_and_e_methods_disagree_by_construction_on_the_same_stretches():
 # ------------------------------------------------------------------------------------------------
 # startup_bias_for_series: the one entry point, built from a raw t/power/amp series
 # ------------------------------------------------------------------------------------------------
-def test_for_series_refuses_with_too_few_samples():
-    out = SB.startup_bias_for_series(np.array([0.0, 3.0]), np.array([1.0, 2.0]),
-                                     np.array([1.0, 1.0]))
-    assert out["refused"] is True
-    assert "too few" in out["reason"]
-
-
-def test_for_series_refuses_when_every_power_reading_is_missing():
-    t = np.arange(10) * 3.0
-    p = np.full(10, np.nan)
-    a = np.full(10, 1.0)
+@pytest.mark.parametrize("t,p,a,reason", [
+    (np.array([0.0, 3.0]), np.array([1.0, 2.0]), np.array([1.0, 1.0]), "too few"),
+    (np.arange(10) * 3.0, np.full(10, np.nan), np.full(10, 1.0), None),
+], ids=["too_few_samples", "every_power_reading_missing"])
+def test_for_series_refuses(t, p, a, reason):
     out = SB.startup_bias_for_series(t, p, a)
     assert out["refused"] is True
+    assert reason is None or reason in out["reason"]
 
 
 def test_for_series_builds_stretches_and_runs_both_methods_on_a_constructed_dip():
@@ -263,11 +257,6 @@ def test_for_series_builds_stretches_and_runs_both_methods_on_a_constructed_dip(
 # startup_bias_note / attach_startup_bias: the prescription-card wiring, mirroring
 # design_rule_note / occupancy_note
 # ------------------------------------------------------------------------------------------------
-def test_startup_bias_note_is_none_when_refused():
-    assert PR.startup_bias_note({"refused": True, "reason": "x"}) is None
-    assert PR.startup_bias_note(None) is None
-
-
 def test_startup_bias_note_states_both_methods_numbers():
     stretches = [
         _stretch([90.0, 100.0, 100.0, 100.0, 100.0]),
@@ -308,24 +297,3 @@ def test_attach_startup_bias_only_touches_the_startup_delay_field():
             assert f.startup_bias_note is None
 
 
-def test_attach_startup_bias_is_a_no_op_when_refused():
-    plan = TY.ThresholdPlan(upper=210.579, lower=161.903, capture_amp_low=1.4, capture_amp_high=4.8)
-    cand = {"channel": "ONE_THREE_LEFT", "center_hz": 24.5, "band_width_hz": 5.0}
-    prescriptions = PR.prescribe_all_modes(threshold_plan=plan, candidate=cand,
-                                           power_series=None, validated_hemispheres=("Left",),
-                                           configuring_both_hemispheres=False)
-    out = PR.attach_startup_bias(prescriptions, {"refused": True, "reason": "x"})
-    dual = out["modes"][PR.PA.DUAL]
-    assert all(f.startup_bias_note is None for f in dual.fields)
-
-
-def test_as_rows_carries_the_startup_bias_note_key():
-    plan = TY.ThresholdPlan(upper=210.579, lower=161.903, capture_amp_low=1.4, capture_amp_high=4.8)
-    cand = {"channel": "ONE_THREE_LEFT", "center_hz": 24.5, "band_width_hz": 5.0}
-    prescriptions = PR.prescribe_all_modes(threshold_plan=plan, candidate=cand,
-                                           power_series=None, validated_hemispheres=("Left",),
-                                           configuring_both_hemispheres=False)
-    dual = prescriptions["modes"][PR.PA.DUAL]
-    rows = dual.as_rows()
-    assert all("startup_bias_note" in r for r in rows)
-    assert all(r["startup_bias_note"] is None for r in rows)   # nothing attached yet

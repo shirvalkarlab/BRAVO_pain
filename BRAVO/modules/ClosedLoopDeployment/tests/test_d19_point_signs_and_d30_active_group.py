@@ -14,6 +14,8 @@ memo's miss-on-new-file rule is exercised through the key alone.
 """
 from __future__ import annotations
 
+import pytest
+
 from ClosedLoopDeployment import adapter as AD, constraints, device_facts as DF
 from ClosedLoopDeployment import pipeline as PL
 from ClosedLoopDeployment.types import EdgeEstimate
@@ -95,19 +97,17 @@ def test_d19_observer_flags_nothing_when_both_signs_are_established():
     assert "NOT statistically established" not in observed
 
 
-def test_d19_is_not_determinable_when_a_candidate_carries_no_edge_at_all():
-    facts = PL._facts_for({"channel": "ZERO_TWO_LEFT"}, None, None, "power_linear")
+@pytest.mark.parametrize("cand,e1,e2", [
+    ({"channel": "ZERO_TWO_LEFT"}, None, None),
+    # an edge that could not be estimated has no sign to supply, established or not
+    ({}, EdgeEstimate("E1", None, None, None, 0, "run", 0),
+     EdgeEstimate("E2", 0.9, (0.5, 1.3), 0.001, 400, "rating", 60)),
+], ids=["no_edge_at_all", "an_edge_with_no_estimate"])
+def test_d19_is_not_determinable_without_an_estimated_edge(cand, e1, e2):
+    facts = PL._facts_for(cand, e1, e2, "power_linear")
     assert "power_slope_vs_amplitude_sign" not in facts
-    assert "power_slope_vs_pain_sign" not in facts
-    assert _d19(facts) is None
-
-
-def test_d19_is_not_determinable_when_an_edge_exists_but_has_no_estimate():
-    """An edge that could not be estimated has no sign to supply, established or not."""
-    no_est = EdgeEstimate("E1", None, None, None, 0, "run", 0)
-    e2 = EdgeEstimate("E2", 0.9, (0.5, 1.3), 0.001, 400, "rating", 60)
-    facts = PL._facts_for({}, no_est, e2, "power_linear")
-    assert "power_slope_vs_amplitude_sign" not in facts
+    if e2 is None:
+        assert "power_slope_vs_pain_sign" not in facts
     assert _d19(facts) is None
 
 
@@ -121,12 +121,6 @@ def test_d19_pass_is_recorded_on_the_ledger_with_its_observed_signs():
     rows = [r for r in report.advisories if r["rule_id"] == "D19"]
     assert len(rows) == 1 and rows[0]["kind"] == "recorded_value"
     assert "NOT statistically established" in rows[0]["observed"]
-
-
-def test_d19_human_text_records_the_pi_decision_and_its_date():
-    text = constraints.RULES_BY_ID["D19"].human_text
-    assert "2026-09-12" in text and "POINT signs" in text
-    assert "not statistically established" in text
 
 
 # ------------------------------------------------------------------------------------------------
@@ -171,9 +165,14 @@ def test_d30_observer_states_the_candidate_rate_the_active_groups_rate_and_the_g
     assert "committed for this attempt: True" in observed
 
 
-def test_d30_human_text_records_the_pi_decision_and_its_date():
-    text = constraints.RULES_BY_ID["D30"].human_text
-    assert "2026-09-12" in text and "option a" in text and "ACTIVE sensing group" in text
+@pytest.mark.parametrize("rule,phrases", [
+    ("D19", ("2026-09-12", "POINT signs", "not statistically established")),
+    ("D30", ("2026-09-12", "option a", "ACTIVE sensing group")),
+])
+def test_the_rules_human_text_records_the_pi_decision_and_its_date(rule, phrases):
+    text = constraints.RULES_BY_ID[rule].human_text
+    for phrase in phrases:
+        assert phrase in text, (rule, phrase)
 
 
 def test_every_new_d19_and_d30_key_is_declared_in_candidate_keys():

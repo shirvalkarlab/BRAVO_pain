@@ -16,24 +16,10 @@
  * draw into that div.
  */
 import "@testing-library/jest-dom";
-import { render, waitFor, fireEvent, screen } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router-dom";
-import { ThemeProvider } from "@mui/material/styles";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 
-jest.mock("plotly.js-dist", () => {
-  const mark = (gd) => {
-    if (gd && gd.classList) { gd.classList.add("js-plotly-plot"); gd._fullLayout = { width: 700, height: 300 }; }
-    return Promise.resolve(gd);
-  };
-  // Plain functions, not jest.fn: the test setup resets every jest.fn's behaviour before each test.
-  return {
-    react: mark, newPlot: mark, purge: () => {}, restyle: () => Promise.resolve(),
-    relayout: () => Promise.resolve(), toImage: () => Promise.resolve("data:image/png;base64,AAAA"),
-  };
-});
+jest.mock("plotly.js-dist", () => require("testUtils/plotlyStubs").plotlyMarking());
 jest.mock("database/session-control", () => ({ SessionController: { query: jest.fn() } }));
 jest.mock("layouts/DatabaseLayout", () => ({ children }) => <div>{children}</div>);
 
@@ -56,9 +42,9 @@ jest.mock("./BandSweepGridPanel", () => {
 // eslint-disable-next-line import/first
 import { SessionController } from "database/session-control";
 // eslint-disable-next-line import/first
-import { invalidateAll } from "database/resultCache";
+import { answer, renderClosedLoopPage } from "testUtils/closedLoopPage";
 // eslint-disable-next-line import/first
-import ClosedLoopSim from "./index";
+import { invalidateAll } from "database/resultCache";
 // eslint-disable-next-line import/first
 import REPORT from "./__fixtures__/rcs08_cl_L13_24p5_2026-09-25.json";
 // eslint-disable-next-line import/first
@@ -80,7 +66,6 @@ const SIMULATION = { available: true, timing_runs: { programmed: RUN, recommende
   inputs: { contact: "ONE_THREE_LEFT", centre_used_hz: 24.5 },
   candidate: { channel: "ONE_THREE_LEFT", center_hz: 24.5 } };
 
-const answer = (data, ms) => new Promise((resolve) => setTimeout(() => resolve({ data }), ms));
 
 // THE CLOCK IS HELD STILL. The page re-renders without end while the clock moves once the
 // simulation is answered (its cache key carries the report's "computed at" time, which the cache
@@ -120,16 +105,7 @@ let uidCount = 0;
 function renderPage() {
   uidCount += 1;
   const uid = `SPEEDTEST${uidCount}`;
-  return render(
-    <ThemeProvider theme={theme}>
-      <PlatformContextProvider initialStates={{ darkMode: false }}>
-        <MemoryRouter initialEntries={[`/reports/closedloop/${uid}`]}>
-          <Routes>
-            <Route path="/reports/closedloop/:participant_uid" element={<ClosedLoopSim />} />
-          </Routes>
-        </MemoryRouter>
-      </PlatformContextProvider>
-    </ThemeProvider>);
+  return renderClosedLoopPage(uid);
 }
 
 const drawnIn = (container, id) => container.querySelectorAll(`#${id} .js-plotly-plot`).length;

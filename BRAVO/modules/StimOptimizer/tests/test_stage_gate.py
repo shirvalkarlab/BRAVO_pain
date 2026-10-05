@@ -11,38 +11,15 @@ import pytest
 from StimOptimizer import stage1_openloop as S1
 from StimOptimizer.routines import percept_adaptive as PA
 from StimOptimizer.routines import stage_gate as GATE
+from StimOptimizer.tests import _helpers as H
 
 
 # ---------------------------------------------------------------------------------------------
 # Fixtures: frozen configurations built directly, so a gate test does not depend on a GP fit
 # ---------------------------------------------------------------------------------------------
-def _setting(hemisphere="Left", rate_hz=130.0, pw_us=60.0, amp_star=2.0,
-             amp_lo=1.0, amp_hi=3.0, rate_resolved=True, pw_resolved=True):
-    return S1.HemisphereSetting(
-        hemisphere=hemisphere, rate_hz=rate_hz, pw_us=pw_us, amp_star_mA=amp_star,
-        amp_delivered_min_mA=amp_lo, amp_delivered_max_mA=amp_hi, n_epochs_fitted=20,
-        rate_resolved=rate_resolved, pw_resolved=pw_resolved, reasons=("fixture",))
-
-
-def _frozen(*settings, override=None):
-    return S1.FrozenConfiguration(
-        settings=tuple(settings or (_setting(),)), primary_item="left_leg",
-        incumbent_epoch=1.0, incumbent_rate_hz=55.0, incumbent_pw_us=60.0,
-        data_horizon="test", washin_min=1.0, n_epochs_total=40, override=override)
-
-
-def _responding_lfp(n=120, low=1.0, high=3.0, suppression=0.9, band=(13.0, 17.0), seed=0):
-    """LFP magnitude that IS suppressed by amplitude inside ``band``, so the response test passes."""
-    rng = np.random.default_rng(seed)
-    amp = np.repeat([low, high], n // 2)
-    freqs = np.arange(4.0, 40.0, 0.5)
-    mag = np.abs(rng.normal(1.0, 0.05, (n, freqs.size)))
-    sel = (freqs >= band[0]) & (freqs <= band[1])
-    mag[:, sel] *= (np.exp(-suppression * amp)[:, None] * 3.0)
-    ev = GATE.LfpEvidence(amplitude_mA=amp, magnitude=mag, freqs=freqs,
-                          era=np.tile(["a", "b"], n // 2), cluster=np.arange(n))
-    ev.channel = "FIXTURE"
-    return ev
+_setting = H.setting
+_frozen = H.frozen
+_responding_lfp = H.responding_lfp   # LFP magnitude suppressed by amplitude inside `band`
 
 
 #: The pain half of the gate's one-band rule (decision 199): every default band centre on the

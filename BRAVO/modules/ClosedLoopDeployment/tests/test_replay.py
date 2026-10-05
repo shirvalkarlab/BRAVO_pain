@@ -150,9 +150,55 @@ def test_the_two_directions_move_the_amplitude_opposite_ways_and_both_are_named_
     assert "positive feedback" in down.note
 
 
-def test_an_unrecognised_direction_is_refused():
-    with pytest.raises(ValueError, match="high_power_action"):
-        replay.dual_threshold(series([5.0] * 10), plan(), {"high_power_action": "inverse"})
+def _gappy():
+    t = np.arange(20, dtype=float) * DT
+    t[10:] += 600.0                                # a ten-minute dropout
+    return {"t_s": t, "power": np.full(20, 5.0)}
+
+
+# id -> (the series, the plan, the params, the refusal's words). Each refusal is a ValueError.
+_REFUSALS = {
+    "unrecognised_direction": (lambda: series([5.0] * 10), lambda: plan(),
+                               {"high_power_action": "inverse"}, "high_power_action"),
+    # a plan that could not place thresholds has already answered the deployability question; a
+    # replay that substituted a guess would turn that refusal into a trajectory
+    "plan_without_thresholds": (lambda: series([5.0] * 10),
+                                lambda: types.ThresholdPlan(upper=None, lower=None,
+                                                            capture_amp_low=1.0, capture_amp_high=3.0),
+                                None, "no thresholds set"),
+    # white paper p. 15: thresholds "too close together or ... inverted" prompt for recapture
+    "inverted_thresholds": (lambda: series([5.0] * 10), lambda: plan(upper=2.0, lower=10.0), None,
+                            "inverted or degenerate"),
+    "touching_thresholds": (lambda: series([5.0] * 10), lambda: plan(upper=5.0, lower=5.0), None,
+                            "inverted or degenerate"),
+    # without limits there is no ramp rate at all; with coincident limits the output is a constant
+    # that would read as a regulating controller
+    "no_amplitude_limits": (lambda: series([5.0] * 10), lambda: plan(amp_low=None, amp_high=None),
+                            None, "no adaptive amplitude limits"),
+    "coincident_amplitude_limits": (lambda: series([5.0] * 10), lambda: plan(amp_low=2.0, amp_high=2.0),
+                                    None, "inverted or degenerate"),
+    # a gap is a period in which the device had no power estimate; simulating across it would
+    # manufacture a controller trajectory for a time the controller was not running
+    "non_uniform_time_base": (_gappy, lambda: plan(), None, "not uniform"),
+    "empty_series": (lambda: [], lambda: plan(), {"dt_s": DT}, "empty"),
+    "single_sample": (lambda: [5.0], lambda: plan(), {"dt_s": DT}, "single sample"),
+    # a misspelt timing key would silently leave the device default in place, and the resulting
+    # trajectory would look entirely plausible
+    "unknown_parameter_key": (lambda: series([5.0] * 10), lambda: plan(),
+                              {"transition_up_s": 150.0}, "unknown params"),
+    # the labelling describes gradual, incremental transitions; a zero duration would jump the
+    # amplitude straight to a limit
+    "zero_transition_duration": (lambda: series([5.0] * 10), lambda: plan(),
+                                 {"transition_up_ms": 0.0}, "must be positive"),
+}
+
+
+@pytest.mark.parametrize("case", list(_REFUSALS))
+def test_the_replay_refuses_what_it_cannot_honestly_replay(case):
+    make_series, make_plan, params, words = _REFUSALS[case]
+    args = (make_series(), make_plan()) + (() if params is None else (params,))
+    with pytest.raises(ValueError, match=words):
+        replay.dual_threshold(*args)
 
 
 # --------------------------------------------------------------------------------------------
@@ -268,68 +314,12 @@ def test_the_trajectory_is_not_claimed_to_be_quantised():
 # --------------------------------------------------------------------------------------------
 # Refusals
 # --------------------------------------------------------------------------------------------
-def test_a_plan_without_thresholds_is_refused():
-    """A plan that could not place thresholds has already answered the deployability question; a
-    replay that substituted a guess would turn that refusal into a trajectory."""
-    with pytest.raises(ValueError, match="no thresholds set"):
-        replay.dual_threshold(series([5.0] * 10), types.ThresholdPlan(upper=None, lower=None,
-                                                                      capture_amp_low=1.0,
-                                                                      capture_amp_high=3.0))
-
-
-def test_inverted_or_touching_thresholds_are_refused_as_the_device_refuses_them():
-    """White paper p. 15: thresholds "too close together or ... inverted" prompt for recapture."""
-    with pytest.raises(ValueError, match="inverted or degenerate"):
-        replay.dual_threshold(series([5.0] * 10), plan(upper=2.0, lower=10.0))
-    with pytest.raises(ValueError, match="inverted or degenerate"):
-        replay.dual_threshold(series([5.0] * 10), plan(upper=5.0, lower=5.0))
-
-
-def test_missing_or_degenerate_amplitude_limits_are_refused():
-    """Without limits there is no ramp rate at all; with coincident limits the output is a constant
-    that would read as a regulating controller."""
-    with pytest.raises(ValueError, match="no adaptive amplitude limits"):
-        replay.dual_threshold(series([5.0] * 10), plan(amp_low=None, amp_high=None))
-    with pytest.raises(ValueError, match="inverted or degenerate"):
-        replay.dual_threshold(series([5.0] * 10), plan(amp_low=2.0, amp_high=2.0))
-
-
 def test_amplitude_limits_can_be_overridden_but_the_starting_amplitude_must_be_inside_them():
     r = replay.dual_threshold(series([5.0] * 10), plan(), {"amp_low_mA": 0.0, "amp_high_mA": 4.0})
     assert r.params["amp_init_mA"] == pytest.approx(2.0)
     assert r.params["amp_low_mA"] == 0.0 and r.params["amp_high_mA"] == 4.0
     with pytest.raises(ValueError, match="outside the amplitude limits"):
         replay.dual_threshold(series([5.0] * 10), plan(), {"amp_init_mA": 9.0})
-
-
-def test_a_non_uniform_time_base_is_refused_rather_than_replayed_across_the_gap():
-    """A gap is a period in which the device had no power estimate. Simulating across it would
-    manufacture a controller trajectory for a time the controller was not running."""
-    t = np.arange(20, dtype=float) * DT
-    t[10:] += 600.0                                # a ten-minute dropout
-    with pytest.raises(ValueError, match="not uniform"):
-        replay.dual_threshold({"t_s": t, "power": np.full(20, 5.0)}, plan())
-
-
-def test_degenerate_series_are_refused():
-    with pytest.raises(ValueError, match="empty"):
-        replay.dual_threshold([], plan(), {"dt_s": DT})
-    with pytest.raises(ValueError, match="single sample"):
-        replay.dual_threshold([5.0], plan(), {"dt_s": DT})
-
-
-def test_an_unknown_parameter_key_is_refused_rather_than_ignored():
-    """A misspelt timing key would silently leave the device default in place, and the resulting
-    trajectory would look entirely plausible."""
-    with pytest.raises(ValueError, match="unknown params"):
-        replay.dual_threshold(series([5.0] * 10), plan(), {"transition_up_s": 150.0})
-
-
-def test_zero_transition_durations_are_refused():
-    """The labelling describes gradual, incremental transitions; a zero duration would jump the
-    amplitude straight to a limit."""
-    with pytest.raises(ValueError, match="must be positive"):
-        replay.dual_threshold(series([5.0] * 10), plan(), {"transition_up_ms": 0.0})
 
 
 # --------------------------------------------------------------------------------------------

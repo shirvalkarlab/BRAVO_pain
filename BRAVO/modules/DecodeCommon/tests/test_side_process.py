@@ -17,6 +17,12 @@ import time
 from DecodeCommon import side_process as SP
 from DecodeCommon import parallel as PAR
 
+from ._helpers import alive as _alive_pids
+
+
+def _alive(pid):
+    return bool(_alive_pids([pid]))
+
 
 def test_the_helper_returns_what_the_call_returns_here():
     fut = SP.submit(sorted, [3, 1, 2])
@@ -46,18 +52,6 @@ def test_switched_off_nothing_is_started():
         assert SP.helper_pid() is None
     finally:
         SP.ENABLED = old
-
-
-def _alive(pid):
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    try:                                          # a zombie is not alive
-        with open(f"/proc/{pid}/stat") as fh:
-            return fh.read().split()[2] != "Z"
-    except OSError:
-        return False
 
 
 def test_a_helper_whose_parent_is_killed_outright_exits_by_itself():

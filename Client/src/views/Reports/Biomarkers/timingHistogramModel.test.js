@@ -6,12 +6,10 @@
  */
 import "@testing-library/jest-dom";
 import { render as rtlRender } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 
 import { timingHistogramData, sampleOffsetsMin, SOURCE_SERIES } from "./timingHistogramModel";
 import TimingHistogram from "./TimingHistogram";
+import { wrap } from "testUtils/render";
 
 jest.mock("plotly.js-dist", () => {
   const noop = () => {};
@@ -21,12 +19,6 @@ jest.mock("plotly.js-dist", () => {
 });
 // eslint-disable-next-line import/first
 import Plotly from "plotly.js-dist";
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 
 const H = 3600;
 const painSeries = { t: [0, H, 2 * H], y: [5, 6, 7] };

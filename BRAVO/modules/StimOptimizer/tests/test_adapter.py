@@ -18,6 +18,8 @@ There is also a check that a frame missing a column raises. This codebase has al
 once by a place that named columns which were not on the real frame and then carried on as though
 everything were fine, producing a wrong answer with no error anywhere. A frame handed in here is
 checked, and a missing column stops the call.
+
+Merged here 2026-10-05: test_settings_stream_from_implant.py, test_stream_limit_kind.py (each under its own heading below).
 """
 import inspect
 import sys
@@ -319,3 +321,100 @@ def test_the_numbers_in_the_design_matrix_are_the_ones_the_fixture_put_in(monkey
     # Two ratings landed in each of the three epochs: 7 and 6, then 4 and 5, then 3 and 2.
     assert list(dm["nrs_n"].to_numpy()) == [2, 2, 2]
     assert list(np.round(dm["nrs"].to_numpy(), 6)) == [6.5, 4.5, 2.5]
+
+
+# ================================================================================================
+# From test_settings_stream_from_implant.py (merged here 2026-10-05).
+# The settings stream starts at the implant date (the PI, 2026-09-24).
+#
+# On RCS08 the stream's first rows were four 'Past Therapy' snapshots from January to April 2025,
+# read off the device at its first clinic session (2025-07-17) and never delivered to the patient; the
+# device record's implant date is 2025-07-16 18:06 UTC. A setting holds until the next change, so the
+# one in force at implant is kept and moved to the implant date; everything earlier goes.
+# ================================================================================================
+
+IMPLANT = pd.Timestamp("2025-07-16 18:06", tz="UTC")
+
+
+def _stream():
+    rows = []
+    for days, amp in [(-179, 2.9), (-149, 2.9), (-119, 2.9), (-89, 2.9), (2, 0.0), (40, 1.5)]:
+        for hemi in ("Left", "Right"):
+            rows.append(dict(t=IMPLANT + pd.Timedelta(days=days), src="history", hemi=hemi, amp=amp,
+                             pw=60.0, rate=55.0, upper=None, upper_is_patient_limit=None,
+                             cathode="2", schema="x"))
+    return pd.DataFrame(rows)
+
+
+def test_rows_before_implant_go_and_the_setting_in_force_at_implant_starts_there():
+    out = AD.apply_data_start(_stream(), IMPLANT.timestamp())
+    for hemi in ("Left", "Right"):
+        s = out[out.hemi == hemi].sort_values("t")
+        assert list(s.t) == [IMPLANT, IMPLANT + pd.Timedelta(days=2), IMPLANT + pd.Timedelta(days=40)]
+        assert list(s.amp) == [2.9, 0.0, 1.5]
+
+
+def test_no_start_leaves_the_stream_as_it_was():
+    s = _stream()
+    out = AD.apply_data_start(s, 0.0)
+    assert out.reset_index(drop=True).equals(s.reset_index(drop=True))
+
+
+def test_the_stored_stream_is_keyed_on_a_rule_that_starts_at_implant():
+    assert "implant" in AD._THERAPY_SETTINGS_RULE_VERSION
+
+
+# ================================================================================================
+# From test_stream_limit_kind.py (merged here 2026-10-05).
+# The settings stream says whether each programmed upper limit is a patient limit (decision 136's
+# rule, imported from the Closed-Loop module): a sensing group's limit is not one while its adaptive
+# therapy is running. Written for review S8 of 2026-09-12; the anchor builder that read the column
+# (`plots.limit_anchors_from_stream`) was deleted on 2026-09-12 when the PI replaced the safety
+# model's limit anchors with a stated ceiling (`safety_ceiling.py`), and its tests went with it.
+# The column itself is a fact about the record and stays on the stream.
+# ================================================================================================
+
+
+# ---------------------------------------------------------------------------------------------
+# the stream carries whether each limit is a patient limit
+# ---------------------------------------------------------------------------------------------
+def _sensing_channel(side, upper, status):
+    return {"HemisphereLocation": f"HemisphereLocationDef.{side}", "SuspendAmplitudeInMilliAmps": 2.0,
+            "PulseWidthInMicroSecond": 100, "RateInHertz": 55, "UpperLimitInMilliAmps": upper,
+            "LowerLimitInMilliAmps": 1.0, "AdaptiveTherapyStatus": status,
+            "ElectrodeState": [{"Electrode": "ElectrodeDef.SenSight_1", "ElectrodeStateResult": "Negative"}]}
+
+
+def test_a_sensing_limit_under_running_adaptive_therapy_is_not_a_patient_limit():
+    g = {"ProgramSettings": {"SensingChannel": [
+        _sensing_channel("Left", 3.0, "AdaptiveTherapyStatusDef.RUNNING"),
+        _sensing_channel("Right", 4.0, "AdaptiveTherapyStatusDef.NOT_CONFIGURED")]}}
+    out = AD.group_settings(g)
+    assert out["Left"]["upper"] == 3.0 and out["Left"]["upper_is_patient_limit"] is False
+    assert out["Right"]["upper"] == 4.0 and out["Right"]["upper_is_patient_limit"] is True
+    assert out["Left"]["schema"] == "sensing"
+
+
+def test_a_legacy_program_limit_is_a_patient_limit_and_no_limit_is_none():
+    g = {"ProgramSettings": {"RateInHertz": 110, "LeftHemisphere": {"Programs": [
+        {"AmplitudeInMilliAmps": 2.0, "PulseWidthInMicroSecond": 60, "UpperLimitInMilliAmps": 3.2,
+         "ElectrodeState": []}]}, "RightHemisphere": {"Programs": [
+        {"AmplitudeInMilliAmps": 2.0, "PulseWidthInMicroSecond": 60, "ElectrodeState": []}]}}}
+    out = AD.group_settings(g)
+    assert out["Left"]["upper_is_patient_limit"] is True and out["Left"]["schema"] == "hemisphere"
+    assert out["Right"]["upper"] is None and out["Right"]["upper_is_patient_limit"] is None
+
+
+def test_the_rule_is_the_closed_loop_modules_not_a_copy():
+    import inspect
+    src = inspect.getsource(AD._sensing_upper_is_patient_limit)
+    assert "session_report_facts" in src and "_patient_limits_configured" in src
+    # the comparison itself lives in the imported rule; only the docstring names the status here
+    assert '== "RUNNING"' not in src and "AdaptiveTherapyStatus" not in src.split('"""')[2]
+
+
+def test_the_stream_rule_version_was_bumped_for_the_new_column():
+    # v2 added the column; any later version (v3 starts the stream at implant, 2026-09-24) keeps it
+    assert not AD._THERAPY_SETTINGS_RULE_VERSION.startswith("v1")
+    import inspect
+    assert '"upper_is_patient_limit"' in inspect.getsource(AD._build_settings_stream)

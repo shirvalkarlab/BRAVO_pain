@@ -18,22 +18,12 @@
  */
 import "@testing-library/jest-dom";
 import { render as rtlRender } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 
 import DecisionStrip, { decisionHeadline } from "./DecisionStrip";
 import ClosedLoopChecks from "./ClosedLoopChecks";
 import SensingEvidenceTable from "./SensingEvidenceTable";
 import response from "./__fixtures__/rcs08_stim_optimizer_two_stage.json";
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
-const clone = (x) => JSON.parse(JSON.stringify(x));
+import { wrap, clone } from "testUtils/render";
 
 // --- 1. the decision card's computed title, and "resolved" defined once -------------------------
 describe("the decision card's title states the finding", () => {

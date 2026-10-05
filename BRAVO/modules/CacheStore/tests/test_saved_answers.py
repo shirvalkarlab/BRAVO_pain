@@ -14,12 +14,15 @@ import pathlib
 import tempfile
 
 from modules.CacheStore import saved_answers as SA
-from modules.CacheStore.tests.test_store import _Sandbox, UID
+from modules.CacheStore.tests._helpers import UID, Sandbox as _Sandbox
 
 KIND = "closed_loop_report"
 
 
-def test_built_once_then_served_and_another_input_builds_again():
+def test_built_once_then_served_and_another_input_or_code_version_builds_again():
+    """Another input builds again, and so does another version of the analysis code, because the
+    label carries the code fingerprint. (Merged 2026-10-05 with
+    `test_the_label_carries_the_code_fingerprint`.)"""
     with _Sandbox():
         calls = []
 
@@ -36,6 +39,15 @@ def test_built_once_then_served_and_another_input_builds_again():
         assert a["value"] == b["value"] == 42 and c["value"] == 43
         assert a["saved_answer"]["served"] is False and b["saved_answer"]["served"] is True
         assert b["saved_answer"]["written_utc"]
+
+        real = SA.code_digest
+        SA.code_digest = lambda *a, **k: "another version of the code"
+        try:
+            SA.serve_or_build(KIND, UID, {"request": {"band": 1}, "pain": "p1"}, build,
+                              writer="closed_loop")
+        finally:
+            SA.code_digest = real
+        assert len(calls) == 3, "another version of the code was served the old saved answer"
 
 
 def test_an_unavailable_answer_is_never_saved():
@@ -77,23 +89,6 @@ def test_the_code_fingerprint_follows_the_analysis_files():
         assert SA.code_digest(root, cache=False) == one
         (root / "Mod" / "a.py").write_text("x = 2\n")                    # analysis code: change
         assert SA.code_digest(root, cache=False) != one
-
-
-def test_the_label_carries_the_code_fingerprint():
-    with _Sandbox():
-        calls = []
-
-        def build():
-            calls.append(1)
-            return {"available": True}
-        real = SA.code_digest
-        SA.serve_or_build(KIND, UID, {"x": 1}, build, writer="closed_loop")
-        SA.code_digest = lambda *a, **k: "another version of the code"
-        try:
-            SA.serve_or_build(KIND, UID, {"x": 1}, build, writer="closed_loop")
-        finally:
-            SA.code_digest = real
-        assert len(calls) == 2
 
 
 def test_a_second_request_waits_for_the_first_build_instead_of_duplicating_it():

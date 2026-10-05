@@ -10,6 +10,8 @@ A cache that fails the first is merely slow. A cache that fails the second hands
 figures computed from a testing sheet that has since been corrected, while reporting itself as
 verified, and nobody goes looking for the problem because nothing raised. That asymmetry is why
 several of these tests check that something RAISES rather than that it returns a marker.
+
+Merged here 2026-10-05: test_inputs_key_carries_the_constants.py.
 """
 import numpy as np
 import pandas as pd
@@ -446,3 +448,90 @@ def test_asking_for_a_refresh_rebuilds_and_reads_once_not_twice(live_inputs):
     AD.evidence_inputs_cached("PARTICIPANT")
     AD.evidence_inputs_cached("PARTICIPANT", force_refresh=True)
     assert len(live_inputs) == 2
+
+# ------------------------------------------------------------------------------------------------
+# The `inputs` entry's key carries the constants (from test_inputs_key_carries_the_constants.py,
+# merged 2026-10-05)
+# ------------------------------------------------------------------------------------------------
+# The Closed-Loop `inputs` store entry (the Stim Optimizer's evidence frame with its calibrated
+# `band_lsb_<centre>` columns, the exposure epochs and the design matrix) is keyed on the recording
+# set AND the calibration constants in effect AND a rule version (decision 215, the PI, 2026-09-20:
+# "agree with adding calibration constant in key").
+#
+# Until now its key was the recording-set signature alone (audit B, finding A1), so after a constant
+# change (352.62 -> 349.10 -> 345.59 in decisions 209 and 211) an entry already on disk kept serving
+# LSB computed under the old constant until a recording was added or removed -- about a day on
+# RCS08 with its daily ingest, unbounded on a participant without one. The tile key already carried
+# the constants (decision 25); this entry, built FROM the tiles, did not.
+
+
+@pytest.mark.parametrize("constant,moved_to", [("LSB_PER_UV2_TRANSFORM", 999.0),
+                                               ("LSB_PER_DEVICE_PSD", 1.0)],
+                         ids=["transform_constant", "bridge_constant"])
+def test_the_inputs_key_moves_when_a_calibration_constant_moves(monkeypatch, constant, moved_to):
+    from Biomarkers.routines import analytics
+    monkeypatch.setattr(AD, "recording_set_signature",
+                        lambda participant: ("PARTICIPANT", 1, 1, "a fixed content hash"))
+    k1 = AD.inputs_signature("PARTICIPANT")
+    monkeypatch.setattr(analytics, constant, moved_to)
+    assert AD.inputs_signature("PARTICIPANT") != k1
+
+
+def test_the_inputs_key_still_moves_with_the_recording_set_and_carries_a_rule_version(monkeypatch):
+    from Biomarkers.routines import analytics
+    monkeypatch.setattr(AD, "recording_set_signature", lambda p: ("P", 1, 1, "hash one"))
+    k1 = AD.inputs_signature("P")
+    monkeypatch.setattr(AD, "recording_set_signature", lambda p: ("P", 1, 2, "hash two"))
+    k2 = AD.inputs_signature("P")
+    assert k1 != k2
+    flat = " ".join(str(x) for x in k1)
+    assert AD._INPUTS_RULE_VERSION in flat
+    assert str(float(analytics.LSB_PER_UV2_TRANSFORM)) in flat
+    assert str(float(analytics.LSB_PER_DEVICE_PSD)) in flat
+
+
+def test_the_inputs_key_moves_when_the_tile_entry_moves(monkeypatch):
+    """Decision 289. The entry's band-power columns are read from the saved tiles, and on
+    2026-09-25 the saved tiles were a short copy (293,108 tiles where the full set is 303,321)
+    written by the Stim Optimizer. The tile key now changes when the tiles would come out
+    differently (the one input set, the implant date); this entry has to follow it, or a frame
+    built from the short copy would outlive the fix until the next recording."""
+    monkeypatch.setattr(AD, "recording_set_signature", lambda p: ("P", 1, 1, "a fixed hash"))
+    monkeypatch.setattr(AD, "_tiles_key_for", lambda p: "raw_lsb_tiles.P.one")
+    k1 = AD.inputs_signature("P")
+    monkeypatch.setattr(AD, "_tiles_key_for", lambda p: "raw_lsb_tiles.P.two")
+    assert AD.inputs_signature("P") != k1
+
+
+def test_evidence_inputs_cached_stores_and_reads_under_the_inputs_signature(live_inputs, monkeypatch):
+    """The store call and the memo use the composed key, not the bare recording signature."""
+    seen = {}
+    real_store = AD._shared_store
+    def spy_store(kind, sig, payload, **kw):
+        seen["store_sig"] = sig
+        return real_store(kind, sig, payload, **kw)
+    monkeypatch.setattr(AD, "_shared_store", spy_store)
+    # force the build: another test in the same worker may already have stored this fixture's entry
+    AD.evidence_inputs_cached("PARTICIPANT", force_refresh=True)
+    assert seen["store_sig"] == AD.inputs_signature("PARTICIPANT")
+    assert seen["store_sig"] != AD.recording_set_signature("PARTICIPANT")
+
+
+def test_the_inputs_entry_rebuilds_once_the_settings_stream_starts_at_implant():
+    """The entry holds settings read from the stream, whose rule changed on 2026-09-24 (it starts at
+    the implant date) while no recording and no constant did; its own version must move too."""
+    assert "implant" in AD._INPUTS_RULE_VERSION
+
+
+def test_this_modules_store_writes_go_to_a_directory_of_the_tests_own(live_inputs, monkeypatch):
+    """The build above writes a real `inputs` entry. On 2026-09-26 it wrote one under the fake
+    participant "PARTICIPANT" into the production store root, because this module took the
+    cold-build fixture without the isolation fixture beside it (the failure of decisions 96, 116
+    and 129). Every write must land under the test's own directory override."""
+    roots = []
+    def spy(kind, participant_uid, signature, payload, **kw):   # records, writes nothing
+        roots.append(kw.get("root"))
+        return False
+    monkeypatch.setattr(AD._cache_store, "store", spy)
+    AD.evidence_inputs_cached("PARTICIPANT", force_refresh=True)
+    assert roots and all(r for r in roots), roots

@@ -8,10 +8,7 @@
  */
 import "@testing-library/jest-dom";
 import { render as rtlRender, fireEvent } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
+import { wrap, clone } from "testUtils/render";
 
 jest.mock("plotly.js-dist", () => ({
   react: jest.fn(), purge: jest.fn(), restyle: jest.fn(), relayout: jest.fn(), newPlot: jest.fn(),
@@ -26,12 +23,6 @@ import DecisionCard from "./DecisionCard";
 import LEFT from "./__fixtures__/rcs08_cl_L13_24p5_2026-09-25.json";
 import SUM_L from "./__fixtures__/rcs08_summary_L13_24p5_2026-09-25.json";
 
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
-const clone = (o) => JSON.parse(JSON.stringify(o));
 const boxes = (c) => Array.from(c.querySelectorAll(".cl-prescription-authorised input[type=checkbox]"));
 const nTicked = (c) => boxes(c).filter((b) => b.checked).length;
 const tickAll = (c) => boxes(c).forEach((b) => fireEvent.click(b));

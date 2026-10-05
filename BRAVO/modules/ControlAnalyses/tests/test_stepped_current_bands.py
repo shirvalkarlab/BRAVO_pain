@@ -33,16 +33,14 @@ def _rows(n_runs=4, n_steps=5, *, family_slope=0.0, far_slope=0.0, baseline=100.
     return pd.DataFrame(rows)
 
 
-def test_usable_rows_drops_refused_unchanged_and_stimulator_flagged_rows():
+def test_usable_rows_drops_refused_unchanged_and_stimulator_flagged_rows_and_is_empty_for_no_input():
+    """(Merged 2026-10-05 with `test_usable_rows_is_empty_frame_for_none_or_empty_input`.)"""
     d = _rows(refuse_some=True, stimulator_flag_on_far=True)
     u = EA.usable_rows(d)
     assert (u["why_not_used"] == "").all()
     assert "unchanged" not in set(u["leg"])
     assert not (u["band_centre_hz"] == 45.5).any()
     assert u["settled_band_power_device_units"].notna().all()
-
-
-def test_usable_rows_is_empty_frame_for_none_or_empty_input():
     assert EA.usable_rows(None).empty
     assert EA.usable_rows(pd.DataFrame()).empty
 
@@ -53,7 +51,8 @@ def test_family_of_classifies_by_the_named_ranges():
     assert EA.family_of(15.0) is None and EA.family_of(20.0) is None
 
 
-def test_fit_slope_recovers_a_planted_per_ma_change_with_run_intercepts():
+def test_fit_slope_recovers_a_planted_per_ma_change_with_run_intercepts_and_refuses_with_no_spare_row():
+    """(Merged 2026-10-05 with `test_fit_slope_refuses_when_there_is_no_spare_row`.)"""
     rng = np.random.default_rng(0)
     runs = np.repeat(["a", "b", "c"], 8)
     current = np.tile(np.linspace(0, 3.5, 8), 3)
@@ -61,9 +60,6 @@ def test_fit_slope_recovers_a_planted_per_ma_change_with_run_intercepts():
     power = np.array([intercepts[r] for r in runs]) + 4.0 * current + rng.normal(0, 0.05, current.size)
     slope = EA._fit_slope(current, power, runs)
     assert abs(slope - 4.0) < 0.1
-
-
-def test_fit_slope_refuses_when_there_is_no_spare_row():
     assert EA._fit_slope(np.array([1.0]), np.array([10.0]), np.array(["a"])) is None
 
 
@@ -82,20 +78,17 @@ def test_band_slope_reports_no_interval_below_the_run_floor_and_one_above_it():
     assert four_runs["lo"] is not None and four_runs["lo"] < four_runs["relative_slope_per_mA"] < four_runs["hi"]
 
 
-def test_per_route_pair_reads_a_ratio_near_one_when_far_bands_move_as_much_as_the_family():
+def test_per_route_pair_reads_a_ratio_near_one_when_far_bands_move_as_much_as_the_family_and_well_under_when_only_the_family_moves():
+    """(Merged 2026-10-05 with `test_per_route_pair_reads_a_ratio_well_under_one_when_only_the_family_moves`.)"""
     d = EA.usable_rows(_rows(n_runs=5, family_slope=0.10, far_slope=0.10, seed=7))
     bands, ratios = EA.per_route_pair(d, n_boot=300, seed=1)
     assert len(ratios) == 1
     r = ratios[0]
     assert r["n_family_bands"] == 2 and r["n_far_bands"] == 3
     assert 0.7 < r["far_over_family_ratio"] < 1.3
-
-
-def test_per_route_pair_reads_a_ratio_well_under_one_when_only_the_family_moves():
     d = EA.usable_rows(_rows(n_runs=5, family_slope=0.10, far_slope=0.0, seed=8))
     bands, ratios = EA.per_route_pair(d, n_boot=300, seed=1)
-    r = ratios[0]
-    assert r["far_over_family_ratio"] < 0.3
+    assert ratios[0]["far_over_family_ratio"] < 0.3, "only the family moves"
 
 
 def test_reading_states_the_prediction_and_handles_no_ratio():

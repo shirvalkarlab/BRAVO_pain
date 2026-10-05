@@ -61,11 +61,9 @@ def test_the_column_version_equals_the_per_sample_loop():
                 assert [type(x) for x in a] == [type(y) for y in b], (seed, ch, k)
 
 
-def test_no_recordings_gives_nothing():
+def test_no_recordings_or_a_column_with_no_usable_sample_makes_no_entry():
+    """(Merged 2026-10-05 with `test_no_recordings_gives_nothing`.)"""
     assert R.native_lsb_by_channel(None, None) == {} == R._native_lsb_by_channel_loop(None, None)
-
-
-def test_a_column_with_no_usable_sample_makes_no_entry():
     chronic, pd_recs = _recordings(0)
     pd_recs[0]["Data"][:, 2] = R._POWER_SENTINEL          # ONE_THREE_RIGHT POWER: nothing usable
     for r in pd_recs[1:]:

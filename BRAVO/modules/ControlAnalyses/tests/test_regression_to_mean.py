@@ -22,19 +22,15 @@ def test_time_blocks_are_contiguous_in_time_order_and_roughly_equal():
     assert list(sorted_blocks) == [0, 0, 0, 1, 1, 2, 2]           # 7 -> 3,2,2 by array_split
 
 
-def test_target_mask_picks_the_most_delivered_current_pair():
+def test_target_mask_picks_the_most_delivered_current_pair_and_rounds_like_the_reference_setting():
+    """(Merged 2026-10-05 with `test_target_mask_rounds_like_the_reference_setting`.)"""
     aL = [1.6, 1.6, 1.6, 0.5, 0.5, 2.0]
     aR = [1.2, 1.2, 1.2, 0.5, 0.5, 2.0]
     mask, setting = RM.target_mask(aL, aR)
     assert list(mask) == [True, True, True, False, False, False]
     assert setting == (1.6, 1.2)
-
-
-def test_target_mask_rounds_like_the_reference_setting():
-    aL = [1.60001, 1.59999, 1.6, 0.5]
-    aR = [1.2, 1.2, 1.2, 0.5]
-    mask, setting = RM.target_mask(aL, aR)
-    assert list(mask) == [True, True, True, False]
+    mask, _setting = RM.target_mask([1.60001, 1.59999, 1.6, 0.5], [1.2, 1.2, 1.2, 0.5])
+    assert list(mask) == [True, True, True, False], "rounding"
 
 
 def test_heterogeneity_and_trend_refuse_with_fewer_than_two_blocks():
@@ -158,20 +154,14 @@ def test_outside_window_test_is_not_computable_with_too_few_rows_or_no_q():
     assert out2["fraction_ge"] is None
 
 
-def test_extremity_is_large_when_block_one_is_far_from_the_record_average():
+def test_extremity_is_large_when_block_one_is_far_from_the_record_average_and_small_when_it_matches():
+    """(Merged 2026-10-05 with `test_extremity_is_small_when_block_one_matches_the_record_average`.)"""
     target_rows = [dict(block=0, n=3, mean=1.51, se=0.12), dict(block=1, n=3, mean=0.53, se=0.24)]
-    full_J = np.array([1.51] * 3 + [0.53] * 3 + [0.6] * 13)
-    full_v = np.ones(19)
-    e = RM.extremity(target_rows, full_J, full_v)
-    assert e["value"] is not None and e["value"] > 3.0
-
-
-def test_extremity_is_small_when_block_one_matches_the_record_average():
+    e = RM.extremity(target_rows, np.array([1.51] * 3 + [0.53] * 3 + [0.6] * 13), np.ones(19))
+    assert e["value"] is not None and e["value"] > 3.0, ("far", e)
     target_rows = [dict(block=0, n=3, mean=0.6, se=0.5), dict(block=1, n=3, mean=0.53, se=0.24)]
-    full_J = np.array([0.6] * 19)
-    full_v = np.ones(19)
-    e = RM.extremity(target_rows, full_J, full_v)
-    assert abs(e["value"]) < 0.5
+    e = RM.extremity(target_rows, np.array([0.6] * 19), np.ones(19))
+    assert abs(e["value"]) < 0.5, ("matching", e)
 
 
 def _stratum_frame(n_blocks_counts, target_extra_block0=0.0, target_extra_block2=0.0, seed=3):

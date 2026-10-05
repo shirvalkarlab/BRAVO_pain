@@ -14,6 +14,8 @@ Every case here is pinned on the value it produces, never on the shape of the an
 """
 import math
 
+import pytest
+
 try:
     from modules.ClosedLoopDeployment import (adapter as AD, authority as AU, consistency as C,
                                               pipeline as PL, types as TY)
@@ -29,42 +31,32 @@ def _e(name, est, ci, p=0.5):
 
 
 # --- the edge --------------------------------------------------------------------------------------
-def test_an_edge_with_a_nonzero_estimate_and_an_interval_spanning_zero_is_resolved_and_not_established():
-    """RCS08's E1 at the band in the PI's browser on 2026-09-13: -3.79 per mA, interval -12.5 to
-    +4.93, p 0.42. Under the old rule it was unresolved; under his rule it has a sign."""
-    e = _e("E1", -3.788, (-12.505, 4.929), 0.419)
-    assert e.sign == -1
-    assert e.resolved is True
-    assert e.statistically_established is False
+# (estimate, interval, p) -> (sign, resolved, statistically established)
+_EDGES = {
+    # RCS08's E1 at the band in the PI's browser on 2026-09-13: -3.79 per mA, interval -12.5 to
+    # +4.93, p 0.42. Under the old rule it was unresolved; under his rule it has a sign.
+    "nonzero_estimate_interval_spanning_zero": ((-3.788, (-12.505, 4.929), 0.419), (-1, True, False)),
+    "interval_excludes_zero": ((-0.154, (-0.269, -0.039), 0.0086), (-1, True, True)),
+    # Decision 9: absence of evidence is not permission. None and NaN both mean "no estimate"; a
+    # NaN used to read as sign -1 because ``nan > 0`` is False, which mattered nowhere while the
+    # interval gated and would have mattered everywhere once the sign alone did.
+    "no_estimate_none": ((None, None, None), (None, False, False)),
+    "no_estimate_nan": ((float("nan"), None, None), (None, False, False)),
+    "no_estimate_nan_with_an_interval": ((float("nan"), (-1.0, 1.0), 0.5), (None, False, False)),
+    # an estimate of exactly zero has no direction
+    "estimate_exactly_zero": ((0.0, (-1.0, 1.0), 0.99), (0, False, False)),
+    # an unbounded interval (four setting epochs, ``edges.actuation_edge``) is "no interval"
+    "nonzero_estimate_no_interval": ((-2.0, None, 0.125), (-1, True, False)),
+}
 
 
-def test_an_edge_whose_interval_excludes_zero_is_resolved_and_established():
-    e = _e("E3", -0.154, (-0.269, -0.039), 0.0086)
-    assert e.sign == -1 and e.resolved is True and e.statistically_established is True
-
-
-def test_an_edge_with_no_estimate_is_unresolved_whatever_its_interval():
-    """Decision 9: absence of evidence is not permission. None and NaN both mean "no estimate";
-    a NaN used to read as sign -1 because ``nan > 0`` is False, which mattered nowhere while the
-    interval gated and would have mattered everywhere once the sign alone did."""
-    for est in (None, float("nan")):
-        e = _e("E2", est, None, None)
-        assert e.sign is None, est
-        assert e.resolved is False, est
-        assert e.statistically_established is False, est
-    with_ci = _e("E2", float("nan"), (-1.0, 1.0), 0.5)
-    assert with_ci.sign is None and with_ci.resolved is False
-
-
-def test_an_estimate_of_exactly_zero_has_no_direction_and_is_unresolved():
-    e = _e("E1", 0.0, (-1.0, 1.0), 0.99)
-    assert e.sign == 0 and e.resolved is False and e.statistically_established is False
-
-
-def test_an_edge_with_a_nonzero_estimate_and_no_interval_is_resolved_and_not_established():
-    """An unbounded interval (four setting epochs, ``edges.actuation_edge``) is "no interval"."""
-    e = _e("E1", -2.0, None, 0.125)
-    assert e.resolved is True and e.statistically_established is False
+@pytest.mark.parametrize("case", list(_EDGES))
+def test_an_edge_is_resolved_by_its_point_sign_and_established_by_its_interval(case):
+    (est, ci, p), (sign, resolved, established) = _EDGES[case]
+    e = _e("E1", est, ci, p)
+    assert e.sign == sign
+    assert e.resolved is resolved
+    assert e.statistically_established is established
 
 
 # --- the report ------------------------------------------------------------------------------------

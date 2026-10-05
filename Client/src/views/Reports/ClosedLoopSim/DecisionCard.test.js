@@ -8,15 +8,23 @@
  *
  * Rendered against the live RCS08 responses of 2026-09-25 (L 1-3+ and R 0-3+ at 24.5 Hz, NRS):
  * the left is allowed and supported on point signs; the right is refused by D19 and D27.
+ *
+ * Merged here 2026-10-05: DecisionCard.ceiling.test.js, DecisionCard.painScoreGuard.test.js. Each
+ * merged file's tests sit in a describe block named after it, with its reason above it.
  */
+
 import fs from "fs";
 import path from "path";
 import "@testing-library/jest-dom";
-import { render as rtlRender, fireEvent, screen } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
+import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import DecisionCard, { decisionStatus, deviceBullets, unevaluatedBullets } from "./DecisionCard";
+import LEFT from "./__fixtures__/rcs08_cl_L13_24p5_2026-09-25.json";
+import RIGHT from "./__fixtures__/rcs08_cl_R03_24p5_2026-09-25.json";
+import SUM_L from "./__fixtures__/rcs08_summary_L13_24p5_2026-09-25.json";
+import SUM_R from "./__fixtures__/rcs08_summary_R03_24p5_2026-09-25.json";
+import { limitsSourceWords } from "./ClosedLoopSimulationPanel";
+import { withheldIfOtherBand } from "./candidateRequestParams";
+import { clone, wrap } from "testUtils/render";
 
 jest.mock("plotly.js-dist", () => ({
   react: jest.fn(), purge: jest.fn(), restyle: jest.fn(), relayout: jest.fn(), newPlot: jest.fn(),
@@ -24,19 +32,6 @@ jest.mock("plotly.js-dist", () => ({
 }));
 jest.mock("database/session-control", () => ({ SessionController: { query: jest.fn() } }));
 
-// eslint-disable-next-line import/first
-import DecisionCard, { deviceBullets, unevaluatedBullets, decisionStatus } from "./DecisionCard";
-import LEFT from "./__fixtures__/rcs08_cl_L13_24p5_2026-09-25.json";
-import RIGHT from "./__fixtures__/rcs08_cl_R03_24p5_2026-09-25.json";
-import SUM_L from "./__fixtures__/rcs08_summary_L13_24p5_2026-09-25.json";
-import SUM_R from "./__fixtures__/rcs08_summary_R03_24p5_2026-09-25.json";
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
-const clone = (o) => JSON.parse(JSON.stringify(o));
 const BC_L = { contact: "ONE_THREE_LEFT", contact_label: "L 1-3+", center_freq_hz: 24.5, bandwidth_hz: 5,
   hemisphere: "Left" };
 const BC_R = { contact: "ZERO_THREE_RIGHT", contact_label: "R 0-3+", center_freq_hz: 24.5, bandwidth_hz: 5,
@@ -331,5 +326,192 @@ describe("the headline never reads better than the server's own verdict (decisio
   it("the live left response, which the server licenses, still reads supported (provisional)", () => {
     expect(LEFT.licensed).toBe(true);
     expect(decisionStatus(LEFT).key).toBe("supported_provisional");
+  });
+});
+
+/* From DecisionCard.ceiling.test.js.
+ * The capped upper limit on the decision card (decision 306).
+ *
+ * Found live on 2026-09-26: "Values to enter on the A610" read "Adaptive amplitude limit, upper
+ * 4.80 mA" for RCS08 (L 1-3+ at 24.5 Hz), above the 4.5 mA per side the PI stated on 2026-09-14.
+ * The server now caps every current it recommends at the participant's safe ceiling and says so on
+ * the row (`ceiling_note`). These pins check that a clinician reading the table in the open sees the
+ * capped value AND the sentence on the same row, that the read-back box still attests to the capped
+ * value, and that a row the ceiling did not touch says nothing about it. The CL-DBS simulation card
+ * names the capped limits the same way.
+ *
+ * The fixture is the live left response of 2026-09-25, with its upper-limit rows set to what the
+ * server sends after the fix (live values re-measured in decision 306's proof).
+ */
+describe("from DecisionCard.ceiling", () => {
+  const NOTE = "Capped at the 4.5 mA safe ceiling; the highest current measured was 4.8 mA.";
+  const UPPER = "Adaptive amplitude limit, upper";
+
+  const BC_L = { contact: "ONE_THREE_LEFT", contact_label: "L 1-3+", center_freq_hz: 24.5, bandwidth_hz: 5,
+    hemisphere: "Left" };
+
+  /** The live left response with its upper-limit rows as the capped server sends them. */
+  function capped() {
+    const rep = JSON.parse(JSON.stringify(LEFT));
+    const fix = (rows) => (rows || []).forEach((r) => {
+      if (r.parameter === UPPER) { r.value = 4.5; r.ceiling_note = NOTE; }
+    });
+    Object.values(rep.prescriptions.modes).forEach((m) => fix(m.fields));
+    if (rep.prescription) fix(rep.prescription.fields);
+    return rep;
+  }
+
+  const card = (rep) => rtlRender(wrap(
+    <DecisionCard participantUid="uid" bandCandidate={BC_L} deploymentReport={{ data: rep, loading: false, err: null }}
+      summary={{ data: SUM_L, loading: false, err: null }}
+      chosenBand={{ band_candidate: BC_L, committed_at: "2026-09-23T08:00:00.000Z" }}
+      bandRecord={{ where: "server", saved: true, chosenBy: "clinician@example.org" }}
+      mode={null} onMode={() => {}} />));
+
+  /** Text a reader can see: everything outside a closed fold. */
+  function visibleText(container) {
+    const c = container.cloneNode(true);
+    c.querySelectorAll(".MuiCollapse-hidden").forEach((n) => n.remove());
+    return c.textContent;
+  }
+
+  describe("the capped upper limit on the decision card", () => {
+    it("shows 4.50 mA and the one-sentence reason in the open, on that row", () => {
+      const { container } = card(capped());
+      const text = visibleText(container);
+      expect(text).toContain(NOTE);
+      expect(text).not.toMatch(/4\.80/);
+      const row = screen.getByText(UPPER).closest("[data-param-row]");
+      expect(row).not.toBeNull();
+      expect(row.textContent).toContain("4.50");
+      expect(row.textContent).toContain(NOTE);
+    });
+
+    it("keeps the read-back box working on the capped value", () => {
+      card(capped());
+      const box = screen.getByLabelText(`The programmer now displays ${UPPER} as 4.50 mA`);
+      expect(box).not.toBeDisabled();
+      fireEvent.click(box);
+      expect(box).toBeChecked();
+    });
+
+    it("says nothing about a ceiling on a row the ceiling did not touch", () => {
+      const { container } = card(capped());
+      const lower = screen.getByText("Adaptive amplitude limit, lower").closest("[data-param-row]");
+      expect(lower.textContent).not.toMatch(/ceiling/i);
+      // and the uncapped live response carries no such sentence anywhere in the open
+      const { container: c2 } = card(LEFT);
+      expect(visibleText(c2)).not.toMatch(/Capped at the/);
+      expect(container).toBeTruthy();
+    });
+  });
+
+  describe("the CL-DBS simulation names the limits it ran between", () => {
+    it("says the range was capped when the server capped it", () => {
+      expect(limitsSourceWords({ amp_limit_note: NOTE }))
+        .toBe("the capture range, capped at the safe ceiling");
+    });
+    it("keeps the old words for a range the ceiling did not touch", () => {
+      expect(limitsSourceWords({})).toBe("the capture range, held");
+      expect(limitsSourceWords({ amp_limit_note: null })).toBe("the capture range, held");
+    });
+  });
+});
+
+/* From DecisionCard.painScoreGuard.test.js.
+ * ONE PAIN SCORE ON THE WHOLE PAGE (decision 307; found live 2026-09-26, the same class as the band
+ * fix of decision 302).
+ *
+ * After the clinician changed the pain-score dropdown (Left Leg VAS -> NRS) and before Recompute,
+ * the decision card still showed the previous score's full verdict and "Values to enter", its header
+ * reading "pain score Left Leg VAS" under a dropdown reading NRS; only the recompute bar said the
+ * settings had changed. A report or summary computed on another pain score -- or, for the summary,
+ * with the clinic-sheet switch the other way -- is now withheld from every card exactly as one
+ * computed for another band is, and the card names both and offers Recompute.
+ */
+describe("from DecisionCard.painScoreGuard", () => {
+  const BC_L = { contact: "ONE_THREE_LEFT", contact_label: "L 1-3+", center_freq_hz: 24.5, bandwidth_hz: 5,
+    hemisphere: "Left" };
+  function visibleText(container) {
+    const c = container.cloneNode(true);
+    c.querySelectorAll(".MuiCollapse-hidden").forEach((n) => n.remove());
+    return c.textContent;
+  }
+
+  /** The live left report as computed on Left Leg VAS. */
+  const LLVAS = (() => {
+    const r = clone(LEFT);
+    r.pain_score = { key: "left_leg_vas", label: "Left Leg VAS", requested: "left_leg_vas",
+      fell_back_to_nrs: false, reason: null };
+    return r;
+  })();
+
+  describe("a report computed on another pain score is withheld", () => {
+    it("withholds it and names both scores", () => {
+      const shown = withheldIfOtherBand({ data: LLVAS, loading: false, err: null, stale: true }, BC_L,
+        "report", { painScore: "nrs" });
+      expect(shown.data).toBeNull();
+      expect(shown.bandMismatch).toEqual({ what: "pain score", chosen: "NRS (0–10)",
+        computedFor: "Left Leg VAS" });
+      expect(shown.err).toMatch(/Left Leg VAS/);
+    });
+
+    it("passes a report on the chosen score through untouched", () => {
+      const same = { data: LLVAS, loading: false, err: null };
+      expect(withheldIfOtherBand(same, BC_L, "report", { painScore: "left_leg_vas" })).toBe(same);
+      // and a caller that names no pain score gets the band check alone, as before
+      expect(withheldIfOtherBand(same, BC_L)).toBe(same);
+    });
+
+    it("names the band first when both the band and the score differ", () => {
+      const other = clone(LLVAS);
+      other.candidates = [{ ...other.candidates[0], channel: "ZERO_TWO_LEFT", center_hz: 23.5 }];
+      const shown = withheldIfOtherBand({ data: other }, BC_L, "report", { painScore: "nrs" });
+      expect(shown.bandMismatch.what).toBe("band");
+      expect(shown.bandMismatch.computedFor).toMatch(/ZERO_TWO_LEFT at 23\.5 Hz/);
+    });
+  });
+
+  describe("a summary computed on another pain score or clinic-sheet setting is withheld", () => {
+    it("withholds a summary on another score", () => {
+      expect(withheldIfOtherBand({ data: SUM_L }, BC_L, "summary",
+        { painScore: "left_leg_vas", includeSheets: false }).data).toBeNull();
+      expect(withheldIfOtherBand({ data: SUM_L }, BC_L, "summary",
+        { painScore: "nrs", includeSheets: false }).data).toBe(SUM_L);
+    });
+
+    it("withholds a summary built with the clinic-sheet switch the other way", () => {
+      const shown = withheldIfOtherBand({ data: SUM_L }, BC_L, "summary",
+        { painScore: "nrs", includeSheets: true });
+      expect(shown.data).toBeNull();
+      expect(shown.bandMismatch).toEqual({ what: "clinic-sheet setting",
+        chosen: "clinic-sheet ratings included", computedFor: "REDCap ratings only" });
+    });
+  });
+
+  describe("the decision card says so and shows nothing computed on the old score", () => {
+    it("names the score it was computed on, the chosen one, and offers Recompute", () => {
+      const shown = withheldIfOtherBand({ data: LLVAS, loading: false, err: null, stale: true }, BC_L,
+        "report", { painScore: "nrs" });
+      const { container } = rtlRender(wrap(
+        <DecisionCard participantUid="uid" bandCandidate={BC_L} deploymentReport={shown}
+          summary={{ data: SUM_L, loading: false, err: null }} mode={null} onMode={() => {}}
+          onRecompute={() => {}} />));
+      const t = visibleText(container);
+      expect(t).toMatch(/Recompute: the analysis shown is for Left Leg VAS/);
+      expect(t).toMatch(/The chosen pain score is NRS \(0–10\)/);
+      expect(t).toMatch(/Recompute for NRS \(0–10\)/);
+      expect(t).not.toMatch(/Device allows it|Device refuses/);
+      expect(t).not.toMatch(/Values withheld|Adaptive amplitude limit/);
+    });
+  });
+
+  describe("the page hands the guard its current pain score and clinic-sheet switch", () => {
+    it("both calls in the page file pass them", () => {
+      const src = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
+      // since decision 331 each also hands the matching settings inherited from the Biomarkers page
+      expect(src).toMatch(/withheldIfOtherBand\(deploymentReport, bc, "report",\s*\{ painScore, matching: reportMatching \}\)/);
+      expect(src).toMatch(/withheldIfOtherBand\(summary, bc, "summary", \{ painScore, includeSheets,\s*matching: requestParams/);
+    });
   });
 });

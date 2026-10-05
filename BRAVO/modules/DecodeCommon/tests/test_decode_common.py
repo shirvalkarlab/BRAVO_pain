@@ -51,16 +51,13 @@ CHANNEL_NAMES = [
 ]
 
 
-def test_canonical_name_matches_the_platform_rule():
-    for name in CHANNEL_NAMES:
-        assert canon_channel(name) == availability._canon_channel(name), (
-            "the canonical form disagrees with the platform on %r" % (name,))
-
-
-def test_canonical_name_is_idempotent():
+def test_canonical_name_matches_the_platform_rule_and_is_idempotent():
+    """(Merged 2026-10-05 with `test_canonical_name_is_idempotent`.)"""
     for name in CHANNEL_NAMES:
         once = canon_channel(name)
-        assert canon_channel(once) == once
+        assert once == availability._canon_channel(name), (
+            "the canonical form disagrees with the platform on %r" % (name,))
+        assert canon_channel(once) == once, "not idempotent on %r" % (name,)
 
 
 # ----------------------------------------------------------------------------------------
@@ -85,28 +82,24 @@ def test_a_session_relative_start_time_is_refused_not_read_as_1970():
     assert to_epoch(12.5) is None
 
 
-def test_a_naive_start_time_is_read_as_utc_on_every_host():
+def test_a_naive_start_time_is_read_as_utc_on_every_host_and_an_explicit_offset_is_unchanged():
     """Open item 19, DECISIONS_and_open_items.md: a start time with no timezone attached names a
     moment in Universal Time (UTC), never the process's own local zone. `expected` is built with
     an explicit UTC offset rather than borrowed from either function under test, so this would
     have failed under the old rule on any host that does not itself run in Universal Time --
     unlike `test_start_time_matches_the_platform_rule`, which only proves the two functions agree
     with EACH OTHER and would have passed even under the old, host-dependent rule.
+
+    An explicit offset is already unambiguous; naive-means-UTC must not touch it. The Z suffix,
+    an explicit +00:00, and a genuinely non-UTC offset (-08:00, the same instant restated) must
+    all resolve to the same moment as their naive counterpart. (Merged 2026-10-05 with
+    `test_a_timezone_aware_start_time_is_unchanged_by_the_naive_utc_rule`.)
     """
     expected = datetime.datetime(2023, 11, 14, 22, 13, 20, tzinfo=datetime.timezone.utc).timestamp()
-    naive_string = "2023-11-14T22:13:20"
-    naive_datetime = datetime.datetime(2023, 11, 14, 22, 13, 20)
-    for value in (naive_string, naive_datetime):
+    for value in ("2023-11-14T22:13:20", datetime.datetime(2023, 11, 14, 22, 13, 20)):
         assert to_epoch(value) == expected, "the canonical form read %r as local time" % (value,)
         assert availability._to_epoch(value) == expected, (
             "the platform read %r as local time" % (value,))
-
-
-def test_a_timezone_aware_start_time_is_unchanged_by_the_naive_utc_rule():
-    """An explicit offset is already unambiguous; naive-means-UTC must not touch it. The Z suffix,
-    an explicit +00:00, and a genuinely non-UTC offset (-08:00, the same instant restated) must
-    all still resolve to the same moment as their naive counterpart above."""
-    expected = datetime.datetime(2023, 11, 14, 22, 13, 20, tzinfo=datetime.timezone.utc).timestamp()
     for value in ("2023-11-14T22:13:20Z", "2023-11-14T22:13:20+00:00",
                   "2023-11-14T14:13:20-08:00",
                   datetime.datetime(2023, 11, 14, 22, 13, 20, tzinfo=datetime.timezone.utc)):
@@ -180,19 +173,15 @@ def test_spectrum_records_keep_their_original_order():
     assert list(idx.psd("ZERO_THREE_LEFT")["t"]) == [T0 + 300, T0 + 100, T0 + 200]
 
 
-def test_a_recording_with_an_unreadable_start_time_is_dropped_and_counted():
+def test_a_recording_or_spectrum_record_with_an_unreadable_time_is_dropped_and_counted():
+    """(Merged 2026-10-05 with `test_a_spectrum_record_with_an_unreadable_time_is_dropped_and_counted`.)"""
     good = _td_recording(["ZERO_THREE_LEFT"], t0=T0)
     bad = _td_recording(["ZERO_THREE_LEFT"], t0=12.5)      # session-relative, refused
-    idx = _index([good, bad], [])
-    s = idx.summary()
+    s = _index([good, bad], []).summary()
     assert s["n_td_recordings_offered"] == 2
     assert s["n_td_traces_kept"] == 1
-
-
-def test_a_spectrum_record_with_an_unreadable_time_is_dropped_and_counted():
-    idx = _index([], [_psd_record("ZERO_THREE_LEFT", T0),
-                      _psd_record("ZERO_THREE_LEFT", None)])
-    s = idx.summary()
+    s = _index([], [_psd_record("ZERO_THREE_LEFT", T0),
+                    _psd_record("ZERO_THREE_LEFT", None)]).summary()
     assert s["n_psd_records_offered"] == 2
     assert s["n_psd_records_kept"] == 1
 

@@ -12,20 +12,18 @@ answer 2).
 
 The routine tests need no Django; the endpoint tests need it and are skipped without it.
 Runs in the container: python3 Biomarkers/tests/test_summary_auc_current_taken_out.py
+
+Merged here 2026-10-05: test_summary_default_cutpoint.py, test_gate_detail_numbers_are_rounded.py, test_validation_tolerance_zero.py.
 """
 import os
 import sys
-
 import numpy as np
 import pandas as pd
-
 _BRAVO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, _BRAVO_ROOT)
 sys.path.insert(0, os.path.join(_BRAVO_ROOT, "modules"))
-
 from Biomarkers.routines import analytics  # noqa: E402
 from Biomarkers.routines import deployment_current as dc  # noqa: E402
-
 CH = "ONE_THREE_LEFT"
 T0 = pd.Timestamp("2026-01-05 12:00", tz="UTC")
 N_REPORTS = 48
@@ -207,10 +205,6 @@ def test_no_plain_reading_means_nothing_to_read_again():
     assert out["available"] is False and "plain reading could not be formed" in out["why"]
 
 
-# ---------------------------------------------------------------------------------------------
-# The endpoint: carried on the summary's evidence, moving nothing else (needs Django)
-# ---------------------------------------------------------------------------------------------
-
 def _summary_with(stream):
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "BRAVO.settings")
     import django
@@ -317,12 +311,106 @@ def test_the_deployment_roc_panel_carries_the_adjusted_reading_and_moves_nothing
     assert with_["roc"] == without["roc"] and with_["forward"] == without["forward"]
     assert set(with_) == set(without)
 
-if __name__ == "__main__":
-    fails = 0
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            try:
-                fn(); print("PASS", name)
-            except Exception as exc:                          # noqa: BLE001
-                fails += 1; print("FAIL", name, repr(exc)[:300])
-    sys.exit(1 if fails else 0)
+
+# --------------------------------------------------------------------------------------------------
+# merged from test_summary_default_cutpoint.py
+# The deployment summary's cut-point when the page sends none (the PI, 2026-10-04, decision 416).
+#
+# The summary turns a cut-point into its device switching value. Until now it needed the page to send
+# one, and the page took it from the ROC panel, a separate request that answers later, so a summary
+# computed on choosing a band was marked "changed since" as soon as the ROC's point arrived. Now, with
+# no `Cutpoint` in the request, the summary takes the ROC's own default point -- the Youden point of
+# the ROC the summary itself builds, the point the ROC panel starts on -- and says which it used.
+#
+# Values: a sent cut-point is used as sent; with none, the Youden point's threshold; with no ROC or no
+# Youden point, none, and the reason is named.
+
+
+from modules.Biomarkers import bravo_service as B
+ROC = {"available": True, "operating_points": {"youden": {"threshold": 2.25, "rule": "youden"},
+                                               "f1": {"threshold": 3.5, "rule": "f1"}}}
+
+
+def test_a_sent_cutpoint_is_used_as_sent():
+    cut, src = B._summary_cutpoint({"Cutpoint": "1.75"}, ROC)
+    assert cut == 1.75 and src == "sent"
+
+
+def test_with_none_sent_the_rocs_youden_point_is_used():
+    cut, src = B._summary_cutpoint({}, ROC)
+    assert cut == 2.25 and src == "roc_default_youden"
+
+
+def test_with_no_roc_there_is_no_cutpoint_and_the_reason_is_named():
+    cut, src = B._summary_cutpoint({}, {"available": False})
+    assert cut is None and src == "none: the ROC is not available"
+    cut, src = B._summary_cutpoint({}, {"available": True, "operating_points": {}})
+    assert cut is None and src == "none: the ROC has no Youden point"
+
+
+# --------------------------------------------------------------------------------------------------
+# merged from test_gate_detail_numbers_are_rounded.py
+# The Closed-Loop sign-off printed `OR CI [0.45738925624915433, 1.545551646406637]` and
+# `band×era LRT p=0.31974358451988527` (page review 2026-10-02): the gate details carry three
+# significant digits.
+
+
+import re
+import pathlib
+_BRAVO_ROOT_PATH = pathlib.Path(__file__).resolve().parents[3]
+if str(_BRAVO_ROOT_PATH) not in sys.path:
+    sys.path.insert(0, str(_BRAVO_ROOT_PATH))
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "BRAVO.settings")
+try:
+    import django
+    django.setup()
+except Exception:
+    pass
+from modules.Biomarkers import bravo_service as BS
+
+
+def test_the_stability_gate_detail_prints_the_p_value_to_three_digits():
+    state, detail = BS._deployment_summary_stim_stable_gate(
+        {"available": True, "stability_verdict": "stable", "lrt_p": 0.31974358451988527})
+    assert state == "pass"
+    assert "p=0.32 " in detail or "p=0.320 " in detail or re.search(r"p=0\.3\d\d? ", detail)
+    assert "0.31974358451988527" not in detail
+
+
+def test_short_keeps_three_significant_digits_and_passes_a_non_number_through():
+    assert BS._short(0.45738925624915433) == "0.457"
+    assert BS._short(1.545551646406637) == "1.55"
+    assert BS._short(None) == "None"
+
+
+# --------------------------------------------------------------------------------------------------
+# merged from test_validation_tolerance_zero.py
+# Review B11 (2026-09-12): a typed match tolerance of 0 no longer crashes the sign-off endpoints.
+#
+# `_match_tolerance_param` reads an explicit 0 or negative `MatchToleranceMin` as "time-matching
+# off" (None). The discovery sweep answers None with its longest length of signal; the sign-off
+# path (`_band_validation_setup`, behind the four Closed-Loop endpoints) answered it with
+# `float(None)` -- a TypeError the page showed as an error. It now takes the sweep's fallback.
+
+
+import inspect
+from modules.Biomarkers.routines import analytics as A
+
+
+def test_zero_and_negative_tolerances_fall_back_to_the_longest_length_of_signal():
+    expect = float(max(A.BAND_TIME_SWEEP_SECONDS)) / 60.0        # 60 s -> 1.0 min since 2026-09-15
+    assert expect == 1.0
+    for raw in ({"MatchToleranceMin": 0}, {"MatchToleranceMin": -3}, {"MatchToleranceMin": "0"}):
+        tol = B._match_tolerance_param(raw)
+        assert tol is None, (raw, tol)
+        assert B._validation_tolerance_min(tol) == expect
+    # a real value passes through unchanged, and the default is the default
+    assert B._validation_tolerance_min(15) == 15.0
+    assert B._validation_tolerance_min(B._match_tolerance_param({})) == float(
+        B._match_tolerance_param({}))
+
+
+def test_the_sign_off_setup_uses_the_guarded_value():
+    src = inspect.getsource(B._band_validation_setup)
+    assert "tolerance_min=_validation_tolerance_min(match_tol_min)" in src
+    assert "float(match_tol_min)" not in src

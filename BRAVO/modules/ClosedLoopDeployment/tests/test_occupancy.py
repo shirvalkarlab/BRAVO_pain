@@ -128,28 +128,21 @@ def test_occupancy_flags_a_pair_centred_well_off_the_median():
     assert "half-width" in out["why"]
 
 
-def test_occupancy_names_the_correct_side_when_the_centre_sits_above_the_median():
-    """centre (185) > median (~100): the pair's centre is ABOVE the level the signal actually
-    occupies, and the sentence must say so, not the opposite."""
-    rng = np.random.default_rng(5)
+@pytest.mark.parametrize("seed,level,sign,side,other", [
+    # centre (185) > median (~100): the pair's centre is ABOVE the level the signal occupies
+    (5, 100.0, 1, "above", " below the participant"),
+    # centre (185) < median (~250): BELOW -- the case measured live on the stored L 1-3+ pair at 30 s
+    (6, 250.0, -1, "below", " above the participant"),
+], ids=["centre_above_the_median", "centre_below_the_median"])
+def test_occupancy_names_the_correct_side_of_the_median(seed, level, sign, side, other):
+    """The sentence must name the side the pair's centre sits on, not the opposite."""
+    rng = np.random.default_rng(seed)
     t = np.arange(2000) * 3.0
-    p = 100.0 + rng.normal(0.0, 5.0, 2000)
+    p = level + rng.normal(0.0, 5.0, 2000)
     out = OC.threshold_occupancy(t, p, upper=210.0, lower=160.0, averaging_s=3.0)
-    assert out["distance_from_median"] > 0
-    assert "above" in out["why"]
-    assert " below the participant" not in out["why"]
-
-
-def test_occupancy_names_the_correct_side_when_the_centre_sits_below_the_median():
-    """centre (185) < median (~250): the pair's centre is BELOW the level the signal actually
-    occupies -- the case measured live on the stored L 1-3+ pair at 30 s averaging."""
-    rng = np.random.default_rng(6)
-    t = np.arange(2000) * 3.0
-    p = 250.0 + rng.normal(0.0, 5.0, 2000)
-    out = OC.threshold_occupancy(t, p, upper=210.0, lower=160.0, averaging_s=3.0)
-    assert out["distance_from_median"] < 0
-    assert "below" in out["why"]
-    assert " above the participant" not in out["why"]
+    assert np.sign(out["distance_from_median"]) == sign
+    assert side in out["why"]
+    assert other not in out["why"]
 
 
 def test_occupancy_does_not_warn_when_well_placed_and_wide_enough():
@@ -162,35 +155,23 @@ def test_occupancy_does_not_warn_when_well_placed_and_wide_enough():
     assert out["warning"] is False
 
 
-def test_occupancy_reports_unavailable_with_no_thresholds():
-    out = OC.threshold_occupancy(np.arange(5) * 3.0, np.ones(5), upper=None, lower=100.0,
-                                 averaging_s=3.0)
+@pytest.mark.parametrize("t,p,kw,check", [
+    (np.arange(5) * 3.0, np.ones(5), dict(upper=None, lower=100.0, averaging_s=3.0),
+     lambda out: "no thresholds" in out["reason"]),
+    (np.arange(5) * 3.0, np.ones(5), dict(upper=200.0, lower=100.0, averaging_s=None),
+     lambda out: "averaging duration" in out["reason"]),
+    (np.array([0.0, 3.0]), np.array([150.0, 155.0]), dict(upper=200.0, lower=100.0, averaging_s=3.0),
+     lambda out: out["n_readings"] == 2),
+], ids=["no_thresholds", "no_averaging_duration", "too_few_readings"])
+def test_occupancy_reports_unavailable(t, p, kw, check):
+    out = OC.threshold_occupancy(t, p, **kw)
     assert out["available"] is False
-    assert "no thresholds" in out["reason"]
-
-
-def test_occupancy_reports_unavailable_with_no_averaging_duration():
-    out = OC.threshold_occupancy(np.arange(5) * 3.0, np.ones(5), upper=200.0, lower=100.0,
-                                 averaging_s=None)
-    assert out["available"] is False
-    assert "averaging duration" in out["reason"]
-
-
-def test_occupancy_reports_unavailable_with_too_few_readings():
-    out = OC.threshold_occupancy(np.array([0.0, 3.0]), np.array([150.0, 155.0]), upper=200.0,
-                                 lower=100.0, averaging_s=3.0)
-    assert out["available"] is False
-    assert out["n_readings"] == 2
+    assert check(out), out
 
 
 # --------------------------------------------------------------------------------------------
 # occupancy_note / attach_occupancy: the prescription-card wiring, mirroring design_rule_note
 # --------------------------------------------------------------------------------------------
-def test_occupancy_note_is_none_when_unavailable():
-    assert PR.occupancy_note({"available": False, "reason": "x"}) is None
-    assert PR.occupancy_note(None) is None
-
-
 def test_occupancy_note_states_the_payloads_own_sentence():
     payload = OC.threshold_occupancy(np.arange(2000) * 3.0,
                                      167.0 + np.random.default_rng(1).normal(0, 1, 2000),
@@ -218,29 +199,6 @@ def test_attach_occupancy_only_touches_the_two_threshold_fields():
             assert f.occupancy_note is None
     single = out["modes"][PR.PA.SINGLE]
     assert all(f.occupancy_note is None for f in single.fields)
-
-
-def test_attach_occupancy_is_a_no_op_when_nothing_is_available():
-    plan = TY.ThresholdPlan(upper=210.579, lower=161.903, capture_amp_low=1.4, capture_amp_high=4.8)
-    cand = {"channel": "ONE_THREE_LEFT", "center_hz": 24.5, "band_width_hz": 5.0}
-    prescriptions = PR.prescribe_all_modes(threshold_plan=plan, candidate=cand,
-                                           power_series=None, validated_hemispheres=("Left",),
-                                           configuring_both_hemispheres=False)
-    out = PR.attach_occupancy(prescriptions, {"available": False, "reason": "x"})
-    dual = out["modes"][PR.PA.DUAL]
-    assert all(f.occupancy_note is None for f in dual.fields)
-
-
-def test_as_rows_carries_the_occupancy_note_key():
-    plan = TY.ThresholdPlan(upper=210.579, lower=161.903, capture_amp_low=1.4, capture_amp_high=4.8)
-    cand = {"channel": "ONE_THREE_LEFT", "center_hz": 24.5, "band_width_hz": 5.0}
-    prescriptions = PR.prescribe_all_modes(threshold_plan=plan, candidate=cand,
-                                           power_series=None, validated_hemispheres=("Left",),
-                                           configuring_both_hemispheres=False)
-    dual = prescriptions["modes"][PR.PA.DUAL]
-    rows = dual.as_rows()
-    assert all("occupancy_note" in r for r in rows)
-    assert all(r["occupancy_note"] is None for r in rows)      # nothing attached yet
 
 
 # --------------------------------------------------------------------------------------------

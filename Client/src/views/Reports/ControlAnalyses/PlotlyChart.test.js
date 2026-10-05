@@ -5,6 +5,9 @@
  * and with one constant `uirevision`. And each x axis ends on a labelled tick: the stepped-current
  * figure's band axis used to stop at a fixed 50 Hz tick while bands run to 100 Hz, so its right-hand
  * edge carried no number.
+ *
+ * Merged here 2026-10-05: PlotlyChart.zoom.test.js (its test reads the drawn call from the recording
+ * stand-in in plotTestUtils instead of its own jest.fn stand-in).
  */
 import React from "react";
 import { render } from "@testing-library/react";
@@ -82,4 +85,18 @@ describe("an axis ends on a labelled tick", () => {
     expect(xaxis.ticktext[xaxis.ticktext.length - 1]).toBe(xaxis.range[1].toFixed(1));
     expect(xaxis.range[1]).toBeGreaterThanOrEqual(0.8);
   });
+});
+
+/* From PlotlyChart.zoom.test.js. The offline checks' figures zoom, pan, save as PNG from the
+ * toolbar and reset on double-click, as the Biomarker Data Timeline does (the PI, 2026-10-03: "make
+ * them work in a similar model as they do with the biomarker data timeline, where if you
+ * double-click it resets the view"). */
+test("the toolbar shows (with PNG save) and double-click resets the view", () => {
+  render(wrap(true, { data: [{ x: [1, 2], y: [3, 4] }], layout: {} }));
+  expect(global.__plots.length).toBeGreaterThan(0);
+  const { config, layout } = global.__plots[global.__plots.length - 1];
+  expect(config.displayModeBar).not.toBe(false);
+  expect(config.toImageButtonOptions).toEqual(expect.objectContaining({ format: "png" }));
+  expect(config.doubleClick).toBe("reset+autosize");
+  expect(layout.dragmode).toBe("zoom");
 });

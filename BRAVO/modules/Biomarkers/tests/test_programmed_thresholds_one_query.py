@@ -16,11 +16,12 @@ that the answer is unchanged for a small hand-built case: one active left-hemisp
 
 No Django settings and no database: stubbed the way test_shared_raw_lsb_cache.py stubs Server.
 
-Run inside the container:
-    python3 _agent_bridge/run_tests.py
 """
+import contextlib
 import pathlib
+import shutil
 import sys
+import tempfile
 import types
 import unittest.mock as mock
 
@@ -116,15 +117,39 @@ class _FakeStimQuerySet:
         return self
 
 
-def _install_fake_orm(groups, calls):
+@contextlib.contextmanager
+def _fake_orm(groups, calls):
+    """Stand-in therapy and source-file models for one test, put back afterwards (until 2026-10-05
+    the stand-ins stayed in `sys.modules` and on `Server.models` for every later test in the same
+    process), with the saved-answer store pointed at a directory of its own (decision 429)."""
     therapy_mod = types.ModuleType("Server.models.Therapy")
     therapy_mod.ElectricalTherapy = mock.Mock(
         objects=_FakeTherapyQuerySet(calls, groups))
     therapy_mod.ElectricalStimulation = mock.Mock(
         objects=_FakeStimQuerySet(calls))
+    models = sys.modules["Server.models"]
+    saved = (sys.modules.get("Server.models.Therapy"), getattr(models, "SourceFile", _MISSING),
+             B._SHARED_CACHE_DIR_OVERRIDE)
+    tmp = tempfile.mkdtemp(prefix="bravo_thresholds_query_")
     sys.modules["Server.models.Therapy"] = therapy_mod
-    sys.modules["Server.models"].SourceFile = mock.Mock(
-        find_all=mock.Mock(return_value=[mock.Mock()]))
+    models.SourceFile = mock.Mock(find_all=mock.Mock(return_value=[mock.Mock()]))
+    B._SHARED_CACHE_DIR_OVERRIDE = tmp
+    try:
+        yield
+    finally:
+        if saved[0] is None:
+            sys.modules.pop("Server.models.Therapy", None)
+        else:
+            sys.modules["Server.models.Therapy"] = saved[0]
+        if saved[1] is _MISSING:
+            delattr(models, "SourceFile")
+        else:
+            models.SourceFile = saved[1]
+        B._SHARED_CACHE_DIR_OVERRIDE = saved[2]
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+_MISSING = object()
 
 
 def test_the_electrode_rides_the_same_prefetch_as_the_stimulation_settings():
@@ -137,9 +162,8 @@ def test_the_electrode_rides_the_same_prefetch_as_the_stimulation_settings():
         adaptive=[_FakeAdaptive(adaptive={"Status": "ADBS_RUNNING"},
                                  sensing={"Thresholds": {"LFPThresholds": [1.5, 3.0]}})],
         date="2026-01-01")
-    _install_fake_orm([group], calls)
-
-    out = B._programmed_adaptive_thresholds(mock.Mock())
+    with _fake_orm([group], calls):
+        out = B._programmed_adaptive_thresholds(mock.Mock())
 
     assert out == {"Left": {"lower": 1.5, "upper": 3.0, "measured_lower": None,
                              "measured_upper": None, "status": "ADBS_RUNNING",
@@ -169,12 +193,6 @@ def test_a_group_with_no_active_adaptive_therapy_is_skipped():
         adaptive=[_FakeAdaptive(adaptive={"Status": "NOT_CONFIGURED"},
                                  sensing={"Thresholds": {"LFPThresholds": [1.0, 2.0]}})],
         date="2026-01-01")
-    _install_fake_orm([group], calls)
-    out = B._programmed_adaptive_thresholds(mock.Mock())
+    with _fake_orm([group], calls):
+        out = B._programmed_adaptive_thresholds(mock.Mock())
     assert out == {}, out
-
-
-if __name__ == "__main__":
-    test_the_electrode_rides_the_same_prefetch_as_the_stimulation_settings()
-    test_a_group_with_no_active_adaptive_therapy_is_skipped()
-    print("All programmed-thresholds query tests passed.")

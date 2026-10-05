@@ -8,6 +8,8 @@ that the device is never going to apply.
 
 Every candidate here is built by mutating ``passing_candidate()``, so a test named after one rule
 fails only on that rule and the assertion can say so exactly.
+
+Merged here 2026-10-05: test_resolved_by.py.
 """
 from __future__ import annotations
 
@@ -370,6 +372,10 @@ def test_d31_still_fails_outright_when_the_general_envelope_is_breached():
     report = check(passing_candidate(rate_hz=300.0), rcs08_participant())
     assert "D31" in ids(report.failures)
     assert "D31" not in ids(report.unknowns)
+    # and the demonstrated-pair evidence path (a named sensing side) must not rescue a physically
+    # impossible rate either (was test_d31_still_fails_a_rate_outside_the_general_envelope)
+    cand = passing_candidate(rate_hz=300.0, sensing_hemisphere="Left")
+    assert constraints.RULES_BY_ID["D31"].predicate(cand, rcs08_participant()) is False
 
 
 def test_d31_bites_on_the_incumbent_55_hz_rate_if_the_minimum_turns_out_higher():
@@ -854,12 +860,6 @@ def test_d31_never_reports_a_never_programmed_pair_as_forbidden():
     assert verdict is None, f"undemonstrated must be not-determinable, got {verdict!r}"
 
 
-def test_d31_still_fails_a_rate_outside_the_general_envelope():
-    """The evidence path must not rescue a physically impossible rate."""
-    cand = passing_candidate(rate_hz=300.0, sensing_hemisphere="Left")
-    assert constraints.RULES_BY_ID["D31"].predicate(cand, rcs08_participant()) is False
-
-
 def test_d29_is_satisfied_when_no_segment_is_steered():
     """Ring stimulation makes the p.39 requirement unreachable, so the rule is satisfied.
 
@@ -917,3 +917,61 @@ def test_d30_asks_a_per_attempt_question_not_a_permanent_one():
     cand.pop("rate_committed_for_this_attempt")
     cand["frequency_search_closed"] = True
     assert constraints.RULES_BY_ID["D30"].predicate(cand, rcs08_participant()) is True
+
+# ------------------------------------------------------------------------------------------------
+# Who can clear a refusal (from test_resolved_by.py, merged 2026-10-05)
+# ------------------------------------------------------------------------------------------------
+# Who can clear a device-rule refusal, carried on every row the evaluator emits, and the rule
+# table's one-line summary counting its rows by what they are (review findings, 2026-09-26).
+#
+# Every refusal used to read "measurement, a property of the recording" on the Closed-Loop page,
+# because the evaluator gives every blocking rule that fails the same kind ("failed") and the page
+# mapped that one kind to one actor. D52 (the sensing pair must flank the stimulating contacts) is
+# cleared at the programmer by a change of contacts, not by measuring anything. Each blocking rule
+# now says which of four things clears it, in ``constraints.RESOLVED_BY``, and the row carries it.
+
+
+KINDS = {"configuration", "band", "recording", "analysis"}
+
+
+def test_every_blocking_rule_says_what_clears_it():
+    blocking = [r.rule_id for r in constraints.RULES if r.severity == "blocking"]
+    missing = [rid for rid in blocking if constraints.RESOLVED_BY.get(rid) not in KINDS]
+    assert missing == []
+
+
+def test_the_map_names_only_real_rules_and_only_the_four_kinds():
+    assert set(constraints.RESOLVED_BY) <= set(constraints.RULES_BY_ID)
+    assert set(constraints.RESOLVED_BY.values()) <= KINDS
+
+
+def test_a_sensing_pair_refusal_is_cleared_at_the_programmer_not_by_measurement():
+    assert constraints.RESOLVED_BY["D52"] == "configuration"
+    assert constraints.RESOLVED_BY["D27"] == "configuration"
+    assert constraints.RESOLVED_BY["D16"] == "recording"
+    assert constraints.RESOLVED_BY["D17"] == "recording"
+    assert constraints.RESOLVED_BY["D19"] == "band"
+    assert constraints.RESOLVED_BY["D11"] == "analysis"
+
+
+def test_every_failed_row_carries_what_clears_it():
+    cand = passing_candidate(pulse_width_us=160.0)       # D27 fails: above the 120 us ceiling
+    rep = constraints.check_eligibility(cand, resolved_participant())
+    d27 = [r for r in rep.failures if r["rule_id"] == "D27"]
+    assert d27 and d27[0]["resolved_by"] == "configuration"
+    for row in rep.failures + rep.unknowns + rep.advisories + list(rep.deferred or []):
+        assert row["resolved_by"] == constraints.RESOLVED_BY.get(row["rule_id"], "")
+
+
+@pytest.mark.parametrize("advisories,summary", [
+    # a passed rule shown with its value is not called an advisory
+    ([{"rule_id": "D52", "kind": "recorded_value"}, {"rule_id": "D03", "kind": "recorded_value"},
+      {"rule_id": "D09", "kind": "advisory_failed"}],
+     "eligible (52 rules checked; 2 passed with their value shown, 1 advisory)"),
+    # and a zero count of passed values is still named
+    ([{"rule_id": "D09", "kind": "advisory_failed"}],
+     "eligible (52 rules checked; 0 passed with their value shown, 1 advisory)"),
+], ids=["two_passed_values", "zero_passed_values"])
+def test_the_eligible_summary_counts_passed_values_apart_from_advisories(advisories, summary):
+    s = types.EligibilityReport(eligible=True, checked=52, advisories=advisories).summary()
+    assert s == summary

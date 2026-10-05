@@ -5,17 +5,9 @@
  */
 import React from "react";
 import { render as rtlRender } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 
 import ReportSharingNote from "./ReportSharingNote";
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
+import { wrap } from "testUtils/render";
 
 const WARNING = "Warning: 19 of 46 matched pain reports are claimed by more than one recording session (66 sessions; at most 7 per report). within the cap of 3 sessions per report set on this page. The correlation's p-value is grouped on the report, so a shared report counts once there.";
 

@@ -16,9 +16,7 @@ result Biomarkers computes in the first place. Together the two prove the whole 
 without either side importing the other in the wrong direction.
 """
 import pathlib
-import shutil
 import sys
-import tempfile
 
 import pytest
 
@@ -33,24 +31,6 @@ from ClosedLoopDeployment import stability as stab
 from Biomarkers.routines import sweep_settings
 
 UID = "2e3c75c00d7f4f37b53a048d195f11da"
-
-
-@pytest.fixture()
-def sandbox():
-    d = tempfile.mkdtemp(prefix="bravo_track_d_grid_test_")
-    prev_dir = st.DIR_OVERRIDE
-    prev_adapter_dir = adapter._SHARED_CACHE_DIR_OVERRIDE
-    from CacheStore import ledger
-    prev_ledger = ledger.ENABLED
-    st.DIR_OVERRIDE = d
-    adapter._SHARED_CACHE_DIR_OVERRIDE = d
-    ledger.ENABLED = False
-    st.clear()
-    yield d
-    st.DIR_OVERRIDE = prev_dir
-    adapter._SHARED_CACHE_DIR_OVERRIDE = prev_adapter_dir
-    ledger.ENABLED = prev_ledger
-    shutil.rmtree(d, ignore_errors=True)
 
 
 def _write_real_band_sweep_entry(*, stability_raw=None, sig=("sweep", 1), center_hz=12.5,
@@ -98,7 +78,7 @@ def _write_real_band_sweep_entry(*, stability_raw=None, sig=("sweep", 1), center
 # D1: the real read
 # --------------------------------------------------------------------------------------------
 
-def test_d1_reads_the_real_stored_grid_without_refusal(sandbox):
+def test_d1_reads_the_real_stored_grid_without_refusal(grid_sandbox):
     _write_real_band_sweep_entry()
     got = adapter.band_sweep_grid_for_closed_loop(UID)
     assert got["available"] is True
@@ -107,7 +87,7 @@ def test_d1_reads_the_real_stored_grid_without_refusal(sandbox):
     assert grid["best_correlation_rows"][0]["band_center_hz"] == 12.5
 
 
-def test_d1_reports_unavailable_with_no_stored_entry(sandbox, monkeypatch):
+def test_d1_reports_unavailable_with_no_stored_entry(grid_sandbox, monkeypatch):
     """No stored entry and nothing buildable: the reader says so rather than inventing a grid.
 
     Since decision 131 the reader BUILDS a grid through the Biomarkers sweep when nothing is stored
@@ -132,7 +112,7 @@ def test_d1_reports_unavailable_with_no_stored_entry(sandbox, monkeypatch):
 _MARGIN = stab.STABILITY_EQUIVALENCE_MARGIN_LOG_OR
 
 
-def test_d2b_translated_answer_is_identical_to_calling_finding_from_stability_result_directly(sandbox):
+def test_d2b_translated_answer_is_identical_to_calling_finding_from_stability_result_directly(grid_sandbox):
     raw = {"available": True, "lrt_p": 0.72,
            "equivalence": {"verdict": "stable", "margin_log_or": _MARGIN,
                            "max_abs_diff_log_or": 0.12, "ci": [-0.10, 0.30],
@@ -154,7 +134,7 @@ def test_d2b_translated_answer_is_identical_to_calling_finding_from_stability_re
     assert "cross_setting_stability_raw" not in got_row
 
 
-def test_d2b_the_documented_disagreement_case_translates_to_cannot_tell(sandbox):
+def test_d2b_the_documented_disagreement_case_translates_to_cannot_tell(grid_sandbox):
     """ONE_THREE_LEFT at 17.5 Hz is the case `adapter.py`'s own comment names: the old two-valued
     flag would read True/"stable" while the honest answer is "cannot tell".
 
@@ -190,7 +170,7 @@ def test_d2b_the_documented_disagreement_case_translates_to_cannot_tell(sandbox)
         "-- if this fires, the anchor point has moved again and the comments naming it are stale")
 
 
-def test_d2b_grid_row_never_carries_a_bare_stim_stable_boolean(sandbox):
+def test_d2b_grid_row_never_carries_a_bare_stim_stable_boolean(grid_sandbox):
     raw = {"available": True, "lrt_p": 0.72,
            "equivalence": {"verdict": "stable", "margin_log_or": _MARGIN,
                            "max_abs_diff_log_or": 0.12, "ci": [-0.10, 0.30],
@@ -204,7 +184,7 @@ def test_d2b_grid_row_never_carries_a_bare_stim_stable_boolean(sandbox):
     assert row["cross_setting_stability"]["answer"] in stab.ANSWERS
 
 
-def test_d2b_a_row_with_no_raw_result_at_all_is_left_alone_not_faked(sandbox):
+def test_d2b_a_row_with_no_raw_result_at_all_is_left_alone_not_faked(grid_sandbox):
     """A grid built before Track D's opt-in flag was ever passed (`cross_setting_stability_raw`
     absent, the default) must not be given a fabricated translation, and
     `cross_setting_stability_included` must say so."""
@@ -260,7 +240,7 @@ def _write_stability_entry(grid_key, raw, *, center_hz=12.5, tagged=True, rule_v
              writer="biomarkers", trigger="stability_grid", provenance=[], extra=extra)
 
 
-def test_the_stability_column_reads_the_answer_for_its_own_grid_not_the_newest(sandbox):
+def test_the_stability_column_reads_the_answer_for_its_own_grid_not_the_newest(grid_sandbox):
     """Found live on 2026-09-23. The stability answer depends on the pain score the grid was built
     for (on RCS08, 3,123 of 5,148 stored values differ between the NRS grid's answer and the Left
     Leg VAS grid's), and the store now keeps one answer per grid. This card read the NEWEST answer
@@ -276,7 +256,7 @@ def test_the_stability_column_reads_the_answer_for_its_own_grid_not_the_newest(s
     assert got["cross_setting_stability_from_store"] == 2
 
 
-def test_with_no_answer_for_its_own_grid_the_column_says_not_tested_rather_than_borrowing(sandbox):
+def test_with_no_answer_for_its_own_grid_the_column_says_not_tested_rather_than_borrowing(grid_sandbox):
     """Only another grid's answer is stored, or one written before the sidecar named its grid:
     the rows carry no stability answer (the card's "not tested"), never a borrowed one."""
     _write_real_band_sweep_entry(sweep_key="grid-shown")
@@ -288,7 +268,7 @@ def test_with_no_answer_for_its_own_grid_the_column_says_not_tested_rather_than_
     assert got["cross_setting_stability_from_store"] == 0
 
 
-def test_the_card_reads_the_grid_with_the_clinic_sheet_switch_the_biomarkers_page_used(sandbox):
+def test_the_card_reads_the_grid_with_the_clinic_sheet_switch_the_biomarkers_page_used(grid_sandbox):
     """Found live on 2026-09-23 while proving the stability fix above. The Closed-Loop page sends
     the Biomarkers page's clinic-sheet switch with the grid settings (`useBandSweepGrid.js`), but
     the server's list of settings it passes on left it out, so with sheets ON on the Biomarkers
@@ -343,7 +323,7 @@ def test_the_stability_rule_version_matches_the_one_biomarkers_writes():
                      src, re.MULTILINE), "the writer no longer takes the kind name from its one home"
 
 
-def test_an_answer_computed_under_an_older_stability_rule_reads_not_tested(sandbox):
+def test_an_answer_computed_under_an_older_stability_rule_reads_not_tested(grid_sandbox):
     """Found by the P-03 work on 2026-09-25. The stability rule moved (one pain report counted in one
     stimulation state, `v5_one_block_per_report`), and the Biomarkers page keys its answers on the
     rule, but this card matched on the grid's key alone, so it kept printing the old rule's answers
@@ -359,7 +339,7 @@ def test_an_answer_computed_under_an_older_stability_rule_reads_not_tested(sandb
     assert got["cross_setting_stability_from_store"] == 0
 
 
-def test_the_current_rules_answer_is_read_even_when_an_older_rules_answer_is_newer(sandbox):
+def test_the_current_rules_answer_is_read_even_when_an_older_rules_answer_is_newer(grid_sandbox):
     """Both rules' answers stored for the same grid, the older rule's written LAST (an old worker
     finishing after the new one, say): the card reads the answer under the rule in force."""
     _write_real_band_sweep_entry(sweep_key="grid-shown")
@@ -374,7 +354,7 @@ def test_the_current_rules_answer_is_read_even_when_an_older_rules_answer_is_new
         "the card read the older rule's answer because it was written last")
 
 
-def test_an_answer_under_the_current_rule_written_before_the_sidecar_named_its_rule_is_still_read(sandbox):
+def test_an_answer_under_the_current_rule_written_before_the_sidecar_named_its_rule_is_still_read(grid_sandbox):
     """Answers written under the rule in force before 2026-09-25 name their grid in the sidecar but
     not their rule. The Biomarkers side finds them by their exact key and will not rewrite them, so
     refusing them here would leave the card on "not tested" until the rule next moves. They are

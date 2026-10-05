@@ -24,10 +24,6 @@ import "@testing-library/jest-dom";
 import fs from "fs";
 import path from "path";
 import { render as rtlRender, screen, fireEvent, waitFor } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 
 import { invalidateAll, putResult, settingsKey } from "database/resultCache";
 import { biomarkerHeatmapSlot } from "views/Reports/moduleCacheKeys";
@@ -35,6 +31,7 @@ import { biomarkerHeatmapSlot } from "views/Reports/moduleCacheKeys";
 import BiomarkerHeatmapGrids from "./BiomarkerHeatmapGrids";
 import { deviceSpectrumBullets } from "./gridReadouts";
 import sweep from "./__fixtures__/rcs08_band_sweep.json";
+import { wrap } from "testUtils/render";
 
 jest.mock("plotly.js-dist", () => {
   // The real `Plotly.react` turns the target <div> into a graph node with `.on`,
@@ -63,12 +60,6 @@ jest.mock("graphing-utility/Plotly", () => ({
 jest.mock("database/session-control", () => ({ SessionController: { query: jest.fn() } }));
 // eslint-disable-next-line import/first
 import { SessionController } from "database/session-control";
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 
 const UID = "2e3c75c00d7f4f37b53a048d195f11da";
 const METRIC = "nrs";

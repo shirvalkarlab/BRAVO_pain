@@ -11,18 +11,10 @@
  */
 import "@testing-library/jest-dom";
 import { render as rtlRender } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 import DecisionStrip, { decisionHeadline, sideVerdicts } from "./DecisionStrip";
 import response from "./__fixtures__/rcs08_stim_optimizer_two_stage.json";
+import { wrap, clone } from "testUtils/render";
 
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
-const clone = (x) => JSON.parse(JSON.stringify(x));
 const inForce = response.in_force_by_side;
 
 describe("the strip's verdict is the frozen setting's, not the rate move's", () => {

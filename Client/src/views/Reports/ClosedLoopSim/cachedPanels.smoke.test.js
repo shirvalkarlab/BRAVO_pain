@@ -21,10 +21,6 @@
 import "@testing-library/jest-dom";
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 
 import { invalidateAll, putResult, settingsKey } from "database/resultCache";
 import { CL } from "views/Reports/moduleCacheKeys";
@@ -33,6 +29,7 @@ import DeploymentRocPanel from "./DeploymentRocPanel";
 import EraRefitPanel from "./EraRefitPanel";
 import LsbPowerPanel from "./LsbPowerPanel";
 import CalibrationInEffectPanel from "views/Reports/Biomarkers/CalibrationInEffectPanel";
+import { wrap } from "testUtils/render";
 
 jest.mock("plotly.js-dist", () => ({
   react: jest.fn(), purge: jest.fn(), restyle: jest.fn(), relayout: jest.fn(), newPlot: jest.fn(),
@@ -46,12 +43,6 @@ import { SessionController } from "database/session-control";
 const UID = "TEST01";
 const BC = { contact: "ZERO_THREE_LEFT", center_freq_hz: 9.77, bandwidth_hz: 5.0 };
 const REQ = { LabelMetric: "vas" };
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 
 beforeEach(() => {
   invalidateAll("smoke test setup");

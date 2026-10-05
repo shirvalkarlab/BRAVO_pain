@@ -16,38 +16,14 @@ against a synthetic chain would keep passing while the real wiring leaked.
 
 Every test also has its CONTROL: the same product derived from raw device recordings only must be
 released, because a rule that refused everything would be trivially safe and useless.
+
+Merged here 2026-10-05: test_closed_loop_reads_band_sweep.py (its section is at the end).
 """
-import pathlib
-import shutil
-import sys
-import tempfile
-
 import numpy as np
-
-_BRAVO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-if str(_BRAVO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_BRAVO_ROOT))
 
 from modules.CacheStore import provenance as prov
 from modules.CacheStore import store as st
-
-UID = "2e3c75c00d7f4f37b53a048d195f11da"
-
-
-class _Sandbox:
-    def __enter__(self):
-        from modules.CacheStore import ledger
-        self._dir = tempfile.mkdtemp(prefix="bravo_prov_test_")
-        self._prev_dir, self._prev_ledger = st.DIR_OVERRIDE, ledger.ENABLED
-        st.DIR_OVERRIDE, ledger.ENABLED = self._dir, False
-        st.clear()
-        return self._dir
-
-    def __exit__(self, *exc):
-        from modules.CacheStore import ledger
-        st.DIR_OVERRIDE, ledger.ENABLED = self._prev_dir, self._prev_ledger
-        shutil.rmtree(self._dir, ignore_errors=True)
-        return False
+from modules.CacheStore.tests._helpers import UID, Sandbox as _Sandbox, refused as _refused
 
 
 def _build_the_cycle():
@@ -94,7 +70,12 @@ def _build_the_cycle():
 # --------------------------------------------------------------------------------------------
 
 def test_stim_optimizer_is_refused_the_verdict_that_derives_from_its_own_ladder():
-    """THE PROOF. Built through the store, not asserted against a hand-written chain."""
+    """THE PROOF. Built through the store, not asserted against a hand-written chain. The refusal
+    holds one more hop of indirection on (a cycle is rarely one step; the chain is flattened, so
+    depth must not defeat the check), and it is not a miss, so `store_if_absent` cannot rebuild
+    the same self-derived product around it and hand it over anyway. (Merged 2026-10-05 with
+    `test_the_refusal_survives_one_more_hop_of_indirection` and
+    `test_a_refusal_is_not_a_miss_so_it_cannot_be_rebuilt_around`, which built the same cycle.)"""
     with _Sandbox():
         _settings_sig, _band_sig, verdict_sig = _build_the_cycle()
 
@@ -103,11 +84,8 @@ def test_stim_optimizer_is_refused_the_verdict_that_derives_from_its_own_ladder(
                        consumer="closed_loop") is not None
         assert st.load("ground_truth_verdict", UID, verdict_sig, consumer=None) is not None
 
-        raised = None
-        try:
-            st.load("ground_truth_verdict", UID, verdict_sig, consumer="stim_optimizer")
-        except prov.SelfDerivedProduct as exc:
-            raised = exc
+        raised = _refused(st.load, "ground_truth_verdict", UID, verdict_sig,
+                          consumer="stim_optimizer")
         assert raised is not None, \
             "THE CYCLE WAS NOT REFUSED. Stim Optimizer just read a verdict computed from the " \
             "recordings its own exploration policy chose to collect."
@@ -116,11 +94,7 @@ def test_stim_optimizer_is_refused_the_verdict_that_derives_from_its_own_ladder(
         assert "stim_optimizer" in text
         assert "exploration_ladder" in text
 
-
-def test_the_refusal_survives_one_more_hop_of_indirection():
-    """A cycle is rarely one step. The chain is flattened, so depth must not defeat the check."""
-    with _Sandbox():
-        _s, _b, verdict_sig = _build_the_cycle()
+        # one more hop
         verdict_key = st.product_key("ground_truth_verdict", UID, verdict_sig)
         far_sig = ("far", 1)
         st.store("amplitude_effect_by_band", UID, far_sig, {"slope": np.array([0.1])},
@@ -130,35 +104,35 @@ def test_the_refusal_survives_one_more_hop_of_indirection():
                                 chain=st.read_stamp("ground_truth_verdict", UID,
                                                     verdict_sig)["provenance"]),
                  ]))
-        raised = None
-        try:
-            st.load("amplitude_effect_by_band", UID, far_sig, consumer="stim_optimizer")
-        except prov.SelfDerivedProduct as exc:
-            raised = exc
-        assert raised is not None, "a two-hop cycle was not refused"
+        assert _refused(st.load, "amplitude_effect_by_band", UID, far_sig,
+                        consumer="stim_optimizer") is not None, "a two-hop cycle was not refused"
 
-
-def test_a_refusal_is_not_a_miss_so_it_cannot_be_rebuilt_around():
-    """A silent miss would rebuild the same self-derived product and hand it over anyway."""
-    with _Sandbox():
-        _s, _b, verdict_sig = _build_the_cycle()
-        raised = False
-        try:
-            st.store_if_absent("ground_truth_verdict", UID, verdict_sig,
-                               lambda: {"rebuilt": True}, consumer="stim_optimizer")
-        except prov.SelfDerivedProduct:
-            raised = True
-        assert raised, "the refusal was swallowed and the product would have been rebuilt"
+        # a refusal is not a miss
+        assert _refused(st.store_if_absent, "ground_truth_verdict", UID, verdict_sig,
+                        lambda: {"rebuilt": True}, consumer="stim_optimizer") is not None, \
+            "the refusal was swallowed and the product would have been rebuilt"
 
 
 # --------------------------------------------------------------------------------------------
 # the controls: a rule that refused everything would be useless
 # --------------------------------------------------------------------------------------------
 
-def test_a_verdict_built_only_from_device_recordings_is_released_to_stim_optimizer():
-    """THE CONTROL. This is the case the whole design exists to serve."""
+def test_the_recordings_and_what_is_built_only_from_them_are_released():
+    """THE CONTROL. A verdict built only from device recordings reaches Stim Optimizer: the case
+    the whole design exists to serve. The tiles themselves reach every module (they are built with
+    no knowledge of any analysis choice, rating or exploration decision, so they cannot carry one
+    module's judgement into another's input), and Biomarkers reads back a result built from its
+    own tiles, which exempting raw kinds is what makes legal. (Merged 2026-10-05 from
+    `test_a_verdict_built_only_from_device_recordings_is_released_to_stim_optimizer`,
+    `test_the_recordings_themselves_are_never_a_cycle` and
+    `test_a_module_may_always_read_its_own_raw_kinds_back`.)"""
     with _Sandbox():
-        tiles_key = st.product_key("raw_lsb_tiles", UID, ("t", 1))
+        tiles_sig = ("t", 1)
+        tiles_key = st.product_key("raw_lsb_tiles", UID, tiles_sig)
+        st.store("raw_lsb_tiles", UID, tiles_sig, {"tiles": np.zeros((2, 2))}, writer="biomarkers")
+        for consumer in prov.MODULES:
+            assert st.load("raw_lsb_tiles", UID, tiles_sig, consumer=consumer) is not None, consumer
+
         sig = ("clean", 1)
         st.store("ground_truth_verdict", UID, sig, {"route": "device_native"},
                  writer="closed_loop", trigger="page_request",
@@ -167,21 +141,6 @@ def test_a_verdict_built_only_from_device_recordings_is_released_to_stim_optimiz
         got = st.load("ground_truth_verdict", UID, sig, consumer="stim_optimizer")
         assert got is not None and got["route"] == "device_native"
 
-
-def test_the_recordings_themselves_are_never_a_cycle():
-    """The tiles are built with no knowledge of any analysis choice, rating or exploration
-    decision, so they cannot carry one module's judgement into another's input."""
-    with _Sandbox():
-        sig = ("t", 1)
-        st.store("raw_lsb_tiles", UID, sig, {"tiles": np.zeros((2, 2))}, writer="biomarkers")
-        for consumer in prov.MODULES:
-            assert st.load("raw_lsb_tiles", UID, sig, consumer=consumer) is not None
-
-
-def test_a_module_may_always_read_its_own_raw_kinds_back():
-    """Biomarkers reads its own tiles constantly. Exempting raw kinds is what makes that legal."""
-    with _Sandbox():
-        tiles_key = st.product_key("raw_lsb_tiles", UID, ("t", 1))
         sig = ("bands", 2)
         st.store("biomarker_band_results", UID, sig, {"center_hz": np.array([23.44])},
                  writer="biomarkers",
@@ -269,9 +228,133 @@ def test_the_matched_table_is_released_to_every_module_while_the_chosen_ladder_i
                  writer="biomarkers", trigger="page_request",
                  provenance=prov.flatten([prov.entry(ladder_key, kind="exploration_ladder",
                                                      writer="stim_optimizer")]))
-        raised = False
-        try:
-            st.load("biomarker_band_results", UID, chosen_sig, consumer="stim_optimizer")
-        except prov.SelfDerivedProduct:
-            raised = True
-        assert raised, "a result built from Stim Optimizer's own chosen ladder was released"
+        assert _refused(st.load, "biomarker_band_results", UID, chosen_sig,
+                        consumer="stim_optimizer") is not None, \
+            "a result built from Stim Optimizer's own chosen ladder was released"
+
+
+# --------------------------------------------------------------------------------------------
+# Track D, task D1: Closed-Loop Deployment reading the calibrated grid's stored entry
+# (was test_closed_loop_reads_band_sweep.py)
+#
+# `adr_2026-09-08_biomarkers_closedloop_matrix_export.md` claims that Closed-Loop Deployment
+# reading the `biomarker_band_sweep` entry never trips the self-derived-product refusal (decision
+# 31), because that entry's own provenance chain names only raw inputs (the tile entry and the
+# pain-report snapshot) -- nothing Closed-Loop Deployment produces ever feeds back into which
+# recordings exist for the grid to be built from. These tests do not trust that reasoning; they
+# build the entry the way `Biomarkers.bravo_service._band_sweep_signature` and
+# `_store_sweep_results` build it, through the real store, and check the real outcome, each with
+# its control.
+# --------------------------------------------------------------------------------------------
+
+def _write_real_band_sweep_entry(tiles_sig=("tiles", 1), report_sig=("reports", 1),
+                                 sweep_sig=("sweep", 1)):
+    """Write a `biomarker_band_sweep` entry with EXACTLY the chain shape
+    `Biomarkers.bravo_service._band_sweep_signature` builds: flattened from the tile entry
+    (`raw_lsb_tiles`) and the pain-report snapshot (`redcap_reports`), both raw kinds. This is not a
+    hand-picked convenient chain; it is the real shape, reproduced from that function's own body
+    rather than assumed.
+    """
+    tiles_key = st.product_key("raw_lsb_tiles", UID, tiles_sig)
+    st.store("raw_lsb_tiles", UID, tiles_sig, {"tiles": np.zeros((2, 2))}, writer="biomarkers")
+    report_key = st.product_key("redcap_reports", UID, report_sig)
+    st.store("redcap_reports", UID, report_sig, {"pain": np.array([1.0, 2.0])},
+             writer="biomarkers", trigger="fresh_fetch", provenance=[])
+
+    chain = prov.flatten([
+        prov.entry(tiles_key, kind="raw_lsb_tiles", writer="biomarkers"),
+        prov.entry(report_key, kind="redcap_reports", writer="biomarkers")])
+
+    # A minimal but representative payload: one channel's full grid -- every band centre crossed
+    # with every length of signal -- which is what task D1 needed to confirm was already present.
+    grid_payload = {
+        "band_time_sweep": {
+            "ZERO_TWO_LEFT": {
+                "center_freqs_hz": [8.5, 13.5, 18.5],
+                "integration_seconds_requested": [30.0, 300.0],
+                "correlation_grid": [[0.1, 0.2, 0.3], [0.15, 0.25, 0.35]],
+                "auc_grid": [[0.5, 0.6, 0.7], [0.55, 0.65, 0.75]],
+                "best_correlation_rows": [{"band_center_hz": 8.5, "r": 0.15},
+                                          {"band_center_hz": 13.5, "r": 0.25},
+                                          {"band_center_hz": 18.5, "r": 0.35}],
+                "best_auc_rows": [{"band_center_hz": 8.5, "auc": 0.55},
+                                  {"band_center_hz": 13.5, "auc": 0.65},
+                                  {"band_center_hz": 18.5, "auc": 0.75}],
+            }
+        },
+        "served_from_store": False,
+    }
+    st.store("biomarker_band_sweep", UID, sweep_sig, grid_payload,
+             writer="biomarkers", trigger="band_time_sweep", provenance=chain, fmt="pickle")
+    return sweep_sig
+
+
+def test_closed_loop_reads_the_real_band_sweep_entry_without_refusal():
+    """THE CASE TRACK D DEPENDS ON. Built through the store with the sweep's real chain shape, not
+    a hand-written one, and read exactly the way `ClosedLoopDeployment` would: as `consumer=
+    "closed_loop"`. The mechanism is checked directly too, not only through its outcome:
+    `writers_in` on the real chain is empty, because both of its entries are raw kinds. (Merged
+    2026-10-05 with `test_the_real_chain_names_no_writer_at_all`.)"""
+    with _Sandbox():
+        sweep_sig = _write_real_band_sweep_entry()
+        got = st.load("biomarker_band_sweep", UID, sweep_sig, consumer="closed_loop")
+        assert got is not None
+        grid = got["band_time_sweep"]["ZERO_TWO_LEFT"]
+        # The full grid -- every band centre crossed with every length of signal -- is already
+        # inside the entry `Biomarkers.bravo_service._store_sweep_results` writes; Track D did not
+        # need to add a field for it.
+        assert len(grid["center_freqs_hz"]) == 3
+        assert len(grid["correlation_grid"]) == 2 and len(grid["correlation_grid"][0]) == 3
+        assert len(grid["best_correlation_rows"]) == 3
+        assert len(grid["best_auc_rows"]) == 3
+
+        # Every other module may read it too, for the same reason: the chain names only raw kinds.
+        assert st.load("biomarker_band_sweep", UID, sweep_sig, consumer="biomarkers") is not None
+        assert st.load("biomarker_band_sweep", UID, sweep_sig,
+                       consumer="stim_optimizer") is not None
+        stamp = st.read_stamp("biomarker_band_sweep", UID, sweep_sig)
+        assert prov.writers_in(stamp["provenance"]) == set()
+
+
+# --------------------------------------------------------------------------------------------
+# THE CONTROL: a chain that DOES cite Closed-Loop Deployment's own output must still be refused.
+# A rule that released every "biomarker_band_sweep"-kind entry regardless of its chain would be
+# trivially safe for this real case and useless for the property decision 31 exists to prove.
+# --------------------------------------------------------------------------------------------
+
+def test_a_deliberately_self_derived_band_sweep_chain_is_still_refused_to_closed_loop():
+    """Mirrors this file's own cycle-construction pattern: write a real
+    `ground_truth_verdict` (Closed-Loop Deployment's own kind), and construct a `biomarker_band_sweep`
+    entry whose chain derives from it. Nothing in this project's real wiring builds such a chain
+    today (the ADR's whole argument is that it cannot), but the refusal machinery must still catch
+    it if it ever did -- otherwise the "no refusal" result proven above would mean nothing."""
+    with _Sandbox():
+        verdict_sig = ("verdict", 1)
+        st.store("ground_truth_verdict", UID, verdict_sig,
+                 {"route": "device_native", "n_windows": 6},
+                 writer="closed_loop", trigger="page_request",
+                 provenance=prov.flatten([prov.entry(
+                     st.product_key("raw_lsb_tiles", UID, ("t", 1)),
+                     kind="raw_lsb_tiles", writer="biomarkers")]))
+        verdict_key = st.product_key("ground_truth_verdict", UID, verdict_sig)
+
+        poisoned_sig = ("poisoned_sweep", 1)
+        st.store("biomarker_band_sweep", UID, poisoned_sig,
+                 {"band_time_sweep": {"ZERO_TWO_LEFT": {"best_correlation_rows": []}}},
+                 writer="biomarkers", trigger="band_time_sweep",
+                 provenance=prov.flatten([
+                     prov.entry(verdict_key, kind="ground_truth_verdict", writer="closed_loop",
+                                chain=st.read_stamp("ground_truth_verdict", UID,
+                                                    verdict_sig)["provenance"])]))
+
+        raised = _refused(st.load, "biomarker_band_sweep", UID, poisoned_sig, consumer="closed_loop")
+        assert raised is not None, (
+            "a biomarker_band_sweep entry that derives from closed_loop's own output was released "
+            "to closed_loop; the refusal machinery has nothing left to catch if this passes")
+        text = str(raised)
+        assert "closed_loop" in text
+        assert "ground_truth_verdict" in text
+
+        # And the SAME poisoned entry is fine for the module that did not write the offending link.
+        assert st.load("biomarker_band_sweep", UID, poisoned_sig,
+                       consumer="stim_optimizer") is not None

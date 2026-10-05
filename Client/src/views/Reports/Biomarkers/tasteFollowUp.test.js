@@ -14,25 +14,18 @@ import "@testing-library/jest-dom";
 import fs from "fs";
 import path from "path";
 import { render as rtlRender, screen, fireEvent } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 
 import TimingHistogram from "./TimingHistogram";
 import BinarizationPreview from "./BinarizationPreview";
 import GridSkeleton from "./GridSkeleton";
 import Fold from "./Fold";
+import { wrap } from "testUtils/render";
 
 jest.mock("plotly.js-dist", () => {
   const noop = () => {};
   return { react: () => Promise.resolve(), purge: noop, restyle: noop, relayout: noop, newPlot: noop };
 });
 
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 const read = (f) => fs.readFileSync(path.join(__dirname, f), "utf8");
 const stripComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
 

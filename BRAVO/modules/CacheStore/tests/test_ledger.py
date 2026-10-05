@@ -6,15 +6,9 @@ SQLite database through `CONNECTION_FACTORY`, so the table creation, the insert,
 and the counts run for real, with SQLite's placeholder rather than MySQL's.
 """
 import contextlib
-import pathlib
 import sqlite3
-import sys
 
-_BRAVO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-if str(_BRAVO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_BRAVO_ROOT))
-
-from modules.CacheStore import ledger   # noqa: E402
+from modules.CacheStore import ledger
 
 
 class _Conn:

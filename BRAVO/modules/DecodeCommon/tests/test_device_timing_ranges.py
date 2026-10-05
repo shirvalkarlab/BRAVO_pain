@@ -15,35 +15,34 @@ except ImportError:                                              # pragma: no co
     from DecodeCommon import device_ranges as DR
 
 
-def test_the_averaging_range_is_0_to_30_s_confirmed_on_the_adaptive_tablet():
+def test_the_device_timing_ranges_and_their_sources():
+    """Each range as the PI's rule picks it (merged 2026-10-05 from five one-range tests; the old
+    names lead each block below)."""
+    # the averaging range is 0 to 30 s, confirmed on the adaptive tablet
     assert DR.AVERAGING_RANGE_MS == (0.0, 30_000.0)
     assert "Tip Cards" in DR.RANGE_SOURCE_TIP_CARD and "2020" in DR.RANGE_SOURCE_TIP_CARD
     assert "tablet" in DR.RANGE_SOURCE_TABLET.lower() and "2026-09-15" in DR.RANGE_SOURCE_TABLET
 
-
-def test_the_dual_onset_range_is_the_tablets_0_to_30_s_and_the_fda_figure_is_kept_beside_it():
-    """The tablet's Dual onset (upper and lower) reads 0.00 ms to 30.00 s; the FDA summary prints
-    0 to 6 min; the white paper and the A610 manual print no range, so the PI's rule picks no
-    winner and what can actually be typed is what the platform applies."""
+    # the dual onset range is the tablet's 0 to 30 s and the FDA figure is kept beside it: the
+    # tablet's Dual onset (upper and lower) reads 0.00 ms to 30.00 s; the FDA summary prints 0 to
+    # 6 min; the white paper and the A610 manual print no range, so the PI's rule picks no winner
+    # and what can actually be typed is what the platform applies
     assert DR.ONSET_RANGE_DUAL_MS == (0.0, 30_000.0)
     assert DR.ONSET_RANGE_DUAL_MS_FDA == (0.0, 360_000.0)
     assert DR.ONSET_RANGE_SINGLE_MS == (0.0, 30_000.0)
     assert "6 min" in DR.ONSET_DISCREPANCY and "FDA" in DR.ONSET_DISCREPANCY
 
-
-def test_the_transition_range_is_the_white_papers_2_s_to_30_min_which_the_tablet_confirms():
+    # the transition range is the white paper's 2 s to 30 min, which the tablet confirms
     assert DR.TRANSITION_RANGE_MS == (2_000.0, 1_800_000.0)
     assert DR.TRANSITION_RANGE_MS_FDA == (250.0, 1_800_000.0)
     assert "p. 16" in DR.RANGE_SOURCE_WHITE_PAPER_P16
 
-
-def test_detection_blanking_has_a_range_now_from_the_tablet():
+    # detection blanking has a range now, from the tablet
     assert DR.DETECTION_BLANKING_RANGE_MS == (0.0, 30_000.0)
 
-
-def test_sensing_blanking_keeps_the_tip_cards_figure_and_records_the_tablets():
-    """Tip card: 0-2500 (printed as ms, read as microseconds); tablet: 0.00 us to 2.28 ms. They
-    deviate, so the manual wins and the tablet's value is recorded beside it."""
+    # sensing blanking keeps the tip card's figure and records the tablet's: tip card 0-2500
+    # (printed as ms, read as microseconds); tablet 0.00 us to 2.28 ms. They deviate, so the
+    # manual wins and the tablet's value is recorded beside it
     assert DR.SENSING_BLANKING_RANGE_US == (0.0, 2_500.0)
     assert DR.SENSING_BLANKING_RANGE_US_TABLET == (0.0, 2_280.0)
     assert DR.HIGHPASS_OPTIONS_HZ == (1.0, 10.0)

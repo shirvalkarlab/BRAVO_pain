@@ -20,10 +20,7 @@
  */
 import "@testing-library/jest-dom";
 import { render as rtlRender } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
+import { wrap } from "testUtils/render";
 
 // The sign-off card reaches Plotly to photograph the page's figures for the printed record, and
 // Plotly asks for a canvas the moment it loads. Mocked exactly as the other tests on this page do.
@@ -38,12 +35,6 @@ import DeploySignoffCard from "./DeploySignoffCard";
 import DecisionCard from "./DecisionCard";
 import WhatWouldChangeThis from "./WhatWouldChangeThis";
 import payload from "./__fixtures__/rcs08_deployment_payload_2026-09-15.json";
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 
 const CAVEATS = [
   { severity: "high", card: "the evidence triangle",

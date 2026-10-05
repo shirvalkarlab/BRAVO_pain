@@ -13,13 +13,8 @@ private store, so the duplication cannot silently return.
 """
 import pathlib
 import re
-import sys
 
-_BRAVO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-if str(_BRAVO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_BRAVO_ROOT))
-
-_MODULES = _BRAVO_ROOT / "modules"
+_MODULES = pathlib.Path(__file__).resolve().parents[2]
 
 from modules.CacheStore import store as st
 
@@ -118,45 +113,33 @@ def _modules_or_none():
         return None
 
 
-def test_both_modules_resolve_under_the_one_root():
-    """Not "they happen to agree today" — the same resolver returns both."""
-    mods = _modules_or_none()
-    if mods is None:
-        return
-    B, AD = mods
-    root = st.root_dir()
-    if root is None:
-        return                    # no storage configured; the other tests still cover the wiring
-    for got in (B.shared_cache_dir(), AD.shared_cache_dir()):
-        assert got is not None
-        assert str(got).startswith(str(root)), f"{got} is not under {root}"
+def test_both_modules_resolve_under_the_one_root_count_into_one_store_and_share_its_limit():
+    """Three checks on the two former copies' wiring, each with its own message (merged 2026-10-05
+    from `test_both_modules_resolve_under_the_one_root`, `test_the_two_modules_count_into_the_same_events`
+    and `test_the_per_entry_limits_no_longer_differ`):
 
-
-def test_the_two_modules_count_into_the_same_events():
-    """Each copy used to count into its own dictionary, so no page could report the whole cache."""
-    mods = _modules_or_none()
-    if mods is None:
-        return
-    B, AD = mods
-    assert B._SHARED_CACHE_EVENTS is st._EVENTS
-    assert AD._SHARED_CACHE_EVENTS is st._EVENTS
-    assert B._SHARED_CACHE_LOCK is st._LOCK
-    assert AD._SHARED_CACHE_LOCK is st._LOCK
-
-
-def test_the_per_entry_limits_no_longer_differ():
-    """THE DEFECT THIS WHOLE CHANGE STARTED FROM: 1,073,741,824 against 268,435,456.
-
-    Not that the smaller cap refused anything -- 268,435,456 bytes is 256 MiB and the 245.90 MB
-    tile entry fits under it. The defect is that two modules writing into one root disagreed by a
-    factor of four about how large an entry may be, so which limit applied depended on which
-    module happened to write first. `test_store.py` covers the headroom argument for the value.
+    * not "they happen to agree today" -- the same resolver returns both roots;
+    * each copy used to count into its own dictionary, so no page could report the whole cache;
+    * THE DEFECT THIS WHOLE CHANGE STARTED FROM: 1,073,741,824 against 268,435,456. Not that the
+      smaller cap refused anything -- 268,435,456 bytes is 256 MiB and the 245.90 MB tile entry fits
+      under it. The defect is that two modules writing into one root disagreed by a factor of four
+      about how large an entry may be, so which limit applied depended on which module happened to
+      write first. `test_store.py` covers the headroom argument for the value.
     """
     mods = _modules_or_none()
     if mods is None:
         return
     B, AD = mods
-    assert B._SHARED_CACHE_MAX_BYTES == AD._SHARED_CACHE_MAX_BYTES
+    root = st.root_dir()
+    if root is not None:          # no storage configured: the other two checks still run
+        for got in (B.shared_cache_dir(), AD.shared_cache_dir()):
+            assert got is not None
+            assert str(got).startswith(str(root)), f"{got} is not under {root}"
+    assert B._SHARED_CACHE_EVENTS is st._EVENTS, "Biomarkers counts into its own events"
+    assert AD._SHARED_CACHE_EVENTS is st._EVENTS, "Closed-Loop counts into its own events"
+    assert B._SHARED_CACHE_LOCK is st._LOCK
+    assert AD._SHARED_CACHE_LOCK is st._LOCK
+    assert B._SHARED_CACHE_MAX_BYTES == AD._SHARED_CACHE_MAX_BYTES, "the per-entry limits differ"
     assert B._SHARED_CACHE_MAX_BYTES == st.MAX_BYTES_DEFAULT
 
 
@@ -200,18 +183,6 @@ def test_the_store_is_the_only_place_that_names_the_cache_subdirectories():
         "a directory name the store owns is written in a caller:\n  " + "\n  ".join(offenders))
 
 
-def test_both_import_spellings_are_one_module_object():
-    """The container spells the package `modules.CacheStore`, the host suite `CacheStore`. Once
-    both roots are on the path in one process the two spellings must resolve to the same objects,
-    or a sandbox applied under one leaves the copy a module holds under the other untouched."""
-    import importlib
-    import sys
-    a = importlib.import_module("modules.CacheStore.store")
-    try:
-        b = importlib.import_module("CacheStore.store")
-    except ImportError:
-        return                  # only one spelling is importable here, so there is nothing to alias
-    assert a is b, "two store module objects are live in one process"
-    assert sys.modules["CacheStore"] is sys.modules["modules.CacheStore"]
-    assert importlib.import_module("CacheStore.ledger") is \
-        importlib.import_module("modules.CacheStore.ledger")
+# `test_both_import_spellings_are_one_module_object` moved 2026-10-05 into
+# `DecodeCommon/tests/test_one_object_under_both_spellings.py`, which checks the same thing for every
+# analysis package and now lists `CacheStore.store` and `CacheStore.ledger` among its cases.
