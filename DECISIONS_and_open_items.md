@@ -75,6 +75,8 @@ Abbreviations: SO, CL, BM = Stim Optimizer, Closed-Loop, Biomarkers (page or mod
   - **N-09.** Sheets show 10 rates (820 hand-filled steps, 29 visits, one-second precision), the device history 7; 25, 85, 100, 180 Hz never on the device; 100 Hz clearly written for two July 2025 test groups. Delivered-but-unsaved or planned-never-given: only someone present can say.
 - RCSchronicpain (another repository), 2026-09-27: tree clean, pushed; `stash@{0}` "Claude Code BRAVO session edits 2026-09-25", 14 files / 959 lines (MATLAB outcomes refactor, statistics/test files) on `refactor_stages123`. PI said delete; permission refused; he runs `git stash drop stash@{0}` after checking. `stash@{1}` ("On main: !!GitHub_Desktop<main>") untouched. "3 token-shaped values" = `credentials/define_env_redcapAPI_tokens.m`, pushed by the PI (`717bb6d8`, "update credentials"); untouched.
 - Left for the PI by 322: gutter Arial, faint PLANNING ONLY watermark, badge uppercase.
+- Electrode identifier (456): shown in the Biomarkers bottom fold only. Any analytic use needs his rule; each channel is one electrode against the other lead's contact 3, so it mixes both sides and is never matched to pain.
+- Dropbox token for rclone on Jetstream2 was pasted into a chat (2026-10-06): he revokes it (dropbox.com, Connected apps, rclone) and re-authorizes in a server terminal (`rclone authorize "dropbox"` on the Mac, `~/bin/rclone config create dropbox dropbox token '<json>'` on the server).
 - CL's 21 "can't be programmed yet" reasons in four buckets: PI reviewing (2026-09-27).
 - [Resolved by 366, 2026-10-02, in the cache.] CL redrew endlessly once its simulation loaded, always showing "Something it depends on has changed": `resultCache.getResult` (his file) gave read time as computed time, which the simulation label includes (365).
 - [Resolved 2026-09-27.] Hover third line shortened (339, 343); more needs his instruction (2026-09-16 ruling).
@@ -92,6 +94,7 @@ Abbreviations: SO, CL, BM = Stim Optimizer, Closed-Loop, Biomarkers (page or mod
 **Waiting on data or a visit**
 - **Next visits** (`artifacts/protocol_2026-09-25_rate_swap_and_down_first_ladder.md` §11): ≤3 h; Visit 1 rate swap (second cycle chosen in the chair), second rater; Visit 2 stimulation off, full 90-minute wait; down-first ladder answers carry-over (272). First home session: check the chronic log spans a group change.
 - Titration readings (237) reach the card once the visit's data exist.
+- Device exports after 2026-09-30 are not on the server: Dropbox `RCS08/` holds 603 exports, newest changed 2026-09-30, all already ingested (dry run 2026-10-06). New exports go into Dropbox `RCS08/`, then `bash BRAVO/_agent_bridge/ingest_new_exports.sh` (dry run) and `--ingest` (453, 456).
 
 **Caveats on the record, not fixable**
 - [PI: both resolved, 2026-09-27.] Short-copy gap (289: two 2026-09 windows read a partial recording; current one re-measured, older two stand); R environment (288: in the Dockerfiles, no image built).
