@@ -1034,6 +1034,40 @@ class QueryElectrodeIdentifierCheck(RestViews.APIView):
         return Response(status=200, data=json_compliant_handler(Analysis))
 
 
+class QueryTimelineDetail(RestViews.APIView):
+    """
+    The Biomarkers timeline's detail panel (item P-18, the PI's go-ahead 2026-10-06): for one
+    clicked mark, the voltage trace, the device's own PSD and the device's sensed band power within
+    12 h, on that contact pair only. Device values at face value; no pain rating.
+
+    **URL:** ``/queryTimelineDetail``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId (uid), Channel, Dtype, Product, TStart (epoch s).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "Channel",
+                                                                         "Dtype", "TStart"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.timeline_detail(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "timeline detail error: " + str(e)})
+
+        return Response(status=200, data=json_compliant_handler(Analysis))
+
+
 class QueryPsdLsbConversionModel(RestViews.APIView):
     """
     API View that serves the FROZEN, reviewed per-participant PSD->device-LSB conversion model for

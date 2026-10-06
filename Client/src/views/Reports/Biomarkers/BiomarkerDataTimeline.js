@@ -8,9 +8,11 @@
  *   - band-power LSB       -> INLINE trend line     (colored by sensing center frequency, categorical)
  *   - PSD snapshots        -> TICKS                 (one-shot spectra; click/hover -> the curve)
  * Below the neural lanes, on the SAME x-axis: a patient-reported PAIN row (full height) and a
- * compact STIMULATION-amplitude row. A right-hand INSPECTOR shows the selected channel's real PSD
- * curve, raw uV waveform, and LSB trend. Selecting a lane sets the inspector channel; the timeline
- * is the front door to the decode (select band -> threshold -> controller).
+ * compact STIMULATION-amplitude row. Clicking a mark on a contact pair's lane (a voltage block, a
+ * PSD tick, a point of the band-power line or a session block) opens the detail panel UNDER the
+ * plot (`TimelineDetailPanel`, item P-18, 2026-10-06): that recording's voltage trace, the device's
+ * own PSD and its sensed band power within 12 h. Under, not beside, so the plot keeps its width and
+ * the left-label columns below are untouched.
  *
  * Consumes the ACQUISITION timeline from /api/queryDataAvailability (decision 216: nothing in it
  * derives from a pain report; the pain row comes from /api/queryPainScores and the binarization
@@ -20,12 +22,14 @@
  * Self-contained via plotly.js-dist. Categorical FREQ_PALETTE ported from BiomarkerTimeline.js.
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Plotly from "plotly.js-dist";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 
 import MDBox from "components/MDBox";
+
+import TimelineDetailPanel from "./TimelineDetailPanel";
 
 import { routeLabel, modeledLegendName, kFromServed } from "./calibrationLabels";
 import { painScoreLabel } from "views/Reports/painScores";
@@ -230,8 +234,12 @@ function painAxis(metric, yvals) {
 }
 
 export default function BiomarkerDataTimeline({ data, height, painOverride,
-                                               scanModel, colorMode, setColorMode }) {
+                                               scanModel, colorMode, setColorMode, participantUid }) {
   const ref = useRef(null);
+  // THE DETAIL PANEL (P-18): `picksRef` maps a trace index to the request each of its points stands
+  // for, rebuilt on every draw; a click looks the point up there and opens the panel under the plot.
+  const picksRef = useRef({});
+  const [selection, setSelection] = useState(null);
   // TD coverage rects re-sized on zoom: each entry is {i: shape index, ts: epoch_s, dur_s} so the
   // plotly_relayout handler can recompute x1 against the live x-range (constant-PIXEL floor, true
   // length when zoomed in). Rebuilt on every draw; read only by the zoom handler.
@@ -382,6 +390,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
     const annotations = [];
     const X = "x", Y = "y";
     tdRectsRef.current = [];   // rebuilt this draw; the zoom handler resizes these TD rects
+    picksRef.current = {};   // the detail panel's lookup, rebuilt with the traces
     lsbScaleRef.current = [];   // rebuilt this draw; the zoom handler rescales the per-lane LSB axis
 
     // ---- LEFT-LABEL COLUMN GEOMETRY (robust, self-sizing) ------------------------------------
@@ -457,7 +466,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       // INITIAL x1 uses a floor of span/200 (~= MIN_TD_PX at full-view pixel width) so the very first
       // paint is already short-and-visible, not 1.6 days; the handler refines it on the first zoom.
       const initFloorS = Math.max((t1 - t0) / 200, 1);
-      const tdHx = [], tdHy = [], tdHc = [];
+      const tdHx = [], tdHy = [], tdHc = [], tdPick = [];
       recordsFor(ch, "timedomain").forEach((r) => {
         const ts = tEpoch(r.t_start);
         const durS = r.dur_s || 0;
@@ -480,12 +489,14 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         tdHy.push(yb + 0.15 * lh);
         tdHc.push([fmtHoverDate(ts), fmtHoverTime(ts), fmtDur(r.dur_s),
                    isMontageTd ? "montage: survey sweep, stimulation off" : "streaming"]);
+        tdPick.push({ Channel: r.channel, Dtype: "timedomain", Product: r.product, TStart: ts });
       });
       if (tdHx.length) {
         // Invisible markers span the FULL block height band so the hover triggers anywhere over the
         // coverage rect, reporting date · start time · captured duration (the info the PSD/montage
         // hovers already show, which TD blocks were missing entirely). The source word distinguishes
         // streaming TD from the montage/survey TD coverage now drawn from the same lane.
+        picksRef.current[traces.length] = tdPick;
         traces.push({ type: "scattergl", mode: "markers", x: tdHx, y: tdHy,
           marker: { size: 18, color: "rgba(0,0,0,0)" }, customdata: tdHc,
           hovertemplate: `${prettyContact(labelFor(ch))} · TD (%{customdata[3]})<br>`
@@ -541,6 +552,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
             const fc = binMode ? DIM_GREY_FAINT : (c == null ? "rgba(90,90,90,0.55)" : freqColor(c));
             const xs = ct.slice(seg, end), ys = cy.slice(seg, end);
             reg.traces.push({ idx: traces.length, raw: ys });
+            picksRef.current[traces.length] = xs.map((tt) => ({ Channel: ch, Dtype: "bandpower",
+              Product: "timeline_lsb", TStart: tt }));
             xs.forEach((tt, ii) => reg.samples.push({ t: tt, v: ys[ii] }));
             traces.push({ type: "scattergl", mode: "lines",
               x: xs.map(D), y: ys.map(sc),
@@ -594,6 +607,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
               hoverinfo: "skip", showlegend: false });
             // invisible hover anchors at each session median (one marker per session, tiny count)
             reg.traces.push({ idx: traces.length, raw: anchRaw });
+            picksRef.current[traces.length] = ss.map((s) => ({ Channel: ch, Dtype: "bandpower",
+              Product: "streaming_lsb", TStart: s.t0 }));
             traces.push({ type: "scattergl", mode: "markers",
               x: ss.map((s) => D((s.t0 + s.t1) / 2)), y: ss.map((s) => sc(s.med)),
               marker: { size: 10, color: "rgba(0,0,0,0)" }, customdata: cd,
@@ -636,11 +651,15 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
           Object.keys(byFreqM).forEach((key) => {
             const ms = byFreqM[key];
             const c = key === "na" ? null : Number(key);
-            // Split by DSP route: circle-open = td_transform, diamond-open = event_psd_bridge.
+            // Split by DSP route: circle-open = td_transform from a montage, square-open = td_transform
+            // from indefinite streaming (P-11, 2026-10-06; ";indefinite" in its method), diamond-open
+            // = event_psd_bridge.
             // This keeps the SAME reserved glyphs as the per-rating tier so both layers are consistent.
-            const ms_td  = ms.filter((m) => String(m.method || "").startsWith("td_transform"));
+            const isInd = (m) => String(m.method || "").indexOf(";indefinite") >= 0;
+            const ms_td  = ms.filter((m) => String(m.method || "").startsWith("td_transform") && !isInd(m));
+            const ms_ind = ms.filter((m) => String(m.method || "").startsWith("td_transform") && isInd(m));
             const ms_psd = ms.filter((m) => String(m.method || "").startsWith("event_psd_bridge"));
-            [[ms_td, "circle-open"], [ms_psd, "diamond-open"]].forEach(([pts, sym]) => {
+            [[ms_td, "circle-open"], [ms_ind, "square-open"], [ms_psd, "diamond-open"]].forEach(([pts, sym]) => {
               if (!pts.length) return;
               const cols = pts.map((m) => modeledColor(m, c));
               // Matched modeled points read a touch larger in binMode so the assigned ones stand out.
@@ -724,6 +743,8 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         const tickLabel = (r) => (isEvent(r)
           ? `PSD<br>${r.event_name || "Event"} (patient event)`
           : `TD (montage)<br>${MONTAGE_KIND[r.product] || "montage or survey recording"}`);
+        picksRef.current[traces.length] = psd.map((r) => ({ Channel: r.channel, Dtype: "psd",
+          Product: r.product, TStart: tEpoch(r.t_start) }));
         traces.push({ type: "scattergl", mode: "markers",
           x: psd.map((r) => D(tEpoch(r.t_start))), y: psd.map(() => yb + 0.93 * lh),
           marker: { symbol: "line-ns-open", size: sizes,
@@ -1177,10 +1198,20 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
       if (touchedX) { applyTdWidths(); applyLsbScales(); }
     };
     gd.on("plotly_relayout", onRelayout);
+    // A click on a mark opens its detail panel (P-18). Removed and re-attached with every draw, as
+    // the heat maps do (decision 91), so listeners never pile up.
+    const onClick = (ev) => {
+      const p = ev && ev.points && ev.points[0];
+      const list = p ? picksRef.current[p.curveNumber] : null;
+      const pick = list ? list[p.pointNumber != null ? p.pointNumber : p.pointIndex] : null;
+      if (pick && pick.TStart != null) setSelection({ ...pick });
+    };
+    gd.on("plotly_click", onClick);
     // No resize hook: the legend is right-anchored and the Hz key left-anchored, so collision-
     // freedom holds at every width by construction — nothing to recompute on resize.
     return () => {
       try { gd.removeListener("plotly_relayout", onRelayout); } catch (e) { /* noop */ }
+      try { gd.removeListener("plotly_click", onClick); } catch (e) { /* noop */ }
     };
   }, [av, channels, height, painOverride, data, scanModelForPlot, colorMode, binMode]);
 
@@ -1224,6 +1255,10 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         </MDBox>
       ) : null}
       <div ref={ref} style={{ width: "100%" }} />
+      {participantUid ? (
+        <TimelineDetailPanel participantUid={participantUid} selection={selection}
+          onClose={() => setSelection(null)} />
+      ) : null}
     </MDBox>
   );
 }

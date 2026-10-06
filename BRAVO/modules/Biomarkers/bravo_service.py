@@ -4330,10 +4330,14 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # exclusive consumer of the bridge.
         event_psd_blocks = _event_psd_lsb_blocks(participant_uid, sensing_hz_by_channel=sensing_hz,
                                                   sensing_index=_sensing_idx)
+        # INDEFINITE STREAMING (item P-11, 2026-10-06): one modelled point per recording per pair,
+        # at the band in force on that pair then (`availability._indefinite_modeled_points`). The
+        # timeline only; the Closed-Loop calls of `lsb_series` do not pass it.
         lsb = availability.lsb_series(chronic_list, powerdomain_list, region_map=region_map,
                                       montage_td_recordings=psd_list,
                                       sensing_hz_by_channel=sensing_hz,
-                                      event_psd_recordings=event_psd_blocks)
+                                      event_psd_recordings=event_psd_blocks,
+                                      indefinite_td_recordings=ind)
         # Compact the per-sample LSB into render-cheap geometry (chronic line + per-session blocks)
         # so the calendar-scale timeline stays responsive while zooming; the frontend draws this.
         lsb_overview = availability.lsb_overview(lsb)
@@ -4414,7 +4418,8 @@ def _rating_centred_scan_index(participant_uid, td_all, psd_all, pain, sensing_i
 #: deterministic decode of the recordings with no other module's choices in it.
 _ACQ_TIMELINE_KIND = "acquisition_timeline"
 # v2 (decision 313): a chronic file spanning the implant date is dated from it, not from 2025-06-18.
-_ACQ_TIMELINE_RULE_VERSION = "v2_spanning_chronic_dated_from_implant_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+# v3 (item P-11, 2026-10-06): indefinite streaming adds modelled points at the band in force.
+_ACQ_TIMELINE_RULE_VERSION = "v3_indefinite_modelled_at_band_in_force"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 
 def _acquisition_timeline_key(recording_set):
@@ -6922,6 +6927,32 @@ def electrode_identifier_check(request_data):
             "n_runs": len(rows), "n_days": len({int(r["t"] // 86400) for r in rows})}
 
 
+def timeline_detail(request_data):
+    """The timeline's detail panel for one clicked mark (item P-18, the PI's go-ahead 2026-10-06;
+    `routines/timeline_detail.py`): the voltage trace, the device's own PSD and the device's sensed
+    band power within 12 h, on the clicked contact pair only. Reads the recordings the timeline
+    itself reads; no pain report. Request: ParticipantId, Channel, Dtype, Product, TStart."""
+    from .routines import timeline_detail as _td
+    uid = request_data.get("ParticipantId")
+    if not uid or models.Participant.find(uid=uid) is None:
+        return {"available": False, "reason": "no such participant"}
+    td, chronic_list, powerdomain_list = _availability_recordings_cached(uid)
+    product = str(request_data.get("Product") or "")
+    dtype = str(request_data.get("Dtype") or "")
+    psd_list = (_load_recordings(uid, AVAILABILITY_PSD_TYPES)
+                if dtype in ("timedomain", "psd") and product not in ("patient_event",) else [])
+    # the same contact-pair rule the timeline's own event marks were placed by (`_event_psd_index`)
+    event_rows = (_event_psd_rows(uid, sensing_index=_build_sensing_config_index(
+                      list(td or []) + list(powerdomain_list or [])))
+                  if product == "patient_event" else [])
+    native = availability.channel_index(chronic_recordings=chronic_list,
+                                        powerdomain_recordings=powerdomain_list).native_lsb_by_channel
+    out = _td.build_detail(request_data, td_recs=td, psd_recs=psd_list, event_rows=event_rows,
+                           native_lsb=native)
+    out["available"] = True
+    return out
+
+
 THRESHOLD_POWER_TYPE = "MedtronicThresholdPowerDomain"
 
 
@@ -7146,9 +7177,10 @@ def _band_lsb_and_power_build(request_data):
     # sensed THIS band natively. Mirrors deployment_summary and the timeline caller so this panel
     # sees exactly the modeled points the clinician sees on the timeline.
     # ALL raw-uV TD for the modeled tier: BrainSense streaming TD + IndefiniteStream (TIMEDOMAIN_TYPES)
-    # AND the montage/survey sweeps (psd_list). The exploration timeline already pools every TD product
-    # into the modeled LSB; the deployment fallback must see the same superset so no modeled point is
-    # dropped just because the band was only ever streamed, never montage-swept. Power-domain records
+    # AND the montage/survey sweeps (psd_list), so no modeled point is dropped just because the band
+    # was only ever streamed, never montage-swept. (The timeline's own modelled points are made
+    # differently: one per montage and, since 2026-10-06, one per indefinite recording per pair at the
+    # band in force then; BrainSense streaming TD makes none there, its band power being sensed.) Power-domain records
     # (chronic/powerdomain) are NOT raw TD and are excluded by the helper's fs/name guards.
     # The four lists come from the two recording memos (review B7.3), not four fresh decodes.
     chronic_list, pd_list, streaming_td, psd_list = _sign_off_recordings(core["participant_uid"])

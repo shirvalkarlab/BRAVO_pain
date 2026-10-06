@@ -882,6 +882,7 @@ function Biomarkers() {
                   {timelineData && timelineData.availability && timelineData.availability.records
                         && timelineData.availability.records.length > 0 ? (
                     <BiomarkerDataTimeline data={timelineData} painOverride={painSeriesLive}
+                      participantUid={participant_uid}
                       scanModel={scanModel} colorMode={timelineColorMode}
                       setColorMode={setTimelineColorMode} />
                   ) : (data && data.timeline && data.timeline.length > 0 ? (

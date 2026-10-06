@@ -481,7 +481,7 @@ _POWER_SENTINEL = 2.0 ** 31 - 1   # device missing-sample sentinel for LFP power
 
 def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
                montage_td_recordings=None, sensing_hz_by_channel=None,
-               event_psd_recordings=None, index=None):
+               event_psd_recordings=None, index=None, indefinite_td_recordings=None):
     """REAL band-power (LSB) time series per channel, for inline display on the timeline.
 
     Same contract, same four sources, same output shape as `_lsb_series_scan`, whose docstring
@@ -494,7 +494,8 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
         return _lsb_series_scan(chronic_recordings, powerdomain_recordings, region_map=region_map,
                                 montage_td_recordings=montage_td_recordings,
                                 sensing_hz_by_channel=sensing_hz_by_channel,
-                                event_psd_recordings=event_psd_recordings)
+                                event_psd_recordings=event_psd_recordings,
+                                indefinite_td_recordings=indefinite_td_recordings)
     if index is None:
         index = channel_index(chronic_recordings=chronic_recordings,
                               powerdomain_recordings=powerdomain_recordings)
@@ -511,8 +512,10 @@ def lsb_series(chronic_recordings, powerdomain_recordings, region_map=None,
                   "method": [None] * len(d["t"])}
     _lsb_series_modeled_tiers(out, montage_td_recordings, event_psd_recordings,
                               sensing_hz_by_channel)
+    _indefinite_modeled_points(out, indefinite_td_recordings, sensing_hz_by_channel,
+                               chronic_recordings, powerdomain_recordings)
     for ch, d in out.items():
-        order = np.argsort(d["t"])
+        order = np.argsort(d["t"], kind="stable")   # ties keep their order (P-11 proof, 2026-10-06)
         for k_ in ("t", "y", "center_hz", "source", "modeled", "method"):
             d[k_] = [d[k_][i] for i in order]
     return out
@@ -593,9 +596,124 @@ def _lsb_series_modeled_tiers(out, montage_td_recordings, event_psd_recordings,
               modeled=True, method=f"event_psd_bridge_x_k={analytics.LSB_PER_DEVICE_PSD:.2f}")
 
 
+def _band_history(chronic_recordings, powerdomain_recordings):
+    """{pair: [(t, Hz), ...] sorted}: the band the device sensed on each contact pair from each time,
+    read from each recording's OWN settings: a BrainSense streaming run's sensing setup at its start,
+    and the chronic record's band schedule with its contact schedule (contacts within one lead,
+    "0-3", named on that side). Not `analytics.power_center_freqs`, which keeps one band per pair."""
+    words = ("ZERO", "ONE", "TWO", "THREE")
+    hist = {}
+    for r in powerdomain_recordings or []:
+        if not isinstance(r, dict):
+            continue
+        t0 = _to_epoch(r.get("StartTime"))
+        desc = r.get("Descriptor")
+        therapy = desc.get("Therapy") if isinstance(desc, dict) else None
+        if t0 is None or not isinstance(therapy, dict):
+            continue
+        for nm in r.get("ChannelNames", []) or []:
+            if "POWER" not in str(nm).upper():
+                continue
+            contact = str(nm).rsplit(" ", 1)[0]
+            side = "Left" if "LEFT" in contact.upper() else ("Right" if "RIGHT" in contact.upper() else None)
+            hz = analytics.sensing_center_hz(therapy.get(side)) if side else None
+            if hz is not None:
+                hist.setdefault(_canon_channel(contact), []).append((float(t0), float(hz)))
+    for r in chronic_recordings or []:
+        if not isinstance(r, dict):
+            continue
+        names = [str(n) for n in (r.get("ChannelNames") or [])]
+        side = ("LEFT" if any(n.upper().startswith("LEFT") for n in names) else
+                ("RIGHT" if any(n.upper().startswith("RIGHT") for n in names) else None))
+        contacts = sorted((float(t), str(c)) for t, c in (r.get("ContactSchedule") or []))
+        if side is None or not contacts:
+            continue
+        for t, hz in (r.get("FreqScheduleHz") or []):
+            now = [c for (tc, c) in contacts if tc <= float(t)] or [contacts[0][1]]
+            try:
+                a, b = (int(x) for x in now[-1].split("-"))
+            except ValueError:
+                continue
+            if 0 <= a <= 3 and 0 <= b <= 3 and a != b:
+                pair = f"{words[min(a, b)]}_{words[max(a, b)]}_{side}"
+                hist.setdefault(pair, []).append((float(t), float(hz)))
+    for k in hist:
+        hist[k].sort()
+    return hist
+
+
+def _indefinite_modeled_points(out, indefinite_td_recordings, sensing_hz_by_channel,
+                               chronic_recordings=None, powerdomain_recordings=None):
+    """INDEFINITE STREAMING on the timeline (item P-11, the PI's go-ahead 2026-10-06): one modelled
+    point per recording per contact pair, added to `out` in place.
+
+    Indefinite streaming records every sensing pair at once with stimulation off and carries no band
+    setting, so the band is the one IN FORCE on that pair then: the last band the device sensed on
+    that pair at or before the recording's start (`_band_history`, from each recording's own
+    settings), else the pair's configured band (`sensing_hz_by_channel`), else no point. The value
+    is the median, over the recording's usable 3-second chunks, of the time-domain transform at that
+    band (the heat maps' chunk and checks: `_td_tile_values`, at most 10% missing, no sample at the
+    rail) times the transform constant. Tagged `psd_modeled` and modeled like the montage points;
+    `method` says the route and constant first (the page reads them from it, decisions 209 and 211),
+    then ";indefinite;band=in_force" or ";indefinite;band=configured". Each pair is its own.
+    """
+    if not indefinite_td_recordings:
+        return
+    sensing_hz_by_channel = sensing_hz_by_channel or {}
+    sensed = _band_history(chronic_recordings, powerdomain_recordings)
+    method_k = f"td_transform_x_k={analytics.LSB_PER_UV2_TRANSFORM:.2f};indefinite"
+
+    def _push(ch, t, y, hz, method):
+        d = out.setdefault(ch, {"t": [], "y": [], "center_hz": [], "source": [],
+                                "modeled": [], "method": []})
+        d["t"].append(float(t)); d["y"].append(float(y))
+        d["center_hz"].append(snap_freq(hz)); d["source"].append("psd_modeled")
+        d["modeled"].append(True); d["method"].append(method)
+
+    for r in indefinite_td_recordings:
+        if not isinstance(r, dict):
+            continue
+        names = list(r.get("ChannelNames", []) or [])
+        data = np.asarray(r.get("Data"), dtype=float)
+        t0 = _to_epoch(r.get("StartTime"))
+        if data.ndim != 2 or data.shape[0] == 0 or t0 is None:
+            continue
+        fs = float(r.get("SamplingRate") or 250.0) or 250.0
+        if data.shape[0] == len(names) and data.shape[1] != len(names):
+            data = data.T
+        miss_all = r.get("Missing")
+        miss_all = np.asarray(miss_all) if miss_all is not None else None
+        for ci, nm in enumerate(names):
+            if ci >= data.shape[1]:
+                continue
+            key = _canon_channel(nm)
+            before = [hz for (t, hz) in sensed.get(key, []) if t <= t0]
+            if before:
+                center, how = before[-1], "in_force"
+            else:
+                center = (sensing_hz_by_channel.get(key) or sensing_hz_by_channel.get(nm)
+                          or sensing_hz_by_channel.get(str(nm)))
+                how = "configured"
+            if center is None or not np.isfinite(center) or float(center) <= 0:
+                continue
+            miss = None
+            if miss_all is not None and miss_all.shape == data.shape:
+                miss = miss_all[:, ci] > 0
+            vals = _td_tile_values(data[:, ci], miss, fs, np.array([float(center)]),
+                                   window_s=analytics.RAW_LSB_WINDOW_SECONDS, half=2.5,
+                                   max_missing_frac=0.10, saturation_uv=PRO_LSB_SATURATION_UV)
+            if vals is None:
+                continue
+            usable = vals["lsb"][vals["passes"], 0]
+            usable = usable[np.isfinite(usable)]
+            if not usable.size:
+                continue
+            _push(nm, t0, float(np.median(usable)), center, f"{method_k};band={how}")
+
+
 def _lsb_series_scan(chronic_recordings, powerdomain_recordings, region_map=None,
                      montage_td_recordings=None, sensing_hz_by_channel=None,
-                     event_psd_recordings=None):
+                     event_psd_recordings=None, indefinite_td_recordings=None):
     """REAL band-power (LSB) time series per channel, for inline display on the timeline.
 
     THE REFERENCE IMPLEMENTATION -- `lsb_series` above is proven equal to this on the live
@@ -849,8 +967,10 @@ def _lsb_series_scan(chronic_recordings, powerdomain_recordings, region_map=None
               modeled=True, method=f"event_psd_bridge_x_k={analytics.LSB_PER_DEVICE_PSD:.2f}")
 
     # time-sort each channel's pooled samples
+    _indefinite_modeled_points(out, indefinite_td_recordings, sensing_hz_by_channel,
+                               chronic_recordings, powerdomain_recordings)
     for ch, d in out.items():
-        order = np.argsort(d["t"])
+        order = np.argsort(d["t"], kind="stable")   # ties keep their order (P-11 proof, 2026-10-06)
         for k_ in ("t", "y", "center_hz", "source", "modeled", "method"):
             d[k_] = [d[k_][i] for i in order]
     return out
