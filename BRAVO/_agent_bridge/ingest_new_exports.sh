@@ -17,7 +17,7 @@
 # loops pick up the new recordings by themselves (saved answers within 10 minutes, grids daily).
 set -uo pipefail
 
-REMOTE="${BRAVO_EXPORTS_REMOTE:-dropbox:PNL/RCS008 jsons}"
+REMOTE="${BRAVO_EXPORTS_REMOTE:-dropbox:RCS08}"
 SINCE="${BRAVO_EXPORTS_SINCE:-2026-09-29}"
 REPO=/media/volume/pnlstore/BRAVO_pain
 IN="$REPO/BRAVO/_agent_bridge/incoming"
