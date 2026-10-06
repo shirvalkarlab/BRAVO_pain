@@ -146,6 +146,10 @@ its line about `MEGA_HANDOFF.md`, archived), `jevgrep` (rule 14).
     number, confirm none is left, then work out why from a reproduction. Before ending a turn, check
     nothing of ours is running far past its normal time. Every background loop's pass has a time limit.
 
+17. **`docker-compose.override.yml` may be committed and pushed** (the PI, 2026-10-06) when it holds no
+    password, token or key (check with `rg -i "token|password|key"` first). It is this server's own
+    settings. Any edit to it still needs his go-ahead first, and a container recreate to take effect.
+
 ## 8. Read first, and on demand
 
 @HOUSE_RULES_writing_and_claims.md

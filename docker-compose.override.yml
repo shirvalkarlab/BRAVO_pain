@@ -1,22 +1,44 @@
+# Server-specific settings for the Jetstream2 host. Everything this needs lives under /media/volume/pnlstore.
 services:
+  mysql:
+    ports: !override
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - /media/volume/pnlstore/mysql-data:/var/lib/mysql
+  redis:
+    ports: !override
+      - "127.0.0.1:6379:6379"
   bravo-server:
-    image: bravo-server-fork:local
-    build:
-      context: .
-      dockerfile: dockerfile.dev
-    # Dev: mount live code + freshly-built client so changes apply without an image rebuild
-    # (DEBUG runserver auto-reloads Python; nginx serves the mounted client build).
+    image: bravo-server:with-deps
+    ports: !override
+      - "127.0.0.1:80:80"
+      - "127.0.0.1:443:443"
+      - "127.0.0.1:27286:27286"
     volumes:
       - ./BRAVO:/usr/src/BRAVO
+      - /media/volume/pnlstore/bravo-storage:/usr/src/BRAVO/BRAVOStorage
+      # The repository's committed page build, served by nginx directly (as on the Mac), and the
+      # nginx config that serves it; without these the image's outdated pages were served.
       - ./Client/build:/usr/share/nginx/html
       - ./BRAVO/bravo_nginx.dev.conf:/etc/nginx/sites-enabled/default
-    # Local REDCap credentials (gitignored secrets/redcap.env). Provides REDCAP_API_URL /
-    # REDCAP_API_TOKEN so the Biomarkers module can pull real PRO surveys.
+    # REDCap credentials (secrets/ is gitignored, readable by exouser only).
     env_file:
       - ./secrets/redcap.env
-    # Dev-only: auto-start the Operon agent bridge (in-container command watcher on the
-    # ./BRAVO bind mount), then run the normal nginx+migrate+gunicorn startup. The watcher
-    # lets the sandboxed agent execute jobs in this container without the Docker socket.
-    # boot.sh execs the same gunicorn line as the base image's command, so behavior is
-    # otherwise identical. Lives in the dev override only — the prod image is untouched.
-    command: ["bash", "/usr/src/BRAVO/_agent_bridge/boot.sh"]
+    # Parallel and memory budget (decisions 359, 364, 369, 455; OPERATIONS_runbook.md 3a): each of the
+    # 16 web workers keeps one pool of 16 processes, started at boot and kept a day, and up to 1,500 MB
+    # of unpacked recordings. This machine has 122 GB, not the 245 the budget was first written for:
+    # at 3,000 MB six workers already held 5-8 GB each and RAM crept to ~80% (2026-10-06).
+    environment:
+      BRAVO_POOL_JOBS: "16"
+      BRAVO_WARMUP_POOL: "auto"
+      BRAVO_POOL_IDLE_SECONDS: "86400"
+      BRAVO_RECORDING_CACHE_MB: "1500"
+      BRAVO_COOKIE_SUFFIX: "_js2"
+    # 16 web workers instead of 4 (speed-up item A1, 2026-10-01; the Mac stays at 4). 64 cores and
+    # 122 GB here (not 245); the heaviest request measured peaks at 10.2 GB.
+    command: >
+      bash -c "env >> /etc/environment && service nginx start && python3 manage.py migrate &&
+      gunicorn BRAVO.asgi:application -k uvicorn.workers.UvicornWorker
+      -w 16
+      -b 0.0.0.0:27286 --timeout 600 --graceful-timeout 30 --reload
+      --access-logfile - --error-logfile -"
