@@ -310,6 +310,16 @@ def registered(uid):
     return str(uid) in registered_participants()
 
 
+def order_committed_first(bands, committed):
+    """The committed band, then its neighbours on the same pair nearest first, then every other band
+    in the grid's order (decision 464): the bands a reader is likeliest to open are ready first."""
+    if not committed or committed.get("channel") is None or committed.get("centre") is None:
+        return list(bands)
+    ch, c = committed["channel"], float(committed["centre"])
+    same = sorted((b for b in bands if b["channel"] == ch), key=lambda b: (abs(float(b["centre"]) - c), float(b["centre"])))
+    return same + [b for b in bands if b["channel"] != ch]
+
+
 def plan_for(uid):
     """`{bands, settings_source, n_refused, grid_available}` for one participant: the band grid worked
     out from the page's grid request (with the settings `settings_from` finds), then every band's
@@ -319,15 +329,18 @@ def plan_for(uid):
     from modules.ClosedLoopDeployment import bravo_service as cl, chosen_band
     try:
         cur = chosen_band.current(uid) or {}
-        gs = (((cur.get("record") or {}).get("band_candidate")) or {}).get("grid_settings")
+        bc = ((cur.get("record") or {}).get("band_candidate")) or {}
+        gs = bc.get("grid_settings")
+        committed = {"channel": bc.get("contact"), "centre": bc.get("center_freq_hz")}
     except Exception:                                          # noqa: BLE001 -- defaults then
-        gs = None
+        gs, committed = None, None
     settings, source = settings_from(request_memory.recent(uid), gs)
     out = cl.run_for_participant(grid_body(uid, settings)) or {}
     grid = bs.json_compliant_handler(out.get("band_sweep_grid") or {})
     if not grid or grid.get("available") is False:
         return {"bands": [], "settings_source": source, "n_refused": 0, "grid_available": False}
-    return {"bands": all_band_requests(uid, grid, settings), "settings_source": source,
+    return {"bands": order_committed_first(all_band_requests(uid, grid, settings), committed),
+            "settings_source": source,
             "n_refused": len(refused_channels(grid)), "grid_available": True}
 
 

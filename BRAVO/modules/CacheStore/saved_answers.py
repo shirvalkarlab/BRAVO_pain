@@ -30,6 +30,9 @@ from . import store as _store
 
 #: The analysis code the label covers: every module file but tests and the scratch area.
 _SKIP_DIRS = {"tests", "__pycache__", "_agent_bridge", "node_modules"}
+#: The refresh job's own files decide WHICH answers are worked out ahead, never what is in one (the
+#: request is in the label already), so editing them keeps every saved answer (decision 464).
+_SKIP_FILES = {"refresh_saved_answers.py", "all_band_requests.py"}
 _CODE_DIGEST = {}
 _CODE_DIGEST_LOCK = threading.Lock()
 
@@ -55,7 +58,7 @@ def code_digest(root=None, *, cache=True):
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS and not d.startswith("."))
         for name in sorted(filenames):
-            if not name.endswith(".py") or name.startswith("test_"):
+            if not name.endswith(".py") or name.startswith("test_") or name in _SKIP_FILES:
                 continue
             path = os.path.join(dirpath, name)
             h.update(os.path.relpath(path, root).encode("utf8"))

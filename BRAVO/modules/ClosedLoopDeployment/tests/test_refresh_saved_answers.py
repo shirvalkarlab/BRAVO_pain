@@ -21,6 +21,7 @@ def fake(monkeypatch):
     f = FakeRedis()
     monkeypatch.setattr(locks, "CLIENT_FACTORY", lambda: f)
     monkeypatch.setenv(rm.OFF_ENV, "1")              # the test runners turn remembering off
+    monkeypatch.setattr(job, "_heat_maps", lambda uid: {"built": 0, "current": 0, "failed": 0})   # no real rebuild
     yield f
 
 
@@ -223,3 +224,58 @@ def test_a_pass_may_run_an_hour():
     src = open(os.path.join(os.path.dirname(job.__file__), "..", "..", "_agent_bridge",
                             "saved_answers_refresh_loop.sh")).read()
     assert 'PASS_LIMIT="${SAVED_ANSWERS_REFRESH_PASS_LIMIT_SECONDS:-3600}"' in src
+
+
+# ---- decision 464: committed band first, a memory check before every batch, one REDCap download ----
+def test_the_committed_band_and_its_neighbours_go_first():
+    from modules.ClosedLoopDeployment import all_band_requests as A
+    bands = [{"channel": ch, "centre": c} for ch in ("ZERO_THREE_LEFT", "ONE_THREE_LEFT") for c in (20.5, 21.5, 22.5, 23.5, 24.5, 25.5, 26.5)]
+    got = [(b["channel"], b["centre"]) for b in A.order_committed_first(bands, {"channel": "ONE_THREE_LEFT", "centre": 24.5})]
+    assert got[:5] == [("ONE_THREE_LEFT", 24.5), ("ONE_THREE_LEFT", 23.5), ("ONE_THREE_LEFT", 25.5),
+                       ("ONE_THREE_LEFT", 22.5), ("ONE_THREE_LEFT", 26.5)]
+    assert sorted(got) == sorted((b["channel"], b["centre"]) for b in bands)
+    assert A.order_committed_first(bands, None) == bands
+
+
+def test_memory_is_checked_before_every_batch_and_waits_above_three_quarters():
+    seen, waits = [], []
+    mem = iter([0.5, 0.8, 0.9, 0.6, 0.5])
+    out = job._run_in_batches([{"kind": "k", "body": {"i": i}} for i in range(5)], 2,
+                              run=lambda rows, w: seen.append([r["body"]["i"] for r in rows]) or [{"ok": True}] * len(rows),
+                              used_fraction=lambda: next(mem), sleep=lambda s: waits.append(s), batch=2)
+    assert seen == [[0, 1], [2, 3], [4]]
+    assert len(out) == 5 and len(waits) == 2               # waited while 80% and then 90% was used
+
+
+def test_a_pass_shares_one_redcap_download_and_cleans_up(fake, monkeypatch):
+    from modules.Biomarkers.routines import redcap_client as rc
+    _remember_three()
+    dirs = []
+
+    def run(rows, workers):
+        d = os.environ.get(rc.PASS_DIR_ENV)
+        dirs.append(d and os.path.isdir(d))
+        return [{"kind": r["kind"], "ok": True} for r in rows]
+    job.refresh_participant("u1", stamp={"d": 1}, run=run)
+    assert dirs == [True] and not os.environ.get(rc.PASS_DIR_ENV)
+
+
+def test_a_silent_redcap_skips_the_pass(fake, monkeypatch):
+    from modules.Biomarkers.routines import redcap_client as rc
+
+    def boom(uid):
+        raise rc.RedcapUnavailable("REDCap did not answer within 20 s")
+    monkeypatch.setattr(job, "data_stamp", boom)
+    out = job.refresh_participant("u1")
+    assert out["skipped"].startswith("REDCap not answering")
+
+
+def test_heat_maps_are_rebuilt_first_when_the_data_changed_and_not_otherwise(fake):
+    _remember_three()
+    order = []
+    run = lambda rows, w: order.append("replays") or [{"kind": r["kind"], "ok": True} for r in rows]
+    heat = lambda uid: order.append("heat maps") or {"built": 6, "current": 0, "failed": 0}
+    first = job.refresh_participant("u1", stamp={"d": 1}, run=run, heat_maps=heat)
+    again = job.refresh_participant("u1", stamp={"d": 1}, run=run, heat_maps=heat)
+    assert order == ["heat maps", "replays"]
+    assert first["heat_maps"]["built"] == 6 and "heat_maps" not in again

@@ -162,7 +162,7 @@ def test_field_list_covers_every_consumed_column_once_and_declines_an_unusable_f
 def _fake_pycap(seen):
     """A stand-in `redcap` module that records the keyword arguments of each export request."""
     class Project:
-        def __init__(self, url, token):
+        def __init__(self, url, token, **request_kwargs):   # real PyCap passes these to requests (timeout, decision 464)
             pass
 
         def export_records(self, **kwargs):
@@ -467,7 +467,7 @@ class _FakeProject:
     made = []
     exports = []
 
-    def __init__(self, url, key):
+    def __init__(self, url, key, **request_kwargs):   # real PyCap: requests settings (timeout, decision 464)
         _FakeProject.made.append((url, key))
 
     def export_records(self, **kw):

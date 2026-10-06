@@ -61,6 +61,30 @@ def get_redcap_credentials(redcap_config=None):
 PROJECT_KEEP_SECONDS = 3600.0
 _PROJECTS = {}
 
+#: Every REDCap call gives up after this long (decision 464): on 2026-10-06 REDCap went silent from
+#: Jetstream2 for over two hours, and with no limit each request waited about 2 minutes (the
+#: system's own connection give-up) before failing.
+REDCAP_TIMEOUT_SECONDS = 20.0
+#: ONE DOWNLOAD PER REFRESH PASS (the PI, 2026-10-06, ruling on decision 22 for the refresh job only;
+#: decision 464). When this names a folder, the first download of a given request writes its table
+#: there and every later identical request in the same pass reads it. The refresh job sets it for one
+#: pass and deletes the folder after; pages never set it, so a page still downloads every time.
+PASS_DIR_ENV = "BRAVO_REDCAP_PASS_DIR"
+
+
+class RedcapUnavailable(RuntimeError):
+    """REDCap did not answer (no connection, or no reply within `REDCAP_TIMEOUT_SECONDS`)."""
+
+
+def _pass_file(fields, records):
+    d = os.environ.get(PASS_DIR_ENV)
+    if not d:
+        return None
+    import hashlib
+    import json as _json
+    key = _json.dumps([list(fields or []), list(records or [])])
+    return os.path.join(d, hashlib.blake2b(key.encode("utf8"), digest_size=12).hexdigest() + ".pkl")
+
 
 def _now():
     import time
@@ -79,9 +103,25 @@ def _project(api_url, api_key):
     hit = _PROJECTS.get(key)
     if hit is not None and _now() - hit[0] <= PROJECT_KEEP_SECONDS:
         return hit[1]
-    project = redcap.Project(api_url, api_key)
+    try:
+        project = redcap.Project(api_url, api_key, timeout=REDCAP_TIMEOUT_SECONDS)
+    except Exception as exc:                                   # noqa: BLE001 -- said plainly below
+        raise _unavailable(exc) from exc
     _PROJECTS[key] = (_now(), project)
     return project
+
+
+def _unavailable(exc):
+    """A plain error for a REDCap that did not answer; any other error is passed on unchanged."""
+    try:
+        import requests
+        silent = isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout))
+    except ImportError:                                        # pragma: no cover
+        silent = False
+    if silent:
+        return RedcapUnavailable(f"REDCap did not answer within {REDCAP_TIMEOUT_SECONDS:.0f} s "
+                                 f"({type(exc).__name__})")
+    return exc
 
 
 def pull_redcap(redcap_config=None, save=False, save_path=None, fields=None, records=None):
@@ -103,6 +143,9 @@ def pull_redcap(redcap_config=None, save=False, save_path=None, fields=None, rec
     tidy pain-report table is unchanged (proved cell-by-cell on the live RCS08 record: 760 rows,
     identical columns, zero differing cells).
     """
+    shared = _pass_file(fields, records)
+    if shared and os.path.exists(shared):
+        return pd.read_pickle(shared)                          # this refresh pass's one download
     api_url, api_key = get_redcap_credentials(redcap_config)
 
     # The connection (with the project's design) is kept for up to an hour (decision 432); the
@@ -113,12 +156,19 @@ def pull_redcap(redcap_config=None, save=False, save_path=None, fields=None, rec
         export_kwargs["fields"] = list(fields)
     if records:
         export_kwargs["records"] = list(records)
-    redcap_data = project.export_records(
-        format_type="df",
-        export_checkbox_labels=True,
-        export_survey_fields=True,
-        **export_kwargs,
-    )
+    try:
+        redcap_data = project.export_records(
+            format_type="df",
+            export_checkbox_labels=True,
+            export_survey_fields=True,
+            **export_kwargs,
+        )
+    except Exception as exc:                                   # noqa: BLE001 -- said plainly
+        raise _unavailable(exc) from exc
+    if shared:
+        tmp = f"{shared}.{os.getpid()}.tmp"
+        redcap_data.to_pickle(tmp)
+        os.replace(tmp, shared)                                # whole file or none, for the other replays
 
     if save:
         if save_path is None:

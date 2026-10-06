@@ -115,3 +115,20 @@ def test_a_second_request_waits_for_the_first_build_instead_of_duplicating_it():
         t.join()
         assert len(calls) == 1
         assert out["b"]["v"] == 1 and out["b"]["saved_answer"]["served"] is True
+
+
+def test_the_refresh_jobs_own_files_are_not_analysis_code():
+    """They decide WHICH answers are worked out ahead, never what is in one (the request is in the
+    label already), so editing them must not throw every saved answer away (decision 464)."""
+    with tempfile.TemporaryDirectory() as root:
+        p = pathlib.Path(root) / "ClosedLoopDeployment"
+        p.mkdir()
+        (p / "adapter.py").write_text("x = 1\n")
+        (p / "refresh_saved_answers.py").write_text("a = 1\n")
+        (p / "all_band_requests.py").write_text("b = 1\n")
+        one = SA.code_digest(root, cache=False)
+        (p / "refresh_saved_answers.py").write_text("a = 2\n")
+        (p / "all_band_requests.py").write_text("b = 2\n")
+        assert SA.code_digest(root, cache=False) == one
+        (p / "adapter.py").write_text("x = 2\n")
+        assert SA.code_digest(root, cache=False) != one
