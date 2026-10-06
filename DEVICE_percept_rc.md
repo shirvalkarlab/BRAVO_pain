@@ -149,6 +149,34 @@ exported files.** The device's own power reading exists in the programmed produc
 
 `BrainSenseSurveys` and `ElectrodeSurvey` are a related electrode-survey variant of the montage.
 
+### The electrode identifier: one electrode against the other lead's contact 3
+
+From the white paper (UC202012929dEN, "Electrode Identifier", pages 3-5) and this participant's own
+62 recordings (read from the live database 2026-10-05).
+
+- **What it is for:** which electrode on one lead carries the most signal, stimulation off. It needs
+  both leads implanted. In the clinic, not at home.
+- **How it is wired:** each channel is ONE electrode on the surveyed lead against ONE reference
+  electrode on the OPPOSITE lead; every channel of a run shares that reference. On RCS08 the left
+  lead's electrodes are referenced to right contact 3 (contact 11) and the right lead's to left
+  contact 3. **So no channel is one of the 6 within-lead sensing pairs, and each channel's voltage
+  mixes both brain sides** (left GPi and right medial thalamus): never pool it with, or match it like,
+  a within-lead recording (§7.13 of CLAUDE.md, decision 202).
+- **How it is recorded:** all electrodes of one lead at once, about 20 s at 250 samples/s; the
+  other side is a separate run. On SenSight leads the clinician picks "Levels" (the 4 rings) or
+  "Segments" (the 6 split electrodes 1a-c, 2a-c); both means two runs, one after the other.
+- **The device's own PSD:** the tablet transforms each channel's 20 s trace; bins 0.98 Hz wide,
+  centres 0 to 96.68 Hz, in µVp. It then ranks the electrodes at one chosen frequency: 3 green dots
+  at 80 % or more of the strongest electrode, 2 white dots at 40-80 %, 1 white dot below 40 %
+  (relative to that run's strongest, so a ranking compares electrodes within one run only).
+- **What the export keeps:** the time-domain traces of every run in the session
+  (`BrainSenseSurveysTimeDomain[].ElectrodeIdentifier`), but the PSD of the most recent run only
+  (`BrainSenseSurveys[].ElectrodeIdentifier`). On RCS08, 44 of the 62 runs carry a device PSD.
+- **What RCS08 has:** 62 runs on 14 visit days (2025-07-16 to 2026-09-25): 32 ring runs (4
+  channels, 16 per side) and 30 segment runs (6 channels, 15 per side), 20-21 s each. Ingested as
+  `MedtronicElectrodeIdentifier`; the PSD attaches to its run only when exactly one run carries its
+  channel, otherwise it is kept with its run unknown (decision 443).
+
 ### What each product is for
 
 - **Indefinite Streaming is the only product that records all six contacts at once, with

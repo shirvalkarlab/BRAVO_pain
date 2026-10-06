@@ -35,7 +35,9 @@ cd Client && CI=true npx react-scripts test --watchAll=false src/views/Reports/f
 - **Fast run while working, full run before every commit** (the PI, 2026-10-05): `sh _agent_bridge/run_both_suites.sh --fast` leaves out ControlAnalyses and the tests listed in `BRAVO/modules/slow_tests.py` (about 40 s against 59 s).
 - **Two suites; a green run of one is not a green platform.** `run_tests.py` (plain `assert`):
   Biomarkers, CacheStore, DecodeCommon, ControlAnalyses, MedtronicPercept. pytest:
-  ClosedLoopDeployment, StimOptimizer, CacheStore, DecodeCommon, ControlAnalyses (the shared three
+  ClosedLoopDeployment, StimOptimizer, CacheStore, DecodeCommon, ControlAnalyses, StimRL (its
+  snapshot-database tests skip without SQLAlchemy; all run in the study's venv on the Mac),
+  SurveyForms (the shared three
   take no test arguments). Markers in `modules/pytest.ini`: `store` runs serially, `live` daily.
 - **No linter, type checker or formatter exists;** the gates are the two suites, the build and the
   page tests. **CI** (`.github/workflows/ci.yml`, every push and pull request): pytest without

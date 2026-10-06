@@ -389,6 +389,29 @@ def test_the_digest_changes_with_any_value():
     assert B._pro_table_digest(a) != B._pro_table_digest(b)
 
 
+
+def test_the_report_table_and_its_digest_do_not_depend_on_the_order_redcap_returns_rows():
+    """Two reports filed at the same time with different values must come out in one order whatever
+    order REDCap sends them in; otherwise the digest moves and every saved answer is rebuilt for
+    nothing (the time sort alone left such ties in arrival order)."""
+    field_map = {"pt": "RCS08", "instruments": ["daily_pain_survey"],
+                 "timestamp_label": "date_time_s1_daily",
+                 "metric_labels": {"nrs": "nrs", "vas": "vas"}}
+    rows = [("RCS08", "v1", "daily_pain_survey", i, ts, n, v, np.nan, np.nan, 0) for i, (ts, n, v) in enumerate([
+        ("2025-09-01 09:00", 2, 20), ("2025-09-02 09:00", 8, 80), ("2025-09-02 09:00", 3, 30),
+        ("2025-09-02 09:00", 8, 80), ("2025-09-03 09:00", 5, 50)], 1)]
+    cols = ["record_id", "redcap_event_name", "redcap_repeat_instrument", "redcap_repeat_instance",
+            "date_time_s1_daily", "nrs", "vas", "mpq_item1_aff", "mpq_item2_aff", "unused"]
+    outs = []
+    for order in ([0, 1, 2, 3, 4], [4, 3, 2, 1, 0], [2, 0, 3, 4, 1]):
+        raw = pd.DataFrame([rows[i] for i in order], columns=cols).set_index(
+            ["record_id", "redcap_event_name", "redcap_repeat_instance"])
+        outs.append(RC.process_redcap(raw, field_map))
+    for o in outs[1:]:
+        pd.testing.assert_frame_equal(o, outs[0])
+        assert B._pro_table_digest(o) == B._pro_table_digest(outs[0])
+    assert len(outs[0]) == 5                                   # identical reports both kept
+
 # ------------------------------------------------------------------- the fall-back safety net
 
 def _full_export_calls(pull, extra_env=None, request=None, patches=()):

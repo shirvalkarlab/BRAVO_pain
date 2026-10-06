@@ -222,7 +222,10 @@ def process_redcap(redcap_data, field_map):
             proc[key] = pd.to_numeric(df[value], errors="coerce")
 
     proc[TIDY_TIMESTAMP_COL] = df[timestamp_label]
-    proc = proc.sort_values(TIDY_TIMESTAMP_COL).reset_index(drop=True)
+    # Time first, then every value: reports filed at the same time come out in one order whatever
+    # order REDCap returned them in, so the table's digest does not move for nothing.
+    proc = proc.sort_values([TIDY_TIMESTAMP_COL] + [c for c in proc.columns if c != TIDY_TIMESTAMP_COL],
+                            kind="mergesort", na_position="last").reset_index(drop=True)
     # IMPORTANT: do NOT fillna(0) the pain metrics — an unreported survey day must stay NaN so the
     # median cutoff, correlations, and KMeans labeler DROP it rather than treat it as a real
     # zero-pain report. (Rigor-review fix; deviates from the source notebook's fillna(0).)

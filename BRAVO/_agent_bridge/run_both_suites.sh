@@ -40,7 +40,7 @@ CONT_N=$(( NPROC - HOST_N )); [ $CONT_N -lt 2 ] && CONT_N=2
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 mkdir -p _agent_bridge/_suite_logs
 LOGS=_agent_bridge/_suite_logs
-HOST_TESTS="ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests ControlAnalyses/tests"
+HOST_TESTS="ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests ControlAnalyses/tests StimRL/tests SurveyForms/tests"
 HOST_OPTS="-q -W ignore -p no:cacheprovider"
 T0=$(date +%s)
 
@@ -52,7 +52,7 @@ CONT_FAST=""
 if [ "${1:-}" = "--fast" ]; then
   SLOW_FILTER=" and not slow"
   CONT_FAST="--fast"
-  HOST_TESTS="ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests"
+  HOST_TESTS="ClosedLoopDeployment/tests StimOptimizer/tests CacheStore/tests DecodeCommon/tests StimRL/tests SurveyForms/tests"
 fi
 
 if [ "${1:-}" = "--live" ]; then
