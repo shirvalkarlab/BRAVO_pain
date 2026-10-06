@@ -8,6 +8,13 @@ services:
   redis:
     ports: !override
       - "127.0.0.1:6379:6379"
+    # Redis keeps its data across restarts (the PI, 2026-10-06; decision 457): a reboot had emptied
+    # the remembered page requests the saved-answer refresh replays. Every change is appended to a
+    # log on disk once a second. Locks and remembered requests all carry an expiry, so none outlives
+    # its purpose. The base file's memory limit and eviction policy are kept.
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --appendonly yes --appendfsync everysec
+    volumes:
+      - /media/volume/pnlstore/redis-data:/data
   bravo-server:
     image: bravo-server:with-deps
     ports: !override
