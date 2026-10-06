@@ -60,6 +60,12 @@ export const CL = {
   simulation: `${MODULES.closedLoop}/simulation`,
 };
 
+/** The Biomarkers page's own extra slots: answers it fetches beside its main one. The electrode
+ *  identifier check (the PI, 2026-10-06) sits in the bottom fold and feeds nothing else. */
+export const BM = {
+  electrodeIdentifier: `${MODULES.biomarkers}/electrodeIdentifier`,
+};
+
 /** Every slot in the family, in no meaningful order. */
 export const CLOSED_LOOP_SLOTS = Object.keys(CL).map((k) => CL[k]);
 

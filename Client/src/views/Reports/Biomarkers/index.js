@@ -45,6 +45,7 @@ import { MATCHING_DEFAULTS as D } from "./matchingDefaults";
 // remains one implementation of each and a fix applied there is a fix here. Editing those files is
 // out of scope for this page; only their placement and their framing change.
 import CalibrationInEffectPanel from "./CalibrationInEffectPanel";
+import ElectrodeIdentifierPanel from "./ElectrodeIdentifierPanel";
 // Colours, type sizes and card style: the shared tokens (the redesign of 2026-09-26).
 import { T, TYPE, LAYOUT } from "assets/theme/base/tokens";
 import PageHead from "views/Reports/paper/PageHead";
@@ -1021,6 +1022,8 @@ function Biomarkers() {
                   <SectionRevealedContext.Provider value={checksOpened}>
                     <ControlAnalysesSection participantUid={participant_uid} page="biomarkers" clinicSheets={includeClinicSheetRatings} plain />
                   </SectionRevealedContext.Provider>
+                  {/* the device's electrode identifier runs (the PI, 2026-10-06); fetched on first opening */}
+                  <ElectrodeIdentifierPanel participantUid={participant_uid} revealed={checksOpened} />
                 </Fold>
               </MDBox>
             </Grid>

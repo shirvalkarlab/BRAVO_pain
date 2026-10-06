@@ -6906,6 +6906,22 @@ def psd_lsb_conversion_model(request_data):
     return out
 
 
+def electrode_identifier_check(request_data):
+    """The electrode identifier's own spectra and rankings, for the Biomarkers page's bottom fold
+    (the PI, 2026-10-06; `routines/electrode_identifier.py`). Device values at face value; read by
+    no other calculation. Request: ParticipantId (uid)."""
+    from .routines import electrode_identifier as _ei
+    uid = request_data.get("ParticipantId")
+    if not uid or models.Participant.find(uid=uid) is None:
+        return {"available": False, "reason": "no such participant"}
+    rows = _ei.runs(_load_recordings(uid, ["MedtronicElectrodeIdentifier"]),
+                    _load_recordings(uid, ["MedtronicSurveyPSD"]))
+    if not rows:
+        return {"available": False, "reason": "no electrode identifier runs"}
+    return {"available": True, "runs": rows, "summary": _ei.summary(rows),
+            "n_runs": len(rows), "n_days": len({int(r["t"] // 86400) for r in rows})}
+
+
 THRESHOLD_POWER_TYPE = "MedtronicThresholdPowerDomain"
 
 

@@ -1002,6 +1002,38 @@ class QueryLsbPower(RestViews.APIView):
         return Response(status=200, data=Analysis)
 
 
+class QueryElectrodeIdentifierCheck(RestViews.APIView):
+    """
+    The electrode identifier's own spectra and rankings (each electrode against the other lead's
+    contact 3, stimulation off) for the Biomarkers page's bottom fold (the PI, 2026-10-06).
+
+    **URL:** ``/queryElectrodeIdentifierCheck``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId (uid).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.electrode_identifier_check(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "electrode identifier error: " + str(e)})
+
+        return Response(status=200, data=json_compliant_handler(Analysis))
+
+
 class QueryPsdLsbConversionModel(RestViews.APIView):
     """
     API View that serves the FROZEN, reviewed per-participant PSD->device-LSB conversion model for
