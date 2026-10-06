@@ -150,3 +150,76 @@ def test_a_replay_that_starts_the_helper_process_still_ends():
         """))
     out = subprocess.run([sys.executable, "-B", script], capture_output=True, text=True, timeout=120)
     assert out.stdout.count("'value': [1, 2]") == 2, out.stderr[-2000:]
+
+
+# ---- every band, registered with the job (the PI, 2026-10-06; decision 463) ----
+def _plan():
+    bands = []
+    for c in (23.5, 24.5):
+        bands.append({"channel": "ONE_THREE_LEFT", "centre": c,
+                      "report": {"ParticipantId": "u1", "Candidates": [{"center_hz": c}]},
+                      "summary": {"ParticipantId": "u1", "CenterHz": c},
+                      "roc": {"ParticipantId": "u1", "CenterHz": c, "MatchDirection": "prior"},
+                      "era": {"ParticipantId": "u1", "CenterHz": c, "Era": 1},
+                      "lsb_template": {"ParticipantId": "u1", "CenterHz": c, "Cutpoint": None}})
+    return {"bands": bands, "settings_source": "page"}
+
+
+def test_a_registered_participant_gets_every_band_replayed_after_its_remembered_requests(fake):
+    from modules.ClosedLoopDeployment import all_band_requests as A
+    rm.remember("deployment_summary", "u1", {"ParticipantId": "u1", "CenterHz": 24.5})   # already sent by a page
+    A.register("u1")
+    batches = []
+
+    def run(rows, workers):
+        batches.append([(r["kind"], r["body"].get("CenterHz") or r["body"].get("roc", {}).get("CenterHz")
+                         or r["body"]["Candidates"][0]["center_hz"]) for r in rows])
+        return [{"kind": r["kind"], "ok": True, "served": False} for r in rows]
+    out = job.refresh_participant("u1", stamp={"d": 1}, run=run, plan=lambda uid: _plan())
+    assert batches[0] == [("deployment_summary", 24.5)]
+    assert sorted(batches[1]) == sorted([("closed_loop_report", 23.5), ("deployment_summary", 23.5),
+                                         ("deployment_roc", 23.5), ("deployment_roc_by_era", 23.5),
+                                         ("closed_loop_report", 24.5),
+                                         ("deployment_roc", 24.5), ("deployment_roc_by_era", 24.5)])
+    assert batches[2] == [(A.LSB_FROM_ROC_KIND, 23.5), (A.LSB_FROM_ROC_KIND, 24.5)]
+    assert out["all_bands"]["bands"] == 2 and out["all_bands"]["settings_source"] == "page"
+
+
+def test_an_unregistered_participant_gets_no_band_beyond_what_its_pages_sent(fake):
+    _remember_three()
+    asked = []
+    job.refresh_participant("u1", stamp={"d": 1}, run=lambda rows, w: [{"ok": True} for r in rows],
+                            plan=lambda uid: asked.append(uid) or _plan())
+    assert asked == []
+
+
+def test_registration_is_kept_and_can_be_undone(fake):
+    from modules.ClosedLoopDeployment import all_band_requests as A
+    assert not A.registered("u2")
+    A.register("u2")
+    assert A.registered("u2") and "u2" in A.registered_participants()
+    A.unregister("u2")
+    assert not A.registered("u2")
+
+
+def test_band_power_is_asked_at_the_bands_own_roc_cut_point(monkeypatch):
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "BRAVO.settings")
+    import django
+    django.setup()
+    from modules.ClosedLoopDeployment import all_band_requests as A
+    from modules.Biomarkers import bravo_service as bs
+    got = {}
+    monkeypatch.setattr(bs, "band_deployment_roc", lambda rd: {"available": True, "roc": {
+        "available": True, "operating_points": {"youden": {"threshold": 0.25}}}})
+    monkeypatch.setattr(bs, "band_lsb_and_power", lambda rd: got.setdefault("body", rd) and {"available": True})
+    A.replay_lsb_from_roc({"roc": {"CenterHz": 24.5}, "lsb_template": {"CenterHz": 24.5, "Cutpoint": None}})
+    assert got["body"]["Cutpoint"] == 0.25
+    monkeypatch.setattr(bs, "band_deployment_roc", lambda rd: {"available": False})
+    out = A.replay_lsb_from_roc({"roc": {"CenterHz": 24.5}, "lsb_template": {"CenterHz": 24.5}})
+    assert out["available"] is False and "no cut-point" in out["reason"]
+
+
+def test_a_pass_may_run_an_hour():
+    src = open(os.path.join(os.path.dirname(job.__file__), "..", "..", "_agent_bridge",
+                            "saved_answers_refresh_loop.sh")).read()
+    assert 'PASS_LIMIT="${SAVED_ANSWERS_REFRESH_PASS_LIMIT_SECONDS:-3600}"' in src

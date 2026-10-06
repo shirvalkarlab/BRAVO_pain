@@ -31,6 +31,11 @@ KINDS = {
     "band_lsb_power": ("modules.Biomarkers.bravo_service", "band_lsb_and_power"),
     "closed_loop_report": ("modules.ClosedLoopDeployment.bravo_service", "run_for_participant"),
 }
+#: Kinds only the every-band step sends (decision 463); never in a page's remembered requests.
+ALL_BAND_KINDS = {
+    "band_lsb_power_from_roc": ("modules.ClosedLoopDeployment.all_band_requests", "replay_lsb_from_roc"),
+    "all_band_plan": ("modules.ClosedLoopDeployment.all_band_requests", "plan_for"),
+}
 MAX_WORKERS = 8
 GB_PER_WORKER = 6.0
 POOL_JOBS_PER_REPLAY = "3"
@@ -39,7 +44,7 @@ STAMP_PREFIX = "bravo:saved_answer_refresh:"
 
 def _function_for(kind):
     import importlib
-    mod, name = KINDS[kind]
+    mod, name = KINDS[kind] if kind in KINDS else ALL_BAND_KINDS[kind]
     return getattr(importlib.import_module(mod), name)
 
 
@@ -142,8 +147,54 @@ def _run_in_processes(rows, workers, replay=_replay_one):
         return [f.result() for f in futures]
 
 
-def refresh_participant(participant_uid, *, workers=MAX_WORKERS, force=False, stamp=None, run=None):
-    """Replay the participant's remembered requests if its data changed since the last pass."""
+def _plan_in_process(participant_uid):
+    """`all_band_requests.plan_for` in one replay process (it decodes the recordings), so this loop
+    process stays small."""
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+    with ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"),
+                             initializer=_replay_process_init,
+                             initargs=(os.getpid(), list(sys.path))) as ex:
+        return ex.submit(_plan_call, participant_uid).result()
+
+
+def _plan_call(participant_uid):
+    return _function_for("all_band_plan")(participant_uid)
+
+
+def _count(results):
+    return {"built": sum(1 for r in results if r.get("ok") and not r.get("served")),
+            "served": sum(1 for r in results if r.get("ok") and r.get("served")),
+            "failed": sum(1 for r in results if not r.get("ok")),
+            "errors": [r["error"] for r in results if not r.get("ok")][:5]}
+
+
+def _all_bands(participant_uid, done_rows, workers, run, plan):
+    """EVERY BAND (decision 463): for a registered participant, every band on the band grid as the
+    page would ask for it (`all_band_requests`): report, summary, ROC and month-by-month first (those
+    this pass already replayed skipped), then band power at each band's own fresh ROC cut-point."""
+    p = (plan or _plan_in_process)(participant_uid) or {}
+    bands = p.get("bands") or []
+    done = {json.dumps([r["kind"], r["body"]], sort_keys=True) for r in done_rows}
+    first = []
+    for b in bands:
+        for kind, field in (("closed_loop_report", "report"), ("deployment_summary", "summary"),
+                            ("deployment_roc", "roc"), ("deployment_roc_by_era", "era")):
+            row = {"kind": kind, "body": b[field]}
+            if json.dumps([kind, b[field]], sort_keys=True) not in done:
+                first.append(row)
+    lsb = [{"kind": "band_lsb_power_from_roc", "body": {"roc": b["roc"], "lsb_template": b["lsb_template"]}}
+           for b in bands]
+    r1 = run(first, workers) if first else []
+    r2 = run(lsb, workers) if lsb else []
+    return {"bands": len(bands), "settings_source": p.get("settings_source"),
+            "grid_available": p.get("grid_available", True), **_count(list(r1) + list(r2))}
+
+
+def refresh_participant(participant_uid, *, workers=MAX_WORKERS, force=False, stamp=None, run=None,
+                        plan=None):
+    """Replay the participant's remembered requests if its data changed since the last pass; for a
+    registered participant, then every band (`_all_bands`, decision 463)."""
     from modules.CacheStore import request_memory
     stamp = data_stamp(participant_uid) if stamp is None else stamp
     if stamp is None:
@@ -151,15 +202,22 @@ def refresh_participant(participant_uid, *, workers=MAX_WORKERS, force=False, st
     if not force and _last_stamp(participant_uid) == stamp:
         return {"participant": participant_uid, "skipped": "data unchanged", "replayed": 0}
     rows = [r for r in request_memory.recent(participant_uid) if r.get("kind") in KINDS]
+    from modules.ClosedLoopDeployment import all_band_requests as _abr
+    if not rows and not _abr.registered(participant_uid):
+        _save_stamp(participant_uid, stamp)
+        return {"participant": participant_uid, "replayed": 0, "built": 0, "served": 0, "failed": 0,
+                "errors": [], "seconds": 0.0}
     t = time.perf_counter()
     results = (run or _run_in_processes)(rows, workers) if rows else []
+    from modules.ClosedLoopDeployment import all_band_requests
+    every = (_all_bands(participant_uid, rows, workers, run or _run_in_processes, plan)
+             if all_band_requests.registered(participant_uid) else None)
     _save_stamp(participant_uid, stamp)
-    return {"participant": participant_uid, "replayed": len(results),
-            "built": sum(1 for r in results if r.get("ok") and not r.get("served")),
-            "served": sum(1 for r in results if r.get("ok") and r.get("served")),
-            "failed": sum(1 for r in results if not r.get("ok")),
-            "errors": [r["error"] for r in results if not r.get("ok")][:5],
-            "seconds": round(time.perf_counter() - t, 1)}
+    out = {"participant": participant_uid, "replayed": len(results), **_count(results),
+           "seconds": round(time.perf_counter() - t, 1)}
+    if every is not None:
+        out["all_bands"] = every
+    return out
 
 
 def main(argv=None):
@@ -172,7 +230,9 @@ def main(argv=None):
     from modules.CacheStore import request_memory
     os.environ[request_memory.OFF_ENV] = "0"                   # the replays are not remembered
     os.environ.setdefault("BRAVO_POOL_JOBS", POOL_JOBS_PER_REPLAY)
-    uids = list(a.participant) + (request_memory.participants() if a.all else [])
+    from modules.ClosedLoopDeployment import all_band_requests
+    uids = list(a.participant) + (request_memory.participants() + all_band_requests.registered_participants()
+                                  if a.all else [])
     n = worker_count(a.workers)
     for uid in dict.fromkeys(uids):
         try:

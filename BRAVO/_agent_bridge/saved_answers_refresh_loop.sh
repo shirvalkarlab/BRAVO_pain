@@ -13,7 +13,7 @@
 #   SAVED_ANSWERS_REFRESH_INTERVAL_SECONDS=600       time between passes
 #   SAVED_ANSWERS_REFRESH_FIRST_DELAY_SECONDS=300    wait before the first pass after a start
 #   SAVED_ANSWERS_REFRESH_WORKERS=8                  replays at once (never more than 8)
-#   SAVED_ANSWERS_REFRESH_PASS_LIMIT_SECONDS=1800    a pass still running after this is stopped
+#   SAVED_ANSWERS_REFRESH_PASS_LIMIT_SECONDS=3600    a pass still running after this is stopped
 set -u
 
 BRAVO_DIR=/usr/src/BRAVO
@@ -22,7 +22,7 @@ LOCK="$BRAVO_DIR/_agent_bridge/logs/.saved_answers_refresh.pid"
 INTERVAL="${SAVED_ANSWERS_REFRESH_INTERVAL_SECONDS:-600}"
 FIRST_DELAY="${SAVED_ANSWERS_REFRESH_FIRST_DELAY_SECONDS:-300}"
 WORKERS="${SAVED_ANSWERS_REFRESH_WORKERS:-8}"
-PASS_LIMIT="${SAVED_ANSWERS_REFRESH_PASS_LIMIT_SECONDS:-1800}"
+PASS_LIMIT="${SAVED_ANSWERS_REFRESH_PASS_LIMIT_SECONDS:-3600}"   # 60 min since every band is worked out (decision 463)
 
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 say() { echo "[saved-answers-refresh $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >> "$LOG"; }
