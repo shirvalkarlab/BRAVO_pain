@@ -35,6 +35,16 @@ export function pairLabel(pair) {
   return up;
 }
 
+/** The line under the timeline naming the streaming runs left out for reading 0 throughout
+ *  (decision 462), from the server's per-pair counts; "" when none were. */
+export function zeroRunsLine(byPair) {
+  const keys = Object.keys(byPair || {}).filter((k) => byPair[k] > 0);
+  if (!keys.length) return "";
+  const parts = keys.map((k) => [pairLabel(k), byPair[k]]).sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([l, n]) => `${l} ${n}`);
+  return `Streaming runs reading 0 throughout, not counted as band power: ${parts.join(", ")}`;
+}
+
 const KIND = {
   streaming_td: "BrainSense streaming", indefinite: "indefinite streaming",
   montage_td: "montage or survey", montage_psd: "montage or survey", survey_psd: "survey",

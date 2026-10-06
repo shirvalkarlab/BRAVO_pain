@@ -13,7 +13,7 @@ import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { SessionController } from "database/session-control";
 import { wrap } from "testUtils/render";
-import TimelineDetailPanel, { detailHeading, missingLines, pairLabel, traceNote } from "./TimelineDetailPanel";
+import TimelineDetailPanel, { detailHeading, missingLines, pairLabel, traceNote, zeroRunsLine } from "./TimelineDetailPanel";
 
 jest.mock("plotly.js-dist", () => ({
   react: jest.fn(), purge: jest.fn(), restyle: jest.fn(), relayout: jest.fn(), newPlot: jest.fn(),
@@ -86,4 +86,10 @@ describe("the timeline's side", () => {
     ["Dtype: \"timedomain\"", "Dtype: \"psd\"", "Product: \"timeline_lsb\"", "Product: \"streaming_lsb\""]
       .forEach((s) => expect(code).toContain(s));
   });
+});
+
+test("the line under the timeline names the runs left out for reading 0 (decision 462)", () => {
+  expect(zeroRunsLine({})).toBe("");
+  expect(zeroRunsLine({ ZERO_TWO_LEFT: 27, ZERO_THREE_LEFT: 11, ZERO_THREE_RIGHT: 5 }))
+    .toBe("Streaming runs reading 0 throughout, not counted as band power: L 0⁻2⁺ 27, L 0⁻3⁺ 11, R 0⁻3⁺ 5");
 });

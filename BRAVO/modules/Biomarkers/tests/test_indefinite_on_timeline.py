@@ -130,7 +130,9 @@ def test_the_overview_keeps_them_off_the_scale_and_out_of_the_sessions():
 
 def test_the_saved_timeline_is_rebuilt_under_the_new_rule():
     src = (_BRAVO_ROOT / "modules" / "Biomarkers" / "bravo_service.py").read_text()
-    assert '_ACQ_TIMELINE_RULE_VERSION = "v3_indefinite_modelled' in src
+    import re
+    v = re.search(r'^_ACQ_TIMELINE_RULE_VERSION = "v(\d+)_', src, re.M)
+    assert v and int(v.group(1)) >= 3          # v3 added these points; later rules keep them
 
 
 def test_the_chronic_records_own_band_and_pair_schedule_count_as_in_force():
@@ -149,3 +151,27 @@ def test_one_band_per_pair_is_not_used_for_the_band_in_force():
     pd = [_powerdomain(9.77, T0 - 3600), _powerdomain(26.37, T0 + 3600)]
     assert analytics.power_center_freqs(pd)["ZERO_THREE_LEFT"] == 26.37
     assert av._band_history([], pd)["ZERO_THREE_LEFT"] == [(T0 - 3600, 9.77), (T0 + 3600, 26.37)]
+
+
+# ---- streaming runs reading 0 throughout, counted where the page shows a threshold (decision 462) ----
+def test_left_out_zero_runs_are_counted_for_one_pair_and_band():
+    zr = [{"pair": "ZERO_THREE_LEFT", "t0": T0, "n": 100, "center_hz": 26.4},
+          {"pair": "ZERO_THREE_LEFT", "t0": T0, "n": 50, "center_hz": 9.8},
+          {"pair": "ZERO_TWO_LEFT", "t0": T0, "n": 70, "center_hz": 26.4}]
+    assert av.zero_runs_in_band(zr, "ZERO_AND_THREE_LEFT_RING", 25.5, 2.5) == {"n_runs": 1, "n_samples": 100}
+    assert av.zero_runs_in_band(zr, "ONE_THREE_LEFT", 25.5, 2.5) == {"n_runs": 0, "n_samples": 0}
+
+
+def test_the_note_says_how_many_and_why():
+    assert av.zero_runs_note({"n_runs": 0, "n_samples": 0}) == ""
+    assert av.zero_runs_note({"n_runs": 11, "n_samples": 28819}) == (
+        "11 device runs at this band on this pair read 0 throughout and are not counted (28,819 samples)")
+    assert av.zero_runs_note({"n_runs": 1, "n_samples": 5}) == (
+        "1 device run at this band on this pair reads 0 throughout and is not counted (5 samples)")
+
+
+def test_the_timeline_counts_them_per_pair():
+    zr = [{"pair": "ZERO_THREE_LEFT", "t0": T0, "n": 100, "center_hz": 26.4},
+          {"pair": "ZERO_THREE_LEFT", "t0": T0 + 1, "n": 50, "center_hz": 9.8},
+          {"pair": "ZERO_TWO_LEFT", "t0": T0, "n": 70, "center_hz": 26.4}]
+    assert av.zero_runs_by_pair(zr) == {"ZERO_THREE_LEFT": 2, "ZERO_TWO_LEFT": 1}

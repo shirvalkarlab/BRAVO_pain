@@ -36,8 +36,16 @@ _log = logging.getLogger(__name__)
 # the package `modules.DecodeCommon`, the host suite's root makes it `DecodeCommon`.
 try:
     from modules.DecodeCommon import build_channel_index as _build_channel_index
+    from modules.DecodeCommon.representation import (run_band_hz as _run_band_hz,
+                                                     chronic_pair_keys as _chronic_pair_keys,
+                                                     is_zero_run as _is_zero_run,
+                                                     zero_runs as _zero_runs)
 except ImportError:
     from DecodeCommon import build_channel_index as _build_channel_index
+    from DecodeCommon.representation import (run_band_hz as _run_band_hz,
+                                             chronic_pair_keys as _chronic_pair_keys,
+                                             is_zero_run as _is_zero_run,
+                                             zero_runs as _zero_runs)
 
 #: THE SWITCH BETWEEN THE INDEXED READERS AND THE REFERENCE SCANS. `lsb_series` and
 #: `native_lsb_by_channel` read from a `ChannelIndex` prepared once per request when this is True,
@@ -596,6 +604,41 @@ def _lsb_series_modeled_tiers(out, montage_td_recordings, event_psd_recordings,
               modeled=True, method=f"event_psd_bridge_x_k={analytics.LSB_PER_DEVICE_PSD:.2f}")
 
 
+def zero_runs(powerdomain_recordings):
+    """The BrainSense streaming runs left out for reading 0 throughout (decision 462;
+    `DecodeCommon.representation.zero_runs`): [{pair, t0, n, center_hz}]."""
+    return _zero_runs(powerdomain_recordings)
+
+
+def zero_runs_in_band(zero_runs_list, channel, center_hz, half_hz):
+    """How many left-out zero runs (and their samples) sit on `channel`'s pair at a band centred
+    within [center_hz - half_hz, center_hz + half_hz), the band test the sign-off uses."""
+    pair = _canon_channel(channel)
+    sel = [z for z in (zero_runs_list or []) if _canon_channel(z["pair"]) == pair
+           and z.get("center_hz") is not None
+           and center_hz - half_hz <= float(z["center_hz"]) < center_hz + half_hz]
+    return {"n_runs": len(sel), "n_samples": int(sum(z["n"] for z in sel))}
+
+
+def zero_runs_note(block):
+    """The sentence the sign-off adds when zero runs were left out; "" when none were."""
+    n = int((block or {}).get("n_runs") or 0)
+    if not n:
+        return ""
+    m = int(block.get("n_samples") or 0)
+    if n == 1:
+        return f"1 device run at this band on this pair reads 0 throughout and is not counted ({m:,} samples)"
+    return f"{n} device runs at this band on this pair read 0 throughout and are not counted ({m:,} samples)"
+
+
+def zero_runs_by_pair(zero_runs_list):
+    """{pair: number of left-out zero runs}, for the line under the timeline."""
+    out = {}
+    for z in zero_runs_list or []:
+        out[z["pair"]] = out.get(z["pair"], 0) + 1
+    return out
+
+
 def _band_history(chronic_recordings, powerdomain_recordings):
     """{pair: [(t, Hz), ...] sorted}: the band the device sensed on each contact pair from each time,
     read from each recording's OWN settings: a BrainSense streaming run's sensing setup at its start,
@@ -796,9 +839,11 @@ def _lsb_series_scan(chronic_recordings, powerdomain_recordings, region_map=None
             if pi >= ncols or "POWER" not in str(nm).upper():
                 continue
             contact = str(nm).rsplit(" ", 1)[0] if " " in str(nm) else str(nm)
-            hz = pd_center.get(contact)
+            hz = _run_band_hz(r, contact, pd_center)   # this run's own band (decision 461)
             col = data[:, pi]
             bad = (missing[:, pi] > 0) | (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
+            if _is_zero_run(col[~bad]):
+                continue                           # not a reading (decision 462)
             for i in np.where(~bad)[0]:
                 _push(contact, times[i], col[i], hz, "streaming")
 
@@ -870,7 +915,9 @@ def _lsb_series_scan(chronic_recordings, powerdomain_recordings, region_map=None
         col = data[:, 0]
         bad = (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
         for i in np.where(~bad)[0]:
-            _push(key, float(tarr[i]), col[i], _hz_at(float(tarr[i])), "chronic")
+            # the contact pair in force at this sample (decision 461), not one pair per side
+            _push(_chronic_pair_keys(r, [float(tarr[i])], hemi, key)[0], float(tarr[i]), col[i],
+                  _hz_at(float(tarr[i])), "chronic")
 
     # --- MODELED tier (fallback): montage survey TD -> transform DSP -> td_to_lsb (the constant in effect) ---
     # Survey contacts carry a full-spectrum TD but NO native device LSB scalar, so without this they

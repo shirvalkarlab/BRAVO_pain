@@ -4384,7 +4384,10 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # replicate the nearest-PRO match + binarization LIVE as the match-window slider moves.
         out = {"records": records, "stim": stim, "freq_bands": bands,
                "span": span, "samples": samples, "lsb_overview": lsb_overview,
-               "events": events, "montage_events": montage_events}
+               "events": events, "montage_events": montage_events,
+               # streaming runs left out for reading 0 throughout, per pair (decision 462)
+               "zero_runs_left_out": availability.zero_runs_by_pair(
+                   availability.zero_runs(powerdomain_list))}
         return out
     except Exception as e:
         _log.warning("Biomarkers: availability payload failed: %s", e, exc_info=True)
@@ -4419,7 +4422,8 @@ def _rating_centred_scan_index(participant_uid, td_all, psd_all, pain, sensing_i
 _ACQ_TIMELINE_KIND = "acquisition_timeline"
 # v2 (decision 313): a chronic file spanning the implant date is dated from it, not from 2025-06-18.
 # v3 (item P-11, 2026-10-06): indefinite streaming adds modelled points at the band in force.
-_ACQ_TIMELINE_RULE_VERSION = "v3_indefinite_modelled_at_band_in_force"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+# v4 (decision 461, 2026-10-06): each streaming run's own band; chronic samples under the pair in force.
+_ACQ_TIMELINE_RULE_VERSION = "v5_zero_runs_left_out"   # v5: decision 462  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 
 def _acquisition_timeline_key(recording_set):
@@ -7283,6 +7287,14 @@ def _band_lsb_and_power_build(request_data):
                          "sweep or stream this band to obtain a deployable threshold."),
             }
 
+    # Streaming runs reading 0 throughout were left out of `lsb` (decision 462): say how many.
+    if isinstance(threshold_lsb, dict):
+        threshold_lsb["zero_runs_left_out"] = availability.zero_runs_in_band(
+            availability.zero_runs(pd_list), channel, center_hz, half)
+        _zn = availability.zero_runs_note(threshold_lsb["zero_runs_left_out"])
+        if _zn:
+            threshold_lsb["note"] = (str(threshold_lsb.get("note") or "") + " " + _zn + ".").strip()
+
     # ---- 1b) recommended-vs-currently-programmed delta (audit C10) ----
     # The task here is tuning an EXISTING device setting, so a recommended LSB number alone forces the
     # programmer to context-switch to the device to know whether it is a small nudge or a large change.
@@ -7646,6 +7658,10 @@ def _deployment_summary_build(request_data):
         vals = y[native_m]; n_tl = int(vals.size)
         if vals.size >= 20 and percentile is not None:
             thr_lsb = round(float(np.percentile(vals, percentile)), 1)
+    # Streaming runs reading 0 throughout were left out of `lsb` (decision 462); counted here so the
+    # gate and the threshold say so.
+    zero_left_out = availability.zero_runs_in_band(availability.zero_runs(pd_list), channel,
+                                                   center_hz, half)
     # MODELED points in-band: model the LSB line off the RAW µV TD the ROC was built from, AT THE ROC's
     # own band center (the transform route over the montage/survey TD; the bridge for PSD-only events),
     # then anchor by percentile like native. Universal across any band the ROC can score and units-
@@ -7755,6 +7771,8 @@ def _deployment_summary_build(request_data):
                             "streaming calibration at this center frequency")
     else:
         _thr_state, _thr_detail = "fail", f"device sensed this band {n_tl} times"
+    if availability.zero_runs_note(zero_left_out):
+        _thr_detail += "; " + availability.zero_runs_note(zero_left_out)
     gates.append(_gate("deployable_threshold", "Deployable LSB threshold available",
                        _thr_state, _thr_detail, necessary=True))
     gates.append(_gate("credible_ci", "Credible effect-size CI",
@@ -8002,6 +8020,7 @@ def _deployment_summary_build(request_data):
             "percentile": round(percentile, 1) if percentile is not None else None,
             "cutpoint_feature": _ff(cutpoint), "cutpoint_source": cutpoint_source,
             "n_timeline_samples": n_tl,
+            "zero_runs_left_out": zero_left_out,
             "method": "percentile-anchored on device Timeline LSB",
             # When the device never sensed this band, an ESTIMATED threshold from the frozen
             # PSD->LSB conversion model (flagged, with its fallback tier). Never overwrites a

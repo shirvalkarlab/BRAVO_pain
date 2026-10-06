@@ -29,7 +29,7 @@ import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 
 import MDBox from "components/MDBox";
 
-import TimelineDetailPanel from "./TimelineDetailPanel";
+import TimelineDetailPanel, { zeroRunsLine } from "./TimelineDetailPanel";
 
 import { routeLabel, modeledLegendName, kFromServed } from "./calibrationLabels";
 import { painScoreLabel } from "views/Reports/painScores";
@@ -1255,6 +1255,11 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         </MDBox>
       ) : null}
       <div ref={ref} style={{ width: "100%" }} />
+      {zeroRunsLine(av.zero_runs_left_out) ? (
+        <div data-testid="zero-runs-line" style={{ fontSize: 14, color: SUB_INK, padding: "4px 8px 0" }}>
+          {zeroRunsLine(av.zero_runs_left_out)}
+        </div>
+      ) : null}
       {participantUid ? (
         <TimelineDetailPanel participantUid={participantUid} selection={selection}
           onClose={() => setSelection(null)} />

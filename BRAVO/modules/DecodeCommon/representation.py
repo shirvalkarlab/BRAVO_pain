@@ -70,10 +70,13 @@ import numpy as np
 # code is a miss rather than a wrong answer. This is not the canonicalisation rule's own
 # version -- that is `_CHANNEL_CANON_VERSION` in bravo_service, and a change there must also
 # bump this.
-CHANNEL_INDEX_VERSION = 3      # 2: traces carry `seq` (recording order) and `product`
+CHANNEL_INDEX_VERSION = 5      # 2: traces carry `seq` (recording order) and `product`
                                 # 3: native_lsb_by_channel added (Power-Domain + Chronic Timeline,
                                 #    values unconverted -- the "one decoding step" for every
                                 #    stream `availability.lsb_series` reads, per its own tiers)
+                                # 4: each streaming run's own band; chronic samples filed under the
+                                #    contact pair in force (decision 461, `run_band_hz`, `chronic_pair_keys`)
+                                # 5: a streaming run reading 0 throughout left out (decision 462)
 
 
 def canon_channel(name):
@@ -217,6 +220,87 @@ def power_center_freqs(powerdomain_list):
     return freqs
 
 
+#: Contact numbers within one lead, as the chronic record's contact schedule writes them ("0-3").
+_PAIR_WORDS = ("ZERO", "ONE", "TWO", "THREE")
+
+
+def run_band_hz(rec, contact, pd_center):
+    """The band ONE BrainSense streaming run sensed on `contact`: that run's own sensing setup for
+    the contact's side (decision 461), else the pair-level value `pd_center` holds (the last run's,
+    `power_center_freqs`) when the run carries none. Not snapped."""
+    desc = rec.get("Descriptor") if isinstance(rec, dict) else None
+    therapy = desc.get("Therapy") if isinstance(desc, dict) else None
+    cu = str(contact).upper()
+    side = "Left" if "LEFT" in cu else ("Right" if "RIGHT" in cu else None)
+    if isinstance(therapy, dict) and side:
+        hz = sensing_center_hz(therapy.get(side))
+        if hz is not None:
+            return hz
+    return pd_center.get(contact)
+
+
+def is_zero_run(kept):
+    """A BrainSense streaming run's band-power column that reads exactly 0 in every kept sample:
+    not a reading (the PI, 2026-10-06, decision 462). RCS08 has 43 such runs, up to 12,466 samples
+    long, the device apparently not sensing that pair; counted as 0 LSB they set a 0.0 LSB threshold
+    on the sign-off. The run stays stored; it is left out of every band-power series and counted
+    by `zero_runs`. A run with only some zeros is kept whole."""
+    kept = np.asarray(kept, dtype=float)
+    return kept.size > 0 and not np.any(kept != 0.0)
+
+
+def zero_runs(powerdomain_recordings):
+    """Every streaming run column `is_zero_run` leaves out: [{pair, t0, n, center_hz}], in recording
+    order, the pair canonical and the band the run's own (`run_band_hz`, snapped)."""
+    pd_center = power_center_freqs(powerdomain_recordings)
+    out = []
+    for r in powerdomain_recordings or []:
+        if not isinstance(r, dict) or "Data" not in r:
+            continue
+        data = np.asarray(r.get("Data"), dtype=float)
+        start = to_epoch(r.get("StartTime"))
+        if data.ndim != 2 or data.shape[0] == 0 or start is None:
+            continue
+        missing = np.asarray(r.get("Missing", np.zeros_like(data)), dtype=float)
+        if missing.shape != data.shape:
+            missing = np.zeros_like(data)
+        for pi, nm in enumerate(list(r.get("ChannelNames", []) or [])):
+            if pi >= data.shape[1] or "POWER" not in str(nm).upper():
+                continue
+            contact = str(nm).rsplit(" ", 1)[0] if " " in str(nm) else str(nm)
+            col = data[:, pi]
+            bad = (missing[:, pi] > 0) | (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
+            if is_zero_run(col[~bad]):
+                out.append({"pair": canon_channel(contact), "t0": float(start), "n": int((~bad).sum()),
+                            "center_hz": snap_freq(run_band_hz(r, contact, pd_center))})
+    return out
+
+
+def chronic_pair_keys(rec, times, hemi, fallback_key):
+    """The contact pair each chronic sample was recorded on (decision 461): the chronic record's
+    own contact schedule entry in force at the sample's time (the last at or before it, else the
+    first), named as the streaming pairs are ("ONE_THREE_LEFT"). Every sample gets `fallback_key`
+    (the old filing: the first streaming pair on that side) when the record has no usable schedule
+    or the side is unknown. Returns a list, one key per time."""
+    times = np.asarray(times, dtype=float)
+    sched = []
+    for item in (rec.get("ContactSchedule") or []) if isinstance(rec, dict) else []:
+        try:
+            ts = float(item[0])
+            a, b = sorted(int(x) for x in str(item[1]).split("-"))
+        except (TypeError, ValueError, IndexError):
+            continue
+        if 0 <= a < b <= 3:
+            sched.append((ts, f"{_PAIR_WORDS[a]}_{_PAIR_WORDS[b]}_{hemi}"))
+    if not sched or hemi not in ("LEFT", "RIGHT"):
+        return [fallback_key] * times.size
+    sched.sort(key=lambda p: p[0])
+    starts = np.asarray([t for t, _ in sched], dtype=float)
+    idx = np.searchsorted(starts, times, side="right") - 1
+    idx[idx < 0] = 0
+    return [sched[i][1] for i in idx.tolist()]
+
+
 def native_lsb_by_channel(chronic_recordings, powerdomain_recordings):
     """The device's OWN sensed band-power series (Power-Domain streaming + Chronic Timeline),
     grouped by canonical channel, values UNCONVERTED -- `_native_lsb_by_channel_loop`'s answer,
@@ -258,10 +342,12 @@ def native_lsb_by_channel(chronic_recordings, powerdomain_recordings):
             if pi >= ncols or "POWER" not in str(nm).upper():
                 continue
             contact = str(nm).rsplit(" ", 1)[0] if " " in str(nm) else str(nm)
-            hz = snap_freq(pd_center.get(contact))
+            hz = snap_freq(run_band_hz(r, contact, pd_center))
             col = data[:, pi]
             bad = (missing[:, pi] > 0) | (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
             keep = np.where(~bad)[0]
+            if is_zero_run(col[keep]):
+                continue                           # not a reading (decision 462)
             _extend(contact, times[keep], col[keep], [hz] * keep.size, "streaming")
 
     hemi_contact = {}
@@ -316,7 +402,11 @@ def native_lsb_by_channel(chronic_recordings, powerdomain_recordings):
             hz_list = [snapped[i] for i in idx.tolist()]
         else:
             hz_list = [snap_freq(fallback_hz)] * keep.size
-        _extend(key, tk, col[keep], hz_list, "chronic")
+        keys = chronic_pair_keys(r, tk, hemi, key)
+        yk = col[keep]
+        for k_ in dict.fromkeys(keys):          # first-seen order, as the loop meets them
+            sel = [i for i, kk in enumerate(keys) if kk == k_]
+            _extend(k_, tk[sel], yk[sel], [hz_list[i] for i in sel], "chronic")
 
     return out
 
@@ -379,9 +469,11 @@ def _native_lsb_by_channel_loop(chronic_recordings, powerdomain_recordings):
             if pi >= ncols or "POWER" not in str(nm).upper():
                 continue
             contact = str(nm).rsplit(" ", 1)[0] if " " in str(nm) else str(nm)
-            hz = pd_center.get(contact)
+            hz = run_band_hz(r, contact, pd_center)
             col = data[:, pi]
             bad = (missing[:, pi] > 0) | (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
+            if is_zero_run(col[~bad]):
+                continue                           # not a reading (decision 462)
             for i in np.where(~bad)[0]:
                 _push(contact, times[i], col[i], hz, "streaming")
 
@@ -441,7 +533,8 @@ def _native_lsb_by_channel_loop(chronic_recordings, powerdomain_recordings):
         col = data[:, 0]
         bad = (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
         for i in np.where(~bad)[0]:
-            _push(key, float(tarr[i]), col[i], _hz_at(float(tarr[i])), "chronic")
+            pair = chronic_pair_keys(r, [float(tarr[i])], hemi, key)[0]
+            _push(pair, float(tarr[i]), col[i], _hz_at(float(tarr[i])), "chronic")
 
     return out
 
