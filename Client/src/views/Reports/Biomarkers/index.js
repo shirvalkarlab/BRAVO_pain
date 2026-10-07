@@ -27,7 +27,7 @@ import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
 import BiomarkerAnalytics, { hasSlidingCorrelation } from "./BiomarkerAnalytics";
 import BinarizationPreview from "./BinarizationPreview";
 import lastComputedLine from "./lastComputedLine";
-import MatchWindowBand from "./MatchWindowBand";
+import MatchWindowBand, { ControlLabel } from "./MatchWindowBand";
 import Fold from "./Fold";
 // BandTimeSweepPanel (the older, non-interactive tables-and-server-figures rendering of this
 // same grid) is superseded on this page by BiomarkerHeatmapGrids below -- kept as a file rather
@@ -75,7 +75,6 @@ const DEFAULT_METRIC_OPTIONS = PAIN_SCORE_OPTIONS;
 // hairline border, no shadow, 24 px padding; never a card inside a card. The Background heading
 // keeps this title style, and its items are plain rows under it, not cards (C12).
 const SECTION_TITLE_SX = { ...TYPE.title, color: T.ink, m: 0 };
-const LABEL_SX = { ...TYPE.body, fontWeight: 600, color: T.ink, display: "block", mb: 0.25 };
 const NOTE_SX = { ...TYPE.body, color: T.ink3, display: "block" };
 
 // How the continuous pain score is turned into the binary high/low pain_level the detector trains
@@ -598,9 +597,11 @@ function Biomarkers() {
   // the other four matching settings go under "More options".
   const clinicSheetControl = (
     <MDBox>
-      <MDTypography component="span" sx={{ ...LABEL_SX, mb: 0.5 }}>
+      <ControlLabel note={includeClinicSheetRatings
+          ? "Adds clinic scores taken while current was stepped; not more independent evidence."
+          : "The heat maps use the home pain surveys only."}>
         {"Clinic sheet scores"}
-      </MDTypography>
+      </ControlLabel>
       <ToggleButtonGroup
         value={includeClinicSheetRatings ? "include" : "exclude"} exclusive size="small"
         aria-label="clinic sheet scores in the heat maps"
@@ -610,11 +611,6 @@ function Biomarkers() {
         <ToggleButton value="exclude" title="Home pain surveys (REDCap) only">Home surveys only</ToggleButton>
         <ToggleButton value="include" title="Also pool clinic and at-home sheet scores (verbal 0–10; ×10 for VAS). Taken while current was stepped, so treat the larger n with care">+ clinic titration sessions</ToggleButton>
       </ToggleButtonGroup>
-      <MDTypography component="span" sx={{ ...NOTE_SX, mt: 0.5 }}>
-        {includeClinicSheetRatings
-          ? "Adds clinic scores taken while current was stepped; not more independent evidence."
-          : "The heat maps use the home pain surveys only."}
-      </MDTypography>
     </MDBox>
   );
 
@@ -623,9 +619,10 @@ function Biomarkers() {
                  columnGap: 3, rowGap: 2 }}>
       {/* The cap per rating, and the minimum gap between the samples it keeps. */}
       <MDBox>
-        <MDTypography component="span" sx={LABEL_SX}>
+        <ControlLabel note={`${maxPerRating > 1 ? "Rating value: median of its closest readings." : "One closest reading per pair."}`
+            + " Applies to the all-band scan, high/low preview and Closed-Loop summary; not the heat maps."}>
           {`Samples per pain rating, at most: ${maxPerRating}`}
-        </MDTypography>
+        </ControlLabel>
         <MDBox px={0.5}>
           <Slider
             value={maxPerRating} min={1} max={10} step={1}
@@ -633,18 +630,17 @@ function Biomarkers() {
             aria-label="samples per pain rating, at most"
             onChange={(e, v) => setMaxPerRating(v)} />
         </MDBox>
-        <MDTypography component="span" sx={NOTE_SX}>
-          {maxPerRating > 1
-            ? "Rating value: median of its closest readings."
-            : "One closest reading per pair."}
-          {" Applies to the all-band scan, high/low preview and Closed-Loop summary; not the heat maps."}
-        </MDTypography>
       </MDBox>
 
       <MDBox>
-        <MDTypography component="span" sx={LABEL_SX}>
+        <ControlLabel note={`${matchDirection === "pro_first"
+            ? "Unused when each report picks its recordings."
+            : maxPerRating <= 1
+            ? "Unused at one reading per rating."
+            : "Stops a burst of readings dominating a rating."}`
+            + " Applies to the all-band scan, high/low preview and Closed-Loop summary; not the heat maps."}>
           {`Minimum gap between the samples one rating keeps: ${refractoryMin} min`}
-        </MDTypography>
+        </ControlLabel>
         <MDBox px={0.5}>
           <Slider
             value={refractoryMin} min={0} max={30} step={1}
@@ -653,22 +649,15 @@ function Biomarkers() {
             disabled={maxPerRating <= 1 || matchDirection === "pro_first"}
             onChange={(e, v) => setRefractoryMin(v)} />
         </MDBox>
-        <MDTypography component="span" sx={NOTE_SX}>
-          {matchDirection === "pro_first"
-            ? "Unused when each report picks its recordings."
-            : maxPerRating <= 1
-            ? "Unused at one reading per rating."
-            : "Stops a burst of readings dominating a rating."}
-          {" Applies to the all-band scan, high/low preview and Closed-Loop summary; not the heat maps."}
-        </MDTypography>
       </MDBox>
 
       {/* How much time-domain signal each rating aggregates. The match window sets how far to
           search; this sets how much to use. */}
       <MDBox>
-        <MDTypography component="span" sx={LABEL_SX}>
+        <ControlLabel note="Signal used per rating, not search range. Applies to the all-band scan; not the heat maps."
+                      noteTitle={liveMatchCaption}>
           {`TD around each rating: ${matchExtentSec} s (the nearest ${Math.max(1, Math.round(matchExtentSec / 3))} of the 3 s pieces)`}
-        </MDTypography>
+        </ControlLabel>
         <MDBox px={0.5}>
           <Slider
             value={matchExtentSec} min={3} max={300} step={3}
@@ -676,15 +665,14 @@ function Biomarkers() {
             aria-label="TD around each rating (seconds)"
             onChange={(e, v) => setMatchExtentSec(v)} />
         </MDBox>
-        <MDTypography component="span" sx={NOTE_SX} title={liveMatchCaption}>
-          {"Signal used per rating, not search range. Applies to the all-band scan; not the heat maps."}
-        </MDTypography>
       </MDBox>
 
       <MDBox>
-        <MDTypography component="span" sx={{ ...LABEL_SX, mb: 0.5 }}>
+        <ControlLabel note={allowWindowReuse
+            ? "More ratings enter, but ratings sharing signal are not independent."
+            : "Each rating is one independent observation."}>
           {"Let one stretch of recording answer more than one report"}
-        </MDTypography>
+        </ControlLabel>
         <ToggleButtonGroup
           value={allowWindowReuse ? "reuse" : "none"} exclusive size="small"
           aria-label="window reuse mode"
@@ -694,11 +682,6 @@ function Biomarkers() {
           <ToggleButton value="none" title="One recording serves its nearest rating only: independent ratings">No</ToggleButton>
           <ToggleButton value="reuse" title="One recording serves every rating whose window covers it: more ratings, not independent">Yes</ToggleButton>
         </ToggleButtonGroup>
-        <MDTypography component="span" sx={{ ...NOTE_SX, mt: 0.5 }}>
-          {allowWindowReuse
-            ? "More ratings enter, but ratings sharing signal are not independent."
-            : "Each rating is one independent observation."}
-        </MDTypography>
       </MDBox>
 
       {data && data.live_match_stats && (

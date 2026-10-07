@@ -35,6 +35,38 @@ const NOTE_SX = { ...TYPE.body, color: T.ink3, display: "block", mt: 0.5 };
 const SWATCH = { display: "inline-block", width: 10, height: 10, marginRight: 6 };
 const TOGGLE_SX = { "& .MuiToggleButton-root": { textTransform: "none", ...TYPE.body, py: 0.5, px: 1.25, lineHeight: 1.2 } };
 
+/**
+ * A control's label with its explanation folded away (the PI, 2026-10-07: the notes under every
+ * slider spread the panel out and pushed the high / low preview down). The label stays; a small "?"
+ * beside it shows the one-sentence note under the label, and "hide" folds it again.
+ */
+export function ControlLabel({ children, note, noteTitle, labelSx }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={0.75} sx={{ mb: 0.5 }}>
+        <MDTypography component="span" sx={{ ...LABEL_SX, mb: 0, display: "inline", ...(labelSx || {}) }}>
+          {children}
+        </MDTypography>
+        {note ? (
+          <MDBox component="button" type="button" onClick={() => setOpen(!open)} aria-expanded={open}
+                 aria-label={open ? "hide the note" : "what this control does"} data-testid="control-note-toggle"
+                 sx={{ ...TYPE.body, fontFamily: "inherit", color: T.accent, background: "none", border: "none",
+                   p: 0, cursor: "pointer", textDecoration: "underline", "&:focus-visible": FOCUS_RING }}>
+            {open ? "hide" : "?"}
+          </MDBox>
+        ) : null}
+      </MDBox>
+      {note && open ? (
+        <MDTypography component="span" sx={{ ...NOTE_SX, mt: 0, mb: 0.5 }} title={noteTitle}
+                      data-testid="control-note">
+          {note}
+        </MDTypography>
+      ) : null}
+    </>
+  );
+}
+
 /** The three ways a report and its recordings are paired, in plain words (SPEC.md section 6). */
 export const DIRECTION_WORDS = {
   pro_first: "Each report picks its nearest recordings",
@@ -134,9 +166,9 @@ export default function MatchWindowBand({
       <Grid container spacing={2} alignItems="flex-start">
         {/* The match window: how far from a pain report a neural sample may sit and still carry its rating. */}
         <Grid item xs={12} md={5}>
-          <MDTypography component="span" sx={LABEL_SX}>
+          <ControlLabel note="How far from a report a reading may be and still carry its rating.">
             {"Match window"}
-          </MDTypography>
+          </ControlLabel>
           <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.25}
                  sx={{ py: 0.5 }}>
             <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink, whiteSpace: "nowrap" }}>
@@ -159,16 +191,19 @@ export default function MatchWindowBand({
             />
             <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink }}>{"min"}</MDTypography>
           </MDBox>
-          <MDTypography component="span" sx={NOTE_SX}>
-            {"How far from a report a reading may be and still carry its rating."}
-          </MDTypography>
         </Grid>
 
         {/* The split: which pain values count as high and which as low. */}
         <Grid item xs={12} sm={6} md={3}>
-          <MDTypography component="span" sx={LABEL_SX}>
+          <ControlLabel note={strategy === "tertile"
+              ? "Lowest and highest thirds of ratings; the middle third is left out."
+              : strategy === "percentile"
+                ? "Cuts at the two handles above the histogram; the middle is left out."
+                : strategy === "median"
+                  ? "Ratings above the median are high, the rest low."
+                  : "Split where the ratings fall into two clusters (kept for older results)."}>
             {"Split into high and low pain"}
-          </MDTypography>
+          </ControlLabel>
           <FormControl fullWidth size="small">
             <Select value={strategy} onChange={(e) => setStrategy(e.target.value)}
                     inputProps={{ "aria-label": "split rule" }} sx={{ ...TYPE.body, ...promptSelectSx }}>
@@ -189,35 +224,23 @@ export default function MatchWindowBand({
               </MDTypography>
             </MDBox>
           ) : null}
-          <MDTypography component="span" sx={NOTE_SX}>
-            {strategy === "tertile"
-              ? "Lowest and highest thirds of ratings; the middle third is left out."
-              : strategy === "percentile"
-                ? "Cuts at the two handles above the histogram; the middle is left out."
-                : strategy === "median"
-                  ? "Ratings above the median are high, the rest low."
-                  : "Split where the ratings fall into two clusters (kept for older results)."}
-          </MDTypography>
         </Grid>
 
         {/* The direction: which side of a report a sample may sit on. */}
         <Grid item xs={12} sm={6} md={4}>
-          <MDTypography component="span" sx={LABEL_SX}>
+          <ControlLabel note={matchDirection === "pro_first"
+              ? "Reports choose in time order; the most reports enter."
+              : matchDirection === "nearest"
+                ? "Readings choose; readings over a report's cap are dropped."
+                : "The closed-loop direction: the signal first, the rating after."}>
             {"Match direction"}
-          </MDTypography>
+          </ControlLabel>
           <ToggleButtonGroup value={matchDirection} exclusive size="small" aria-label="Match direction"
                              onChange={(e, v) => { if (v) setMatchDirection(v); }} sx={TOGGLE_SX}>
             <ToggleButton value="pro_first" title="Each pain report claims its closest readings on either side (in the all-band scan, up to the cap per report)">{DIRECTION_WORDS.pro_first}</ToggleButton>
             <ToggleButton value="nearest" title="Each reading pairs with the nearest pain report on either side">{DIRECTION_WORDS.nearest}</ToggleButton>
             <ToggleButton value="prior" title="Each reading pairs only with a pain report recorded after it (the closed-loop direction)">{DIRECTION_WORDS.prior}</ToggleButton>
           </ToggleButtonGroup>
-          <MDTypography component="span" sx={NOTE_SX}>
-            {matchDirection === "pro_first"
-              ? "Reports choose in time order; the most reports enter."
-              : matchDirection === "nearest"
-                ? "Readings choose; readings over a report's cap are dropped."
-                : "The closed-loop direction: the signal first, the rating after."}
-          </MDTypography>
         </Grid>
         {extraControls ? <Grid item xs={12} sm={6} md={4}>{extraControls}</Grid> : null}
       </Grid>

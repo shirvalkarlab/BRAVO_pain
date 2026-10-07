@@ -238,6 +238,9 @@ describe("6. the matching summary and the controls the heat maps ignore", () => 
   test("the cap, the gap and the TD length each say they apply to the all-band scan, not the heat maps", async () => {
     await renderPage();
     const more = screen.getByTestId("more-matching-options");
+    // The notes sit behind each control's "?" (the PI, 2026-10-07): folded, none shows; opened, all three say so.
+    expect((more.textContent.match(/[Aa]pplies to the all-band scan[^.]*; not the heat maps/g) || []).length).toBe(0);
+    more.querySelectorAll('[data-testid="control-note-toggle"]').forEach((b) => fireEvent.click(b));
     expect((more.textContent.match(/[Aa]pplies to the all-band scan[^.]*; not the heat maps/g) || []).length).toBe(3);
   });
 });
