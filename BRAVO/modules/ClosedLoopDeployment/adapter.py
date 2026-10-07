@@ -3729,6 +3729,25 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     # column, the prescription's validated side and the simulation's amplitude series all take it.
     hemisphere = _act_hemi or hemisphere
 
+    # THE USER'S STIMULATION PROGRAM (decision 467): sent by the Closed-Loop page's "Stimulation
+    # program" card only when the user changed it. It replaces the device's settings for the rules
+    # (rate and pulse width on the candidate; the stimulating rings below) and fills the parameter
+    # table's program rows. Recorded data are not touched.
+    try:
+        from ClosedLoopDeployment import stim_program as _sp
+    except ImportError:                                   # pragma: no cover - host spelling
+        from . import stim_program as _sp
+    _stim_prog = _sp.normalise(rd.get("StimProgram"))
+    if _stim_prog and cands:
+        _c0 = dict(cands[0] or {}, stim_program=_stim_prog)
+        if _stim_prog.get("rate_hz") is not None:
+            _c0["rate_hz"] = _stim_prog["rate_hz"]
+        if (_stim_prog.get(_sens_hemi) or {}).get("pw_us") is not None:
+            _c0["pulse_width_us"] = _stim_prog[_sens_hemi]["pw_us"]
+        if (_stim_prog.get(_act_hemi) or {}).get("amp_mA") is not None:
+            _c0["paused_amplitude_mA"] = _stim_prog[_act_hemi]["amp_mA"]
+        cands = [_c0] + list(cands[1:])
+
     # Device facts the rules need but the analysis tables cannot supply. Fetched here rather than
     # inside pipeline.run so the pipeline stays free of ORM imports and remains testable on frames.
     dev = {}
@@ -3746,6 +3765,15 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         _log.warning("closed-loop report: device facts unavailable for %s",
                      getattr(participant, "uid", participant), exc_info=True)
         dev = {"_provenance": {}, "_error": f"device facts unavailable: {exc!r}"}
+
+    # The user's program wins over the device's settings for the sensing side's rules (decision 467);
+    # the epoch and active-group fills below only fill what is still None.
+    if _stim_prog:
+        _pf = _sp.device_facts_from_program(_stim_prog, _sens_hemi)
+        _pf_prov = _pf.pop("_provenance", None)
+        for _pk, _pv in _pf.items():
+            dev[_pk] = _pv
+            dev.setdefault("_provenance", {})[_pk] = _pf_prov
 
     # RATE AND PULSE WIDTH THE DEVICE IS ACTUALLY PROGRAMMED AT, read from the exposure-epoch
     # table `eps` already loaded above (`evidence_inputs_cached`) rather than asked of the caller.

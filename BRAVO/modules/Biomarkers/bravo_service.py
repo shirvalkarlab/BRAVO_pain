@@ -3546,7 +3546,17 @@ def _region_map(participant, chan_order):
     except Exception:
         return {}
     hemi_region = {}
-    for e in Electrode.objects.filter(owner=participant):
+    # The newest implanted device's leads first (decision 467): RCS08 also owns older lead records
+    # (Left STN, Right STN), and "first match per side" otherwise depended on row order.
+    electrodes = []
+    try:
+        from Server.models.Device import DBSDevice
+        for d in sorted(DBSDevice.objects.filter(owner=participant),
+                        key=lambda d: -float(getattr(d, "implanted_date", 0) or 0)):
+            electrodes.extend(d.electrodes.all())
+    except Exception:                                    # noqa: BLE001 - fall back to every lead
+        electrodes = []
+    for e in electrodes + list(Electrode.objects.filter(owner=participant)):
         reg = (getattr(e, "custom_name", "") or getattr(e, "target", "") or "").strip()
         if not reg:
             continue
@@ -7992,7 +8002,10 @@ def _deployment_summary_build(request_data):
             # is not JSON-serializable and made /queryDeploymentSummary 500 on every real fetch.
             "participant": core.get("participant_uid"), "hemisphere": analytics.format_channel(channel)["hemisphere"],
             "contact": channel, "contact_label": analytics.format_channel(channel)["label"],
-            "region": analytics.format_channel(channel)["region"],
+            # The lead's stored name (decision 467); before, no region was passed and the demo map's
+            # "Sensory Thalamus (VPL)" / "Ant. Cingulate (ACC)" reached the sign-off card.
+            "region": analytics.format_channel(
+                channel, region=_region_map(core.get("Participant"), [channel]).get(channel) or "")["region"],
             "center_freq_hz": _ff(center_hz), "bandwidth_hz": _ff(band_width_hz),
             "band_lo_hz": _ff(center_hz - half), "band_hi_hz": _ff(center_hz + half),
             "snapped_center_freq_hz": _ff(snapped),

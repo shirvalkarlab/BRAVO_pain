@@ -1068,6 +1068,33 @@ class QueryTimelineDetail(RestViews.APIView):
         return Response(status=200, data=json_compliant_handler(Analysis))
 
 
+class QueryStimProgram(RestViews.APIView):
+    """
+    The Closed-Loop page's "Stimulation program" card (decision 467): the program the device runs
+    today, from the newest export, for "Inherit current settings". Nothing is written anywhere.
+
+    **URL:** ``/queryStimProgram``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId (uid).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        from modules.ClosedLoopDeployment import bravo_service
+        return Response(status=200, data=json_compliant_handler(bravo_service.stim_program(request.data)))
+
+
 class QueryPsdLsbConversionModel(RestViews.APIView):
     """
     API View that serves the FROZEN, reviewed per-participant PSD->device-LSB conversion model for

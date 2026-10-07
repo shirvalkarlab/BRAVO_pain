@@ -37,7 +37,7 @@ export function reportSide({ bandCandidate, hemisphere }) {
 }
 
 export function deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale,
-  painScore, matching }) {
+  painScore, matching, stimProgram }) {
   const bc = bandCandidate || {};
   const side = reportSide({ bandCandidate, hemisphere });
   return {
@@ -66,6 +66,9 @@ export function deploymentReportBody({ participantUid, bandCandidate, hemisphere
       pulse_width_us: bc.pulseWidthUs == null ? null : Number(bc.pulseWidthUs),
       threshold_mode: bc.thresholdMode || "dual",
     }],
+    // The user's stimulation program, only when it differs from the device's (decision 467); absent,
+    // the request is exactly as before, so answers saved ahead still serve it.
+    ...(stimProgram ? { StimProgram: stimProgram } : {}),
   };
 }
 
@@ -93,11 +96,11 @@ function reportSettings(body) {
 }
 
 export default function useDeploymentReport({ participantUid, bandCandidate, hemisphere,
-  powerScale, painScore, matching, enabled = true }) {
+  powerScale, painScore, matching, stimProgram = null, enabled = true }) {
   const channel = bandCandidate && bandCandidate.channel;
   const centerHz = bandCandidate && bandCandidate.centerHz;
   const body = deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale,
-    painScore, matching });
+    painScore, matching, stimProgram });
 
   const cached = useCachedResult({
     moduleKey: CL.report,

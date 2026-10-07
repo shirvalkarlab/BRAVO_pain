@@ -208,3 +208,18 @@ def _run_for_participant(request_data):
         _log.exception("closed-loop: the deployment report failed for %s", participant_uid)
         return {"available": False,
                 "reason": f"the deployment report could not be built: {exc!r}"}
+
+
+def stim_program(request_data):
+    """The stimulation program the device runs today, for the Closed-Loop page's "Inherit current
+    settings" (decision 467): each side's contacts, Amp, PW and closed-loop limits, the shared
+    rate, and each lead's stored target name. Read from the newest export; never raises."""
+    uid = (request_data or {}).get("ParticipantId")
+    if not uid:
+        return {"available": False, "reason": "ParticipantId is required"}
+    try:
+        from . import stim_program as _sp
+        return _sp.current_program(uid)
+    except Exception as exc:                           # noqa: BLE001
+        _log.exception("closed-loop: the current stimulation program could not be read for %s", uid)
+        return {"available": False, "reason": f"the current stimulation program could not be read: {exc!r}"}

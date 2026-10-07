@@ -207,6 +207,8 @@ def test_active_sensing_group_from_report_reads_the_active_group_that_has_sensin
     # the per-side programmed timing rides along since 2026-09-13; pinned in test_documented_ranges
     timing = facts.pop("active_sensing_group_timing")
     assert set(timing) <= {"Left", "Right"}
+    # each side's stimulation program rides along since decision 467; pinned in test_programmed_stimulation
+    assert set(facts.pop("active_sensing_group_program")) <= {"Left", "Right"}
     assert facts == {"active_sensing_group": "GROUP_D",
                      "active_sensing_group_rate_hz": 55.0,
                      "active_sensing_group_pulse_widths_us": [100, 150],

@@ -623,7 +623,7 @@ def _load_summary(participant_uid):
         S, stamp = _cache_store.load_newest(_srf.SUMMARY_KIND, uid)
         if isinstance(S, dict) and S:
             old_key = str(S.get("newest_stamp_key") or _srf.report_stamp(S.get("newest_stamp")))
-            newer = sum(1 for r in rows if _srf.report_stamp(r.name) > old_key)
+            newer = sum(1 for r in rows if _srf.row_stamp(r) > old_key)
             res["source"] = "stale"
             res["sentence"] = (f"STALE: built from {S.get('n_files')} files on "
                                f"{str(S.get('built_utc') or '')[:10]}; {newer} newer session "
@@ -1001,9 +1001,70 @@ def active_sensing_group_from_report(d):
             # (2026-09-13). Read from the same group; the export's own field names are kept in
             # the comment beside each key.
             "active_sensing_group_timing": programmed_closed_loop_timing(sens),
+            # Each side's stimulation program, for the Closed-Loop page's "Inherit current settings"
+            # (decision 467).
+            "active_sensing_group_program": programmed_stimulation(sens),
         }
         return out
     return {}
+
+
+def _contact_name(electrode):
+    """``ElectrodeDef.SenSight_2a`` / ``ElectrodeDef.Sensight_2b`` -> "2a"; ``ElectrodeDef.Case`` ->
+    "case"; ``ElectrodeDef.FourElectrodes_1`` -> "1". Contacts are numbered 0-3 on both sides, as the
+    device writes them; the right lead's 8-11 is a label the page adds."""
+    nm = str(electrode or "").split(".")[-1]
+    if nm.lower() == "case":
+        return "case"
+    tail = nm.split("_")[-1]
+    return tail.lower() if tail and tail[0].isdigit() else None
+
+
+def programmed_stimulation(sensing_channels):
+    """Per hemisphere, the stimulation program in one group: contacts and their sign, amplitude,
+    pulse width, rate and the closed-loop current limits. Pure; ``{}`` for an empty list.
+
+    ``contacts`` maps "0", "1a" ... "3" and "case" to -1 (negative) or +1 (positive); a contact left
+    off is absent. ``amp_mA`` is the amplitude the program returns to when closed loop is paused
+    (``SuspendAmplitudeInMilliAmps``), the one number the programmer shows; when the export does not
+    carry it, the sum of the negative contacts' own currents. Nothing is invented: a missing field
+    is ``None``.
+    """
+    def _f(v):
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    out = {}
+    for c in sensing_channels or []:
+        if not isinstance(c, dict):
+            continue
+        side = str(c.get("HemisphereLocation") or "").split(".")[-1] or None
+        if side not in ("Left", "Right"):
+            continue
+        contacts, neg_mA = {}, []
+        for e in c.get("ElectrodeState") or []:
+            name = _contact_name(e.get("Electrode"))
+            state = str(e.get("ElectrodeStateResult") or "").split(".")[-1]
+            if name is None or state not in ("Negative", "Positive"):
+                continue
+            contacts[name] = -1 if state == "Negative" else 1
+            if state == "Negative" and _f(e.get("ElectrodeAmplitudeInMilliAmps")) is not None:
+                neg_mA.append(_f(e.get("ElectrodeAmplitudeInMilliAmps")))
+        amp = _f(c.get("SuspendAmplitudeInMilliAmps"))
+        if amp is None and neg_mA:
+            amp = round(sum(neg_mA), 2)
+        out[side] = {
+            "contacts": contacts,
+            "amp_mA": amp,
+            "pw_us": _f(c.get("PulseWidthInMicroSecond")),
+            "rate_hz": _f(c.get("RateInHertz")),
+            "lower_limit_mA": _f(c.get("LowerLimitInMilliAmps")),
+            "upper_limit_mA": _f(c.get("UpperLimitInMilliAmps")),
+            "sensing_channel": str(c.get("Channel") or "").split(".")[-1] or None,
+        }
+    return out
 
 
 def programmed_closed_loop_timing(sensing_channels):

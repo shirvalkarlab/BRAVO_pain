@@ -79,6 +79,9 @@ import BandSweepGridPanel from "./BandSweepGridPanel";
 import ThreeSourceResponsePanel from "./ThreeSourceResponsePanel";
 import useDeploymentSummary from "./useDeploymentSummary";
 import useDeploymentReport from "./useDeploymentReport";
+import StimProgramCard from "./StimProgramCard";
+import { fromServer, isEdited, requestProgram, sensingPair } from "./stimProgram";
+import { SessionController } from "database/session-control";
 import useBandSweepGrid from "./useBandSweepGrid";
 import useThreeSourcePooled from "./useThreeSourcePooled";
 import useClosedLoopSimulation from "./useClosedLoopSimulation";
@@ -118,6 +121,19 @@ import { inheritedMatching, inheritedMatchingLine, matchingRequestKeys, MATCHING
  * for a clean slate.
  */
 const VIEW_STATE = new Map();
+
+// The user's stimulation program, per participant, in this browser only (decision 467). Storage may
+// be refused (a private window); the page then starts from the device's program each time.
+const STIM_PROGRAM_KEY = (uid) => `bravo:stimProgram:${uid}`;
+function loadStimProgram(uid) {
+  try {
+    const raw = window.localStorage.getItem(STIM_PROGRAM_KEY(uid));
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+function saveStimProgram(uid, program) {
+  try { window.localStorage.setItem(STIM_PROGRAM_KEY(uid), JSON.stringify(program)); } catch (e) { /* kept for this visit only */ }
+}
 
 function readViewState(uid) { return VIEW_STATE.get(String(uid || "unknown")) || {}; }
 
@@ -285,6 +301,35 @@ function ClosedLoopSim() {
   }, []);
 
   const bc = envelope && envelope.band_candidate;
+
+  // THE STIMULATION PROGRAM (decision 467): the device's program today, from the newest export, and
+  // the user's own, remembered in this browser per participant. Only an edited program is sent.
+  const [inheritedProgram, setInheritedProgram] = useState(null);
+  const [programUnavailable, setProgramUnavailable] = useState(null);
+  const [stimProgram, setStimProgramState] = useState(() => loadStimProgram(participant_uid));
+  const setStimProgram = useCallback((next) => {
+    setStimProgramState(next);
+    saveStimProgram(participant_uid, next);
+  }, [participant_uid]);
+  useEffect(() => {
+    if (!participant_uid) return undefined;
+    let live = true;
+    SessionController.query("/api/queryStimProgram", { ParticipantId: participant_uid })
+      .then((resp) => {
+        if (!live) return;
+        const prog = fromServer(resp && resp.data);
+        setInheritedProgram(prog ? { ...prog, session_date: resp.data.session_date } : null);
+        if (!prog) setProgramUnavailable((resp && resp.data && resp.data.reason) || "The device's settings could not be read");
+        setStimProgramState((cur) => cur || prog);
+      })
+      .catch(() => { if (live) setProgramUnavailable("The device's settings could not be read"); });
+    return () => { live = false; };
+  }, [participant_uid]);
+  const programEdited = !!(stimProgram && inheritedProgram && isEdited(stimProgram, inheritedProgram));
+  const programForReport = useMemo(() => (programEdited ? requestProgram(stimProgram) : null),
+    [programEdited, stimProgram]);
+  const bandSensing = bc ? sensingPair(bc.contact || bc.channel) : null;
+
   // The pain score chosen on this page, until another band is chosen (see below).
   const [painScoreChoice, setPainScoreChoice] = useState(null);
   // THE CHOSEN BAND AS THE GRID AND THE THREE-SOURCE PANEL READ IT, built once per band rather than
@@ -350,6 +395,7 @@ function ClosedLoopSim() {
     bandCandidate: reportCandidate,
     painScore,
     matching: reportMatching,
+    stimProgram: programForReport,
   });
 
   // ONE BAND ON THE WHOLE PAGE (decision 302). The cache hands back the last result, marked stale,
@@ -561,6 +607,14 @@ function ClosedLoopSim() {
           </MDTypography>
           {bc ? <ContentsRow /> : null}
         </PageHead>
+
+        <MDBox mb={4}>
+          <StimProgramCard program={stimProgram} onChange={setStimProgram}
+            onInherit={() => inheritedProgram && setStimProgram({ ...inheritedProgram })}
+            inheritedFrom={inheritedProgram && inheritedProgram.session_date
+              ? String(inheritedProgram.session_date).slice(0, 10) : null}
+            edited={programEdited} sensing={bandSensing} unavailable={programUnavailable} />
+        </MDBox>
 
         {bc ? (
           <>
