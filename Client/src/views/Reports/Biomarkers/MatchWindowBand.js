@@ -9,14 +9,14 @@
  * settings in force printed beside it ("Paired within ±15 min · each recording picks its nearest
  * report · high / low split: lowest and highest thirds ...") (the PI, 2026-09-26; the defaults since
  * decision 331, from `matchingDefaults.js`). Each control
- * carries one short sentence under it. The coverage sentence, the timing histogram and the high / low
+ * carries one short sentence under it, all shown or hidden by one switch at the top of the panel. The coverage sentence, the timing histogram and the high / low
  * preview follow every control at once. The heat maps and the all-band scan do NOT: a moved setting
  * leaves them on screen as computed, the heat maps say which setting changed, and the page's
  * Recompute rebuilds both (review of 2026-09-26).
  *
  * On screen: Biomarkers page, the matching section, under the heat maps.
  */
-import { useState } from "react";
+import { createContext, useContext, useState } from "react";
 import { Grid, Select, MenuItem, FormControl, Slider, TextField, ToggleButton, ToggleButtonGroup } from "@mui/material";
 
 import MDBox from "components/MDBox";
@@ -36,28 +36,20 @@ const SWATCH = { display: "inline-block", width: 10, height: 10, marginRight: 6 
 const TOGGLE_SX = { "& .MuiToggleButton-root": { textTransform: "none", ...TYPE.body, py: 0.5, px: 1.25, lineHeight: 1.2 } };
 
 /**
- * A control's label with its explanation folded away (the PI, 2026-10-07: the notes under every
- * slider spread the panel out and pushed the high / low preview down). The label stays; a small "?"
- * beside it shows the one-sentence note under the label, and "hide" folds it again.
+ * Whether the panel's explanations are shown. ONE switch at the top of the matching panel shows or
+ * hides every control's note at once (the PI, 2026-10-07: a "?" per control meant clicking each one).
  */
+const NotesShown = createContext(false);
+
+/** A control's label, with its one-sentence note under it while the panel's switch shows notes. */
 export function ControlLabel({ children, note, noteTitle, labelSx }) {
-  const [open, setOpen] = useState(false);
+  const shown = useContext(NotesShown);
   return (
     <>
-      <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={0.75} sx={{ mb: 0.5 }}>
-        <MDTypography component="span" sx={{ ...LABEL_SX, mb: 0, display: "inline", ...(labelSx || {}) }}>
-          {children}
-        </MDTypography>
-        {note ? (
-          <MDBox component="button" type="button" onClick={() => setOpen(!open)} aria-expanded={open}
-                 aria-label={open ? "hide the note" : "what this control does"} data-testid="control-note-toggle"
-                 sx={{ ...TYPE.body, fontFamily: "inherit", color: T.accent, background: "none", border: "none",
-                   p: 0, cursor: "pointer", textDecoration: "underline", "&:focus-visible": FOCUS_RING }}>
-            {open ? "hide" : "?"}
-          </MDBox>
-        ) : null}
-      </MDBox>
-      {note && open ? (
+      <MDTypography component="span" sx={{ ...LABEL_SX, ...(labelSx || {}) }}>
+        {children}
+      </MDTypography>
+      {note && shown ? (
         <MDTypography component="span" sx={{ ...NOTE_SX, mt: 0, mb: 0.5 }} title={noteTitle}
                       data-testid="control-note">
           {note}
@@ -66,6 +58,23 @@ export function ControlLabel({ children, note, noteTitle, labelSx }) {
     </>
   );
 }
+
+/** The one switch: an arrow and "Show explanations" / "Hide explanations". */
+export function NotesSwitch({ shown, setShown }) {
+  return (
+    <MDBox component="button" type="button" onClick={() => setShown(!shown)} aria-expanded={shown}
+           data-testid="control-notes-switch"
+           sx={{ ...TYPE.body, fontFamily: "inherit", color: T.accent, background: "none", border: "none",
+             p: 0, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 0.75,
+             "&:focus-visible": FOCUS_RING }}>
+      <FoldArrow open={shown} />
+      {shown ? "Hide explanations" : "Show explanations"}
+    </MDBox>
+  );
+}
+
+/** Wraps ControlLabels outside the panel (tests) with the switch's state. */
+export const ControlNotesProvider = NotesShown.Provider;
 
 /** The three ways a report and its recordings are paired, in plain words (SPEC.md section 6). */
 export const DIRECTION_WORDS = {
@@ -121,6 +130,7 @@ export default function MatchWindowBand({
   // compact panel with every matching control, the extra options and the high / low split's own
   // controls. The panel stays MOUNTED while closed (hidden), so tests and search still read it.
   const [open, setOpen] = useState(!!defaultOpen);
+  const [notesShown, setNotesShown] = useState(false);
   const score = metricLabel || "pain";
   const twoCut = strategy === "tertile" || strategy === "percentile";
   const lowPct = strategy === "tertile" ? 33.3 : percentileLow;
@@ -163,6 +173,8 @@ export default function MatchWindowBand({
       </MDBox>
       <MDBox id="matching-panel" hidden={!open} data-testid="matching-panel"
              sx={{ borderLeft: `2px solid ${T.accent}`, pl: 2, py: 1 }}>
+      <NotesShown.Provider value={notesShown}>
+      <MDBox mb={1}><NotesSwitch shown={notesShown} setShown={setNotesShown} /></MDBox>
       <Grid container spacing={2} alignItems="flex-start">
         {/* The match window: how far from a pain report a neural sample may sit and still carry its rating. */}
         <Grid item xs={12} md={5}>
@@ -254,6 +266,7 @@ export default function MatchWindowBand({
           {binarization}
         </MDBox>
       ) : null}
+      </NotesShown.Provider>
       </MDBox>
     </MDBox>
   );
