@@ -58,13 +58,15 @@ describe("the Closed-Loop page's jump links are a table of contents", () => {
     labelsWithArrow.forEach((j) => expect(j.id).toBe(last.id));
   });
 
-  it("the decision card, which carries Sign and print, opens the page, above the band grid (SPEC 2026-09-26 section 5.2)", () => {
+  it("the decision card, which carries Sign and print, comes right after the program and wiring cards, above the band grid", () => {
     // The PI, 2026-09-26, merged the sign-off card into the one decision card (decision 302), and
     // the minimalist redesign of the same day puts that card first: the page opens with its answer,
     // and "Band selection" is its first section below it. The record a clinician signs is printed from
     // that card, and the print opens every fold in it.
+    // Since 2026-10-07/08 the stimulation program and the sense-to-control wiring sit above it: they
+    // are what the verdict is worked out for (decision 467; the PI, 2026-10-08).
     const onPage = idsInPageOrder();
-    expect(onPage.slice(0, 2)).toEqual(["cl-decision", "cl-grid"]);
+    expect(onPage.slice(0, 4)).toEqual(["cl-stim-program", "cl-wiring", "cl-decision", "cl-grid"]);
     expect(onPage).not.toContain("cl-signoff");
     expect(onPage).not.toContain("cl-prescription");
     expect(onPage).not.toContain("cl-what-changes");

@@ -24,7 +24,8 @@
  *   4. SIGN AND PRINT, and Export.
  *   5. ONE "Details" FOLD holding everything that explained the above: who can resolve each item,
  *      the rule table's own sentences, how each value was derived and checked, and the full
- *      sign-off record. Closed when the configuration is allowed and supported, open otherwise.
+ *      sign-off record. Closed by default whatever the verdict (the PI, 2026-10-08); the
+ *      analysis's own reasons for stopping sit in the open under the bullets.
  *      The print stylesheet opens it, so the paper record keeps its full detail; the SCREEN is what
  *      is short.
  *
@@ -52,6 +53,8 @@ import BandCandidateIdentity from "./BandCandidateIdentity";
 // Jump targets, set as `id` on the Grid items in index.js, in the order the page draws them.
 // DeploymentJumpLinks.order.test.js holds this list to the page's own order.
 export const JUMPS = [
+  { id: "cl-stim-program", label: "Stimulation program" },
+  { id: "cl-wiring", label: "Sense-to-control algorithm wiring" },
   { id: "cl-grid", label: "Band selection" },
   { id: "cl-rules", label: "Device rule check" },
   { id: "cl-evidence", label: "Evidence consistency" },
@@ -101,8 +104,8 @@ export function decisionStatus(rep) {
     return { key: "unsupported", ink: STATE.blocked.ink, glyph: STATE.blocked.glyph,
       headline: "Device allows it; the analysis does not support it",
       sub: n
-        ? `The analysis stopped for ${n === 1 ? "a reason" : `${n} reasons`} of its own, printed `
-          + "under Details. Nothing here is permission to program."
+        ? `The analysis stopped for ${n === 1 ? "a reason" : `${n} reasons`} of its own, listed `
+          + "below. Nothing here is permission to program."
         : "The server's verdict is \"unsupported\". Nothing here is permission to program." };
   }
   if (provisionalCaveat(rep)) {
@@ -235,7 +238,6 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
       sub: `The chosen ${mismatch.what || "band"} is ${mismatch.chosen}. Nothing on this page `
         + "describes it until the analysis is recomputed." }
     : decisionStatus(rep);
-  const allowedAndSupported = status.key === "supported" || status.key === "supported_provisional";
   const red = deviceBullets(rep);
   const yellow = unevaluatedBullets(rep, sm);
   const vd = (rep && rep.verdict_detail) || {};
@@ -295,6 +297,21 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
               label="Why the device refuses" />
             <Bullets items={yellow} cls="cl-bullets-yellow" ink={PAL.warnText} glyph={STATE.caution.glyph}
               label="Evidence that was not evaluated" />
+            {/* The module's blocker sentences, verbatim, in ink with ✕: the analysis's own reasons it
+                could not go on (no thresholds placed, a step that failed), not the device refusing,
+                and red is only for a device refusal or a value above the safe ceiling (the PI,
+                2026-09-26, TASTE_AUDIT.md D14). In the open since the Details fold stays closed
+                (the PI, 2026-10-08), so the reason is never one click away. */}
+            {blockers.length ? (
+              <MDBox className="cl-blockers" mt={1}>
+                {blockers.map((b) => (
+                  <MDTypography key={b} data-blocker="" sx={{ ...TYPE.body, fontWeight: 600, display: "block", color: STATE.blocked.ink, py: 0.25 }}>
+                    <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.blocked.glyph}</span>
+                    {b}
+                  </MDTypography>
+                ))}
+              </MDBox>
+            ) : null}
           </>
         ) : null}
 
@@ -319,26 +336,12 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
         </MDBox>
 
         <MDBox className="cl-details" mt={3}>
-          {/* Keyed on the verdict, so the fold opens by itself when the answer changes to one that
-              needs reading, and a reader's own toggle survives every other re-render. */}
-          <Fold key={status.key} show={detailsLabel} hide="Hide details" defaultOpen={!allowedAndSupported}>
+          {/* Closed by default whatever the verdict (the PI, 2026-10-08: "have the details collapsed
+              by default"); the red and caution bullets above already say why. Until then it opened
+              by itself on any verdict but "allowed and supported". Keyed on the verdict, so a new
+              answer starts closed again and a reader's own toggle survives every other re-render. */}
+          <Fold key={status.key} show={detailsLabel} hide="Hide details">
             <WhatWouldChangeThis report={deploymentReport} bare />
-            {/* The module's blocker sentences, verbatim, in ink with ✕: they are the analysis's own
-                reasons it could not go on (no thresholds placed, a step that failed), not the device
-                refusing, and red is only for a device refusal or a value above the safe ceiling
-                (the PI, 2026-09-26, TASTE_AUDIT.md D14). Its warnings (today the two D26 capture
-                checks) are not repeated here: they are the first entries of the caveats list in the
-                sign-off record below, and the D26 row above quotes them too. */}
-            {blockers.length ? (
-              <Section title="The analysis's own reasons it could not go on">
-                {blockers.map((b) => (
-                  <MDTypography key={b} data-blocker="" sx={{ ...TYPE.body, display: "block", color: STATE.blocked.ink, mt: 0.5 }}>
-                    <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.blocked.glyph}</span>
-                    {b}
-                  </MDTypography>
-                ))}
-              </Section>
-            ) : null}
             <Section title="How each value was worked out and checked">
               <ParameterDetails report={deploymentReport} mode={mode} />
             </Section>

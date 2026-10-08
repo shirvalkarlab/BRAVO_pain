@@ -145,7 +145,7 @@ export default function StimProgramCard({ program, onChange, onInherit, inherite
   const source = edited ? "Your program: the checks and the parameter table use it"
     : inheritedFrom ? `As the device runs today (export of ${inheritedFrom})` : (unavailable || "Reading the device's settings…");
   return (
-    <Section id="cl-stim-program" question="Stimulation program" answer={source}
+    <Section question="Stimulation program" answer={source}
       actions={(
         <MDBox component="button" type="button" onClick={onInherit} sx={BUTTON} data-testid="inherit-current">
           Inherit current settings

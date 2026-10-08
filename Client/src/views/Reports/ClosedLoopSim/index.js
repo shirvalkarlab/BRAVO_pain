@@ -80,6 +80,7 @@ import ThreeSourceResponsePanel from "./ThreeSourceResponsePanel";
 import useDeploymentSummary from "./useDeploymentSummary";
 import useDeploymentReport from "./useDeploymentReport";
 import StimProgramCard from "./StimProgramCard";
+import WiringCard from "./WiringCard";
 import { fromServer, isEdited, requestProgram, sensingPair } from "./stimProgram";
 import { SessionController } from "database/session-control";
 import useBandSweepGrid from "./useBandSweepGrid";
@@ -133,6 +134,14 @@ function loadStimProgram(uid) {
 }
 function saveStimProgram(uid, program) {
   try { window.localStorage.setItem(STIM_PROGRAM_KEY(uid), JSON.stringify(program)); } catch (e) { /* kept for this visit only */ }
+}
+// The sense-to-control wiring (the PI, 2026-10-08), the same way: per participant, this browser only.
+const WIRING_KEY = (uid) => `bravo:wiring:${uid}`;
+function loadWiring(uid) {
+  try { return window.localStorage.getItem(WIRING_KEY(uid)) || null; } catch (e) { return null; }
+}
+function saveWiring(uid, key) {
+  try { window.localStorage.setItem(WIRING_KEY(uid), key); } catch (e) { /* kept for this visit only */ }
 }
 
 function readViewState(uid) { return VIEW_STATE.get(String(uid || "unknown")) || {}; }
@@ -329,6 +338,9 @@ function ClosedLoopSim() {
   const programForReport = useMemo(() => (programEdited ? requestProgram(stimProgram) : null),
     [programEdited, stimProgram]);
   const bandSensing = bc ? sensingPair(bc.contact || bc.channel) : null;
+  const [wiring, setWiringState] = useState(() => loadWiring(participant_uid));
+  const setWiring = useCallback((key) => { setWiringState(key); saveWiring(participant_uid, key); },
+    [participant_uid]);
 
   // The pain score chosen on this page, until another band is chosen (see below).
   const [painScoreChoice, setPainScoreChoice] = useState(null);
@@ -608,12 +620,15 @@ function ClosedLoopSim() {
           {bc ? <ContentsRow /> : null}
         </PageHead>
 
-        <MDBox mb={4}>
+        <MDBox id="cl-stim-program">
           <StimProgramCard program={stimProgram} onChange={setStimProgram}
             onInherit={() => inheritedProgram && setStimProgram({ ...inheritedProgram })}
             inheritedFrom={inheritedProgram && inheritedProgram.session_date
               ? String(inheritedProgram.session_date).slice(0, 10) : null}
             edited={programEdited} sensing={bandSensing} unavailable={programUnavailable} />
+        </MDBox>
+        <MDBox id="cl-wiring">
+          <WiringCard value={wiring} onChange={setWiring} bandSides={bandSensing ? [bandSensing.side] : []} />
         </MDBox>
 
         {bc ? (

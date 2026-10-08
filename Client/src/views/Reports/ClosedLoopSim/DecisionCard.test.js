@@ -125,18 +125,18 @@ describe("yellow bullets: only for evidence that should have been evaluated and 
   });
 });
 
-describe("the Details fold: closed when allowed and supported, open otherwise", () => {
-  it("closed on the left", () => {
+describe("the Details fold: closed by default whatever the verdict (the PI, 2026-10-08)", () => {
+  it("closed on the left, where the device allows it", () => {
     expect(detailsOpen(card(LEFT, SUM_L, BC_L).container)).toBe(false);
   });
-  it("open on the right, where the device refuses", () => {
-    expect(detailsOpen(card(RIGHT, SUM_R, BC_R).container)).toBe(true);
+  it("closed on the right, where the device refuses", () => {
+    expect(detailsOpen(card(RIGHT, SUM_R, BC_R).container)).toBe(false);
   });
-  it("open when the device allows it but the evidence is not established", () => {
+  it("closed when the device allows it but the evidence is not established", () => {
     const rep = clone(LEFT);
     rep.coherence.coherent = null;
     expect(decisionStatus(rep).key).toBe("unestablished");
-    expect(detailsOpen(card(rep, SUM_L, BC_L).container)).toBe(true);
+    expect(detailsOpen(card(rep, SUM_L, BC_L).container)).toBe(false);
   });
 });
 
@@ -288,9 +288,9 @@ describe("the headline never reads better than the server's own verdict (decisio
     expect(t).toMatch(/Device allows it; the analysis does not support it/);
   });
 
-  it("the blocker's own sentence is in the open and the Details fold opens", () => {
+  it("the blocker's own sentence is in the open while the Details fold stays closed", () => {
     const { container } = card(blockedForAnotherReason(), SUM_L, BC_L);
-    expect(detailsOpen(container)).toBe(true);
+    expect(detailsOpen(container)).toBe(false);
     expect(visibleText(container)).toMatch(/replay failed: ValueError: no samples in the replay window/);
   });
 
