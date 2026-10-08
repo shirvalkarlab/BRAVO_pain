@@ -37,7 +37,7 @@ export function reportSide({ bandCandidate, hemisphere }) {
 }
 
 export function deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale,
-  painScore, matching, stimProgram }) {
+  painScore, matching, stimProgram, contralateral = false }) {
   const bc = bandCandidate || {};
   const side = reportSide({ bandCandidate, hemisphere });
   return {
@@ -65,6 +65,10 @@ export function deploymentReportBody({ participantUid, bandCandidate, hemisphere
       rate_hz: bc.rateHz == null ? null : Number(bc.rateHz),
       pulse_width_us: bc.pulseWidthUs == null ? null : Number(bc.pulseWidthUs),
       threshold_mode: bc.thresholdMode || "dual",
+      // The sense-to-control wiring (the PI, 2026-10-08): choosing "Left sensing drives both" (or
+      // the right's) IS the user acknowledging that the other stimulator uses contralateral sensing
+      // (rule D39). Only on that request, so the ordinary request is exactly as before.
+      ...(contralateral ? { contralateral_pairing_acknowledged: true } : {}),
     }],
     // The user's stimulation program, only when it differs from the device's (decision 467); absent,
     // the request is exactly as before, so answers saved ahead still serve it.
@@ -96,11 +100,11 @@ function reportSettings(body) {
 }
 
 export default function useDeploymentReport({ participantUid, bandCandidate, hemisphere,
-  powerScale, painScore, matching, stimProgram = null, enabled = true }) {
+  powerScale, painScore, matching, stimProgram = null, contralateral = false, enabled = true }) {
   const channel = bandCandidate && bandCandidate.channel;
   const centerHz = bandCandidate && bandCandidate.centerHz;
   const body = deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale,
-    painScore, matching, stimProgram });
+    painScore, matching, stimProgram, contralateral });
 
   const cached = useCachedResult({
     moduleKey: CL.report,

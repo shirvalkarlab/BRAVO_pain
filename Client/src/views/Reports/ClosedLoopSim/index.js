@@ -69,9 +69,8 @@ import {
 import DeploymentRocPanel from "./DeploymentRocPanel";
 import LsbPowerPanel from "./LsbPowerPanel";
 import EraRefitPanel from "./EraRefitPanel";
-import DecisionCard, { ContentsRow } from "./DecisionCard";
+import DecisionCard, { ContentsRow, UncheckedStimulatorCard } from "./DecisionCard";
 import DeveloperMenu from "./DeveloperMenu";
-import DeviceRuleLedger from "./DeviceRuleLedger";
 import EvidenceTrianglePanel from "./EvidenceTrianglePanel";
 import ClosedLoopSimulationPanel from "./ClosedLoopSimulationPanel";
 import BandStabilityPanel from "./BandStabilityPanel";
@@ -81,6 +80,7 @@ import useDeploymentSummary from "./useDeploymentSummary";
 import useDeploymentReport from "./useDeploymentReport";
 import StimProgramCard from "./StimProgramCard";
 import WiringCard from "./WiringCard";
+import { controllers as wiringControllers } from "./wiring";
 import { fromServer, isEdited, requestProgram, sensingPair } from "./stimProgram";
 import { SessionController } from "database/session-control";
 import useBandSweepGrid from "./useBandSweepGrid";
@@ -417,6 +417,25 @@ function ClosedLoopSim() {
   // bands named, instead of the old band's verdict under the new band's name.
   // The same for the page's pain score and clinic-sheet switch (decision 307): a result computed on
   // another score, or with the switch the other way, is withheld and named until Recompute.
+  // THE SENSE-TO-CONTROL WIRING (the PI, 2026-10-08) decides which stimulators the decision answers
+  // for: one card per stimulator. The band's own side is the report above; a stimulator driven from
+  // the band's side through contralateral sensing gets a report of its own (same band, the other
+  // stimulator's current, the contralateral pairing acknowledged by the choice itself), fetched
+  // only when the wiring needs it.
+  const stimulators = wiringControllers(wiring, bandSensing ? bandSensing.side : null);
+  const contraStim = stimulators.find((c) => c.kind === "contralateral");
+  const contraReportRaw = useDeploymentReport({
+    participantUid: participant_uid,
+    bandCandidate: reportCandidate,
+    hemisphere: contraStim ? contraStim.stim : null,
+    contralateral: true,
+    painScore,
+    matching: reportMatching,
+    stimProgram: programForReport,
+    enabled: !!contraStim,
+  });
+  const contraReport = withheldIfOtherBand(contraReportRaw, bc, "report",
+    { painScore, matching: reportMatching });
   const report = withheldIfOtherBand(deploymentReport, bc, "report",
     { painScore, matching: reportMatching });
   const summaryForBand = withheldIfOtherBand(summary, bc, "summary", { painScore, includeSheets,
@@ -638,10 +657,10 @@ function ClosedLoopSim() {
             <MDBox mb={2}>
               <RecomputeBar
                 title="closed-loop deployment"
-                stale={!!(deploymentReport.stale || summary.stale)}
+                stale={!!(deploymentReport.stale || summary.stale || (contraStim && contraReportRaw.stale))}
                 staleReasons={staleReasons}
                 computedAt={pageComputedAt}
-                loading={!!(deploymentReport.loading || summary.loading)}
+                loading={!!(deploymentReport.loading || summary.loading || (contraStim && contraReportRaw.loading))}
                 notKept={deploymentReport.notKept || summary.notKept}
                 onRecompute={onRecomputePage}
               />
@@ -649,12 +668,18 @@ function ClosedLoopSim() {
             {/* THE DECISION CARD (decision 302; SPEC 2026-09-26 section 5.2): the verdict, red and
                 caution bullets worded as the rule table words them, the values to enter only when
                 the device allows them, "Sign and print", and one Details fold. */}
-            <MDBox id="cl-decision" mb={8}>
+            <MDBox id="cl-decision" mb={8} display="flex" flexDirection="column" gap={3}>
               <FigureRecordContext.Provider value={drawFiguresForRecord}>
-                <DecisionCard participantUid={participant_uid} bandCandidate={bc} summary={summaryForBand}
-                  deploymentReport={report} chosenBand={envelope} bandRecord={bandRecord}
-                  cutpoint={cutpointHere} mode={thresholdMode} onMode={setThresholdMode}
-                  onRecompute={onRecomputePage} />
+                {stimulators.map((st) => (st.kind === "no_band" ? (
+                  <UncheckedStimulatorCard key={st.stim} stimulator={st} />
+                ) : (
+                  <DecisionCard key={st.stim} participantUid={participant_uid} bandCandidate={bc}
+                    summary={summaryForBand}
+                    deploymentReport={st.kind === "contralateral" ? contraReport : report}
+                    chosenBand={envelope} bandRecord={bandRecord}
+                    cutpoint={cutpointHere} mode={thresholdMode} onMode={setThresholdMode}
+                    onRecompute={onRecomputePage} stimulator={wiring ? st : null} />
+                )))}
               </FigureRecordContext.Provider>
             </MDBox>
           </>
@@ -694,13 +719,8 @@ function ClosedLoopSim() {
           </Card>
         ) : (
           <>
-            {/* SECTION 2, "Device rule check" Before the evidence, because on a device
-                that acts on its own, whether a configuration is PERMITTED comes before how well it
-                scores. */}
-            <MDBox id="cl-rules" mb={8}>
-              <DeviceRuleLedger report={report} />
-            </MDBox>
-
+            {/* The device rule check is inside the decision card's Details (the PI, 2026-10-08:
+                one panel, not two). */}
             {/* SECTION 3, "Evidence consistency" */}
             <MDBox id="cl-evidence" mb={8}>
               <EvidenceTrianglePanel report={report} matchWindowAuc={matchWindowAuc} />

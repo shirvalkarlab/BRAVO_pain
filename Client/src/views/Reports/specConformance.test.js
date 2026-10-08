@@ -476,7 +476,9 @@ describe("D13: 64 px between sections and a content column of at most 1,120 px",
 
   test("the Closed-Loop page's own sections are 64 px apart (MUI unit 8 x 8)", () => {
     const src = read(path.join(SRC, "views", "Reports", "ClosedLoopSim", "index.js"));
-    ["cl-decision", "cl-grid", "cl-rules", "cl-evidence", "cl-stability"].forEach((id) => {
+    // "cl-rules" left the list 2026-10-08: the device rule check moved into the decision card's
+    // Details (the PI: one panel, not two).
+    ["cl-decision", "cl-grid", "cl-evidence", "cl-stability"].forEach((id) => {
       expect({ id, gap: new RegExp(`id="${id}" mb=\\{8\\}`).test(src) }).toEqual({ id, gap: true });
     });
   });

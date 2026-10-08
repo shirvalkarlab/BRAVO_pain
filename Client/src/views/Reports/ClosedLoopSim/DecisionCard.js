@@ -49,14 +49,15 @@ import SignoffRecord, { useSignoffActions, StaleNotice, SnapshotFigures } from "
 import WhatWouldChangeThis from "./WhatWouldChangeThis";
 import { JUMP_ROW_CLASS } from "views/Reports/paper/links";
 import BandCandidateIdentity from "./BandCandidateIdentity";
+import DeviceRuleLedger from "./DeviceRuleLedger";
 
 // Jump targets, set as `id` on the Grid items in index.js, in the order the page draws them.
 // DeploymentJumpLinks.order.test.js holds this list to the page's own order.
 export const JUMPS = [
   { id: "cl-stim-program", label: "Stimulation program" },
   { id: "cl-wiring", label: "Sense-to-control algorithm wiring" },
+  { id: "cl-decision", label: "Deployment decision" },
   { id: "cl-grid", label: "Band selection" },
-  { id: "cl-rules", label: "Device rule check" },
   { id: "cl-evidence", label: "Evidence consistency" },
   { id: "cl-stability", label: "Stability across stimulation states" },
   { id: "cl-background", label: "Background" },
@@ -222,8 +223,41 @@ const SECONDARY = { textTransform: "none", ...TYPE.body, fontWeight: 400, minHei
   px: 2, borderRadius: "4px", boxShadow: "none", backgroundColor: PAL.surface, color: PAL.ink,
   border: `1px solid ${PAL.ink3}`, "&:hover": { backgroundColor: PAL.fillMuted } };
 
+/**
+ * The words naming which stimulator a card answers for, from the sense-to-control wiring (the PI,
+ * 2026-10-08): "Right stimulator · contralateral sensing, from the left band". Null with no wiring.
+ */
+export function stimulatorLine(stimulator) {
+  if (!stimulator) return null;
+  const { stim, source, kind } = stimulator;
+  if (kind === "contralateral") return `${stim} stimulator · contralateral sensing, from the ${source.toLowerCase()} band`;
+  if (kind === "no_band") return `${stim} stimulator · driven by a ${source.toLowerCase()} band`;
+  return `${stim} stimulator · ipsilateral sensing`;
+}
+
+/** A stimulator the wiring drives from a side with no band chosen: not checked, said in one card. */
+export function UncheckedStimulatorCard({ stimulator }) {
+  return (
+    <Card className="cl-decision-card" data-testid={`decision-unchecked-${stimulator.stim}`}
+      sx={{ width: "100%", backgroundColor: PAL.surface, border: `1px solid ${PAL.rule}`,
+        borderRadius: "6px", boxShadow: "none" }}>
+      <MDBox p={3}>
+        <MDTypography sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink }}>{stimulatorLine(stimulator)}</MDTypography>
+        <MDTypography component="h2" sx={{ ...TYPE.answer, ...WRAP.balance, color: STATE.notChecked.ink, mt: 0.5 }}>
+          <span aria-hidden="true" style={{ marginRight: 8 }}>{STATE.notChecked.glyph}</span>
+          {`Not checked: no band chosen on the ${stimulator.source.toLowerCase()}`}
+        </MDTypography>
+        <MDTypography sx={{ ...TYPE.lead, color: PAL.ink, mt: 1 }}>
+          Nothing here is permission to program.
+        </MDTypography>
+      </MDBox>
+    </Card>
+  );
+}
+
 export default function DecisionCard({ participantUid, bandCandidate, summary, deploymentReport,
-                                       chosenBand, bandRecord, cutpoint, mode, onMode, onRecompute }) {
+                                       chosenBand, bandRecord, cutpoint, mode, onMode, onRecompute,
+                                       stimulator = null }) {
   const bc = bandCandidate || {};
   const rep = repOf(deploymentReport);
   const loading = !!(deploymentReport && deploymentReport.loading);
@@ -265,6 +299,11 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
         <StaleNotice inputsStale={actions.inputsStale} computedAt={actions.computedAt}
           staleWhy={actions.staleWhy} />
 
+        {stimulator ? (
+          <MDTypography data-testid="decision-stimulator" sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink }}>
+            {stimulatorLine(stimulator)}
+          </MDTypography>
+        ) : null}
         {eyebrow ? (
           <MDTypography sx={{ ...TYPE.body, color: PAL.ink2 }}>{eyebrow}</MDTypography>
         ) : null}
@@ -342,6 +381,11 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
               answer starts closed again and a reader's own toggle survives every other re-render. */}
           <Fold key={status.key} show={detailsLabel} hide="Hide details">
             <WhatWouldChangeThis report={deploymentReport} bare />
+            {/* The device rule check, every rule, here rather than in a card of its own (the PI,
+                2026-10-08: "consolidate these"); its refusals are the red bullets above. */}
+            <Section title="Device rule check, every rule">
+              <DeviceRuleLedger report={deploymentReport} bare />
+            </Section>
             <Section title="How each value was worked out and checked">
               <ParameterDetails report={deploymentReport} mode={mode} />
             </Section>

@@ -17,7 +17,7 @@ import fs from "fs";
 import path from "path";
 import "@testing-library/jest-dom";
 import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
-import DecisionCard, { decisionStatus, deviceBullets, unevaluatedBullets } from "./DecisionCard";
+import DecisionCard, { decisionStatus, deviceBullets, unevaluatedBullets, stimulatorLine, UncheckedStimulatorCard } from "./DecisionCard";
 import LEFT from "./__fixtures__/rcs08_cl_L13_24p5_2026-09-25.json";
 import RIGHT from "./__fixtures__/rcs08_cl_R03_24p5_2026-09-25.json";
 import SUM_L from "./__fixtures__/rcs08_summary_L13_24p5_2026-09-25.json";
@@ -513,5 +513,29 @@ describe("from DecisionCard.painScoreGuard", () => {
       expect(src).toMatch(/withheldIfOtherBand\(deploymentReport, bc, "report",\s*\{ painScore, matching: reportMatching \}\)/);
       expect(src).toMatch(/withheldIfOtherBand\(summary, bc, "summary", \{ painScore, includeSheets,\s*matching: requestParams/);
     });
+  });
+});
+
+describe("one decision per stimulator, from the sense-to-control wiring (the PI, 2026-10-08)", () => {
+  it("names the stimulator and how it is driven", () => {
+    expect(stimulatorLine({ stim: "Left", source: "Left", kind: "own" })).toBe("Left stimulator · ipsilateral sensing");
+    expect(stimulatorLine({ stim: "Right", source: "Left", kind: "contralateral" }))
+      .toBe("Right stimulator · contralateral sensing, from the left band");
+    expect(stimulatorLine(null)).toBeNull();
+  });
+  it("a stimulator with no band on its driving side is said not checked, never allowed", () => {
+    const { container } = rtlRender(wrap(<UncheckedStimulatorCard stimulator={{ stim: "Right", source: "Right", kind: "no_band" }} />));
+    expect(container.textContent).toMatch(/Not checked: no band chosen on the right/);
+    expect(container.textContent).not.toMatch(/allows/);
+  });
+  it("the device rule check is inside the closed Details, not a panel of its own", () => {
+    const { container } = card(RIGHT, SUM_R, BC_R);
+    expect(container.textContent).toMatch(/Device rule check, every rule/);
+    expect(visibleText(container)).not.toMatch(/Device rule check, every rule/);
+    expect(detailsOpen(container)).toBe(false);
+    // its refusals are still in the open, as the red bullets
+    expect(visibleText(container)).toMatch(/Device refuses this configuration/);
+    const page = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
+    expect(page).not.toMatch(/<DeviceRuleLedger/);
   });
 });

@@ -509,6 +509,20 @@ def facts_for_participant(participant_uid, impedance_recordings=None, *,
             out[k] = v
             prov[k] = srf_prov.get(k, "measured: session reports")
 
+    # D39: contralateral sensing is documented for dual lead implants only. Read from the stored
+    # leads of the newest implanted device (the same records the lead names come from); a lookup
+    # that fails leaves the fact absent, so D39 stays "could not check", never a pass.
+    if out.get("dual_lead_implant") is None:
+        try:
+            from . import stim_program as _sp
+            _sides = _sp.lead_targets(participant_uid)
+            if _sides:
+                out["dual_lead_implant"] = {"Left", "Right"} <= set(_sides)
+                prov["dual_lead_implant"] = ("measured: the newest implanted device's stored leads ("
+                                             + ", ".join(sorted(_sides)) + ")")
+        except Exception:                              # noqa: BLE001 - no database, no fact
+            pass
+
     out["_provenance"] = prov
     return out
 

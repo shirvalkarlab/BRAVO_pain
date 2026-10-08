@@ -70,6 +70,9 @@ describe("the Closed-Loop page's jump links are a table of contents", () => {
     expect(onPage).not.toContain("cl-signoff");
     expect(onPage).not.toContain("cl-prescription");
     expect(onPage).not.toContain("cl-what-changes");
-    expect(JUMPS.map((j) => j.id)).not.toContain("cl-decision");
+    // Since 2026-10-08 the decision card is linked: it is no longer the first thing on the page,
+    // and it now holds the device rule check (the PI: one panel, not two), so "cl-rules" is gone.
+    expect(JUMPS.map((j) => j.id)).toContain("cl-decision");
+    expect(onPage).not.toContain("cl-rules");
   });
 });
