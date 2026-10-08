@@ -12,7 +12,7 @@
  */
 
 export const WIRINGS = [
-  { key: "independent", label: "Ipsilateral, each side its own",
+  { key: "independent", label: "2 independent controllers: Ipsilateral wiring",
     medtronic: "Left: ipsilateral sensing. Right: ipsilateral sensing.",
     drives: { Left: "Left", Right: "Right" } },
   { key: "left_both", label: "Left sensing drives both",
