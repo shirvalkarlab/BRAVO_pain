@@ -100,14 +100,16 @@ function reportSettings(body) {
 }
 
 export default function useDeploymentReport({ participantUid, bandCandidate, hemisphere,
-  powerScale, painScore, matching, stimProgram = null, contralateral = false, enabled = true }) {
+  powerScale, painScore, matching, stimProgram = null, contralateral = false, enabled = true,
+  slot = CL.report }) {
   const channel = bandCandidate && bandCandidate.channel;
   const centerHz = bandCandidate && bandCandidate.centerHz;
   const body = deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale,
     painScore, matching, stimProgram, contralateral });
 
   const cached = useCachedResult({
-    moduleKey: CL.report,
+    // One slot per question (`moduleCacheKeys.CL`): the page asks one report per stimulator.
+    moduleKey: slot,
     uid: participantUid,
     settings: reportSettings(body),
     enabled: enabled !== false && !!participantUid && channel != null && centerHz != null,

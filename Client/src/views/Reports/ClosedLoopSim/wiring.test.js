@@ -52,6 +52,17 @@ test("the stimulators the decision answers for, from the wiring and the band's s
   expect(controllers("right_both", "Left").map((c) => c.kind)).toEqual(["no_band", "no_band"]);
 });
 
+test("with a band on each side, each stimulator is checked with the band of the side driving it", () => {
+  expect(controllers("independent", ["Left", "Right"], "Right")).toEqual([
+    { stim: "Left", source: "Left", kind: "own" }, { stim: "Right", source: "Right", kind: "own" }]);
+  // the page's band is on the left, but the wiring reads the right: both from the right band
+  expect(controllers("right_both", ["Left", "Right"], "Left")).toEqual([
+    { stim: "Left", source: "Right", kind: "contralateral" }, { stim: "Right", source: "Right", kind: "own" }]);
+  // no wiring: the page's band on its own side, whatever else is chosen
+  expect(controllers(null, ["Left", "Right"], "Right")).toEqual([{ stim: "Right", source: "Right", kind: "own" }]);
+  expect(controllers(null, [], null)).toEqual([]);
+});
+
 test("the three choices sit in one row, not stacked (the PI, 2026-10-08)", () => {
   const src = require("fs").readFileSync(require("path").join(__dirname, "WiringCard.js"), "utf8");
   expect(src).toMatch(/flexWrap: "nowrap"/);

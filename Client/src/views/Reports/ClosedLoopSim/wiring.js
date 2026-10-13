@@ -9,8 +9,7 @@
  *
  * The choice is remembered in this browser per participant. It decides which stimulators the
  * decision card answers for (`controllers`): one card per stimulator, each checked with the band
- * that drives it. The page has one band today, so a stimulator driven from the other side reads
- * "no band chosen" until Band selection takes one band per side.
+ * chosen on the side that drives it (Band selection takes one band per side).
  */
 
 export const WIRINGS = [
@@ -35,7 +34,7 @@ export function sensedSides(key) {
 
 /**
  * What stops this wiring being set up with the band(s) chosen; [] when nothing does.
- * `bandSides` is the list of sides a band has been chosen on (today at most one).
+ * `bandSides` is the list of sides a band has been chosen on.
  */
 export function wiringProblems(key, bandSides) {
   const have = new Set(bandSides || []);
@@ -46,15 +45,20 @@ export function wiringProblems(key, bandSides) {
 /**
  * One entry per stimulator the decision answers for, in the order Left, Right:
  * `{ stim, source, kind }`, kind "own" (ipsilateral), "contralateral" (driven by the other side's
- * band) or "no_band" (its driving side has no band chosen). With no wiring chosen, the band's own
- * side only, as the page checked before the choice existed.
+ * band) or "no_band" (its driving side has no band chosen). `bandSides` lists the sides with a band
+ * chosen (Band selection takes one per side). With no wiring chosen, `pageSide` only (the side of
+ * the band ticked last), as the page checked before the choice existed.
  */
-export function controllers(key, bandSide) {
+export function controllers(key, bandSides, pageSide = null) {
+  const have = new Set(typeof bandSides === "string" ? [bandSides] : (bandSides || []));
   const w = wiringOf(key);
-  if (!w) return bandSide ? [{ stim: bandSide, source: bandSide, kind: "own" }] : [];
+  if (!w) {
+    const own = pageSide || (have.size === 1 ? [...have][0] : null);
+    return own && have.has(own) ? [{ stim: own, source: own, kind: "own" }] : [];
+  }
   return ["Left", "Right"].map((stim) => {
     const source = w.drives[stim];
-    if (source !== bandSide) return { stim, source, kind: "no_band" };
+    if (!have.has(source)) return { stim, source, kind: "no_band" };
     return { stim, source, kind: source === stim ? "own" : "contralateral" };
   });
 }

@@ -59,12 +59,12 @@ import DatabaseLayout from "layouts/DatabaseLayout";
 import RecomputeBar from "views/Reports/RecomputeBar";
 import CacheStatusLine from "views/Reports/CacheStatusLine";
 import Fold from "./Fold";
-import { newBandForClosedLoop, recomputeClosedLoop } from "views/Reports/moduleCacheKeys";
+import { CL, newBandForClosedLoop, recomputeClosedLoop } from "views/Reports/moduleCacheKeys";
 import { prefetchNeighbours } from "./neighbourPrefetch";
 
 import {
   loadBandCandidate, parseUploadedCandidate, syncChosenBand, recordChosenBand, recordClearedBand,
-  chosenBandRecordText,
+  chosenBandRecordText, loadBandsBySide, bandSide,
 } from "./bandCandidateStore";
 import DeploymentRocPanel from "./DeploymentRocPanel";
 import LsbPowerPanel from "./LsbPowerPanel";
@@ -80,7 +80,7 @@ import useDeploymentSummary from "./useDeploymentSummary";
 import useDeploymentReport from "./useDeploymentReport";
 import StimProgramCard from "./StimProgramCard";
 import WiringCard from "./WiringCard";
-import { controllers as wiringControllers } from "./wiring";
+import { controllers as wiringControllers, sensedSides } from "./wiring";
 import { fromServer, isEdited, requestProgram, sensingPair } from "./stimProgram";
 import { SessionController } from "database/session-control";
 import useBandSweepGrid from "./useBandSweepGrid";
@@ -241,6 +241,9 @@ function ClosedLoopSim() {
   // score flipped after load and the first result was already "changed since").
   const [bandSynced, setBandSynced] = useState(false);
   const [envelope, setEnvelope] = useState(null);   // {band_candidate, participant_uid, committed_at}
+  // The band chosen on each side, `{ Left, Right }` of envelopes (the PI, 2026-10-08: one band per
+  // side for "2 independent controllers"). `envelope` above is the band ticked last, the page's band.
+  const [bandsBySide, setBandsBySide] = useState({ Left: null, Right: null });
   // Where the chosen band is held: on the server's record, or in this browser only (with why).
   const [bandRecord, setBandRecord] = useState(null);
   // THE MATCHING SETTINGS OF THE BIOMARKERS PAGE'S LAST RUN (decision 331), read once per visit:
@@ -289,11 +292,13 @@ function ClosedLoopSim() {
     // matching answer does not hand every panel a new object and refire its fetch.
     const local = loadBandCandidate(participant_uid);
     setEnvelope(local);
+    setBandsBySide(loadBandsBySide(participant_uid));
     setBandSynced(false);
     let alive = true;
-    syncChosenBand(participant_uid).then(({ envelope: server, status }) => {
+    syncChosenBand(participant_uid).then(({ envelope: server, status, bySide }) => {
       if (!alive) return;
       setBandRecord(status);
+      if (bySide) setBandsBySide(bySide);
       const same = (a, b) => JSON.stringify(a && a.band_candidate) === JSON.stringify(b && b.band_candidate);
       if (!same(server, local)) setEnvelope(server);
       setBandSynced(true);
@@ -353,12 +358,31 @@ function ClosedLoopSim() {
   const committedBand = useMemo(
     () => (hasBand ? { contact: bandContact, centerHz: bandCentreHz } : null),
     [hasBand, bandContact, bandCentreHz]);
+  // The band on each side and the sides the wiring reads, for the two-column Band selection; the same
+  // objects between changes, for the reason above.
+  const sideBandKey = ["Left", "Right"].map((sd) => {
+    const b = bandsBySide[sd] && bandsBySide[sd].band_candidate;
+    return b ? `${b.contact}|${b.center_freq_hz}` : "";
+  }).join("/");
+  const committedBySide = useMemo(() => {
+    const out = { Left: null, Right: null };
+    ["Left", "Right"].forEach((sd) => {
+      const b = bandsBySide[sd] && bandsBySide[sd].band_candidate;
+      if (b) out[sd] = { contact: b.contact, centerHz: b.center_freq_hz };
+    });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sideBandKey]);
+  const gridActiveSides = useMemo(() => (wiring ? sensedSides(wiring) : null), [wiring]);
+  const gridOffNote = gridActiveSides && gridActiveSides.length === 1
+    ? `Not used: ${gridActiveSides[0].toLowerCase()} sensing drives both stimulators.` : null;
   // The grid's two callbacks, the same functions from render to render for the same reason.
   // Choosing a band computes it (decision 418): the pain score starts again from the new band's own
   // in the same render, and every answer about the band is fetched for it.
   const onGridCandidateChosen = useCallback(() => {
     setPainScoreChoice(null);
     setEnvelope(loadBandCandidate(participant_uid));
+    setBandsBySide(loadBandsBySide(participant_uid));
     newBandForClosedLoop(participant_uid);
   }, [participant_uid]);
   const onGridChoiceRecorded = useCallback(({ status }) => setBandRecord(status), []);
@@ -418,24 +442,55 @@ function ClosedLoopSim() {
   // The same for the page's pain score and clinic-sheet switch (decision 307): a result computed on
   // another score, or with the switch the other way, is withheld and named until Recompute.
   // THE SENSE-TO-CONTROL WIRING (the PI, 2026-10-08) decides which stimulators the decision answers
-  // for: one card per stimulator. The band's own side is the report above; a stimulator driven from
-  // the band's side through contralateral sensing gets a report of its own (same band, the other
-  // stimulator's current, the contralateral pairing acknowledged by the choice itself), fetched
-  // only when the wiring needs it.
-  const stimulators = wiringControllers(wiring, bandSensing ? bandSensing.side : null);
-  const contraStim = stimulators.find((c) => c.kind === "contralateral");
-  const contraReportRaw = useDeploymentReport({
+  // for: one card per stimulator, each checked with the band chosen on the side that drives it (one
+  // band per side). The page's band on its own side is the report above. Every other pairing gets a
+  // report of its own, IN A CACHE SLOT OF ITS OWN (decision 470: sharing the report's slot let one
+  // stimulator be shown the other's answer), fetched only when the wiring needs it. A stimulator
+  // driven through contralateral sensing sends the pairing acknowledged by the choice itself.
+  const pageSide = bc ? bandSide(bc) : null;
+  const otherSide = pageSide === "Left" ? "Right" : (pageSide === "Right" ? "Left" : null);
+  const otherEnvelope = otherSide ? bandsBySide[otherSide] : null;
+  const otherBc = (otherEnvelope && otherEnvelope.band_candidate) || null;
+  const bandSides = [pageSide, otherBc ? otherSide : null].filter(Boolean);
+  const stimulators = wiringControllers(wiring, bandSides, pageSide);
+  const needs = (fromPage, kind) => stimulators.some((st) => st.kind === kind
+    && (st.source === pageSide) === fromPage);
+  const otherCandidate = bandSynced && otherBc ? reportCandidateFromBand(otherBc) : null;
+  const reportArgs = { participantUid: participant_uid, painScore, matching: reportMatching,
+    stimProgram: programForReport };
+  const contraReportRaw = useDeploymentReport({ ...reportArgs, bandCandidate: reportCandidate,
+    hemisphere: otherSide, contralateral: true, enabled: needs(true, "contralateral"),
+    slot: CL.reportContra });
+  const otherReportRaw = useDeploymentReport({ ...reportArgs, bandCandidate: otherCandidate,
+    hemisphere: otherSide, enabled: needs(false, "own"), slot: CL.reportOther });
+  const otherContraReportRaw = useDeploymentReport({ ...reportArgs, bandCandidate: otherCandidate,
+    hemisphere: pageSide, contralateral: true, enabled: needs(false, "contralateral"),
+    slot: CL.reportOtherContra });
+  const usesOther = needs(false, "own") || needs(false, "contralateral");
+  // The other side's band has its own summary (its statistical checks), on the page's pain score.
+  const otherRequestParams = useMemo(() => (otherBc
+    ? summaryRequestParams(otherBc, includeSheets, painScore, inherited) : null),
+  [otherBc, includeSheets, painScore, inherited]);
+  const otherSummaryRaw = useDeploymentSummary({
     participantUid: participant_uid,
-    bandCandidate: reportCandidate,
-    hemisphere: contraStim ? contraStim.stim : null,
-    contralateral: true,
-    painScore,
-    matching: reportMatching,
-    stimProgram: programForReport,
-    enabled: !!contraStim,
+    channel: bandSynced && usesOther && otherBc ? otherBc.contact : null,
+    centerHz: bandSynced && usesOther && otherBc ? otherBc.center_freq_hz : null,
+    bandWidthHz: (otherBc && otherBc.bandwidth_hz) || 5.0,
+    matchDir: "prior", cutThr: null, requestParams: otherRequestParams, slot: CL.summaryOther,
   });
-  const contraReport = withheldIfOtherBand(contraReportRaw, bc, "report",
+  const withheldReport = (r, band) => withheldIfOtherBand(r, band, "report",
     { painScore, matching: reportMatching });
+  const contraReport = withheldReport(contraReportRaw, bc);
+  const otherReport = otherBc ? withheldReport(otherReportRaw, otherBc) : otherReportRaw;
+  const otherContraReport = otherBc ? withheldReport(otherContraReportRaw, otherBc) : otherContraReportRaw;
+  const otherSummary = otherBc ? withheldIfOtherBand(otherSummaryRaw, otherBc, "summary", { painScore,
+    includeSheets, matching: otherRequestParams, matchingKeys: MATCHING_KEYS.filter((k) => k !== "MatchDirection"
+      && k !== "IncludeClinicSheetRatings") }) : otherSummaryRaw;
+  // The extra answers the wiring asked for, for the one Recompute control.
+  const extraAnswers = [
+    [contraReportRaw, needs(true, "contralateral")], [otherReportRaw, needs(false, "own")],
+    [otherContraReportRaw, needs(false, "contralateral")], [otherSummaryRaw, usesOther],
+  ].filter(([, on]) => on).map(([a]) => a);
   const report = withheldIfOtherBand(deploymentReport, bc, "report",
     { painScore, matching: reportMatching });
   const summaryForBand = withheldIfOtherBand(summary, bc, "summary", { painScore, includeSheets,
@@ -568,6 +623,7 @@ function ClosedLoopSim() {
         recordChosenBand(participant_uid, parsed.band_candidate, "upload")
           .then(({ status }) => setBandRecord(status));
         setEnvelope(loadBandCandidate(participant_uid));
+        setBandsBySide(loadBandsBySide(participant_uid));
       }
     };
     reader.readAsText(file);
@@ -615,6 +671,7 @@ function ClosedLoopSim() {
                 onClear={bc ? () => {
                   recordClearedBand(participant_uid).then(({ status }) => setBandRecord(status));
                   setEnvelope(null);
+                  setBandsBySide({ Left: null, Right: null });
                 } : null}>
                 {/* The stored-results line is for a developer, so it lives in the closed ⋯ menu
                     (SPEC 2026-09-26 section 4 rule 2). The menu hides it without unmounting it, and
@@ -647,7 +704,7 @@ function ClosedLoopSim() {
             edited={programEdited} sensing={bandSensing} unavailable={programUnavailable} />
         </MDBox>
         <MDBox id="cl-wiring">
-          <WiringCard value={wiring} onChange={setWiring} bandSides={bandSensing ? [bandSensing.side] : []} />
+          <WiringCard value={wiring} onChange={setWiring} bandSides={bandSides} />
         </MDBox>
 
         {bc ? (
@@ -657,10 +714,10 @@ function ClosedLoopSim() {
             <MDBox mb={2}>
               <RecomputeBar
                 title="closed-loop deployment"
-                stale={!!(deploymentReport.stale || summary.stale || (contraStim && contraReportRaw.stale))}
+                stale={!!(deploymentReport.stale || summary.stale || extraAnswers.some((a) => a.stale))}
                 staleReasons={staleReasons}
                 computedAt={pageComputedAt}
-                loading={!!(deploymentReport.loading || summary.loading || (contraStim && contraReportRaw.loading))}
+                loading={!!(deploymentReport.loading || summary.loading || extraAnswers.some((a) => a.loading))}
                 notKept={deploymentReport.notKept || summary.notKept}
                 onRecompute={onRecomputePage}
               />
@@ -673,12 +730,21 @@ function ClosedLoopSim() {
                 {stimulators.map((st) => (st.kind === "no_band" ? (
                   <UncheckedStimulatorCard key={st.stim} stimulator={st} />
                 ) : (
-                  <DecisionCard key={st.stim} participantUid={participant_uid} bandCandidate={bc}
-                    summary={summaryForBand}
-                    deploymentReport={st.kind === "contralateral" ? contraReport : report}
-                    chosenBand={envelope} bandRecord={bandRecord}
-                    cutpoint={cutpointHere} mode={thresholdMode} onMode={setThresholdMode}
-                    onRecompute={onRecomputePage} stimulator={wiring ? st : null} />
+                  st.source === pageSide ? (
+                    <DecisionCard key={st.stim} participantUid={participant_uid} bandCandidate={bc}
+                      summary={summaryForBand}
+                      deploymentReport={st.kind === "contralateral" ? contraReport : report}
+                      chosenBand={envelope} bandRecord={bandRecord}
+                      cutpoint={cutpointHere} mode={thresholdMode} onMode={setThresholdMode}
+                      onRecompute={onRecomputePage} stimulator={wiring ? st : null} />
+                  ) : (
+                    <DecisionCard key={st.stim} participantUid={participant_uid} bandCandidate={otherBc}
+                      summary={otherSummary}
+                      deploymentReport={st.kind === "contralateral" ? otherContraReport : otherReport}
+                      chosenBand={otherEnvelope} bandRecord={bandRecord}
+                      cutpoint={null} mode={thresholdMode} onMode={setThresholdMode}
+                      onRecompute={onRecomputePage} stimulator={st} />
+                  )
                 )))}
               </FigureRecordContext.Provider>
             </MDBox>
@@ -693,6 +759,9 @@ function ClosedLoopSim() {
             grid={bandSweepGrid.grid}
             participantUid={participant_uid}
             committed={committedBand}
+            committedBySide={committedBySide}
+            activeSides={gridActiveSides}
+            offNote={gridOffNote}
             onCandidateChosen={onGridCandidateChosen}
             onChoiceRecorded={onGridChoiceRecorded}
           />

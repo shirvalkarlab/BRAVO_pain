@@ -853,7 +853,7 @@ class QueryClosedLoopChosenBand(RestViews.APIView):
     decision 233). Until 2026-09-23 the choice lived only in the browser that made it.
 
     One endpoint, three actions. ``read`` returns the band chosen now (or none) with the last rows
-    of the history; ``choose`` records a new choice; ``clear`` records that none is chosen. The
+    of the history and the newest band on each side (``by_side``); ``choose`` records a new choice; ``clear`` records that none is chosen. The
     record is append-only (``modules.ClosedLoopDeployment.chosen_band``): nothing is rewritten, the
     current band is the newest row, and every row names who made it. A save that did not land says
     so (``saved`` False with a reason), so the page can say the choice lives in this browser only.
@@ -885,6 +885,8 @@ class QueryClosedLoopChosenBand(RestViews.APIView):
         if action == "read":
             out = chosen_band.current(uid)
             out["history"] = chosen_band.history(uid, limit=20)
+            # One band per side (the PI, 2026-10-08), for "2 independent controllers".
+            out["by_side"] = chosen_band.current_by_side(uid)["by_side"]
         elif action == "choose":
             out = chosen_band.choose(uid, request.data.get("BandCandidate"), chosen_by=who,
                                      source=request.data.get("Source"),

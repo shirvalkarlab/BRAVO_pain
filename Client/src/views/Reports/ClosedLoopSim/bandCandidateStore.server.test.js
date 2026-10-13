@@ -12,7 +12,7 @@
 import { SessionController } from "database/session-control";
 import {
   loadBandCandidate, commitBandCandidate, syncChosenBand, recordChosenBand, recordClearedBand,
-  chosenBandRecordText,
+  chosenBandRecordText, loadBandsBySide, bandSide,
 } from "./bandCandidateStore";
 
 jest.mock("database/session-control", () => ({ SessionController: { query: jest.fn() } }));
@@ -128,4 +128,64 @@ test("a band carried over from browser storage does not name the carrier as the 
   expect(text).toMatch(/carried over from this browser's own copy/);
   expect(text).toMatch(/by demo@bravo\.local/);
   expect(text).not.toMatch(/recorded on the server \(.*by demo/);
+});
+
+
+/* ONE BAND PER SIDE (the PI, 2026-10-08: "2 independent controllers" senses on both sides). The band
+ * ticked last is still the page's band; the other side keeps the newest band ticked there. */
+describe("one band per side", () => {
+  const RIGHT = { schema_version: "bandcandidate_v1", contact: "ZERO_THREE_RIGHT", center_freq_hz: 18.5 };
+
+  test("the side comes from the band's own hemisphere, else its pair's name", () => {
+    expect(bandSide(BAND)).toBe("Left");
+    expect(bandSide(RIGHT)).toBe("Right");
+    expect(bandSide({ contact: "ONE_THREE_LEFT", hemisphere: "Right" })).toBe("Right");
+    expect(bandSide({ contact: "SOMEWHERE" })).toBeNull();
+  });
+
+  test("ticking a band on each side keeps both in this browser; the page's band is the last", () => {
+    commitBandCandidate(UID, BAND);
+    commitBandCandidate(UID, RIGHT);
+    const by = loadBandsBySide(UID);
+    expect(by.Left.band_candidate).toEqual(BAND);
+    expect(by.Right.band_candidate).toEqual(RIGHT);
+    expect(loadBandCandidate(UID).band_candidate).toEqual(RIGHT);
+  });
+
+  test("the server's bands by side win and are mirrored", async () => {
+    commitBandCandidate(UID, { ...RIGHT, center_freq_hz: 9.5 });     // a stale local right band
+    SessionController.query.mockImplementation(() => reply({
+      available: true, record: serverRecord(), history: [serverRecord()],
+      by_side: { Left: serverRecord(), Right: serverRecord(RIGHT) } }));
+    const out = await syncChosenBand(UID);
+    expect(out.bySide.Left.band_candidate).toEqual(BAND);
+    expect(out.bySide.Right.band_candidate.center_freq_hz).toBe(18.5);
+    expect(loadBandsBySide(UID).Right.band_candidate.center_freq_hz).toBe(18.5);
+  });
+
+  test("a server with no band on a side clears this browser's copy of that side", async () => {
+    commitBandCandidate(UID, RIGHT);
+    SessionController.query.mockImplementation(() => reply({
+      available: true, record: serverRecord(), history: [serverRecord()],
+      by_side: { Left: serverRecord(), Right: null } }));
+    const out = await syncChosenBand(UID);
+    expect(out.bySide.Right).toBeNull();
+    expect(loadBandsBySide(UID).Right).toBeNull();
+  });
+
+  test("an older server without by_side gives the page's band on its own side only", async () => {
+    SessionController.query.mockImplementation(() => reply({
+      available: true, record: serverRecord(), history: [serverRecord()] }));
+    const out = await syncChosenBand(UID);
+    expect(out.bySide.Left.band_candidate).toEqual(BAND);
+    expect(out.bySide.Right).toBeNull();
+  });
+
+  test("a clear empties both sides", async () => {
+    commitBandCandidate(UID, BAND);
+    commitBandCandidate(UID, RIGHT);
+    SessionController.query.mockImplementation(() => reply({ saved: true }));
+    await recordClearedBand(UID);
+    expect(loadBandsBySide(UID)).toEqual({ Left: null, Right: null });
+  });
 });

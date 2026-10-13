@@ -12,6 +12,10 @@
  * AUC, which is everything drawn here. No new backend field was needed (measured on the live
  * payload, 2026-09-11).
  *
+ * TWO COLUMNS, ONE PER SIDE (the PI, 2026-10-08): Left and Right side by side, each narrowed, with
+ * its own contact-pair tabs and its own "Use" radio, so one band can be chosen on each side for
+ * "2 independent controllers". A side the sense-to-control wiring does not read is greyed.
+ *
  * WHAT IS DRAWN, per contact tab: one row per band centre (22, 8.5-29.5 Hz, down the side), two
  * colour columns -- the correlation r (diverging around 0) and the AUC (diverging around 0.5,
  * never around 0; house rule) -- each carrying its value, then two symbol columns: whether the
@@ -46,7 +50,7 @@ import { TYPE, WRAP, CARD } from "assets/theme/base/tokens";
 import { DIVERGING, RANGE } from "assets/theme/base/dataColors";
 import ColorKey from "views/Reports/paper/ColorKey";
 import { orderContacts } from "views/Reports/Biomarkers/contactOrder";
-import PAL from "./palette";
+import PAL, { SIDE } from "./palette";
 import Fold from "./Fold";
 import { fmtHz, fmtNum } from "./deployFormat";
 import { recordChosenBand } from "./bandCandidateStore";
@@ -301,17 +305,196 @@ export function bandRecordFromGrid(grid, channel, centreHz) {
   };
 }
 
-function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen,
-  onChoiceRecorded }) {
+const SIDES = ["Left", "Right"];
+const SIDE_INK = { Left: SIDE.left, Right: SIDE.right };
+
+/**
+ * The band chosen on each side, as `{ Left, Right }` of `{ contact, centerHz }` or null. Taken from
+ * `committedBySide` when the page passes it, and the page's own band always counts for its side.
+ */
+export function chosenBySide(committed, committedBySide, sideOf) {
+  const out = { Left: null, Right: null };
+  SIDES.forEach((s) => {
+    const c = committedBySide && committedBySide[s];
+    if (c && c.contact) out[s] = c;
+  });
+  const side = committed && committed.contact ? sideOf(committed.contact) : null;
+  if (side && out[side] == null) out[side] = committed;
+  return out;
+}
+
+/**
+ * The page's answer line for Band selection: the band on each side, and which band the sections
+ * below the decision describe when there are two.
+ */
+export function bandSelectionAnswer(bySide, committed, labelOf, activeSides) {
+  const say = (c) => `${labelOf(c.contact)} at ${fmtHz(c.centerHz)} Hz`;
+  const used = activeSides || SIDES;
+  if (!SIDES.some((s) => bySide[s])) {
+    return "No band chosen yet: tick one to check it against the device and the evidence below.";
+  }
+  const parts = used.map((s) => `${s}: ${bySide[s] ? say(bySide[s]) : "none chosen"}`);
+  const both = bySide.Left && bySide.Right;
+  return `${parts.join(" · ")}.`
+    + (both && committed && committed.contact
+      ? ` The sections below the decision describe ${say(committed)}, the band ticked last.` : "");
+}
+
+/**
+ * ONE SIDE'S COLUMN (the PI, 2026-10-08: "horizontally compressed ... one on the left and one on the
+ * right"): that side's contact-pair tabs, then the band centres down the side with r, AUC, the two
+ * marks and a "Use" radio. A side the wiring does not read is greyed and cannot be ticked.
+ */
+function SideColumn({ side, channels, sweeps, refused, chosen, active, offNote, labelOf, regionOf,
+  participantUid, onChoose }) {
+  const [activeChannel, setActiveChannel] = useState(null);
+  const allowed = channels.filter((ch) => !refused[ch]);
+  const tabOrder = [...allowed, ...channels.filter((ch) => refused[ch])];
+  const channel = (activeChannel && channels.includes(activeChannel)) ? activeChannel
+    : (chosen && channels.includes(chosen.contact)) ? chosen.contact
+      : (allowed[0] || channels[0]);
+  const sw = sweeps[channel] || {};
+  const rows = mergedRows(sw);
+  const isChosen = (row) => !!(active && chosen && chosen.contact === channel && chosen.centerHz != null
+    && Math.abs(Number(chosen.centerHz) - row.band_center_hz) < 1e-6);
+
+  const corrTip = (row) => (row.pearson_r == null ? "no correlation for this band"
+    : `correlation with pain ${fmtNum(row.pearson_r, 3)}`
+      + (row.pearson_r_low != null && row.pearson_r_high != null
+        ? ` (95% range ${fmtNum(row.pearson_r_low, 3)} to ${fmtNum(row.pearson_r_high, 3)})` : "")
+      + (row.integration_seconds_delivered != null
+        ? `, best of ${nLengthsForRow(row, false)} lengths at ${fmtNum(row.integration_seconds_delivered, 0)} s` : "")
+      + (row.n_pain_reports != null ? `, ${row.n_pain_reports} pain reports` : ""));
+  const aucTip = (row) => (row.auc == null ? "no high-versus-low reading for this band"
+    : `tells high pain from low: ${fmtNum(row.auc, 3)} (0.5 = coin toss, 1 = perfect)`
+      + (row.auc_low != null && row.auc_high != null
+        ? `, 95% range ${fmtNum(row.auc_low, 3)} to ${fmtNum(row.auc_high, 3)}` : "")
+      + (row.auc_seconds != null ? `, best of ${nLengthsForRow(row, true)} lengths at ${fmtNum(row.auc_seconds, 0)} s` : "")
+      + (row.auc_n_pain_reports != null ? `, ${row.auc_n_pain_reports} pain reports` : ""));
+
+  const tab = (ch, i) => {
+    const on = ch === channel;
+    const no = !!refused[ch];
+    return (
+      <button key={ch} type="button" onClick={() => setActiveChannel(ch)} disabled={!active}
+        title={[regionOf(ch), refused[ch]].filter(Boolean).join("; ") || undefined}
+        aria-label={regionOf(ch) ? `${labelOf(ch)}, ${regionOf(ch)}` : labelOf(ch)}
+        aria-pressed={on}
+        style={{ ...TYPE.body, fontFamily: "inherit", cursor: active ? "pointer" : "default",
+          padding: "4px 8px", minHeight: 32, border: `1px solid ${on ? PAL.accent : PAL.rule}`,
+          marginLeft: i === 0 ? 0 : -1, position: "relative", zIndex: on ? 1 : 0,
+          borderRadius: i === 0 ? "4px 0 0 4px" : (i === tabOrder.length - 1 ? "0 4px 4px 0" : 0),
+          backgroundColor: on ? PAL.accentFill : (no ? PAL.fillMuted : PAL.surface),
+          color: on ? PAL.accent : (no ? PAL.ink3 : PAL.ink), fontWeight: on ? 600 : 400,
+          whiteSpace: "nowrap" }}>
+        {no ? <span aria-hidden="true" style={{ marginRight: 4 }}>✕</span> : null}
+        {labelOf(ch)}
+      </button>
+    );
+  };
+
+  return (
+    <MDBox data-testid={`band-side-${side}`} aria-disabled={!active}
+      sx={{ border: `1px solid ${PAL.rule}`, borderRadius: "4px", p: 1.5, minWidth: 0,
+        opacity: active ? 1 : 0.45 }}>
+      <MDBox display="flex" justifyContent="space-between" alignItems="baseline" gap={1} flexWrap="wrap">
+        <MDTypography component="h3" sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink }}>
+          <span aria-hidden="true"
+            style={{ display: "inline-block", width: 10, height: 10, borderRadius: "50%", background: SIDE_INK[side], marginRight: 6 }} />
+          {`${side} sensing`}
+        </MDTypography>
+        {active && chosen ? (
+          <MDTypography data-testid={`band-side-${side}-chosen`}
+            sx={{ ...TYPE.body, fontWeight: 600, color: PAL.accent }}>
+            {`Chosen: ${labelOf(chosen.contact)} at ${fmtHz(chosen.centerHz)} Hz`}
+          </MDTypography>
+        ) : null}
+      </MDBox>
+      {channels.length ? (
+        <MDBox display="flex" flexWrap="wrap" mt={1} mb={1} role="group"
+          aria-label={`${side} sensing contact pair`}>
+          {tabOrder.map(tab)}
+        </MDBox>
+      ) : (
+        <MDTypography sx={{ ...TYPE.body, color: PAL.ink3, mt: 1 }}>No recordings on this side.</MDTypography>
+      )}
+      {refused[channel] ? (
+        <MDTypography sx={{ ...TYPE.body, color: PAL.failText, mb: 1 }}>
+          <span aria-hidden="true" style={{ marginRight: 6 }}>✕</span>
+          {`${labelOf(channel)}: ${refused[channel]}.`}
+        </MDTypography>
+      ) : null}
+      {channels.length ? (
+        <MDBox sx={{ display: "grid",
+          gridTemplateColumns: "60px minmax(44px,1fr) minmax(44px,1fr) 40px 40px 36px",
+          columnGap: "4px", rowGap: "2px", alignItems: "center", overflowX: "auto" }}>
+          <MDTypography variant="caption" sx={{ ...HEAD, justifyContent: "flex-end" }}>Hz</MDTypography>
+          <MDTypography variant="caption" title="correlation with pain" sx={HEAD}>r</MDTypography>
+          <MDTypography variant="caption" sx={HEAD}>AUC</MDTypography>
+          <MDTypography variant="caption" title="corrected for the 22 bands tested" sx={HEAD}>Corr.</MDTypography>
+          <MDTypography variant="caption" title="same at every setting" sx={HEAD}>Same</MDTypography>
+          <MDTypography variant="caption" title="use this band" sx={HEAD}>Use</MDTypography>
+          {rows.map((row) => {
+            const on = isChosen(row);
+            const id = `cl-band-${String(channel)}-${row.band_center_hz}`;
+            const ring = on ? `2px solid ${PAL.accent}` : "none";
+            return [
+              <MDTypography key={`${id}-lab`} variant="caption" component="label" htmlFor={id}
+                sx={{ ...TYPE.body, textAlign: "right", paddingRight: "4px",
+                  color: on ? PAL.accent : PAL.ink2, fontWeight: on ? 600 : 400,
+                  cursor: active ? "pointer" : "default" }}>
+                {fmtHz(row.band_center_hz)}
+              </MDTypography>,
+              <div key={`${id}-r`} title={corrTip(row)} style={{ height: CELL_H, borderRadius: 2,
+                background: cellFill(row.pearson_r, R_LO, R_HI), display: "flex", alignItems: "center",
+                justifyContent: "center", fontSize: PAL.fs.body,
+                color: inkFor(row.pearson_r, R_LO, R_HI), outline: ring, outlineOffset: -1 }}>
+                {row.pearson_r == null ? "" : fmtNum(row.pearson_r, 2)}
+              </div>,
+              <div key={`${id}-a`} title={aucTip(row)} style={{ height: CELL_H, borderRadius: 2,
+                background: cellFill(row.auc, A_LO, A_HI), display: "flex", alignItems: "center",
+                justifyContent: "center", fontSize: PAL.fs.body,
+                color: inkFor(row.auc, A_LO, A_HI), outline: ring, outlineOffset: -1 }}>
+                {row.auc == null ? "" : fmtNum(row.auc, 2)}
+              </div>,
+              <div key={`${id}-fw`} style={{ textAlign: "center", lineHeight: `${CELL_H}px` }}>
+                <FamilyWiseMark significant={row.family_wise_significant_8_to_30hz}
+                  q={row.family_wise_q_8_to_30hz} />
+              </div>,
+              <div key={`${id}-st`} style={{ textAlign: "center", lineHeight: `${CELL_H}px` }}>
+                <StabilityMark stability={row.cross_setting_stability} />
+              </div>,
+              <div key={`${id}-use`} style={{ textAlign: "center" }}>
+                <input type="radio" id={id} name={`cl-use-band-${participantUid}-${side}`} checked={on}
+                  disabled={!active} onChange={() => onChoose(channel, row)}
+                  aria-label={`use the ${fmtHz(row.band_center_hz)} Hz band on ${labelOf(channel)}`}
+                  style={{ width: 16, height: 16, margin: 0, cursor: active ? "pointer" : "default",
+                    accentColor: PAL.accent }} />
+              </div>,
+            ];
+          })}
+        </MDBox>
+      ) : null}
+      {!active && offNote ? (
+        <MDTypography data-testid={`band-side-${side}-off`} sx={{ ...TYPE.body, color: PAL.ink3, mt: 1 }}>
+          {offNote}
+        </MDTypography>
+      ) : null}
+    </MDBox>
+  );
+}
+
+/**
+ * Props: `committed` (the page's band, `{ contact, centerHz }`), `committedBySide` (`{ Left, Right }`,
+ * the band chosen on each side), `activeSides` (the sides the wiring reads; null for both) and
+ * `offNote` (why a side not read is greyed), plus the grid and the two callbacks.
+ */
+function BandSweepGridPanel({ grid, participantUid, committed, committedBySide, activeSides,
+  offNote, onCandidateChosen, onChoiceRecorded }) {
   // Memoised, because a fresh `{}` on every render (when there is no grid yet) would make every
   // memo below it recompute on every render.
   const sweeps = useMemo(() => (grid && grid.band_time_sweep) || {}, [grid]);
   const channels = useMemo(() => orderContacts(sweeps), [sweeps]);
-  const [activeChannel, setActiveChannel] = useState(null);
-  // Open on the committed band's contact when there is one, so the tick is visible on arrival.
-  const channel = (activeChannel && channels.includes(activeChannel)) ? activeChannel
-    : (committed && committed.contact && channels.includes(committed.contact)) ? committed.contact
-      : channels[0];
 
   if (!grid || grid.available === false) {
     return (
@@ -326,9 +509,6 @@ function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen
     );
   }
 
-  const sw = sweeps[channel] || {};
-  const rows = mergedRows(sw);
-  const bandWidthHz = Number(sw.band_width_hz || 5.0);
   const sideOf = (ch) => {
     const s = sweeps[ch] || {};
     return s.display_hemisphere || (/LEFT/i.test(ch) ? "Left" : (/RIGHT/i.test(ch) ? "Right" : null));
@@ -337,81 +517,37 @@ function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen
     const s = sweeps[ch] || {};
     return s.display_short || String(ch || "").replace(/_/g, " ");
   };
-  const isCommitted = (row) => !!(committed && committed.contact === channel
-    && committed.centerHz != null && Math.abs(Number(committed.centerHz) - row.band_center_hz) < 1e-6);
+  const regionOf = (ch) => (sweeps[ch] && sweeps[ch].display_region) || null;
+  const refused = refusedByRule(channels, sweeps, grid && grid.sensing_rule, sideOf);
+  const bySide = chosenBySide(committed, committedBySide, sideOf);
+  const active = (s) => !activeSides || activeSides.includes(s);
 
-  const choose = (row) => {
+  const choose = (channel, row) => {
     const hemisphere = sideOf(channel);
     // Written to this browser at once (so the page moves on the click) and recorded on the server
     // (the PI's ruling 8); the promise reports whether the server took it. `grid_settings` is the
     // server's own tag of the grid the band was picked from, carried so the sign-off sheet can say
     // which grid that was (panel D item 8). The record is `bandRecordFromGrid`'s, the one the
-    // neighbour pre-compute builds too (decision 425).
+    // neighbour pre-compute builds too (decision 425). The band ticked becomes the page's band and
+    // the band of its side (one band per side, the PI, 2026-10-08).
     const recorded = recordChosenBand(participantUid,
       bandRecordFromGrid(grid, channel, row.band_center_hz), "grid");
     if (onChoiceRecorded) recorded.then(onChoiceRecorded);
     if (onCandidateChosen) {
-      onCandidateChosen({ channel, centerHz: row.band_center_hz, bandWidthHz,
-        sensingHemisphere: hemisphere });
+      onCandidateChosen({ channel, centerHz: row.band_center_hz,
+        bandWidthHz: Number((sweeps[channel] || {}).band_width_hz || 5.0), sensingHemisphere: hemisphere });
     }
   };
 
-  // The tabs as one segmented control: the pairs the device allows today first, then the others,
-  // greyed, each saying why it is refused; left before right within each group, the same order as
-  // the Biomarkers thumbnails. Each tab's accessible name is its pair AND its region (decision 307):
-  // the region alone read "Left GPi" three times and "Right VIM" three times to a screen reader.
-  const refused = refusedByRule(channels, sweeps, grid && grid.sensing_rule, sideOf);
-  const bySideOrder = (list) => [...list.filter((ch) => sideOf(ch) === "Left"),
-    ...list.filter((ch) => sideOf(ch) === "Right"),
-    ...list.filter((ch) => sideOf(ch) !== "Left" && sideOf(ch) !== "Right")];
-  const tabOrder = [...bySideOrder(channels.filter((ch) => !refused[ch])),
-    ...bySideOrder(channels.filter((ch) => refused[ch]))];
-  const regionOf = (ch) => (sweeps[ch] && sweeps[ch].display_region) || null;
-  const tab = (ch, i) => {
-    const on = ch === channel;
-    const no = !!refused[ch];
-    return (
-      <button key={ch} type="button" onClick={() => setActiveChannel(ch)}
-        title={[regionOf(ch), refused[ch]].filter(Boolean).join("; ") || undefined}
-        aria-label={regionOf(ch) ? `${labelOf(ch)}, ${regionOf(ch)}` : labelOf(ch)}
-        aria-pressed={on}
-        style={{ ...TYPE.body, fontFamily: "inherit", cursor: "pointer", padding: "6px 12px",
-          minHeight: 36, border: `1px solid ${on ? PAL.accent : PAL.rule}`,
-          marginLeft: i === 0 ? 0 : -1, position: "relative", zIndex: on ? 1 : 0,
-          borderRadius: i === 0 ? "4px 0 0 4px" : (i === tabOrder.length - 1 ? "0 4px 4px 0" : 0),
-          backgroundColor: on ? PAL.accentFill : (no ? PAL.fillMuted : PAL.surface),
-          color: on ? PAL.accent : (no ? PAL.ink3 : PAL.ink), fontWeight: on ? 600 : 400 }}>
-        {no ? <span aria-hidden="true" style={{ marginRight: 4 }}>✕</span> : null}
-        {labelOf(ch)}
-      </button>
-    );
-  };
-
-  const corrTip = (row) => (row.pearson_r == null ? "no correlation for this band"
-    : `correlation ${fmtNum(row.pearson_r, 3)}`
-      + (row.pearson_r_low != null && row.pearson_r_high != null
-        ? ` (95% range ${fmtNum(row.pearson_r_low, 3)} to ${fmtNum(row.pearson_r_high, 3)})` : "")
-      + (row.integration_seconds_delivered != null
-        ? `, best of ${nLengthsForRow(row, false)} lengths at ${fmtNum(row.integration_seconds_delivered, 0)} s` : "")
-      + (row.n_pain_reports != null ? `, ${row.n_pain_reports} pain reports` : ""));
-  const aucTip = (row) => (row.auc == null ? "no high-versus-low reading for this band"
-    : `tells high pain from low: ${fmtNum(row.auc, 3)} (0.5 = coin toss, 1 = perfect)`
-      + (row.auc_low != null && row.auc_high != null
-        ? `, 95% range ${fmtNum(row.auc_low, 3)} to ${fmtNum(row.auc_high, 3)}` : "")
-      + (row.auc_seconds != null ? `, best of ${nLengthsForRow(row, true)} lengths at ${fmtNum(row.auc_seconds, 0)} s` : "")
-      + (row.auc_n_pain_reports != null ? `, ${row.auc_n_pain_reports} pain reports` : ""));
-
-  const chosenRow = rows.find((r) => isCommitted(r));
-  const answer = chosenRow
-    ? `Chosen: ${labelOf(channel)} at ${fmtHz(chosenRow.band_center_hz)} Hz. Every section below is about this band.`
-    : (committed && committed.contact
-      ? `The chosen band is on another pair; open its tab to see it, or tick a band here to choose again.`
-      : "No band chosen yet: tick one to check it against the device and the evidence below.");
+  const anySweep = channels.length ? sweeps[channels[0]] : {};
+  const answer = bandSelectionAnswer(bySide, committed, labelOf, activeSides);
 
   return (
     <Card sx={{ ...CARD, p: 3 }}>
       <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Band selection</MDTypography>
-      <MDTypography sx={{ ...TYPE.lead, color: PAL.ink, mt: 1, maxWidth: "68ch" }}>{answer}</MDTypography>
+      <MDTypography data-testid="band-selection-answer" sx={{ ...TYPE.lead, color: PAL.ink, mt: 1, maxWidth: "68ch" }}>
+        {answer}
+      </MDTypography>
       {!grid.cross_setting_stability_included ? (
         <MDTypography sx={{ ...TYPE.body, color: PAL.warnText, mt: 1 }}>
           <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>
@@ -422,87 +558,41 @@ function BandSweepGridPanel({ grid, participantUid, committed, onCandidateChosen
           the same entry the Biomarkers page shows for its controls (decision 131). */}
       <SettingsFinePrint gs={grid.grid_settings} />
 
-      <MDBox display="flex" flexWrap="wrap" alignItems="center" mt={2} mb={2} role="group"
-        aria-label="Sensing contact pair">
-        {tabOrder.map(tab)}
-      </MDBox>
-      {refused[channel] ? (
-        <MDTypography sx={{ ...TYPE.body, color: PAL.failText, mb: 2 }}>
-          <span aria-hidden="true" style={{ marginRight: 6 }}>✕</span>
-          {`${labelOf(channel)}: ${refused[channel]}.`}
-        </MDTypography>
-      ) : null}
-
-      <MDBox display="flex" gap={4} flexWrap="wrap" mb={2}>
-        <ColorKey scale={DIVERGING} range={RANGE.correlation} title="Correlation with pain"
-          lowLabel="falls with pain" midLabel="0 no relationship" highLabel="rises with pain" width={300} />
+      <MDBox display="flex" gap={4} flexWrap="wrap" mt={2} mb={2}>
+        <ColorKey scale={DIVERGING} range={RANGE.correlation} title="r: correlation with pain"
+          lowLabel="falls with pain" midLabel="0 no relationship" highLabel="rises with pain" width={240} />
         <ColorKey scale={DIVERGING} range={RANGE.areaUnderCurve} title="AUC"
           lowLabel="pain lower when power high" midLabel="0.5 no relationship"
-          highLabel="pain higher when power high" width={300} />
+          highLabel="pain higher when power high" width={240} />
       </MDBox>
 
-      {/* The map. The two colour columns take the card's width between them; the mark and radio
-          columns are fixed. */}
-      <MDBox sx={{ display: "grid", gridTemplateColumns: "72px minmax(90px,1fr) minmax(90px,1fr) 96px 96px 64px",
-        columnGap: "8px", rowGap: "4px", alignItems: "center", overflowX: "auto" }}>
-        <MDTypography variant="caption" sx={{ ...HEAD, justifyContent: "flex-end" }}>Band centre</MDTypography>
-        <MDTypography variant="caption" sx={HEAD}>Correlation with pain</MDTypography>
-        <MDTypography variant="caption" sx={HEAD}>AUC</MDTypography>
-        <MDTypography variant="caption" sx={HEAD}>Corrected, 22 bands</MDTypography>
-        <MDTypography variant="caption" sx={HEAD}>Same at every setting</MDTypography>
-        <MDTypography variant="caption" sx={HEAD}>Use this band</MDTypography>
-        {rows.map((row) => {
-          const on = isCommitted(row);
-          const id = `cl-band-${String(channel)}-${row.band_center_hz}`;
-          const ring = on ? `2px solid ${PAL.accent}` : "none";
-          return [
-            <MDTypography key={`${id}-lab`} variant="caption" component="label" htmlFor={id}
-              sx={{ ...TYPE.body, textAlign: "right", paddingRight: "4px",
-                color: on ? PAL.accent : PAL.ink2, fontWeight: on ? 600 : 400, cursor: "pointer" }}>
-              {`${fmtHz(row.band_center_hz)} Hz`}
-            </MDTypography>,
-            <div key={`${id}-r`} title={corrTip(row)} style={{ height: CELL_H, borderRadius: 2,
-              background: cellFill(row.pearson_r, R_LO, R_HI), display: "flex", alignItems: "center",
-              justifyContent: "center", fontSize: PAL.fs.body,
-              color: inkFor(row.pearson_r, R_LO, R_HI), outline: ring, outlineOffset: -1 }}>
-              {row.pearson_r == null ? "" : fmtNum(row.pearson_r, 2)}
-            </div>,
-            <div key={`${id}-a`} title={aucTip(row)} style={{ height: CELL_H, borderRadius: 2,
-              background: cellFill(row.auc, A_LO, A_HI), display: "flex", alignItems: "center",
-              justifyContent: "center", fontSize: PAL.fs.body,
-              color: inkFor(row.auc, A_LO, A_HI), outline: ring, outlineOffset: -1 }}>
-              {row.auc == null ? "" : fmtNum(row.auc, 2)}
-            </div>,
-            <div key={`${id}-fw`} style={{ textAlign: "center", lineHeight: `${CELL_H}px` }}>
-              <FamilyWiseMark significant={row.family_wise_significant_8_to_30hz}
-                q={row.family_wise_q_8_to_30hz} />
-            </div>,
-            <div key={`${id}-st`} style={{ textAlign: "center", lineHeight: `${CELL_H}px` }}>
-              <StabilityMark stability={row.cross_setting_stability} />
-            </div>,
-            <div key={`${id}-use`} style={{ textAlign: "center" }}>
-              <input type="radio" id={id} name={`cl-use-band-${participantUid}`} checked={on}
-                onChange={() => choose(row)} aria-label={`use the ${fmtHz(row.band_center_hz)} Hz band on ${labelOf(channel)}`}
-                style={{ width: 16, height: 16, margin: 0, cursor: "pointer", accentColor: PAL.accent }} />
-            </div>,
-          ];
-        })}
+      {/* The two sides side by side, stacked when the page is narrow. */}
+      <MDBox sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0,1fr)", md: "repeat(2, minmax(0,1fr))" },
+        gap: 2.5 }}>
+        {SIDES.map((side) => (
+          <SideColumn key={side} side={side} channels={channels.filter((ch) => sideOf(ch) === side)}
+            sweeps={sweeps} refused={refused} chosen={bySide[side]} active={active(side)}
+            offNote={offNote} labelOf={labelOf} regionOf={regionOf}
+            participantUid={participantUid} onChoose={choose} />
+        ))}
       </MDBox>
 
       <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 2 }}>
-        {"✓ passes (corrected, or same at every setting) · – fails correction · ✕ differs across "
-          + "settings · ? unknown · ○ not tested"}
+        {"Corr.: corrected for 22 bands · Same: same at every setting · ✓ passes · – fails "
+          + "correction · ✕ differs across settings · ? unknown · ○ not tested"}
       </MDTypography>
 
       <Fold show="Reading guide, limits" hide="Hide how to read this" mt={2}>
         <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, maxWidth: "68ch" }}>
-          Each colour cell is the strongest of {countWord(nLengthsForChannel(sw, rows))} lengths of signal for that band, so
+          Each colour cell is the strongest of {countWord(nLengthsForChannel(anySweep || {}, mergedRows(anySweep || {})))} lengths of signal for that band, so
           optimistic by construction; hover for its 95% range, length and number of reports. Colours
           stop at ±0.5 (correlation) and 0.25/0.75 (AUC); stronger values draw at the end colour and
           print their true number. Every band is selectable, including those failing the 22-band
-          correction: marks are labels, not refusals. The device rule check needs current, pulse width,
-          rate and impedance, which a band alone lacks, so no allowed or refused mark is shown here; it
-          runs on the band you tick, in the sections below.
+          correction: marks are labels, not refusals. One band can be chosen on each side; the
+          sense-to-control wiring above decides which side drives which stimulator, and a side it
+          does not read is greyed. The device rule check needs current, pulse width, rate and
+          impedance, which a band alone lacks, so no allowed or refused mark is shown here; it runs
+          on the bands you tick, in the deployment decision above.
         </MDTypography>
       </Fold>
     </Card>

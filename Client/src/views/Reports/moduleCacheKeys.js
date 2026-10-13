@@ -58,6 +58,16 @@ export const CL = {
   pooled: `${MODULES.closedLoop}/pooled`,
   // the stored closed-loop simulation, fetched after the report the same way (Phase 8)
   simulation: `${MODULES.closedLoop}/simulation`,
+  // ONE REPORT PER STIMULATOR (the sense-to-control wiring, the PI, 2026-10-08), each in a slot of
+  // its own for the grid's reason above: sharing `report` let the stimulator driven from the other
+  // side be shown the band's own-side answer marked "changed since" (decision 470). `reportContra`:
+  // the page's band driving the other stimulator. `reportOther` and `reportOtherContra`: the band
+  // chosen on the other side, driving its own stimulator or the other one; `summaryOther` is that
+  // band's summary.
+  reportContra: `${MODULES.closedLoop}/reportContra`,
+  reportOther: `${MODULES.closedLoop}/reportOther`,
+  reportOtherContra: `${MODULES.closedLoop}/reportOtherContra`,
+  summaryOther: `${MODULES.closedLoop}/summaryOther`,
 };
 
 /** The Biomarkers page's own extra slots: answers it fetches beside its main one. The electrode
