@@ -39,7 +39,8 @@ def test_short_labels_are_distinct_so_two_bullets_never_read_the_same():
 
 
 def test_every_row_the_evaluator_emits_carries_its_rules_short_label():
-    cand = passing_candidate(pulse_width_us=160.0)       # D27 fails: above the 120 us ceiling
+    # D27 fails: above the 120 us ceiling, on the sensing lead (decision 471)
+    cand = passing_candidate(pulse_width_us=160.0, actuated_hemisphere="Right")
     part = participant_record()
     part.pop("brainsense_max_pulse_width_us", None)      # and a rule made not determinable
     rep = constraints.check_eligibility(cand, part)

@@ -447,6 +447,7 @@ def test_check_eligibility_returns_every_failure_rather_than_the_first():
         artifact_flags=["cardiac"],            # D17: artefact flagged by the device
         power_slope_vs_amplitude_sign=1,       # D19: wrong sign for the fixed control polarity
         pulse_width_us=160.0,                  # D27: above the 120 us artefact ceiling
+        actuated_hemisphere="Right",           # D27's pulse width counts on the sensing lead only
         frequency_search_closed=False,         # D30: rate would freeze mid-search
         has_pocket_adaptor=True,               # D32: BrainSense cannot be configured there
         paused_amplitude_mA=0.0,               # D34: a pause must not mean cessation
@@ -537,7 +538,8 @@ def test_d27_flags_the_right_hemispheres_160_us_pulse_width():
     The consequence is specific: the Lower LFP Threshold captured there is artefact-suspect and must
     not be read as a physiological measurement.
     """
-    report = check(passing_candidate(pulse_width_us=160.0), resolved_participant())
+    report = check(passing_candidate(pulse_width_us=160.0, actuated_hemisphere="Right"),
+                   resolved_participant())
     assert "D27" in ids(report.failures)
     assert "160" in next(row for row in report.failures if row["rule_id"] == "D27")["observed"]
 
@@ -564,7 +566,8 @@ def test_d27_prefers_the_capture_pulse_width_over_the_candidates_general_pulse_w
 
     # And the reverse: capture_pulse_width_us (160, over the ceiling) must win over a compliant
     # general pulse_width_us (60), so the candidate is refused end to end.
-    over_ceiling = passing_candidate(capture_pulse_width_us=160.0, pulse_width_us=60.0)
+    over_ceiling = passing_candidate(capture_pulse_width_us=160.0, pulse_width_us=60.0,
+                                     actuated_hemisphere="Right")
     failing = check(over_ceiling, resolved_participant())
     assert "D27" in ids(failing.failures)
     observed = next(row for row in failing.failures if row["rule_id"] == "D27")["observed"]
@@ -574,7 +577,7 @@ def test_d27_prefers_the_capture_pulse_width_over_the_candidates_general_pulse_w
 
 def test_d27_falls_back_to_the_general_pulse_width_when_no_capture_pulse_width_is_recorded():
     """A caller with no capture record at all still gets a real verdict from `pulse_width_us`."""
-    no_capture_field = passing_candidate(pulse_width_us=160.0)
+    no_capture_field = passing_candidate(pulse_width_us=160.0, actuated_hemisphere="Right")
     assert "capture_pulse_width_us" not in no_capture_field
     report = check(no_capture_field, resolved_participant())
     assert "D27" in ids(report.failures)
@@ -582,6 +585,24 @@ def test_d27_falls_back_to_the_general_pulse_width_when_no_capture_pulse_width_i
     assert "capture pulse width" not in observed
     assert "pulse width" in observed
     assert "160.0" in observed
+
+
+def test_d27_pulse_width_is_not_applied_to_a_stimulator_on_the_other_lead():
+    """The PI, 2026-10-14 (decision 471): when the other side's sensing drives a stimulator
+    (contralateral), the sensing contacts are on the other lead, so that stimulator's pulse width is
+    not what the 120 us artefact ceiling is about. The 5 mA amplitude ceiling still applies."""
+    contra = passing_candidate(capture_pulse_width_us=160.0, sensing_hemisphere="Right",
+                               actuated_hemisphere="Left")
+    assert constraints._p_d27(contra, resolved_participant()) is True
+    assert "not checked, because this stimulator is on the other lead" in constraints._o_d27(
+        contra, resolved_participant())
+    assert "D27" not in ids(check(contra, resolved_participant()).failures)
+    same_side = dict(contra, actuated_hemisphere="Right")
+    assert constraints._p_d27(same_side, resolved_participant()) is False
+    over_amplitude = dict(contra, capture_amp_high_mA=5.5)
+    assert constraints._p_d27(over_amplitude, resolved_participant()) is False
+    no_amplitude = {k: v for k, v in contra.items() if k not in ("capture_amp_high_mA", "amp_mA")}
+    assert constraints._p_d27(no_amplitude, resolved_participant()) is None
 
 
 def test_d19_rejects_a_biomarker_whose_power_falls_as_pain_rises():
@@ -955,7 +976,8 @@ def test_a_sensing_pair_refusal_is_cleared_at_the_programmer_not_by_measurement(
 
 
 def test_every_failed_row_carries_what_clears_it():
-    cand = passing_candidate(pulse_width_us=160.0)       # D27 fails: above the 120 us ceiling
+    # D27 fails: above the 120 us ceiling, on the sensing lead (decision 471)
+    cand = passing_candidate(pulse_width_us=160.0, actuated_hemisphere="Right")
     rep = constraints.check_eligibility(cand, resolved_participant())
     d27 = [r for r in rep.failures if r["rule_id"] == "D27"]
     assert d27 and d27[0]["resolved_by"] == "configuration"

@@ -926,6 +926,14 @@ def _p_d27(candidate, participant):
     hi = _num(candidate, "capture_amp_high_mA")
     if hi is None:
         hi = _num(candidate, "amp_mA")
+    # THE PULSE-WIDTH CEILING IS NOT APPLIED TO A STIMULATOR ON THE OTHER LEAD (the PI, 2026-10-14:
+    # "ignore 120 us limit", answering whether it applies when contralateral sensing drives that
+    # stimulator; decision 471). The sensing contacts are on the other lead, so this stimulator's
+    # pulse width is not what the artefact ceiling is about. The 5 mA amplitude ceiling still applies.
+    sens = _text(candidate, "sensing_hemisphere")
+    act = _text(candidate, "actuated_hemisphere")
+    if sens is not None and act is not None and sens != act:
+        return None if hi is None else hi <= CAPTURE_ARTEFACT_AMP_MA
     if pw is None or hi is None:
         return None
     return hi <= CAPTURE_ARTEFACT_AMP_MA and pw <= CAPTURE_ARTEFACT_PW_US
@@ -1510,6 +1518,11 @@ def _o_d27(c, p):
         pw_label, pw_val = "capture pulse width", c.get("capture_pulse_width_us")
     else:
         pw_label, pw_val = "pulse width", c.get("pulse_width_us")
+    sens, act = _text(c, "sensing_hemisphere"), _text(c, "actuated_hemisphere")
+    if sens is not None and act is not None and sens != act:
+        return (f"capture high amplitude {c.get('capture_amp_high_mA', c.get('amp_mA'))!r} mA against "
+                f"{CAPTURE_ARTEFACT_AMP_MA} mA; {pw_label} {pw_val!r} us not checked, because this "
+                f"stimulator is on the other lead from the sensing contacts (decision 471)")
     return (f"capture high amplitude {c.get('capture_amp_high_mA', c.get('amp_mA'))!r} mA against "
             f"{CAPTURE_ARTEFACT_AMP_MA} mA and {pw_label} {pw_val!r} us against "
             f"{CAPTURE_ARTEFACT_PW_US} us")
