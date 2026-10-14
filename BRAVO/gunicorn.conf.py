@@ -8,28 +8,27 @@ compose file changes. Options on the command line (`-w`, `--timeout`, `--reload`
 Each new web worker is warmed (`BRAVO/warmup.py`: R started, the numba
 loops compiled, the libraries a request imports loaded) after Django is set up and before the worker
 accepts a request (speed-up item B9, 2026-10-02). `BRAVO_WARMUP=0` in the environment turns it off.
-And when gunicorn starts, `when_ready` launches the two background loops boot.sh launches on the Mac
-(the saved-answer refresh, decision 435, and the daily pass), since Jetstream2 does not run boot.sh.
+And when gunicorn starts, `when_ready` launches the 10-minute rebuild loop (decision 435), since
+Jetstream2 does not run boot.sh. The daily pass is no longer started here (decision 473).
 Keep this file free of imports at the top: gunicorn's main process reads it too.
 """
 
 
 def when_ready(server):
-    """Runs once in gunicorn's main process when it starts (not on a reload). Starts the two
-    background loops `_agent_bridge/boot.sh` starts on the Mac, because the Jetstream2 server starts
-    gunicorn directly and never runs boot.sh (found 2026-10-04): the loop that works saved band
-    answers out again when a participant's data change (decision 435; `SAVED_ANSWERS_REFRESH=0`
-    turns it off) and the daily pass -- every pain score's heat maps, the stability column, the
-    clinic-sheet sync from Drive (decision 97; `STABILITY_PRECOMPUTE=0` turns it off, the PI's
-    "yes", 2026-10-04). Each loop's own pid lock stops a second copy where boot.sh also runs.
-    Never stops gunicorn starting."""
+    """Runs once in gunicorn's main process when it starts (not on a reload). Starts the loop that
+    rebuilds everything once when a participant's data change -- heat maps, stability column,
+    session-report summary, the pages' answers, every band (decisions 435, 464, 473;
+    `SAVED_ANSWERS_REFRESH=0` turns it off) -- because the Jetstream2 server starts gunicorn directly
+    and never runs boot.sh (found 2026-10-04). The daily pass is not started (decision 473, the PI,
+    2026-10-14): its rebuilds are in this loop and its clinic-sheet sync and live tests in the 2 pm
+    cron job, `_agent_bridge/daily_ingest.sh`. The loop's pid lock stops a second copy where boot.sh
+    also runs. Never stops gunicorn starting."""
     import os
     import subprocess
     here = os.path.dirname(os.path.abspath(__file__))
     logs = os.path.join(here, "_agent_bridge", "logs")
     for script, off_switch, log_name in (
-            ("saved_answers_refresh_loop.sh", "SAVED_ANSWERS_REFRESH", "saved_answers_refresh.boot.log"),
-            ("stability_precompute_loop.sh", "STABILITY_PRECOMPUTE", "stability_precompute.boot.log")):
+            ("saved_answers_refresh_loop.sh", "SAVED_ANSWERS_REFRESH", "saved_answers_refresh.boot.log"),):
         if os.environ.get(off_switch, "1") == "0":
             continue
         loop = os.path.join(here, "_agent_bridge", script)

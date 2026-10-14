@@ -40,6 +40,17 @@ MAX_WORKERS = 8
 GB_PER_WORKER = 6.0
 POOL_JOBS_PER_REPLAY = "3"
 STAMP_PREFIX = "bravo:saved_answer_refresh:"
+#: Left by `_agent_bridge/daily_ingest.sh` while it writes; a pass then waits for the next one, so an
+#: ingest is rebuilt once, on all its exports. A note older than INGEST_NOTE_MAX_SECONDS is ignored.
+INGEST_NOTE = "/usr/src/BRAVO/_agent_bridge/.ingest_running"
+INGEST_NOTE_MAX_SECONDS = 6 * 3600
+
+
+def ingest_running():
+    try:
+        return time.time() - os.path.getmtime(INGEST_NOTE) < INGEST_NOTE_MAX_SECONDS
+    except OSError:
+        return False
 
 
 def _function_for(kind):
@@ -219,21 +230,21 @@ def _run_in_batches(rows, workers, run, *, used_fraction=None, sleep=None, batch
 
 #: The heat maps' rebuild may run this long in one pass (six pain scores, about 9 s each on RCS08).
 HEAT_MAP_LIMIT_SECONDS = 1200
+#: The two products the daily pass used to build (decision 473), each this long at most.
+PRODUCT_LIMIT_SECONDS = 900
 
 
-def _heat_maps(participant_uid):
-    """THE BIOMARKERS HEAT MAPS, rebuilt when the data changed (decision 464; until now once a day by
-    the daily loop): every pain score's grid, by the daily loop's own command, in its own process so
-    this one stays small. It reads this pass's one REDCap download (the folder is in its environment).
-    The Closed-Loop band grid reads these same saved grids, so they go first."""
+def _run_command(name, participant_uid, limit):
+    """One of the daily loop's own commands for one participant, in its own process so this one
+    stays small; it reads this pass's one REDCap download (the folder is in its environment).
+    Counts its JSON lines: stored, already current, failed (a reason and nothing stored)."""
     import subprocess
     manage = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "manage.py")
     try:
-        p = subprocess.run([sys.executable, manage, "precompute_band_sweeps", "--participant",
-                            str(participant_uid), "--json"], capture_output=True, text=True,
-                           timeout=HEAT_MAP_LIMIT_SECONDS, cwd=os.path.dirname(manage))
+        p = subprocess.run([sys.executable, manage, name, "--participant", str(participant_uid), "--json"],
+                           capture_output=True, text=True, timeout=limit, cwd=os.path.dirname(manage))
     except subprocess.TimeoutExpired:
-        return {"built": 0, "current": 0, "failed": 0, "error": f"stopped after {HEAT_MAP_LIMIT_SECONDS} s"}
+        return {"built": 0, "current": 0, "failed": 0, "error": f"stopped after {limit} s"}
     rows = []
     for line in (p.stdout or "").splitlines():
         try:
@@ -244,6 +255,21 @@ def _heat_maps(participant_uid):
             "current": sum(1 for r in rows if r.get("already_current")),
             "failed": sum(1 for r in rows if not r.get("stored") and not r.get("already_current") and r.get("reason")),
             "seconds": round(sum(float(r.get("wall_seconds") or 0) for r in rows), 1)}
+
+
+def _heat_maps(participant_uid):
+    """THE BIOMARKERS HEAT MAPS, rebuilt when the data changed (decision 464): every pain score's
+    grid. The Closed-Loop band grid and the stability column read these saved grids, so they go first."""
+    return _run_command("precompute_band_sweeps", participant_uid, HEAT_MAP_LIMIT_SECONDS)
+
+
+def _other_products(participant_uid):
+    """THE STABILITY COLUMN AND THE SESSION-REPORT SUMMARY (decision 473; until then the daily pass's):
+    after the heat maps (the stability column reads their grids), before the replays (the Closed-Loop
+    report's device rules read the summary)."""
+    return {"stability": _run_command("compute_stability_grid", participant_uid, PRODUCT_LIMIT_SECONDS),
+            "session_summary": _run_command("rebuild_session_report_summary", participant_uid,
+                                            PRODUCT_LIMIT_SECONDS)}
 
 
 def refresh_participant(participant_uid, *, workers=MAX_WORKERS, force=False, stamp=None, run=None,
@@ -276,12 +302,13 @@ def _refresh_participant(participant_uid, *, workers, force, stamp, run, plan, h
     if not force and _last_stamp(participant_uid) == stamp:
         return {"participant": participant_uid, "skipped": "data unchanged", "replayed": 0}
     heat = (heat_maps or _heat_maps)(participant_uid)        # first: the band grid reads these
+    others = _other_products(participant_uid)
     rows = [r for r in request_memory.recent(participant_uid) if r.get("kind") in KINDS]
     from modules.ClosedLoopDeployment import all_band_requests as _abr
     if not rows and not _abr.registered(participant_uid):
         _save_stamp(participant_uid, stamp)
         return {"participant": participant_uid, "replayed": 0, "built": 0, "served": 0, "failed": 0,
-                "errors": [], "seconds": 0.0, "heat_maps": heat}
+                "errors": [], "seconds": 0.0, "heat_maps": heat, **others}
     t = time.perf_counter()
     runner = (lambda rs, w: _run_in_batches(rs, w, run)) if run else \
         (lambda rs, w: _run_in_batches(rs, w, _run_in_processes))
@@ -295,6 +322,7 @@ def _refresh_participant(participant_uid, *, workers, force, stamp, run, plan, h
     if every is not None:
         out["all_bands"] = every
     out["heat_maps"] = heat
+    out.update(others)
     return out
 
 
@@ -305,6 +333,10 @@ def main(argv=None):
     ap.add_argument("--workers", type=int, default=MAX_WORKERS)
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args(argv)
+    if ingest_running():
+        print(json.dumps({"skipped": "ingest running",
+                          "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}), flush=True)
+        return 0
     from modules.CacheStore import request_memory
     os.environ[request_memory.OFF_ENV] = "0"                   # the replays are not remembered
     os.environ.setdefault("BRAVO_POOL_JOBS", POOL_JOBS_PER_REPLAY)

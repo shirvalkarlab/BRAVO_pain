@@ -22,6 +22,7 @@ def fake(monkeypatch):
     monkeypatch.setattr(locks, "CLIENT_FACTORY", lambda: f)
     monkeypatch.setenv(rm.OFF_ENV, "1")              # the test runners turn remembering off
     monkeypatch.setattr(job, "_heat_maps", lambda uid: {"built": 0, "current": 0, "failed": 0})   # no real rebuild
+    monkeypatch.setattr(job, "_run_command", lambda name, uid, limit: {"built": 0, "current": 0, "failed": 0})
     yield f
 
 
@@ -113,13 +114,28 @@ def test_the_server_starts_the_loop():
     assert "modules/ClosedLoopDeployment/refresh_saved_answers.py" not in loop
 
 
-def test_gunicorn_also_starts_the_daily_loop():
-    """The daily pass (every pain score's heat maps, the stability column, the clinic-sheet sync)
-    was started only by boot.sh, which Jetstream2 never runs (the PI, 2026-10-04: "yes")."""
+def test_gunicorn_no_longer_starts_the_daily_pass():
+    """Decision 473 (the PI, 2026-10-14): the daily pass is gone on Jetstream2. Its rebuilds moved into
+    the 10-minute pass, which runs them only when the data changed; its clinic-sheet sync and live
+    tests moved into the 2 pm cron job (`daily_ingest.sh`)."""
     here = os.path.dirname(os.path.abspath(__file__))
     conf = open(os.path.join(here, "..", "..", "..", "gunicorn.conf.py")).read()
     hook = conf.split("def when_ready(server):", 1)[1].split("\ndef ", 1)[0]
-    assert "stability_precompute_loop.sh" in hook and "STABILITY_PRECOMPUTE" in hook
+    assert "saved_answers_refresh_loop.sh" in hook
+    assert "stability_precompute_loop.sh" not in hook
+
+
+def test_the_2pm_job_brings_data_in_and_leaves_the_rebuild_to_the_pass():
+    here = os.path.dirname(os.path.abspath(__file__))
+    daily = open(os.path.join(here, "..", "..", "..", "_agent_bridge", "daily_ingest.sh")).read()
+    for step in ("sync_clinic_sheets", "ingest_new_exports.sh", ".ingest_running", "run_both_suites.sh --live",
+                 "mysqldump"):
+        assert step in daily, step
+    # the sheets and exports are written under the note, so the pass rebuilds once, on both
+    assert daily.index("touch \"$NOTE\"") < daily.index("manage.py sync_clinic_sheets") < daily.index('\nrm -f "$NOTE"')
+    for rebuild in ("precompute_band_sweeps", "compute_stability_grid", "rebuild_session_report_summary",
+                    "refresh_saved_answers"):
+        assert rebuild not in daily, rebuild
 
 
 def test_a_replay_that_starts_the_helper_process_still_ends():
@@ -279,3 +295,36 @@ def test_heat_maps_are_rebuilt_first_when_the_data_changed_and_not_otherwise(fak
     again = job.refresh_participant("u1", stamp={"d": 1}, run=run, heat_maps=heat)
     assert order == ["heat maps", "replays"]
     assert first["heat_maps"]["built"] == 6 and "heat_maps" not in again
+
+
+def test_stability_and_session_summary_follow_the_heat_maps_before_the_replays(fake, monkeypatch):
+    """Decision 473: the daily pass's two other products are rebuilt in the same pass, when the data
+    changed: the stability column reads the heat maps' grids, and the Closed-Loop report (a replay)
+    reads the session-report summary."""
+    _remember_three()
+    order = []
+    monkeypatch.setattr(job, "_run_command", lambda name, uid, limit: order.append(name)
+                        or {"built": 1, "current": 0, "failed": 0, "seconds": 0.0})
+    monkeypatch.setattr(job, "_heat_maps", lambda uid: job._run_command("precompute_band_sweeps", uid, 1))
+    run = lambda rows, w: order.append("replays") or [{"kind": r["kind"], "ok": True} for r in rows]
+    first = job.refresh_participant("u1", stamp={"d": 1}, run=run, heat_maps=None)
+    job.refresh_participant("u1", stamp={"d": 1}, run=run, heat_maps=None)
+    assert order == ["precompute_band_sweeps", "compute_stability_grid",
+                     "rebuild_session_report_summary", "replays"]
+    assert first["stability"]["built"] == 1 and first["session_summary"]["built"] == 1
+
+
+def test_a_pass_waits_while_an_ingest_is_writing(fake, monkeypatch, tmp_path, capsys):
+    """The daily ingest (`_agent_bridge/daily_ingest.sh`) leaves a note while it writes; a pass that
+    started then would rebuild on half the new exports and again on all of them 10 minutes later."""
+    note = tmp_path / ".ingest_running"
+    monkeypatch.setattr(job, "INGEST_NOTE", str(note))
+    seen = []
+    monkeypatch.setattr(job, "refresh_participant", lambda uid, **k: seen.append(uid) or {"participant": uid})
+    note.write_text("")
+    assert job.main(["--participant", "u1"]) == 0
+    assert seen == [] and '"skipped": "ingest running"' in capsys.readouterr().out
+    os.utime(note, (0, 0))                                   # a note left by a crashed ingest is ignored
+    assert job.main(["--participant", "u1"]) == 0 and seen == ["u1"]
+    note.unlink()
+    assert job.main(["--participant", "u1"]) == 0 and seen == ["u1", "u1"]

@@ -13,8 +13,9 @@
 #
 # Exports are ingested one at a time, oldest session first; an export already held (same bytes) is
 # skipped, so running twice is safe. The copies carry the patient's name in their file names: they
-# go to a gitignored folder and are deleted when the script ends, whatever happens. The two server
-# loops pick up the new recordings by themselves (saved answers within 10 minutes, grids daily).
+# go to a gitignored folder and are deleted when the script ends, whatever happens. The server's
+# 10-minute loop rebuilds the heat maps and the pages' answers by itself (decision 464); the daily
+# run, daily_ingest.sh, also builds the stability column and the session-report summary.
 set -uo pipefail
 
 REMOTE="${BRAVO_EXPORTS_REMOTE:-dropbox:RCS08}"
