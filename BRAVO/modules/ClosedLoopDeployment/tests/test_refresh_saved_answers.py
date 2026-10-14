@@ -481,7 +481,9 @@ def test_a_stopped_pass_takes_every_process_it_started_with_it():
         time.sleep(0.1)
     gc = int(open(pid_file).read())
     os.kill(p.pid, signal.SIGTERM)
-    p.wait(timeout=30)
+    # 143 (stopped), not 137: the loop reads 137 as its own time limit and logged a 5-minute pass as
+    # "still running after the 3600s limit" (2026-10-14)
+    assert p.wait(timeout=30) == 143
     for _ in range(50):
         try:
             os.kill(gc, 0)

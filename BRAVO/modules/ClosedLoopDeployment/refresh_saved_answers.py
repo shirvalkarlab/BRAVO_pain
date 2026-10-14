@@ -455,7 +455,18 @@ def _own_process_group():
 
     def stop(signum, frame):
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        os.killpg(0, signal.SIGKILL)
+        me, group = os.getpid(), os.getpgrp()
+        for name in os.listdir("/proc"):
+            if not name.isdigit() or int(name) == me:
+                continue
+            try:
+                if os.getpgid(int(name)) == group:
+                    os.kill(int(name), signal.SIGKILL)
+            except OSError:
+                pass
+        # 143, "stopped": the loop reads 137 as its own time limit (2026-10-14, a 5-minute pass logged
+        # as "still running after the 3600s limit"); its real limit comes back as 124 from `timeout`
+        os._exit(143)
     signal.signal(signal.SIGTERM, stop)
 
 
