@@ -132,3 +132,25 @@ def test_the_refresh_jobs_own_files_are_not_analysis_code():
         assert SA.code_digest(root, cache=False) == one
         (p / "adapter.py").write_text("x = 2\n")
         assert SA.code_digest(root, cache=False) != one
+
+
+def test_the_rebuild_switch_builds_and_saves_again_even_when_an_answer_is_saved():
+    """BRAVO_SAVED_ANSWERS_REBUILD=1 (decision 474, the PI 2026-10-14: measure a rating-only pass
+    without waiting for a rating): every answer is worked out afresh and saved over its own label,
+    as a new pain rating forces; off, the saved answer is served."""
+    with _Sandbox():
+        calls = []
+
+        def build():
+            calls.append(1)
+            return {"available": True, "value": 41 + len(calls)}
+        inputs = {"request": {"band": 1}, "pain": "p1"}
+        SA.serve_or_build(KIND, UID, inputs, build, writer="closed_loop")
+        os.environ[SA.REBUILD_ENV] = "1"
+        try:
+            again = SA.serve_or_build(KIND, UID, inputs, build, writer="closed_loop")
+        finally:
+            os.environ.pop(SA.REBUILD_ENV, None)
+        assert len(calls) == 2 and again["saved_answer"]["served"] is False and again["value"] == 43
+        served = SA.serve_or_build(KIND, UID, inputs, build, writer="closed_loop")
+        assert len(calls) == 2 and served["saved_answer"]["served"] is True and served["value"] == 43

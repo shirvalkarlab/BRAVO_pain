@@ -81,6 +81,11 @@ def label(kind, participant_uid, inputs):
             hashlib.blake2b(blob.encode("utf8"), digest_size=20).hexdigest())
 
 
+#: "1": work every answer out afresh and save it over its own label, as a new pain rating forces
+#: (decision 474: to time a rating-only pass without waiting for a rating). Off by default.
+REBUILD_ENV = "BRAVO_SAVED_ANSWERS_REBUILD"
+
+
 def serve_or_build(kind, participant_uid, inputs, build, *, writer, volatile=(), refresh=None,
                    provenance=None, root=None):
     """The saved answer for ``inputs`` when there is one, otherwise ``build()``'s, saved when it is
@@ -99,7 +104,8 @@ def serve_or_build(kind, participant_uid, inputs, build, *, writer, volatile=(),
                                "key": _store.product_key(kind, participant_uid, sig)}
         return out
 
-    hit = _served()
+    rebuild = os.environ.get(REBUILD_ENV) == "1"
+    hit = None if rebuild else _served()
     if hit is not None:
         return hit
     # ONE BUILD AT A TIME PER ANSWER (decision 425): a request arriving while another worker builds
@@ -110,7 +116,7 @@ def serve_or_build(kind, participant_uid, inputs, build, *, writer, volatile=(),
     with _locks.build_lock(name, ttl_s=BUILD_LOCK_TTL_S, wait_s=BUILD_LOCK_WAIT_S,
                            ready=lambda: _store.read_stamp(kind, participant_uid, sig,
                                                            root=root) is not None) as lk:
-        if lk.role == "served":
+        if lk.role == "served" and not rebuild:
             hit = _served()
             if hit is not None:
                 return hit
