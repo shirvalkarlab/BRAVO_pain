@@ -59,16 +59,24 @@ def _function_for(kind):
     return getattr(importlib.import_module(mod), name)
 
 
-def worker_count(requested, available_gb=None):
-    """At most `MAX_WORKERS`, and one per `GB_PER_WORKER` of memory available (at least one)."""
-    if available_gb is None:
+def _headroom_gb(meminfo_kb=None):
+    """Memory left before MEMORY_LIMIT_FRACTION of the machine is in use, in GB."""
+    if meminfo_kb is None:
+        with open("/proc/meminfo") as fh:
+            meminfo_kb = {l.split(":")[0]: int(l.split()[1]) for l in fh if ":" in l}
+    total = meminfo_kb["MemTotal"] / 1024.0 / 1024.0
+    return meminfo_kb["MemAvailable"] / 1024.0 / 1024.0 - (1.0 - MEMORY_LIMIT_FRACTION) * total
+
+
+def worker_count(requested, headroom_gb=None):
+    """At most `MAX_WORKERS`, and one per `GB_PER_WORKER` of the memory left under MEMORY_LIMIT_FRACTION
+    of the machine (at least one): a replay process keeps about 6 GB for the whole pass (decision 474)."""
+    if headroom_gb is None:
         try:
-            with open("/proc/meminfo") as fh:
-                kb = next(int(l.split()[1]) for l in fh if l.startswith("MemAvailable:"))
-            available_gb = kb / 1024.0 / 1024.0
+            headroom_gb = _headroom_gb()
         except Exception:                                      # noqa: BLE001
-            available_gb = GB_PER_WORKER * MAX_WORKERS
-    return max(1, min(int(requested), MAX_WORKERS, int(available_gb // GB_PER_WORKER)))
+            headroom_gb = GB_PER_WORKER * MAX_WORKERS
+    return max(1, min(int(requested), MAX_WORKERS, int(max(0.0, headroom_gb) // GB_PER_WORKER)))
 
 
 def data_stamp(participant_uid):
@@ -241,9 +249,10 @@ def _all_bands(participant_uid, done_rows, workers, run, plan):
             "grid_available": p.get("grid_available", True), **_count(list(r1) + list(r2))}
 
 
-#: Above this share of memory in use a pass waits before its next batch (decision 464; the PI's
-#: standing rule: relieve memory above 75 %).
-MEMORY_LIMIT_FRACTION = 0.75
+#: Above this share of memory in use a pass closes its processes and waits before its next batch
+#: (decision 464). 90 %, not 75 %: the PI, 2026-10-14, "dont [worry] about staying under the 75%
+#: threshold thats why its a threshold ... max out the resources" (decision 474).
+MEMORY_LIMIT_FRACTION = 0.90
 
 
 def _used_fraction():

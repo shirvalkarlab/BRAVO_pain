@@ -90,10 +90,14 @@ def test_each_kind_is_answered_by_its_pages_function():
                               "band_lsb_power", cs.REPORT_KIND}
 
 
-def test_workers_are_capped_at_eight_and_by_free_memory():
-    assert job.worker_count(20, available_gb=200) == 8
-    assert job.worker_count(8, available_gb=13) == 2
-    assert job.worker_count(8, available_gb=1) == 1
+def test_workers_are_capped_at_eight_and_by_the_memory_left_under_nine_tenths():
+    """Decision 474: a replay process keeps about 6 GB for the pass (measured 2026-10-14). The PI,
+    2026-10-14: 75 % is an alarm with room above it, not a ceiling; use the machine."""
+    assert job.worker_count(20, headroom_gb=200) == 8
+    assert job.worker_count(8, headroom_gb=29) == 4
+    assert job.worker_count(8, headroom_gb=1) == 1
+    assert job.worker_count(8, headroom_gb=-5) == 1
+    assert job._headroom_gb({"MemTotal": 122 * 2**20, "MemAvailable": 60 * 2**20}) == 60 - (1 - 0.9) * 122
 
 
 def test_the_server_starts_the_loop():
@@ -253,21 +257,21 @@ def test_the_committed_band_and_its_neighbours_go_first():
     assert A.order_committed_first(bands, None) == bands
 
 
-def test_memory_is_checked_before_every_batch_and_waits_above_three_quarters():
+def test_memory_is_checked_before_every_batch_and_waits_above_nine_tenths():
     seen, waits = [], []
-    mem = iter([0.5, 0.8, 0.9, 0.6, 0.5])
+    mem = iter([0.5, 0.92, 0.95, 0.85, 0.5])
     out = job._run_in_batches([{"kind": "k", "body": {"i": i}} for i in range(5)], 2,
                               run=lambda rows, w: seen.append([r["body"]["i"] for r in rows]) or [{"ok": True}] * len(rows),
                               used_fraction=lambda: next(mem), sleep=lambda s: waits.append(s), batch=2)
     assert seen == [[0, 1], [2, 3], [4]]
-    assert len(out) == 5 and len(waits) == 2               # waited while 80% and then 90% was used
+    assert len(out) == 5 and len(waits) == 2               # waited while 92% and then 95% was used; 85% goes on
 
 
-def test_above_three_quarters_the_pass_closes_its_processes_before_it_waits():
+def test_above_nine_tenths_the_pass_closes_its_processes_before_it_waits():
     """Decision 474 (2026-10-14, 101 of 122 GB): with one set of processes for the whole pass,
     waiting freed nothing, because the processes kept their memory; they are closed first."""
     events = []
-    mem = iter([0.5, 0.8, 0.6, 0.5])
+    mem = iter([0.5, 0.92, 0.6, 0.5])
     job._run_in_batches([{"kind": "k", "body": {"i": i}} for i in range(3)], 1,
                         run=lambda rows, w: events.append("batch") or [{"ok": True}] * len(rows),
                         used_fraction=lambda: next(mem), sleep=lambda s: events.append("wait"), batch=1,
