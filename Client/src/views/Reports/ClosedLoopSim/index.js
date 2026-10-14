@@ -80,6 +80,7 @@ import useDeploymentSummary from "./useDeploymentSummary";
 import useDeploymentReport from "./useDeploymentReport";
 import StimProgramCard from "./StimProgramCard";
 import WiringCard from "./WiringCard";
+import useWiringComparison from "./useWiringComparison";
 import { controllers as wiringControllers, sensedSides } from "./wiring";
 import { fromServer, isEdited, requestProgram, sensingPair } from "./stimProgram";
 import { SessionController } from "database/session-control";
@@ -486,6 +487,13 @@ function ClosedLoopSim() {
   const otherSummary = otherBc ? withheldIfOtherBand(otherSummaryRaw, otherBc, "summary", { painScore,
     includeSheets, matching: otherRequestParams, matchingKeys: MATCHING_KEYS.filter((k) => k !== "MatchDirection"
       && k !== "IncludeClinicSheetRatings") }) : otherSummaryRaw;
+  // THE THREE WIRINGS COMPARED BY SIMULATION (decision 472), once a band is chosen on each side.
+  const wiringComparison = useWiringComparison({
+    participantUid: participant_uid,
+    left: bandSynced ? (bandsBySide.Left && bandsBySide.Left.band_candidate) || null : null,
+    right: bandSynced ? (bandsBySide.Right && bandsBySide.Right.band_candidate) || null : null,
+    painScore, matching: reportMatching, stimProgram: programForReport,
+  });
   // The extra answers the wiring asked for, for the one Recompute control.
   const extraAnswers = [
     [contraReportRaw, needs(true, "contralateral")], [otherReportRaw, needs(false, "own")],
@@ -704,7 +712,8 @@ function ClosedLoopSim() {
             edited={programEdited} sensing={bandSensing} unavailable={programUnavailable} />
         </MDBox>
         <MDBox id="cl-wiring">
-          <WiringCard value={wiring} onChange={setWiring} bandSides={bandSides} />
+          <WiringCard value={wiring} onChange={setWiring} bandSides={bandSides}
+            comparison={wiringComparison} />
         </MDBox>
 
         {bc ? (

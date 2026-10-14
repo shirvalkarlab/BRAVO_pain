@@ -24,6 +24,10 @@ import SUMMARY from "./__fixtures__/rcs08_summary_L13_24p5_2026-09-25.json";
 // eslint-disable-next-line import/first
 import FULL from "./__fixtures__/rcs08_deployment_payload_2026-09-15.json";
 
+// Each test renders the whole page through up to four reports and the wiring comparison: about 28 s
+// alone, more when the full page-test run shares the machine, so past the 30 s default.
+jest.setTimeout(120000);
+
 const RIGHT_BC = { ...LOCAL_BC, contact: "ZERO_THREE_RIGHT", contact_label: "R 0-3", center_freq_hz: 18.5,
   hemisphere: "Right" };
 const env = (bc) => ({ band_candidate: bc, committed_at: 2, action: "chosen" });

@@ -68,6 +68,8 @@ export const CL = {
   reportOther: `${MODULES.closedLoop}/reportOther`,
   reportOtherContra: `${MODULES.closedLoop}/reportOtherContra`,
   summaryOther: `${MODULES.closedLoop}/summaryOther`,
+  // the three sense-to-control wirings compared by simulation (decision 472)
+  wiring: `${MODULES.closedLoop}/wiring`,
 };
 
 /** The Biomarkers page's own extra slots: answers it fetches beside its main one. The electrode

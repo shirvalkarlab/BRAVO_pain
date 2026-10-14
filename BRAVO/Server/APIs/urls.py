@@ -92,6 +92,7 @@ urlpatterns = [
     path('queryElectrodeIdentifierCheck', DataAnalysis.QueryElectrodeIdentifierCheck.as_view()),
     path('queryTimelineDetail', DataAnalysis.QueryTimelineDetail.as_view()),
     path('queryStimProgram', DataAnalysis.QueryStimProgram.as_view()),
+    path('queryWiringComparison', DataAnalysis.QueryWiringComparison.as_view()),
     path('queryDeploymentRocByEra', DataAnalysis.QueryDeploymentRocByEra.as_view()),
     path('queryDeploymentSummary', DataAnalysis.QueryDeploymentSummary.as_view()),
     path('queryPainScores', DataAnalysis.QueryPainScores.as_view()),

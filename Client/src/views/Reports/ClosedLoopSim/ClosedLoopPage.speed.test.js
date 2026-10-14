@@ -116,7 +116,10 @@ async function untilBackgroundHasData(container) {
   await waitFor(() => {
     expect(container.querySelector("#cl-simulation").textContent).toMatch(/Closing the loop moves/);
     expect(container.querySelector("#cl-three-source").textContent).toMatch(/Sensing on /);
-  }, { timeout: 3000 });
+    // 10 s, not 3: the wait is for the stand-in answers to arrive, which is not what these tests
+    // check, and on a loaded machine (the full page-test run beside the server's background pass)
+    // 3 s failed three runs in four (2026-10-13/14) while every case passed alone.
+  }, { timeout: 10000 });
 }
 
 describe("C5: the Background fold's figures are drawn when it is first opened", () => {

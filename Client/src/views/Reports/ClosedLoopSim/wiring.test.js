@@ -68,3 +68,49 @@ test("the three choices sit in one row, not stacked (the PI, 2026-10-08)", () =>
   expect(src).toMatch(/flexWrap: "nowrap"/);
   expect(src).not.toMatch(/gridTemplateColumns/);
 });
+
+/* The simulated comparison on the card (decision 472). */
+const COMPARISON = {
+  available: true,
+  record: { hours_both_sides: 4.83, n_ratings_high: 44, n_ratings_low: 68, n_days: 12, n_ratings_in_opening: 19,
+    opening_s: 60 },
+  pain_split: { why: "the pain scores were split into thirds" }, rating_tol_s: 60,
+  response_per_mA: { "Left<Left": { slope_per_mA: -5.68, source: "stored pooled line" } },
+  wirings: {
+    independent: { scored: true, score: 0.356, score_interval: [0.097, 0.543], auc: { Left: 0.386, Right: 0.326 },
+      switches_per_hour: 2.0, share_at_highest: { Left: 0.18, Right: 0.27 }, mean_current_mA: { Left: 3.1, Right: 3.2 },
+      device_allows: false },
+    left_both: { scored: true, score: 0.256, score_interval: [0.146, 0.418], auc: { Left: 0.27, Right: 0.24 },
+      device_allows: false },
+    right_both: { scored: true, score: 0.37, score_interval: [0.08, 0.57], auc: { Left: 0.41, Right: 0.33 },
+      device_allows: true },
+  },
+};
+
+test("no band on one side: the comparison asks for one", () => {
+  render(wrap(<WiringCard value={null} onChange={() => {}} bandSides={["Left"]} comparison={null} />));
+  expect(screen.getByTestId("wiring-comparison"))
+    .toHaveTextContent("Choose a band on each side to compare the three wirings by simulation.");
+});
+
+test("none recommended: no button is marked, the reason is said, the numbers are folded shut", () => {
+  const data = { ...COMPARISON, recommendation: { wiring: null, basis: "none_follows_pain",
+    reason: "in none of the three wirings did the simulated current rise with pain" } };
+  render(wrap(<WiringCard value={null} onChange={() => {}} bandSides={["Left", "Right"]}
+    comparison={{ data, loading: false, err: null }} />));
+  expect(screen.queryByTestId("wiring-recommended")).toBeNull();
+  expect(screen.getByTestId("wiring-recommendation")).toHaveTextContent(
+    "Simulation recommends none: in none of the three wirings did the simulated current rise with pain.");
+  expect(screen.getByText(/Replay of 4.8 h recorded on both sides; 112 pain ratings/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /Simulated comparison, every number/ }))
+    .toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByTestId("wiring-row-right_both")).toHaveTextContent("0.37 (0.08–0.57)");
+});
+
+test("a recommendation marks its button", () => {
+  const data = { ...COMPARISON, recommendation: { wiring: "right_both", basis: "clearly_best", reason: "x." } };
+  render(wrap(<WiringCard value={null} onChange={() => {}} bandSides={["Left", "Right"]}
+    comparison={{ data, loading: false, err: null }} />));
+  expect(screen.getByTestId("wiring-right_both")).toContainElement(screen.getByTestId("wiring-recommended"));
+  expect(screen.getAllByTestId("wiring-recommended")).toHaveLength(1);
+});
