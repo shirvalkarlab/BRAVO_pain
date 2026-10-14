@@ -5377,7 +5377,53 @@ def _validation_tolerance_min(match_tol_min):
     return float(max(analytics.BAND_TIME_SWEEP_SECONDS)) / 60.0
 
 
+#: Set in the rebuild's worker processes only (`refresh_saved_answers._replay_process_init`).
+BAND_SETUP_MEMO_ENV = "BRAVO_BAND_SETUP_MEMO"
+#: The request fields that name the band, not the preparation: left out of the memo's label.
+_BAND_ONLY_FIELDS = ("Channel", "CenterHz", "BandCenterHz", "BandWidthHz", "Cutpoint")
+_BAND_SETUP_MEMO = {}
+_BAND_SETUP_MEMO_MAX = 2
+
+
+def _setup_data_identity(request_data):
+    """Every piece of data `_band_validation_setup_build` reads, by identity: the recording set,
+    the pain-report table (content hash) and the newest clinic sheets."""
+    uid = request_data.get("ParticipantId")
+    Participant = models.Participant.find(uid=uid)
+    if Participant is None:
+        return (str(uid), None)
+    pro = _load_pros(request_data, Participant)
+    sheets = _cache_store.newest_stamp(CLINIC_SHEET_STEPS_KIND, str(uid),
+                                       root=_SHARED_CACHE_DIR_OVERRIDE) or {}
+    return (repr(_recording_set_identity(uid)),
+            _pro_table_digest(pro) if pro is not None and len(pro) else "none",
+            sheets.get("signature_key"))
+
+
 def _band_validation_setup(request_data):
+    """`_band_validation_setup_build`, kept between requests in the rebuild's workers (decision 474,
+    the PI, 2026-10-14). The preparation is the same for every band of a participant under one set
+    of settings, and the rebuild asks for about 900 band answers a pass; each paid 1.3-3 s for it.
+    Filed under the whole request minus the band's own fields (an unknown field stays in, which can
+    only make sharing rarer) and the identity of every piece of data it reads, so a hand upload
+    during a pass cannot be answered from the old data. Every caller gets its own deep copy; at most two kept. Off
+    unless BAND_SETUP_MEMO_ENV is "1": the page's web workers never keep it."""
+    if os.environ.get(BAND_SETUP_MEMO_ENV) != "1":
+        return _band_validation_setup_build(request_data)
+    import copy
+    rest = {k: v for k, v in request_data.items() if k not in _BAND_ONLY_FIELDS}
+    try:
+        key = (json.dumps(rest, sort_keys=True, default=str), _setup_data_identity(request_data))
+    except Exception:                                          # noqa: BLE001 -- no label, no memo
+        return _band_validation_setup_build(request_data)
+    if key not in _BAND_SETUP_MEMO:
+        if len(_BAND_SETUP_MEMO) >= _BAND_SETUP_MEMO_MAX:
+            _BAND_SETUP_MEMO.clear()
+        _BAND_SETUP_MEMO[key] = _band_validation_setup_build(request_data)
+    return copy.deepcopy(_BAND_SETUP_MEMO[key])
+
+
+def _band_validation_setup_build(request_data):
     """Everything `_validate_band_core` needs that does NOT depend on which band is being asked
     about: the participant, the pain-report table, the assembled spectrum matrix, the pooled
     matched detail, and the chronic stimulation series.

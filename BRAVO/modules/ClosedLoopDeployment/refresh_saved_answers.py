@@ -135,6 +135,8 @@ def _replay_process_init(parent_pid, sys_path):
     from multiprocessing import util
     from modules.DecodeCommon import side_process
     side_process._child_init(parent_pid, sys_path)
+    from modules.Biomarkers import bravo_service as _bs
+    os.environ[_bs.BAND_SETUP_MEMO_ENV] = "1"                # this worker keeps the band preparation (decision 474)
     util.Finalize(None, _stop_helpers, exitpriority=100)
 
 
@@ -146,6 +148,43 @@ def _stop_helpers():
     for name, mod in list(sys.modules.items()):
         if name.endswith("DecodeCommon.side_process") and hasattr(mod, "shutdown"):
             mod.shutdown()
+
+
+#: A replay process is replaced after this many replays, so what it keeps cannot grow without end.
+REPLAYS_PER_PROCESS = 20
+_PASS_POOL = {}
+
+
+def _pass_pool(workers):
+    """ONE SET OF REPLAY PROCESSES FOR THE WHOLE PASS (decision 474). A fresh set per batch of 24
+    started R and emptied every in-process store about 40 times a pass; the participant's
+    preparation, the same for every band, was then redone for every request (a cold summary 14.2 s
+    against 4.5 s warm, measured 2026-10-14). Closed by `refresh_participant` when the pass ends."""
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+    if _PASS_POOL.get("workers") != workers:
+        _close_pass_pool()
+        _PASS_POOL["pool"] = ProcessPoolExecutor(
+            max_workers=workers, mp_context=multiprocessing.get_context("spawn"),
+            initializer=_replay_process_init, initargs=(os.getpid(), list(sys.path)),
+            max_tasks_per_child=REPLAYS_PER_PROCESS)
+        _PASS_POOL["workers"] = workers
+    return _PASS_POOL["pool"]
+
+
+def _close_pass_pool():
+    pool = _PASS_POOL.pop("pool", None)
+    _PASS_POOL.pop("workers", None)
+    if pool is not None:
+        pool.shutdown(wait=True, cancel_futures=True)
+
+
+def _run_in_pool(rows, workers, replay=_replay_one):
+    """`_run_in_batches` over the pass's one set of processes (memory checked before each batch)."""
+    def run(batch, w):
+        futures = [_pass_pool(w).submit(replay, r["kind"], r["body"]) for r in batch]
+        return [f.result() for f in futures]
+    return _run_in_batches(rows, workers, run, before_wait=_close_pass_pool)
 
 
 def _run_in_processes(rows, workers, replay=_replay_one):
@@ -213,16 +252,21 @@ def _used_fraction():
     return 1.0 - m["MemAvailable"] / float(m["MemTotal"])
 
 
-def _run_in_batches(rows, workers, run, *, used_fraction=None, sleep=None, batch=None):
+def _run_in_batches(rows, workers, run, *, used_fraction=None, sleep=None, batch=None, before_wait=None):
     """`run` over `rows` a batch at a time (3 rows per worker), checking memory before each batch and
     waiting (30 s at a time) while more than `MEMORY_LIMIT_FRACTION` is in use (decision 464). The
-    pass's own time limit (the loop's `timeout`) bounds the waiting."""
+    pass's own time limit (the loop's `timeout`) bounds the waiting. `before_wait` runs once before
+    a wait: the pass closes its replay processes there, or waiting would free nothing (decision 474)."""
     used_fraction = used_fraction or _used_fraction
     sleep = sleep or time.sleep
     size = max(1, int(batch or workers * 3))
     out = []
     for i in range(0, len(rows), size):
+        closed = False
         while used_fraction() > MEMORY_LIMIT_FRACTION:
+            if before_wait is not None and not closed:
+                before_wait()
+                closed = True
             sleep(30)
         out.extend(run(rows[i:i + size], workers))
     return out
@@ -290,32 +334,95 @@ def refresh_participant(participant_uid, *, workers=MAX_WORKERS, force=False, st
     except redcap_client.RedcapUnavailable as exc:
         return {"participant": participant_uid, "skipped": f"REDCap not answering: {exc}", "replayed": 0}
     finally:
+        _close_pass_pool()
         os.environ.pop(redcap_client.PASS_DIR_ENV, None)
         shutil.rmtree(pass_dir, ignore_errors=True)
 
 
+#: The parts of the data stamp that change band power or what a band's answers are built from:
+#: a change in any of them rebuilds every band at once (decision 474). A change in the pain ratings or
+#: clinic sheets alone rebuilds only what the pages asked for; every band follows within a day.
+BAND_STRUCTURAL_KEYS = ("recordings", "settings_files", "code")
+BAND_CATCH_UP_SECONDS = 20 * 3600
+BAND_STAMP_PREFIX = STAMP_PREFIX + "every_band:"
+
+
+def _now():
+    return time.time()
+
+
+def _last_band_stamp(participant_uid):
+    from modules.CacheStore import locks
+    try:
+        client = locks._client()
+        raw = client.get(BAND_STAMP_PREFIX + str(participant_uid)) if client is not None else None
+        return json.loads(raw.decode() if isinstance(raw, bytes) else raw) if raw else None
+    except Exception:                                          # noqa: BLE001
+        return None
+
+
+def _save_band_stamp(participant_uid, stamp):
+    from modules.CacheStore import locks
+    try:
+        client = locks._client()
+        if client is not None:
+            client.set(BAND_STAMP_PREFIX + str(participant_uid),
+                       json.dumps({"stamp": stamp, "t": _now()}, sort_keys=True))
+    except Exception:                                          # noqa: BLE001
+        pass
+
+
+def bands_due(participant_uid, stamp, force=False):
+    """Whether every band is rebuilt in this pass (decision 474): on the first pass, when the
+    recordings, settings files or code changed since the last every-band run, or when anything else
+    changed and that run is BAND_CATCH_UP_SECONDS old."""
+    if force:
+        return True
+    last = _last_band_stamp(participant_uid)
+    if not last:
+        return True
+    prev = last.get("stamp") or {}
+    if any(prev.get(k) != stamp.get(k) for k in BAND_STRUCTURAL_KEYS):
+        return True
+    return prev != stamp and _now() - float(last.get("t") or 0) >= BAND_CATCH_UP_SECONDS
+
+
 def _refresh_participant(participant_uid, *, workers, force, stamp, run, plan, heat_maps):
     from modules.CacheStore import request_memory
+    from modules.ClosedLoopDeployment import all_band_requests as _abr
     stamp = data_stamp(participant_uid) if stamp is None else stamp
     if stamp is None:
         return {"participant": participant_uid, "skipped": "no such participant", "replayed": 0}
+    registered = _abr.registered(participant_uid)
+    due = registered and bands_due(participant_uid, stamp, force)
+    runner = (lambda rs, w: _run_in_batches(rs, w, run)) if run else \
+        (lambda rs, w: _run_in_pool(rs, w))
     if not force and _last_stamp(participant_uid) == stamp:
-        return {"participant": participant_uid, "skipped": "data unchanged", "replayed": 0}
+        if not due:
+            return {"participant": participant_uid, "skipped": "data unchanged", "replayed": 0}
+        # THE DAILY CATCH-UP: the pages' answers are current, every band is a day behind the ratings
+        t = time.perf_counter()
+        every = _all_bands(participant_uid, [], workers, runner, plan)
+        _save_band_stamp(participant_uid, stamp)
+        return {"participant": participant_uid, "replayed": 0, "built": 0, "served": 0, "failed": 0,
+                "errors": [], "all_bands": every, "seconds": round(time.perf_counter() - t, 1),
+                "every_band_catch_up": True}
     heat = (heat_maps or _heat_maps)(participant_uid)        # first: the band grid reads these
     others = _other_products(participant_uid)
     rows = [r for r in request_memory.recent(participant_uid) if r.get("kind") in KINDS]
-    from modules.ClosedLoopDeployment import all_band_requests as _abr
-    if not rows and not _abr.registered(participant_uid):
+    if not rows and not registered:
         _save_stamp(participant_uid, stamp)
         return {"participant": participant_uid, "replayed": 0, "built": 0, "served": 0, "failed": 0,
                 "errors": [], "seconds": 0.0, "heat_maps": heat, **others}
     t = time.perf_counter()
-    runner = (lambda rs, w: _run_in_batches(rs, w, run)) if run else \
-        (lambda rs, w: _run_in_batches(rs, w, _run_in_processes))
     results = runner(rows, workers) if rows else []
-    from modules.ClosedLoopDeployment import all_band_requests
-    every = (_all_bands(participant_uid, rows, workers, runner, plan)
-             if all_band_requests.registered(participant_uid) else None)
+    every = None
+    if due:
+        every = _all_bands(participant_uid, rows, workers, runner, plan)
+        _save_band_stamp(participant_uid, stamp)
+    elif registered:
+        every = {"skipped": "only pain ratings or clinic sheets changed; every band follows within "
+                            f"{BAND_CATCH_UP_SECONDS // 3600} h"}
     _save_stamp(participant_uid, stamp)
     out = {"participant": participant_uid, "replayed": len(results), **_count(results),
            "seconds": round(time.perf_counter() - t, 1)}
@@ -324,6 +431,23 @@ def _refresh_participant(participant_uid, *, workers, force, stamp, run, plan, h
     out["heat_maps"] = heat
     out.update(others)
     return out
+
+
+def _own_process_group():
+    """Lead a process group and end all of it on SIGTERM (the stop signal the loop's time limit
+    sends). 2026-10-14: a stopped pass left 119 calculation-pool processes behind, children of its
+    killed replay processes; they held the loop's output pipe and the loop froze, as on 2026-10-05.
+    Every process the pass starts inherits the group, so one signal ends them all."""
+    import signal
+    try:
+        os.setpgrp()
+    except OSError:
+        return
+
+    def stop(signum, frame):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        os.killpg(0, signal.SIGKILL)
+    signal.signal(signal.SIGTERM, stop)
 
 
 def main(argv=None):
@@ -356,6 +480,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    _own_process_group()
     sys.path.insert(0, "/usr/src/BRAVO")
     sys.path.insert(1, "/usr/src/BRAVO/modules")
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "BRAVO.settings")

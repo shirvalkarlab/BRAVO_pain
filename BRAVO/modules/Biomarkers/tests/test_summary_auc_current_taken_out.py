@@ -411,6 +411,6 @@ def test_zero_and_negative_tolerances_fall_back_to_the_longest_length_of_signal(
 
 
 def test_the_sign_off_setup_uses_the_guarded_value():
-    src = inspect.getsource(B._band_validation_setup)
+    src = inspect.getsource(B._band_validation_setup_build)     # its body since decision 474
     assert "tolerance_min=_validation_tolerance_min(match_tol_min)" in src
     assert "float(match_tol_min)" not in src

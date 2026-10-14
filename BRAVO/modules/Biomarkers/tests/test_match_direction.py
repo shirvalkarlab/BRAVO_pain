@@ -269,8 +269,9 @@ def test_run_for_participant_and_validate_band_core_both_use_the_shared_forecast
     pass while `_validate_band_core` quietly stopped resolving MatchDirection at all.
     """
     # The functions that must call the helper directly. `_band_validation_setup` now owns the parse
-    # that `_validate_band_core` used to make itself.
-    for fn in (bs.run_for_participant, bs._band_validation_setup):
+    # that `_validate_band_core` used to make itself; its body is `_band_validation_setup_build`
+    # since decision 474 (the wrapper only keeps it between bands in the rebuild's workers).
+    for fn in (bs.run_for_participant, bs._band_validation_setup_build):
         src = inspect.getsource(fn)
         assert "_forecast_match_direction(request_data)" in src, (
             f"{fn.__name__} no longer calls the shared MatchDirection helper -- "
@@ -278,7 +279,8 @@ def test_run_for_participant_and_validate_band_core_both_use_the_shared_forecast
 
     # No call site may re-parse MatchDirection inline alongside the shared helper -- including
     # `_validate_band_core`, which must get its answer from the setup helper and nowhere else.
-    for fn in (bs.run_for_participant, bs._band_validation_setup, bs._validate_band_core):
+    for fn in (bs.run_for_participant, bs._band_validation_setup, bs._band_validation_setup_build,
+               bs._validate_band_core):
         src = inspect.getsource(fn)
         assert 'request_data.get("MatchDirection"' not in src, (
             f"{fn.__name__} parses MatchDirection inline again, alongside the shared helper")

@@ -263,6 +263,25 @@ def test_memory_is_checked_before_every_batch_and_waits_above_three_quarters():
     assert len(out) == 5 and len(waits) == 2               # waited while 80% and then 90% was used
 
 
+def test_above_three_quarters_the_pass_closes_its_processes_before_it_waits():
+    """Decision 474 (2026-10-14, 101 of 122 GB): with one set of processes for the whole pass,
+    waiting freed nothing, because the processes kept their memory; they are closed first."""
+    events = []
+    mem = iter([0.5, 0.8, 0.6, 0.5])
+    job._run_in_batches([{"kind": "k", "body": {"i": i}} for i in range(3)], 1,
+                        run=lambda rows, w: events.append("batch") or [{"ok": True}] * len(rows),
+                        used_fraction=lambda: next(mem), sleep=lambda s: events.append("wait"), batch=1,
+                        before_wait=lambda: events.append("close"))
+    assert events == ["batch", "close", "wait", "batch", "batch"]
+
+
+def test_a_replay_process_is_replaced_often_and_keeps_few_preparations():
+    from modules.Biomarkers import bravo_service as bs
+    assert job.REPLAYS_PER_PROCESS <= 20 and bs._BAND_SETUP_MEMO_MAX <= 2
+    import inspect
+    assert "before_wait=_close_pass_pool" in inspect.getsource(job._run_in_pool)
+
+
 def test_a_pass_shares_one_redcap_download_and_cleans_up(fake, monkeypatch):
     from modules.Biomarkers.routines import redcap_client as rc
     _remember_three()
@@ -328,3 +347,148 @@ def test_a_pass_waits_while_an_ingest_is_writing(fake, monkeypatch, tmp_path, ca
     assert job.main(["--participant", "u1"]) == 0 and seen == ["u1"]
     note.unlink()
     assert job.main(["--participant", "u1"]) == 0 and seen == ["u1", "u1"]
+
+
+# ---- decision 474: a new pain rating rebuilds what the pages asked for, not every band ----
+def _stamp(**over):
+    s = {"recordings": "r1", "settings_files": "f1", "pain_reports": "p1", "clinic_sheets": "c1", "code": "k1"}
+    s.update(over)
+    return s
+
+
+def _band_run(seen):
+    def run(rows, workers):
+        seen.extend(r["kind"] for r in rows)
+        return [{"kind": r["kind"], "ok": True, "served": False} for r in rows]
+    return run
+
+
+def test_only_new_ratings_rebuild_the_pages_answers_but_not_every_band(fake, monkeypatch):
+    from modules.ClosedLoopDeployment import all_band_requests as A
+    rm.remember("deployment_summary", "u1", {"ParticipantId": "u1", "CenterHz": 24.5})
+    A.register("u1")
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(job, "_now", lambda: clock["t"])
+    seen = []
+    job.refresh_participant("u1", stamp=_stamp(), run=_band_run(seen), plan=lambda uid: _plan())
+    assert seen.count(A.LSB_FROM_ROC_KIND) == 2                       # first pass: every band
+    for change in ({"pain_reports": "p2"}, {"clinic_sheets": "c2"}):
+        seen.clear()
+        clock["t"] += 600
+        out = job.refresh_participant("u1", stamp=_stamp(**change), run=_band_run(seen), plan=lambda uid: _plan())
+        assert seen == ["deployment_summary"], change                 # the page's answer only
+        assert out["all_bands"]["skipped"].startswith("only pain ratings or clinic sheets changed")
+    for change in ({"recordings": "r2"}, {"settings_files": "f2"}, {"code": "k2"}):
+        seen.clear()
+        clock["t"] += 600
+        job.refresh_participant("u1", stamp=_stamp(**change), run=_band_run(seen), plan=lambda uid: _plan())
+        assert seen.count(A.LSB_FROM_ROC_KIND) == 2, change          # new recordings, settings, code
+
+
+def test_every_band_catches_up_within_a_day_even_with_no_further_change(fake, monkeypatch):
+    from modules.ClosedLoopDeployment import all_band_requests as A
+    A.register("u1")
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(job, "_now", lambda: clock["t"])
+    seen = []
+    job.refresh_participant("u1", stamp=_stamp(), run=_band_run(seen), plan=lambda uid: _plan())
+    clock["t"] += 600
+    job.refresh_participant("u1", stamp=_stamp(pain_reports="p2"), run=_band_run(seen), plan=lambda uid: _plan())
+    seen.clear()
+    clock["t"] += 3600                                                 # same data, under a day: nothing
+    out = job.refresh_participant("u1", stamp=_stamp(pain_reports="p2"), run=_band_run(seen), plan=lambda uid: _plan())
+    assert seen == [] and out["skipped"] == "data unchanged"
+    clock["t"] = 1000.0 + job.BAND_CATCH_UP_SECONDS + 1                 # a day after the last every-band run
+    out = job.refresh_participant("u1", stamp=_stamp(pain_reports="p2"), run=_band_run(seen), plan=lambda uid: _plan())
+    assert seen.count(A.LSB_FROM_ROC_KIND) == 2 and out["all_bands"]["bands"] == 2
+    seen.clear()
+    clock["t"] += 600                                                  # caught up: quiet again
+    assert job.refresh_participant("u1", stamp=_stamp(pain_reports="p2"), run=_band_run(seen),
+                                   plan=lambda uid: _plan())["skipped"] == "data unchanged" and seen == []
+
+
+def test_one_set_of_replay_processes_serves_the_whole_pass_and_ends_with_it():
+    """Decision 474: the same processes across batches (a fresh set per batch of 24 restarted R and
+    emptied every in-process store about 40 times a pass), replaced after REPLAYS_PER_PROCESS, and
+    closed when the pass ends, helper processes included (the 6.5-hour hang of 2026-10-05)."""
+    import subprocess
+    import sys
+    import tempfile
+    import textwrap
+    modules_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    script = os.path.join(tempfile.mkdtemp(), "pass_pool.py")
+    with open(script, "w") as fh:
+        fh.write(textwrap.dedent(f"""
+            import os, sys, importlib
+            sys.path.insert(0, {os.path.dirname(modules_dir)!r})
+            sys.path.insert(1, {modules_dir!r})
+            from modules.ClosedLoopDeployment import refresh_saved_answers as job
+
+            def pid_and_helper(kind, body):
+                SP = importlib.import_module("modules.DecodeCommon.side_process")
+                return {{"ok": True, "pid": os.getpid(), "value": SP.submit(sorted, [2, 1]).result(timeout=60)}}
+
+            if __name__ == "__main__":
+                job.REPLAYS_PER_PROCESS = 5
+                rows = [{{"kind": "k", "body": {{"i": i}}}} for i in range(14)]     # 3 batches of 6
+                out = job._run_in_pool(rows, 2, replay=pid_and_helper)
+                job._close_pass_pool()
+                print("values", sum(r["value"] == [1, 2] for r in out), "pids", len({{r["pid"] for r in out}}))
+        """))
+    out = subprocess.run([sys.executable, "-B", script], capture_output=True, text=True, timeout=180)
+    # 14 replays, 5 per process at most: at least 3 processes, far fewer than one set per batch (6)
+    line = [l for l in out.stdout.splitlines() if l.startswith("values")]
+    assert line, out.stderr[-2000:]
+    _, n_ok, _, n_pids = line[0].split()
+    assert int(n_ok) == 14 and 3 <= int(n_pids) <= 4, line
+
+
+def test_a_stopped_pass_takes_every_process_it_started_with_it():
+    """2026-10-14: a pass stopped by hand left 119 calculation-pool processes behind (their parents,
+    the replay processes, were gone); they held the loop's output pipe open and the loop froze. The
+    job leads its own process group and, on the stop signal its time limit sends, ends the group."""
+    import signal
+    import subprocess
+    import sys
+    import tempfile
+    import textwrap
+    import time
+    modules_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    d = tempfile.mkdtemp()
+    script = os.path.join(d, "stopped_pass.py")
+    with open(script, "w") as fh:
+        fh.write(textwrap.dedent(f"""
+            import subprocess, sys, time
+            sys.path.insert(0, {os.path.dirname(modules_dir)!r})
+            sys.path.insert(1, {modules_dir!r})
+            from modules.ClosedLoopDeployment import refresh_saved_answers as job
+            job._own_process_group()
+            # a grandchild that outlives its parent, as an orphaned pool process does
+            subprocess.Popen([sys.executable, "-c",
+                "import subprocess, sys; p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)']);"
+                " open({os.path.join(d, 'gc.pid')!r}, 'w').write(str(p.pid))"])
+            time.sleep(120)
+        """))
+    p = subprocess.Popen([sys.executable, "-B", script])
+    pid_file = os.path.join(d, "gc.pid")
+    for _ in range(100):
+        if os.path.exists(pid_file) and open(pid_file).read():
+            break
+        time.sleep(0.1)
+    gc = int(open(pid_file).read())
+    os.kill(p.pid, signal.SIGTERM)
+    p.wait(timeout=30)
+    for _ in range(50):
+        try:
+            os.kill(gc, 0)
+        except ProcessLookupError:
+            break
+        try:                                             # a zombie (not yet reaped by init) is gone too
+            if open(f"/proc/{gc}/stat").read().split()[2] == "Z":
+                break
+        except OSError:
+            break
+        time.sleep(0.1)
+    else:
+        os.kill(gc, signal.SIGKILL)
+        raise AssertionError("the orphaned grandchild outlived the stopped pass")
