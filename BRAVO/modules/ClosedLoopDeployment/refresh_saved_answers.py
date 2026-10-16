@@ -168,7 +168,11 @@ def _stop_helpers():
             mod.shutdown()
 
 
-#: A replay process is replaced after this many replays, so what it keeps cannot grow without end.
+#: A fresh set of replay processes after this many replays per process, on average, so what they
+#: keep cannot grow without end. Counted by the pass itself, never Python's `max_tasks_per_child`:
+#: Python 3.12.3 then skips replacing a process while it counts one as idle that has already taken
+#: the next task, and once every process has gone the queued replays wait for ever (CPython
+#: gh-115634; two full passes on 2026-10-16 sat 12 minutes with no process alive). Decision 476.
 REPLAYS_PER_PROCESS = 20
 _PASS_POOL = {}
 
@@ -184,15 +188,16 @@ def _pass_pool(workers):
         _close_pass_pool()
         _PASS_POOL["pool"] = ProcessPoolExecutor(
             max_workers=workers, mp_context=multiprocessing.get_context("spawn"),
-            initializer=_replay_process_init, initargs=(os.getpid(), list(sys.path)),
-            max_tasks_per_child=REPLAYS_PER_PROCESS)
+            initializer=_replay_process_init, initargs=(os.getpid(), list(sys.path)))
         _PASS_POOL["workers"] = workers
+        _PASS_POOL["replays"] = 0
     return _PASS_POOL["pool"]
 
 
 def _close_pass_pool():
     pool = _PASS_POOL.pop("pool", None)
     _PASS_POOL.pop("workers", None)
+    _PASS_POOL.pop("replays", None)
     if pool is not None:
         pool.shutdown(wait=True, cancel_futures=True)
 
@@ -200,7 +205,11 @@ def _close_pass_pool():
 def _run_in_pool(rows, workers, replay=_replay_one):
     """`_run_in_batches` over the pass's one set of processes (memory checked before each batch)."""
     def run(batch, w):
-        futures = [_pass_pool(w).submit(replay, r["kind"], r["body"]) for r in batch]
+        if "pool" in _PASS_POOL and _PASS_POOL["replays"] + len(batch) > w * REPLAYS_PER_PROCESS:
+            _close_pass_pool()                                 # a fresh set, between batches
+        pool = _pass_pool(w)
+        futures = [pool.submit(replay, r["kind"], r["body"]) for r in batch]
+        _PASS_POOL["replays"] += len(batch)
         return [f.result() for f in futures]
     return _run_in_batches(rows, workers, run, before_wait=_close_pass_pool)
 

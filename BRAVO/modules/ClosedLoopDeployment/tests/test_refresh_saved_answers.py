@@ -463,6 +463,48 @@ def test_one_set_of_replay_processes_serves_the_whole_pass_and_ends_with_it():
     assert int(n_ok) == 14 and 3 <= int(n_pids) <= 4, line
 
 
+def test_many_quick_replays_never_leave_the_pass_waiting_on_no_processes():
+    """2026-10-16, twice: a full pass waited 12 minutes with no replay process alive. Python 3.12.3's
+    pool, told to replace each process after a number of tasks (`max_tasks_per_child`), skips the
+    replacement while it counts a process as idle that has already taken the next task; once every
+    process has gone, the queued replays wait for ever (CPython gh-115634, fixed in later 3.12).
+    The pass now starts a fresh set itself after workers x REPLAYS_PER_PROCESS replays."""
+    import subprocess
+    import sys
+    import tempfile
+    import textwrap
+    modules_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    script = os.path.join(tempfile.mkdtemp(), "many_replays.py")
+    with open(script, "w") as fh:
+        fh.write(textwrap.dedent(f"""
+            import os, sys
+            sys.path.insert(0, {os.path.dirname(modules_dir)!r})
+            sys.path.insert(1, {modules_dir!r})
+            from modules.ClosedLoopDeployment import refresh_saved_answers as job
+
+            def quick(kind, body):
+                return {{"ok": True, "pid": os.getpid()}}
+
+            if __name__ == "__main__":
+                job.REPLAYS_PER_PROCESS = 2
+                rows = [{{"kind": "k", "body": {{"i": i}}}} for i in range(60)]
+                out = job._run_in_pool(rows, 4, replay=quick)
+                job._close_pass_pool()
+                print("done", sum(r["ok"] for r in out), "pids", len({{r["pid"] for r in out}}))
+        """))
+    try:
+        out = subprocess.run([sys.executable, "-B", script], capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        raise AssertionError("60 quick replays did not finish in 120 s: the pool was left with no processes")
+    line = [l for l in out.stdout.splitlines() if l.startswith("done")]
+    assert line, out.stderr[-2000:]
+    _, n_ok, _, n_pids = line[0].split()
+    assert int(n_ok) == 60, line
+    # each batch of 12 (3 per worker) is more than 4 x 2, so every batch gets a fresh set: 5 sets.
+    # Quick replays can all land on a set's first process, so at least 5 processes, not 4 x 5.
+    assert int(n_pids) >= 5, line
+
+
 def test_a_stopped_pass_takes_every_process_it_started_with_it():
     """2026-10-14: a pass stopped by hand left 119 calculation-pool processes behind (their parents,
     the replay processes, were gone); they held the loop's output pipe open and the loop froze. The
