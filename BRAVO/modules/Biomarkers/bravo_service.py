@@ -3728,9 +3728,41 @@ def _request_memo(key, compute):
         return compute()
     k = ("__request_memo__",) + tuple(key)
     if k not in cache:
-        cache[k] = compute()
+        cache[k] = _pass_memo(key, compute, cache)
     got = cache[k]
     return list(got) if isinstance(got, list) else got
+
+
+#: THE RECORDING READS SHARED BETWEEN REQUESTS IN THE REBUILD'S OWN PROCESSES (decision 476, the PI,
+#: 2026-10-16: "update the closed-loop report to use shared preparation"). A Closed-Loop report is
+#: about a band, but 4.5 s of each (of 11-28 s) went on reading the participant's recordings, the tile
+#: rows' digest and the recording signature again, the same for every band. In a process with
+#: BAND_SETUP_MEMO_ENV "1" (the rebuild's, never a web worker's) those three are kept between
+#: requests, filed under the recording set's identity read fresh once per request, so a hand upload
+#: during a pass is read anew. That identity covers every row's id, content hash and type, not the
+#: sensing fields written onto a row at decode time; a re-decode that changes only those reaches a
+#: rebuild process when it is replaced (every 20 replays), and the pages, which never keep this, at
+#: once. No pain report is kept. At most _PASS_MEMO_MAX kept.
+_PASS_MEMO_KEYS = ("recordings", "tile_rows", "cl_recording_set_signature")
+_PASS_MEMO = {}
+_PASS_MEMO_MAX = 8
+
+
+def _pass_memo(key, compute, cache):
+    if os.environ.get(BAND_SETUP_MEMO_ENV) != "1" or not key or key[0] not in _PASS_MEMO_KEYS:
+        return compute()
+    ik = ("__recording_identity__", str(key[1]))
+    try:
+        if ik not in cache:
+            cache[ik] = repr(_recording_set_identity(key[1]))
+    except Exception:                                          # noqa: BLE001 -- no label, no memo
+        return compute()
+    pk = (tuple(key), cache[ik])
+    if pk not in _PASS_MEMO:
+        if len(_PASS_MEMO) >= _PASS_MEMO_MAX:
+            _PASS_MEMO.clear()
+        _PASS_MEMO[pk] = compute()
+    return _PASS_MEMO[pk]
 
 
 def _pro_scoped(fn):

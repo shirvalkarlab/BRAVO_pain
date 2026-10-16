@@ -6,13 +6,13 @@
 # fingerprint -- recordings, settings files, pain reports fetched fresh from REDCap, clinic sheets,
 # code -- with the one of its last pass, and only when it moved replays the requests the pages sent
 # (summary, the three Closed-Loop panels, the Closed-Loop report, including those sent ahead), at most
-# 8 at once. An unchanged pass costs one pain-report download per participant.
+# 32 at once (one per core). An unchanged pass costs one pain-report download per participant.
 #
 # Switches, read from the environment:
 #   SAVED_ANSWERS_REFRESH=0                          turn the loop off
 #   SAVED_ANSWERS_REFRESH_INTERVAL_SECONDS=600       time between passes
 #   SAVED_ANSWERS_REFRESH_FIRST_DELAY_SECONDS=300    wait before the first pass after a start
-#   SAVED_ANSWERS_REFRESH_WORKERS=8                  replays at once (never more than 8)
+#   SAVED_ANSWERS_REFRESH_WORKERS=32                 replays at once (never more than 32)
 #   SAVED_ANSWERS_REFRESH_PASS_LIMIT_SECONDS=3600    a pass still running after this is stopped
 set -u
 
@@ -21,7 +21,7 @@ LOG="$BRAVO_DIR/_agent_bridge/logs/saved_answers_refresh.log"
 LOCK="$BRAVO_DIR/_agent_bridge/logs/.saved_answers_refresh.pid"
 INTERVAL="${SAVED_ANSWERS_REFRESH_INTERVAL_SECONDS:-600}"
 FIRST_DELAY="${SAVED_ANSWERS_REFRESH_FIRST_DELAY_SECONDS:-300}"
-WORKERS="${SAVED_ANSWERS_REFRESH_WORKERS:-8}"
+WORKERS="${SAVED_ANSWERS_REFRESH_WORKERS:-32}"
 PASS_LIMIT="${SAVED_ANSWERS_REFRESH_PASS_LIMIT_SECONDS:-3600}"   # 60 min since every band is worked out (decision 463)
 
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true

@@ -78,3 +78,73 @@ def test_the_rebuild_workers_switch_it_on():
     import inspect
     from modules.ClosedLoopDeployment import refresh_saved_answers as job
     assert "BAND_SETUP_MEMO_ENV" in inspect.getsource(job._replay_process_init)
+
+
+# THE CLOSED-LOOP REPORT'S RECORDING READS (decision 476): the recordings, the tile rows' digest and
+# the recording signature are kept between requests in a rebuild process, under the recording set's
+# identity; never in a web worker, and never anything else.
+
+@contextlib.contextmanager
+def _pass(on=True):
+    ident = {"v": ("u1", 10, "d1")}
+    saved = (bs._recording_set_identity, os.environ.get(bs.BAND_SETUP_MEMO_ENV))
+    bs._recording_set_identity = lambda uid: ident["v"]
+    if on:
+        os.environ[bs.BAND_SETUP_MEMO_ENV] = "1"
+    else:
+        os.environ.pop(bs.BAND_SETUP_MEMO_ENV, None)
+    bs._PASS_MEMO.clear()
+    try:
+        yield ident
+    finally:
+        bs._recording_set_identity = saved[0]
+        if saved[1] is None:
+            os.environ.pop(bs.BAND_SETUP_MEMO_ENV, None)
+        else:
+            os.environ[bs.BAND_SETUP_MEMO_ENV] = saved[1]
+        bs._PASS_MEMO.clear()
+
+
+def _read(key, calls):
+    with bs.pro_request_scope():                                # one request
+        return bs._request_memo(key, lambda: calls.append(key) or [{"n": len(calls)}])
+
+
+def test_recording_reads_are_shared_between_requests_in_a_rebuild_process():
+    calls = []
+    with _pass():
+        for _ in range(3):
+            _read(("recordings", "u1", ("A",)), calls)
+            _read(("tile_rows", "u1"), calls)
+            _read(("cl_recording_set_signature", "u1"), calls)
+        assert len(calls) == 3
+
+
+def test_a_new_recording_set_is_read_again():
+    calls = []
+    with _pass() as ident:
+        _read(("recordings", "u1", ("A",)), calls)
+        ident["v"] = ("u1", 11, "d2")
+        assert _read(("recordings", "u1", ("A",)), calls) == [{"n": 2}]
+        assert len(calls) == 2
+
+
+def test_web_workers_and_other_reads_are_never_shared_between_requests():
+    calls = []
+    with _pass(on=False):
+        _read(("recordings", "u1", ("A",)), calls)
+        _read(("recordings", "u1", ("A",)), calls)
+        assert len(calls) == 2
+    calls = []
+    with _pass():
+        _read(("something_else", "u1"), calls)
+        _read(("something_else", "u1"), calls)
+        assert len(calls) == 2
+
+
+def test_the_shared_reads_are_bounded():
+    calls = []
+    with _pass():
+        for i in range(bs._PASS_MEMO_MAX + 3):
+            _read(("recordings", "u1", (str(i),)), calls)
+        assert len(bs._PASS_MEMO) <= bs._PASS_MEMO_MAX

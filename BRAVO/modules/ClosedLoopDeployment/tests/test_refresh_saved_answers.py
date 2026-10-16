@@ -2,7 +2,7 @@
 2026-10-04: "yes do 3b", decision 435): after an ingest, a new or corrected pain report, new clinic
 sheets, new settings files or new code. Every 10 minutes it compares each participant's data
 fingerprint with the one it last worked under; if it moved, it replays the remembered requests
-(`CacheStore.request_memory`), newest first, at most 8 at once.
+(`CacheStore.request_memory`), newest first, at most 32 at once.
 
 Values: unchanged data replays nothing; changed data replays every remembered request once, newest
 first, and then counts as current; one failing request does not stop the rest; the replays are
@@ -90,14 +90,30 @@ def test_each_kind_is_answered_by_its_pages_function():
                               "band_lsb_power", cs.REPORT_KIND}
 
 
-def test_workers_are_capped_at_eight_and_by_the_memory_left_under_nine_tenths():
-    """Decision 474: a replay process keeps about 6 GB for the pass (measured 2026-10-14). The PI,
-    2026-10-14: 75 % is an alarm with room above it, not a ceiling; use the machine."""
-    assert job.worker_count(20, headroom_gb=200) == 8
-    assert job.worker_count(8, headroom_gb=29) == 4
-    assert job.worker_count(8, headroom_gb=1) == 1
-    assert job.worker_count(8, headroom_gb=-5) == 1
+def test_workers_are_capped_at_32_and_by_the_memory_left_under_nine_tenths():
+    """Decision 476: one per core at most (the PI, 2026-10-16: 32 workers); a replay process peaks
+    at about 4.4 GB with its share of the cores as pool workers (measured 2026-10-16), budgeted 5. The PI, 2026-10-14: 75 % is an alarm with room
+    above it, not a ceiling; use the machine."""
+    assert job.MAX_WORKERS == 32 and job.GB_PER_WORKER == 5.0
+    assert job.worker_count(40, headroom_gb=300) == 32
+    assert job.worker_count(32, headroom_gb=80) == 16
+    assert job.worker_count(32, headroom_gb=1) == 1
+    assert job.worker_count(32, headroom_gb=-5) == 1
     assert job._headroom_gb({"MemTotal": 122 * 2**20, "MemAvailable": 60 * 2**20}) == 60 - (1 - 0.9) * 122
+
+
+def test_the_spare_cores_are_shared_out_as_pool_workers_and_set_outright():
+    """Decision 476: the container sets BRAVO_POOL_JOBS=16, which a setdefault left in force (up to
+    16 helpers in each replay process); the pass now sets cores // replays outright."""
+    assert job.pool_jobs_per_replay(11, cores=32) == 2
+    assert job.pool_jobs_per_replay(32, cores=32) == 1
+    assert job.pool_jobs_per_replay(40, cores=32) == 1
+    assert job.pool_jobs_per_replay(1, cores=32) == 32
+    import inspect
+    src = inspect.getsource(job.main)
+    assert 'os.environ["BRAVO_POOL_JOBS"] = str(pool_jobs_per_replay(n))' in src
+    assert "setdefault(\"BRAVO_POOL_JOBS\"" not in src
+    assert src.index("worker_count(a.workers)") < src.index("pool_jobs_per_replay(n)")
 
 
 def test_the_server_starts_the_loop():

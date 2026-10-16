@@ -10,13 +10,16 @@ of its last pass, it replays every remembered request, newest first, through the
 function, so each answer is saved under its new label before anyone asks. Unchanged data costs one
 pain-report download per participant.
 
-LIMITS. At most 8 replays at once, fewer when memory is short (one per 6 GB available), each
-replay process limited to 3 pool workers (8 x 3 + 8 stays within 32 cores). The replay processes
+LIMITS. At most 32 replays at once, one per core (the PI, 2026-10-16), fewer when memory is short
+(one per GB_PER_WORKER left under MEMORY_LIMIT_FRACTION; about 16 on RCS08 today), and the cores
+left shared out as pool workers: each replay process gets cores // replays of them, set outright
+(the container's own BRAVO_POOL_JOBS=16 used to win over the 3 meant here, decision 476). The replay
+processes
 are fresh interpreters that exit if this process dies. A failed replay is logged and the rest go
 on; the fingerprint is then recorded, so a request that always fails is retried at the next data
 change, not every 10 minutes.
 
-    python3 -m modules.ClosedLoopDeployment.refresh_saved_answers --all [--workers 8] [--force]
+    python3 -m modules.ClosedLoopDeployment.refresh_saved_answers --all [--workers 32] [--force]
 """
 import argparse
 import json
@@ -36,9 +39,11 @@ ALL_BAND_KINDS = {
     "band_lsb_power_from_roc": ("modules.ClosedLoopDeployment.all_band_requests", "replay_lsb_from_roc"),
     "all_band_plan": ("modules.ClosedLoopDeployment.all_band_requests", "plan_for"),
 }
-MAX_WORKERS = 8
-GB_PER_WORKER = 6.0
-POOL_JOBS_PER_REPLAY = "3"
+MAX_WORKERS = 32
+#: A replay process's peak with its share of the cores as pool workers, measured 2026-10-16: 4.4 GB
+#: (11 at once, 2 pool workers each: 78 GB in use at most). With the container's 16 pool workers each
+#: it was 6.5 GB (13 at once: 112 GB, 92 %). Decision 476.
+GB_PER_WORKER = 5.0
 STAMP_PREFIX = "bravo:saved_answer_refresh:"
 #: Left by `_agent_bridge/daily_ingest.sh` while it writes; a pass then waits for the next one, so an
 #: ingest is rebuilt once, on all its exports. A note older than INGEST_NOTE_MAX_SECONDS is ignored.
@@ -59,6 +64,11 @@ def _function_for(kind):
     return getattr(importlib.import_module(mod), name)
 
 
+def pool_jobs_per_replay(workers, cores=None):
+    """The pool workers each replay process may start: the cores shared out among the replays."""
+    return max(1, int(cores or os.cpu_count() or 2) // max(1, int(workers)))
+
+
 def _headroom_gb(meminfo_kb=None):
     """Memory left before MEMORY_LIMIT_FRACTION of the machine is in use, in GB."""
     if meminfo_kb is None:
@@ -70,7 +80,7 @@ def _headroom_gb(meminfo_kb=None):
 
 def worker_count(requested, headroom_gb=None):
     """At most `MAX_WORKERS`, and one per `GB_PER_WORKER` of the memory left under MEMORY_LIMIT_FRACTION
-    of the machine (at least one): a replay process keeps about 6 GB for the whole pass (decision 474)."""
+    of the machine (at least one): a replay process peaks at about 4.4 GB (decision 476)."""
     if headroom_gb is None:
         try:
             headroom_gb = _headroom_gb()
@@ -483,11 +493,11 @@ def main(argv=None):
         return 0
     from modules.CacheStore import request_memory
     os.environ[request_memory.OFF_ENV] = "0"                   # the replays are not remembered
-    os.environ.setdefault("BRAVO_POOL_JOBS", POOL_JOBS_PER_REPLAY)
     from modules.ClosedLoopDeployment import all_band_requests
     uids = list(a.participant) + (request_memory.participants() + all_band_requests.registered_participants()
                                   if a.all else [])
     n = worker_count(a.workers)
+    os.environ["BRAVO_POOL_JOBS"] = str(pool_jobs_per_replay(n))  # outright: the container sets 16
     for uid in dict.fromkeys(uids):
         try:
             out = refresh_participant(uid, workers=n, force=a.force)
