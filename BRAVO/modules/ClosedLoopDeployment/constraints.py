@@ -2129,11 +2129,16 @@ RULES = (
     ),
     types.DeviceConstraint(
         rule_id="D27",
-        title="Stimulation artefact contaminates the capture above 5 mA or 120 us",
+        title=("Stimulation artefact contaminates the capture above 5 mA or 120 us "
+               "(not evidence based - disregard)"),
         source="A610", page="p. 73",
-        severity="blocking",
+        # RECORD ONLY (the PI, 2026-10-16, decision 478: "not evidence based - disregard"). Kept in
+        # the ledger with its text and that note; no machine check, so it never refuses, never goes
+        # unchecked and never warns. Its check `_p_d27` and observer `_o_d27` stay in this file.
+        severity="advisory",
         short_label="Stimulation below artefact limits",
         human_text=(
+            "Not evidence based - disregard. "
             "If the stimulation level is above 5 mA or 120 microseconds, the artefact of "
             "stimulation may make the LFP appear elevated when the Lower LFP Threshold is captured. "
             "This is a measurement-validity ceiling on the capture procedure and it is distinct "
@@ -2144,7 +2149,7 @@ RULES = (
             "asymmetric between hemispheres, most commonly 60 microseconds on the left and 160 on "
             "the right, so right-hemisphere captures fail this rule as programmed today."
         ),
-        predicate=_p_d27,
+        predicate=None,
     ),
     types.DeviceConstraint(
         rule_id="D28",

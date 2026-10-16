@@ -213,6 +213,10 @@ class ThresholdPlan:
     #: yet established, or not assessed. They WARN and gate nothing: the pipeline copies them into
     #: ``DeploymentReport.warnings``, never into ``blockers``. PI decision 2026-09-12, "b and c".
     warnings: list = field(default_factory=list)
+    #: The D27 artefact-ceiling sentences on the proposed capture (above 5 mA or 120 us), each
+    #: prefixed "Not evidence based - disregard: ". Kept for the record; they block nothing and warn
+    #: nothing (the PI, 2026-10-16, decision 478).
+    record_only: list = field(default_factory=list)
     #: The structured form of the two D26 verdicts: what each was judged on (the pooled titration
     #: slope, decision 124), its status, whether it is established, and the between-visit
     #: comparison the verdicts used to rest on, kept beside them as a number and labelled as the

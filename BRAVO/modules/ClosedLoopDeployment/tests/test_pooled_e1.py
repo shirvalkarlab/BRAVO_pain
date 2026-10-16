@@ -297,18 +297,18 @@ def test_a_d26_warning_never_lands_in_blockers_whatever_the_slope(monkeypatch):
             rep.threshold.capture_verdicts["inverted"]["status"]
 
 
-def test_the_capture_artefact_ceiling_and_the_unmeasurable_spread_still_block():
-    """Only the two D26 sentences moved; the other capture problems keep blocking. (Since review
-    C10, 2026-09-12, the ceiling sentences name the PROPOSED capture amplitude and no longer begin
-    "D27:", because the ledger's D27 row judges a different amplitude -- test_core pins the
-    wording; this pins that they still block.)"""
+def test_the_unmeasurable_spread_still_blocks_and_the_artefact_ceiling_no_longer_does():
+    """The D26 sentences warn; the unmeasurable spread still blocks. The D27 artefact-ceiling
+    sentences block nothing and warn nothing since decision 478 (the PI, 2026-10-16: "not evidence
+    based - disregard"); they are kept in ``record_only`` -- test_core pins the wording."""
     rng = np.random.default_rng(1)
     lo, hi = rng.normal(10, 1, 30), rng.normal(4, 1, 30)
     e = TY.EdgeEstimate("E1", -3.6, (-6.0, -1.2), 0.01, 13, "run", 4, "power_linear")
     r = AU.threshold_placement(lo, hi, amp_low=1.0, amp_high=6.0, expected_sign=-1,
                                pulse_width_us=200.0, pooled_slope=e)
-    assert any("artefact ceiling" in p and "6.00 mA" in p for p in r.problems)
-    assert any("artefact ceiling" in p and "200 us" in p for p in r.problems)
+    assert not any("artefact ceiling" in p for p in r.problems)
+    assert any("artefact ceiling" in p and "6.00 mA" in p for p in r.record_only)
+    assert any("artefact ceiling" in p and "200 us" in p for p in r.record_only)
     assert r.warnings == []
     r2 = AU.threshold_placement([1.0], [5.0], amp_low=1.0, amp_high=3.0, pooled_slope=e)
     assert any("control authority is not estimable" in p for p in r2.problems)

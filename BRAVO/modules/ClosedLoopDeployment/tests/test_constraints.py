@@ -164,7 +164,7 @@ def test_severity_counts_are_the_documented_split():
     check that the change was deliberate and recorded.
     """
     counts = constraints.severity_counts()
-    assert counts == {"blocking": 21, "advisory": 29, "unknown": 2}
+    assert counts == {"blocking": 20, "advisory": 30, "unknown": 2}   # D27 advisory (decision 478)
     unknown_ids = {rule.rule_id for rule in constraints.RULES if rule.severity == "unknown"}
     assert unknown_ids == {"D04", "D31"}
 
@@ -403,8 +403,8 @@ def test_empty_inputs_produce_no_passes_at_all():
     """
     report = check({}, {})
     assert report.failures == []
-    assert len(report.unknowns) == 23          # 21 blocking + 2 unknown (D09 advisory; D52 blocking)
-    assert len(report.advisories) == 29        # 28 + D09, softened 2026-09-04
+    assert len(report.unknowns) == 22          # 20 blocking + 2 unknown (D09, D27 advisory; D52 blocking)
+    assert len(report.advisories) == 30        # 28 + D09 (softened 2026-09-04) + D27 (record only, decision 478)
     assert report.checked == 52
     assert report.eligible is False
 
@@ -446,8 +446,8 @@ def test_check_eligibility_returns_every_failure_rather_than_the_first():
         impedance_ohms=100.0,                  # D16: below the SenSight short-circuit limit
         artifact_flags=["cardiac"],            # D17: artefact flagged by the device
         power_slope_vs_amplitude_sign=1,       # D19: wrong sign for the fixed control polarity
-        pulse_width_us=160.0,                  # D27: above the 120 us artefact ceiling
-        actuated_hemisphere="Right",           # D27's pulse width counts on the sensing lead only
+        pulse_width_us=160.0,                  # D27: record only since decision 478, never refuses
+        actuated_hemisphere="Right",
         frequency_search_closed=False,         # D30: rate would freeze mid-search
         has_pocket_adaptor=True,               # D32: BrainSense cannot be configured there
         paused_amplitude_mA=0.0,               # D34: a pause must not mean cessation
@@ -457,8 +457,9 @@ def test_check_eligibility_returns_every_failure_rather_than_the_first():
     # D09 is deliberately absent: it was softened to advisory on 2026-09-04, so a sub-gate
     # amplitude is reported rather than counted as a failure.
     expected = {"D08", "D11", "D12", "D13", "D15", "D16", "D17",
-                "D19", "D27", "D30", "D32", "D34"}
+                "D19", "D30", "D32", "D34"}
     assert expected.issubset(ids(report.failures))
+    assert "D27" not in ids(report.failures) | ids(report.unknowns)
     assert len(report.failures) >= len(expected)
     assert report.checked == 52                # nothing was skipped on the way past the failures
     assert report.eligible is False
@@ -532,20 +533,21 @@ def test_d03_blocks_a_participant_not_programmed_in_parkinsons_mode():
     assert "D03" not in ids(report.advisories)      # a failure is not also a recorded value
 
 
-def test_d27_flags_the_right_hemispheres_160_us_pulse_width():
-    """This participant's right hemisphere is programmed at 160 us, above the 120 us ceiling.
-
-    The consequence is specific: the Lower LFP Threshold captured there is artefact-suspect and must
-    not be read as a physiological measurement.
-    """
-    report = check(passing_candidate(pulse_width_us=160.0, actuated_hemisphere="Right"),
-                   resolved_participant())
-    assert "D27" in ids(report.failures)
-    assert "160" in next(row for row in report.failures if row["rule_id"] == "D27")["observed"]
-
-    over_amplitude = check(passing_candidate(capture_amp_high_mA=5.5, adaptive_max_mA=5.5),
-                           resolved_participant())
-    assert "D27" in ids(over_amplitude.failures)
+def test_d27_never_refuses_and_stays_in_the_ledger_marked_not_evidence_based():
+    """The PI, 2026-10-16 (decision 478): D27 is "not evidence based - disregard". It stays in the
+    ledger with its text and that note, for the record only: no machine check, so it never refuses,
+    never goes unchecked and never warns -- at 160 us on the sensing lead, or above 5 mA."""
+    rule = constraints.RULES_BY_ID["D27"]
+    assert rule.severity == "advisory" and rule.predicate is None
+    assert "not evidence based - disregard" in rule.title
+    assert rule.human_text.startswith("Not evidence based - disregard.")
+    for cand in (passing_candidate(pulse_width_us=160.0, actuated_hemisphere="Right"),
+                 passing_candidate(capture_amp_high_mA=5.5, adaptive_max_mA=5.5)):
+        report = check(cand, resolved_participant())
+        assert "D27" not in ids(report.failures) | ids(report.unknowns)
+        rows = [r for r in report.advisories if r["rule_id"] == "D27"]
+        assert [r["kind"] for r in rows] == ["advisory_no_predicate"]
+        assert "not evidence based - disregard" in rows[0]["why"]
 
 
 def test_d27_prefers_the_capture_pulse_width_over_the_candidates_general_pulse_width():
@@ -565,23 +567,22 @@ def test_d27_prefers_the_capture_pulse_width_over_the_candidates_general_pulse_w
     assert "60.0" in observed
 
     # And the reverse: capture_pulse_width_us (160, over the ceiling) must win over a compliant
-    # general pulse_width_us (60), so the candidate is refused end to end.
+    # general pulse_width_us (60). The check is kept for the record (decision 478); nothing refuses.
     over_ceiling = passing_candidate(capture_pulse_width_us=160.0, pulse_width_us=60.0,
                                      actuated_hemisphere="Right")
-    failing = check(over_ceiling, resolved_participant())
-    assert "D27" in ids(failing.failures)
-    observed = next(row for row in failing.failures if row["rule_id"] == "D27")["observed"]
+    assert constraints._p_d27(over_ceiling, resolved_participant()) is False
+    observed = constraints._o_d27(over_ceiling, resolved_participant())
     assert "capture pulse width" in observed
     assert "160.0" in observed
 
 
 def test_d27_falls_back_to_the_general_pulse_width_when_no_capture_pulse_width_is_recorded():
-    """A caller with no capture record at all still gets a real verdict from `pulse_width_us`."""
+    """With no capture record, D27's kept check function reads `pulse_width_us` (decision 478: the
+    function is kept for the record; the rule no longer calls it)."""
     no_capture_field = passing_candidate(pulse_width_us=160.0, actuated_hemisphere="Right")
     assert "capture_pulse_width_us" not in no_capture_field
-    report = check(no_capture_field, resolved_participant())
-    assert "D27" in ids(report.failures)
-    observed = next(row for row in report.failures if row["rule_id"] == "D27")["observed"]
+    assert constraints._p_d27(no_capture_field, resolved_participant()) is False
+    observed = constraints._o_d27(no_capture_field, resolved_participant())
     assert "capture pulse width" not in observed
     assert "pulse width" in observed
     assert "160.0" in observed
@@ -976,11 +977,11 @@ def test_a_sensing_pair_refusal_is_cleared_at_the_programmer_not_by_measurement(
 
 
 def test_every_failed_row_carries_what_clears_it():
-    # D27 fails: above the 120 us ceiling, on the sensing lead (decision 471)
-    cand = passing_candidate(pulse_width_us=160.0, actuated_hemisphere="Right")
+    # D16 fails: impedance below the SenSight short-circuit limit (D27 no longer refuses, decision 478)
+    cand = passing_candidate(impedance_ohms=100.0)
     rep = constraints.check_eligibility(cand, resolved_participant())
-    d27 = [r for r in rep.failures if r["rule_id"] == "D27"]
-    assert d27 and d27[0]["resolved_by"] == "configuration"
+    d16 = [r for r in rep.failures if r["rule_id"] == "D16"]
+    assert d16 and d16[0]["resolved_by"] == "recording"
     for row in rep.failures + rep.unknowns + rep.advisories + list(rep.deferred or []):
         assert row["resolved_by"] == constraints.RESOLVED_BY.get(row["rule_id"], "")
 
