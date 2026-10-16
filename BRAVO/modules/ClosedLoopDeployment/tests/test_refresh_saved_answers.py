@@ -136,10 +136,26 @@ def test_the_spare_cores_are_shared_out_as_pool_workers_and_set_outright():
     assert job.pool_jobs_per_replay(40, cores=32) == 1
     assert job.pool_jobs_per_replay(1, cores=32) == 32
     import inspect
-    src = inspect.getsource(job.main)
+    src = inspect.getsource(job.workers_now)
     assert 'os.environ["BRAVO_POOL_JOBS"] = str(pool_jobs_per_replay(n))' in src
-    assert "setdefault(\"BRAVO_POOL_JOBS\"" not in src
-    assert src.index("worker_count(a.workers)") < src.index("pool_jobs_per_replay(n)")
+    assert 'setdefault("BRAVO_POOL_JOBS"' not in inspect.getsource(job)
+
+
+def test_workers_are_counted_after_the_heat_maps_just_before_the_replays(fake, monkeypatch):
+    """Decision 476: the 07:23 UTC pass of 2026-10-16 counted the free memory when it started, while
+    memory was briefly high, and ran on 8 replays where 13 fitted a minute later."""
+    events = []
+    monkeypatch.setenv("BRAVO_POOL_JOBS", os.environ.get("BRAVO_POOL_JOBS", "1"))
+    monkeypatch.setattr(job, "worker_count", lambda req: events.append(("count", req)) or 5)
+    monkeypatch.setattr(job, "_heat_maps", lambda uid: events.append("heat") or {})
+    monkeypatch.setattr(job, "_other_products", lambda uid: events.append("others") or {})
+    monkeypatch.setattr(job, "_run_in_pool", lambda rows, w: events.append(("replays", w)) or [])
+    rm.remember("deployment_summary", "u1", {"ParticipantId": "u1", "CenterHz": 24.5})
+    out = job.refresh_participant("u1", workers=32, stamp=_stamp())
+    assert events == ["heat", "others", ("count", 32), ("replays", 5)], events
+    assert out["workers"] == 5 and os.environ["BRAVO_POOL_JOBS"] == str(job.pool_jobs_per_replay(5))
+    src = __import__("inspect").getsource(job.main)
+    assert "worker_count(" not in src and "refresh_participant(uid, workers=n" in src
 
 
 def test_the_server_starts_the_loop():

@@ -527,6 +527,11 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
                 )}
                 <KV k="Odds ratio (95% range)" v={`${fmt(ev.odds_ratio)} (${fmt(ev.or_ci_low)}–${fmt(ev.or_ci_high)})${ev.credible_ci ? " ✓" : ""}`} />
                 <KV k="p from the mixed-effects model (ratings grouped in time)" v={ev.p_glmer != null ? ev.p_glmer.toExponential(2) : "not reported"} />
+                {/* The same model's exact rotation test, beside it (decision 477, "show both"): on
+                    RCS08 the model's own p read <= 0.05 for 8.3 % of unrelated bands, this 5 %. */}
+                <KV k="p from shifting ratings in time" v={ev.p_rotation != null
+                  ? `${fmt(ev.p_rotation, 3)}${ev.rotation_n_orders ? ` (${ev.rotation_n_orders} shifts)` : ""}`
+                  : "not reported"} />
                 <KV k="Readings behind the switching point / reports" v={`${ev.n_matched_samples ?? "not reported"} / ${ev.n_clusters ?? "not reported"}`} />
                 <BurnInNote ev={ev} />
                 {pw && pw.available ? (

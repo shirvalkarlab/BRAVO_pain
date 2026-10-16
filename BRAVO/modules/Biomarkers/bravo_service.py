@@ -8132,6 +8132,9 @@ def _deployment_summary_build(request_data):
             "odds_ratio": _ff(or_val), "or_ci_low": _ff(g.get("or_lo")),
             "or_ci_high": _ff(g.get("or_hi")), "credible_ci": bool(credible),
             "p_glmer": _ff(g.get("p")), "n_matched_samples": g.get("n"),
+            # the same model's exact rotation test, shown beside it (decision 477)
+            "p_rotation": _ff((g.get("rotation") or {}).get("p")),
+            "rotation_n_orders": (g.get("rotation") or {}).get("n_orders"),
             "n_clusters": roc.get("n_clusters") if roc.get("available") else None,
             "operating_point": roc.get("operating_point") if roc.get("available") else None,
             # the area under the curve above, read again with the current taken out (answer 6)

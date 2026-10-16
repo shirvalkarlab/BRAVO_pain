@@ -4807,6 +4807,10 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
                        "cluster": cl[m]})
     n_clusters = int(df["cluster"].nunique())
     formula = "pain_high ~ band_power + (1|cluster)" if n_clusters > 1 else "pain_high ~ band_power"
+    # BESIDE THE MODEL'S OWN p, THE EXACT ROTATION TEST OF THE SAME MODEL (decision 477; the PI,
+    # 2026-10-16: "show both"). On RCS08's layout the model's own p read <= 0.05 for 8.3 % of
+    # unrelated bands, the rotation test's for 4.95 %. Nothing below reads it: the verdict stays on p.
+    rotation = _band_rotation_test(df, _times_epoch_s(times)[m])
     try:
         # The fit + the pandas<->R conversion it triggers must run with rpy2's converter active in
         # THIS thread (see _rpy2_converter_ctx). pymer4 populates .coefs/.ranef_var as plain pandas
@@ -4856,7 +4860,7 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
                 "one_block_per_report": _one_block_summary(weeks=_one_week),
                 "coef": _f(est), "odds_ratio": None,
                 "or_lo": None, "or_hi": None,
-                "z": None, "p": None,
+                "z": None, "p": None, "rotation": rotation,
                 "separation": True, "singular": False,
                 "note": ("Complete/quasi-complete separation — band power separates high/low "
                          "pain perfectly at this window, so the logistic estimate is degenerate. "
@@ -4884,7 +4888,7 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
                 "n_weeks_before_exclusion": n_weeks_before,
                 "one_block_per_report": _one_block_summary(weeks=_one_week),
                 "coef": None, "odds_ratio": None, "or_lo": None, "or_hi": None,
-                "z": None, "p": None, "separation": False, "singular": singular,
+                "z": None, "p": None, "rotation": rotation, "separation": False, "singular": singular,
                 "converged": False, "fit_warnings": fit_warnings,
                 "note": ("The mixed-effects fit did not converge (lme4's words are in "
                          "fit_warnings), so it gives no odds ratio, interval or p."),
@@ -4903,12 +4907,42 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
             "coef": _f(est), "odds_ratio": _f(odds),
             "or_lo": _f(or_lo) if or_lo is not None else None,
             "or_hi": _f(or_hi) if or_hi is not None else None,
-            "z": _f(z), "p": _f(p), "separation": False, "singular": singular,
+            "z": _f(z), "p": _f(p), "rotation": rotation, "separation": False, "singular": singular,
             "converged": True, "fit_warnings": fit_warnings,
             "note": "Random intercept per weekly era; band power z-scored. Exploratory inference.",
         }
     except Exception as e:
         return {"available": False, "reason": f"glmer fit failed: {e}"}
+
+
+def _band_rotation_test(df, t_rows):
+    """The exact rotation test of the band's mixed model (`routines/mixed_model_shuffle.py`,
+    decision 477): the model without band power fitted once in lme4, then pain (with its weeks)
+    slid along band power in time by every possible number of samples, each order scored by the
+    same statistic. Smallest possible p 1 / n. Never raises: a failure is reported."""
+    try:
+        try:
+            from modules.Biomarkers.routines import mixed_model_shuffle as MS
+        except ImportError:                                        # pragma: no cover - host spelling
+            from Biomarkers.routines import mixed_model_shuffle as MS
+        y = df["pain_high"].to_numpy(float)
+        x = df["band_power"].to_numpy(float)
+        cl = df["cluster"].to_numpy()
+        if len(np.unique(cl)) < 2:
+            return {"available": False, "reason": "every sample is in one week"}
+        if not np.all(np.isfinite(t_rows)):
+            return {"available": False, "reason": "a sample has no time, so it cannot be put in order"}
+        null, converged, warns = MS.null_fit_lme4(y, cl)
+        if not converged:
+            return {"available": False, "fit_warnings": warns,
+                    "reason": "the model without band power did not converge"}
+        out = MS.shuffle_test(null, x, order=t_rows)
+        return {"available": True, "p": _f(out["p"]), "z": _f(out["z"]),
+                "n_orders": int(out["n_orders"]), "p_floor": _f(out["p_floor"]),
+                "how": ("exact rotation test: the pain ratings, with their weeks, slid along band "
+                        "power in time by every possible number of samples")}
+    except Exception as e:                                         # noqa: BLE001
+        return {"available": False, "reason": f"rotation test failed: {e}"}
 
 
 #: Declared equivalence margin for the stim-stability verdict, on the log-odds-ratio scale.

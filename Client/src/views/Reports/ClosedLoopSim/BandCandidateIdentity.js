@@ -130,6 +130,11 @@ export default function BandCandidateIdentity({ bc, envelope }) {
                       ? <span style={{ color: PAL.ink }}> · ✓ credible</span> : null}
                 </KV>
                 <KV label="p from the mixed-effects model">{fmtP(ev.p_glmer)}</KV>
+                {/* the same model's exact rotation test, beside it (decision 477, "show both") */}
+                <KV label="p from shifting ratings in time">
+                  {fmtP(ev.p_rotation)}
+                  {ev.p_rotation != null && ev.rotation_n_orders ? ` (${ev.rotation_n_orders} shifts)` : ""}
+                </KV>
                 {/* "grouped by week" is stated because the ROC panel lower down groups the SAME
                     data by individual pain rating, and a reader comparing the two counts must
                     be able to see they are counting different things (open item 15). */}

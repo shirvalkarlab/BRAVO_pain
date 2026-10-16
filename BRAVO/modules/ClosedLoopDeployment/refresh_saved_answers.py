@@ -65,6 +65,16 @@ def _function_for(kind):
     return getattr(importlib.import_module(mod), name)
 
 
+def workers_now(requested):
+    """The replays' worker count from the memory free just before they start, and each replay
+    process's share of the cores as pool workers, set outright (the container sets 16). Counted
+    here rather than when the pass starts: the 2026-10-16 07:23 UTC pass counted while memory was
+    briefly 60 GB in use and ran on 8 where 13 fitted once the heat maps were done (decision 476)."""
+    n = worker_count(requested)
+    os.environ["BRAVO_POOL_JOBS"] = str(pool_jobs_per_replay(n))
+    return n
+
+
 def pool_jobs_per_replay(workers, cores=None):
     """The pool workers each replay process may start: the cores shared out among the replays."""
     return max(1, int(cores or os.cpu_count() or 2) // max(1, int(workers)))
@@ -435,11 +445,12 @@ def _refresh_participant(participant_uid, *, workers, force, stamp, run, plan, h
             return {"participant": participant_uid, "skipped": "data unchanged", "replayed": 0}
         # THE DAILY CATCH-UP: the pages' answers are current, every band is a day behind the ratings
         t = time.perf_counter()
+        workers = workers_now(workers) if run is None else workers
         every = _all_bands(participant_uid, [], workers, runner, plan)
         _save_band_stamp(participant_uid, stamp)
         return {"participant": participant_uid, "replayed": 0, "built": 0, "served": 0, "failed": 0,
                 "errors": [], "all_bands": every, "seconds": round(time.perf_counter() - t, 1),
-                "every_band_catch_up": True}
+                "every_band_catch_up": True, "workers": workers}
     heat = (heat_maps or _heat_maps)(participant_uid)        # first: the band grid reads these
     others = _other_products(participant_uid)
     rows = [r for r in request_memory.recent(participant_uid) if r.get("kind") in KINDS]
@@ -448,6 +459,7 @@ def _refresh_participant(participant_uid, *, workers, force, stamp, run, plan, h
         return {"participant": participant_uid, "replayed": 0, "built": 0, "served": 0, "failed": 0,
                 "errors": [], "seconds": 0.0, "heat_maps": heat, **others}
     t = time.perf_counter()
+    workers = workers_now(workers) if run is None else workers   # after the heat maps, before the replays
     results = runner(rows, workers) if rows else []
     every = None
     if due:
@@ -457,7 +469,7 @@ def _refresh_participant(participant_uid, *, workers, force, stamp, run, plan, h
         every = {"skipped": "only pain ratings or clinic sheets changed; every band follows within "
                             f"{BAND_CATCH_UP_SECONDS // 3600} h"}
     _save_stamp(participant_uid, stamp)
-    out = {"participant": participant_uid, "replayed": len(results), **_count(results),
+    out = {"participant": participant_uid, "replayed": len(results), **_count(results), "workers": workers,
            "seconds": round(time.perf_counter() - t, 1)}
     if every is not None:
         out["all_bands"] = every
@@ -510,15 +522,13 @@ def main(argv=None):
     from modules.ClosedLoopDeployment import all_band_requests
     uids = list(a.participant) + (request_memory.participants() + all_band_requests.registered_participants()
                                   if a.all else [])
-    n = worker_count(a.workers)
-    os.environ["BRAVO_POOL_JOBS"] = str(pool_jobs_per_replay(n))  # outright: the container sets 16
+    n = max(1, min(int(a.workers), MAX_WORKERS))      # the cap; each pass counts the memory itself
     for uid in dict.fromkeys(uids):
         try:
             out = refresh_participant(uid, workers=n, force=a.force)
         except Exception as exc:                               # noqa: BLE001 -- next participant
             out = {"participant": uid, "error": f"{type(exc).__name__}: {exc}"[:300]}
         out["utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        out["workers"] = n
         print(json.dumps(out, sort_keys=True), flush=True)
     return 0
 
