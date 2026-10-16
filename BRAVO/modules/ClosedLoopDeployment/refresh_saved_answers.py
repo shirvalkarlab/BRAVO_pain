@@ -11,7 +11,7 @@ function, so each answer is saved under its new label before anyone asks. Unchan
 pain-report download per participant.
 
 LIMITS. At most 32 replays at once, one per core (the PI, 2026-10-16), fewer when memory is short
-(one per GB_PER_WORKER left under MEMORY_LIMIT_FRACTION; about 16 on RCS08 today), and the cores
+(one per GB_PER_WORKER left under MEMORY_LIMIT_FRACTION; about 13 on RCS08 today), and the cores
 left shared out as pool workers: each replay process gets cores // replays of them, set outright
 (the container's own BRAVO_POOL_JOBS=16 used to win over the 3 meant here, decision 476). The replay
 processes
@@ -40,10 +40,11 @@ ALL_BAND_KINDS = {
     "all_band_plan": ("modules.ClosedLoopDeployment.all_band_requests", "plan_for"),
 }
 MAX_WORKERS = 32
-#: A replay process's peak with its share of the cores as pool workers, measured 2026-10-16: 4.4 GB
-#: (11 at once, 2 pool workers each: 78 GB in use at most). With the container's 16 pool workers each
-#: it was 6.5 GB (13 at once: 112 GB, 92 %). Decision 476.
-GB_PER_WORKER = 5.0
+#: A replay process's peak with its share of the cores as pool workers, measured 2026-10-16: 5.4 GB
+#: in a full pass (16 at once, 2 pool workers each: 114.7 GB in use, 94 %, so the pass was stopped),
+#: 4.4 GB when only the pages' answers are rebuilt (11 at once: 78 GB). With the container's 16
+#: pool workers each it was 6.5 GB (13 at once: 112 GB, 92 %). Decision 476.
+GB_PER_WORKER = 6.0
 STAMP_PREFIX = "bravo:saved_answer_refresh:"
 #: Left by `_agent_bridge/daily_ingest.sh` while it writes; a pass then waits for the next one, so an
 #: ingest is rebuilt once, on all its exports. A note older than INGEST_NOTE_MAX_SECONDS is ignored.
@@ -80,7 +81,7 @@ def _headroom_gb(meminfo_kb=None):
 
 def worker_count(requested, headroom_gb=None):
     """At most `MAX_WORKERS`, and one per `GB_PER_WORKER` of the memory left under MEMORY_LIMIT_FRACTION
-    of the machine (at least one): a replay process peaks at about 4.4 GB (decision 476)."""
+    of the machine (at least one): a replay process peaks at about 5.4 GB in a full pass (decision 476)."""
     if headroom_gb is None:
         try:
             headroom_gb = _headroom_gb()

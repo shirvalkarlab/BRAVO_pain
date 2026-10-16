@@ -92,11 +92,12 @@ def test_each_kind_is_answered_by_its_pages_function():
 
 def test_workers_are_capped_at_32_and_by_the_memory_left_under_nine_tenths():
     """Decision 476: one per core at most (the PI, 2026-10-16: 32 workers); a replay process peaks
-    at about 4.4 GB with its share of the cores as pool workers (measured 2026-10-16), budgeted 5. The PI, 2026-10-14: 75 % is an alarm with room
+    at about 5.4 GB in a full pass with its share of the cores as pool workers (measured 2026-10-16:
+    16 at once reached 94 %), budgeted 6. The PI, 2026-10-14: 75 % is an alarm with room
     above it, not a ceiling; use the machine."""
-    assert job.MAX_WORKERS == 32 and job.GB_PER_WORKER == 5.0
+    assert job.MAX_WORKERS == 32 and job.GB_PER_WORKER == 6.0
     assert job.worker_count(40, headroom_gb=300) == 32
-    assert job.worker_count(32, headroom_gb=80) == 16
+    assert job.worker_count(32, headroom_gb=80) == 13
     assert job.worker_count(32, headroom_gb=1) == 1
     assert job.worker_count(32, headroom_gb=-5) == 1
     assert job._headroom_gb({"MemTotal": 122 * 2**20, "MemAvailable": 60 * 2**20}) == 60 - (1 - 0.9) * 122
