@@ -1349,7 +1349,7 @@ def clear_response_cache(*, shared=False):
 
 
 def joined_table_cached(psd_frame, epochs, *, centers=None, width=DEFAULT_BAND_WIDTH_HZ,
-                        force_refresh=False, **kwargs):
+                        force_refresh=False, channels=None, only_center=None, **kwargs):
     """``joined_table`` with a content-keyed memo. Returns the SAME object to every caller.
 
     Callers must therefore treat the result as read-only, or copy it before mutating. That is the
@@ -1362,13 +1362,16 @@ def joined_table_cached(psd_frame, epochs, *, centers=None, width=DEFAULT_BAND_W
     pro = kwargs.get("pro_frame")
     pro_fp = None if pro is None else _frame_fingerprint(
         pro, ("epoch",), also=("report_id",) + PAIN_SCORE_KEYS)
-    sig = (_joined_signature(psd_frame, epochs, cen, width), pro_fp)
+    sig = (_joined_signature(psd_frame, epochs, cen, width), pro_fp,
+           None if channels is None else tuple(str(c) for c in channels),
+           None if only_center is None else float(only_center))
     if not force_refresh:
         with _JOINED_MEMO_LOCK:
             hit = _JOINED_MEMO.get(sig)
         if hit is not None:
             return hit
-    out = joined_table(psd_frame, epochs, centers=cen, width=width, **kwargs)
+    out = joined_table(psd_frame, epochs, centers=cen, width=width, channels=channels,
+                       only_center=only_center, **kwargs)
     with _JOINED_MEMO_LOCK:
         if sig not in _JOINED_MEMO and len(_JOINED_MEMO) >= _JOINED_MEMO_MAX:
             _JOINED_MEMO.pop(next(iter(_JOINED_MEMO)), None)
@@ -1423,7 +1426,7 @@ def _attach_setting_pain(T, pro_frame):
 
 
 def joined_table(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ,
-                 width=DEFAULT_BAND_WIDTH_HZ, pro_frame=None):
+                 width=DEFAULT_BAND_WIDTH_HZ, pro_frame=None, channels=None, only_center=None):
     """The Phase 0 table: one row per (PSD sample, band).
 
     Long rather than wide in the band dimension. Wide would mean 18 columns per power scale and a
@@ -1437,7 +1440,8 @@ def joined_table(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ,
     if psd_frame is None or len(psd_frame) == 0:
         return pd.DataFrame()
     if calibrated_centres(psd_frame):
-        return _joined_table_calibrated(psd_frame, epochs, centers=centers, pro_frame=pro_frame)
+        return _joined_table_calibrated(psd_frame, epochs, centers=centers, pro_frame=pro_frame,
+                                        channels=channels, only_center=only_center)
     ep_idx = _assign_epoch(psd_frame["t"].to_numpy(), epochs)
 
     rows = []
@@ -1478,7 +1482,8 @@ def joined_table(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ,
     return _attach_setting_pain(T, pro_frame)
 
 
-def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ, pro_frame=None):
+def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_HZ, pro_frame=None,
+                             channels=None, only_center=None):
     """``joined_table`` for the calibrated frame: one row per (tile, band), power read from the
     band's own column rather than integrated from a spectrum.
 
@@ -1493,6 +1498,12 @@ def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_
 
     THE BAND WIDTH is the frame's own (twice ``band_half_hz``); a ``centers`` entry the frame does
     not carry yields no rows for that centre, never a neighbour's value.
+
+    ONE CONTACT AND BAND (decision 419). ``channels`` keeps only those contacts' rows and
+    ``only_center`` only that band's: the report reads nothing else, and the whole table was 8.5 s
+    of its 40. The rows kept are the whole table's rows for them, in the same order.
+    ``attrs["n_rows_all_contacts_bands"]`` is the size the whole table (every contact, every
+    ``centers`` entry the frame carries) would have had, which the manifest states.
     """
     f = psd_frame
     keep = np.ones(len(f), dtype=bool)
@@ -1500,8 +1511,14 @@ def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_
         keep &= f["tile_ok"].to_numpy(dtype=bool)
     if "tile_saturated" in f.columns:
         keep &= ~f["tile_saturated"].to_numpy(dtype=bool)
+    n_all_tiles = int(keep.sum())
+    n_all_centres = sum(1 for c in centers if f"{_CAL_LSB_PREFIX}{float(c):g}" in f.columns)
+    if channels is not None:
+        keep &= f["channel"].astype(str).isin([str(c) for c in channels]).to_numpy()
+    if only_center is not None:
+        centers = [c for c in centers if np.isclose(float(c), float(only_center))]
     f = f.loc[keep].reset_index(drop=True)
-    n_dropped = int((~keep).sum())
+    n_dropped = int(len(keep) - n_all_tiles)
     if len(f) == 0:
         T = pd.DataFrame()
         T.attrs["rows_dropped_by_tile_gate"] = n_dropped
@@ -1534,6 +1551,9 @@ def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_
     t = f["t"].to_numpy(dtype=float)
     chan = f["channel"].to_numpy()
     src = f["source"].to_numpy() if "source" in f.columns else np.array([None] * len(f), dtype=object)
+    # Which measurement each row is (TD chunk or device PSD snapshot): the 7-MAD-above chunk rule
+    # judges each against its own family's bound (decisions 411, 412).
+    fam = f["family"].to_numpy() if "family" in f.columns else None
     for c in centers:
         col = f"{_CAL_LSB_PREFIX}{float(c):g}"
         if col not in f.columns:
@@ -1542,6 +1562,8 @@ def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_
         block = {"t": t, "channel": chan, "source": src, "setting_epoch": ep_idx,
                  "center_hz": np.full(len(f), float(c)), "band_width_hz": np.full(len(f), width),
                  "power_linear": lin}
+        if fam is not None:
+            block["family"] = fam
         nat = f"{_CAL_NATIVE_PREFIX}{float(c):g}"
         if nat in f.columns:
             block["device_native"] = f[nat].to_numpy(dtype=bool)
@@ -1559,8 +1581,72 @@ def _joined_table_calibrated(psd_frame, epochs, *, centers=DEFAULT_BAND_CENTERS_
     T = _attach_setting_pain(T, pro_frame)
     T.attrs["rows_dropped_by_tile_gate"] = n_dropped
     T.attrs["band_power_source"] = "calibrated"
+    T.attrs["n_rows_all_contacts_bands"] = n_all_tiles * n_all_centres
     return T
 
+
+
+#: The frame's family labels -> the family names `analytics.chunk_upper_bounds` builds a bound for.
+_CHUNK_RULE_FAMILY = {"td_transform": "td", "device_psd": "psd"}
+
+
+def chunk_bounds_for_candidates(raw_cache, candidates):
+    """The 7-MAD-above chunk bounds (decisions 410-412) for each candidate's contact and band:
+    ``{channel: {"td": {centre: bound}, "psd": {centre: bound}}}``.
+
+    Built by `Biomarkers.routines.analytics.chunk_upper_bounds` from the contact's tile cache, so
+    the bound comes from every usable chunk of the contact (the heat maps' own population), never
+    from the rows a caller happens to hold. A contact with no cache, or a candidate naming no
+    contact or band, gets no entry, and its rows are then left as they are."""
+    try:
+        from modules.Biomarkers.routines import analytics as _an
+    except ImportError:                                # pragma: no cover - the host runner's spelling
+        from Biomarkers.routines import analytics as _an
+    out = {}
+    for cd in (candidates or ()):
+        ch = (cd or {}).get("channel")
+        try:
+            c = float((cd or {}).get("center_hz"))
+        except (TypeError, ValueError):
+            continue
+        entry = (raw_cache or {}).get(str(ch)) if ch is not None else None
+        if not isinstance(entry, dict):
+            continue
+        by_fam = out.setdefault(str(ch), {"td": {}, "psd": {}})
+        for fam in ("td", "psd"):
+            by_fam[fam][c] = float(_an.chunk_upper_bounds(entry, [c], family=fam)[0])
+    return out
+
+
+def drop_chunks_above_bounds(T, bounds):
+    """A COPY of the joined table without the rows whose band power is above their own family's
+    7-MAD-above bound (decision 412). Only E2 and the threshold capture pair read it (the PI's
+    choice, 2026-10-03); E1 and everything else keep the whole table, which is shared between
+    requests and is never changed here.
+
+    ``bounds`` is `chunk_bounds_for_candidates`'s output. A row whose contact, family or band has
+    no bound is kept. Nothing is dropped for being low. The counts land on
+    ``attrs["chunk_rule"]``."""
+    n = len(T)
+    drop = np.zeros(n, dtype=bool)
+    counts = {"n_td_rows_dropped": 0, "n_psd_rows_dropped": 0, "n_rows_judged": 0}
+    if n and bounds and "family" in T.columns:
+        ch = T["channel"].astype(str).to_numpy()
+        fam = T["family"].map(_CHUNK_RULE_FAMILY).to_numpy()
+        cen = T["center_hz"].to_numpy(dtype=float)
+        pw = pd.to_numeric(T["power_linear"], errors="coerce").to_numpy(dtype=float)
+        for contact, by_fam in bounds.items():
+            for f_name, by_c in by_fam.items():
+                for c, b in by_c.items():
+                    m = (ch == contact) & (fam == f_name) & np.isclose(cen, c)
+                    counts["n_rows_judged"] += int(m.sum())
+                    hit = m & (pw > b)
+                    counts[f"n_{f_name}_rows_dropped"] += int(hit.sum())
+                    drop |= hit
+    K = T.loc[~drop].reset_index(drop=True)
+    K.attrs = dict(T.attrs)
+    K.attrs["chunk_rule"] = counts
+    return K
 
 
 # `scale_disagreement(T)` -- how often the linear and mean-of-log scales picked a different winning
@@ -2635,7 +2721,10 @@ def simulation_signature(participant, *, tiles_key, contact, centre_hz, hemisphe
     # edit to `RECORD_DERIVED_TIMING_MS` must invalidate a stored replay built under the old
     # numbers. `recording_set_signature` already changes when a new session report is ingested
     # (session reports are Recording rows), which is what invalidates the PROGRAMMED-timing half.
+    from . import band_timing as _bt_sig
+    # The band's onset rule (decision 417) is in the key too: it sets the recommended regime.
     return (_sim.KIND, _sim.RULE_VERSION, _amp_sig.POOLED_RULE_VERSION, _tr_sig.TABLE_VERSION,
+            _bt_sig.RULE_VERSION,
             str(getattr(participant, "uid", participant)), tiles_key,
             recording_set_signature(participant), str(contact), round(float(centre_hz), 3),
             str(hemisphere), str(power_scale),
@@ -2678,7 +2767,7 @@ def _simulation_params_from_timing_dict(values_by_field):
     return out
 
 
-def _timing_runs_for_simulation(uid, hemisphere, device_facts):
+def _timing_runs_for_simulation(uid, hemisphere, device_facts, band_timing=None):
     """The two timing regimes T2 replays (contest_2026-09-13_SYNTHESIS.md section 4): what the
     device is PROGRAMMED to run today on the candidate's own hemisphere, and this participant's
     record-derived RECOMMENDATION (decision 150). Reads `device_facts["active_sensing_group_timing"]`
@@ -2699,10 +2788,13 @@ def _timing_runs_for_simulation(uid, hemisphere, device_facts):
         "no active sensing group with a programmed timing was found for this hemisphere on this "
         "participant's newest session report; the white-paper Dual Threshold default is used")
 
-    rec_raw = _tr.for_participant(uid) or {}
+    # The band's own onset when the report worked one out (decision 417), else the table.
+    rec_raw = _tr.for_band(uid, band_timing) or {}
     rec_values = {k: (v or {}).get("value_ms") for k, v in rec_raw.items()}
     recommended_params = _simulation_params_from_timing_dict(rec_values) if rec_raw else dict(programmed_params)
-    recommended_source = (_tr.RECORD_DERIVED_PROVENANCE if rec_raw else
+    _band_prov = ((rec_raw.get("onset_upper_ms") or {}).get("provenance")
+                  if band_timing and band_timing.get("available") else None)
+    recommended_source = (_band_prov or _tr.RECORD_DERIVED_PROVENANCE if rec_raw else
                           "no record-derived recommendation is on file for this participant; the "
                           "same timing as \"as programmed today\" is used instead")
 
@@ -2807,7 +2899,8 @@ def write_simulation(participant, *, rep, build, candidate, hemisphere, power_sc
     # record-derived recommendation, so the card can show both rather than silently replacing one
     # with the other. `run_models` already accepts `params=`; each regime just supplies a different
     # (possibly partial) override of `replay.DEFAULT_PARAMS`.
-    timing = _timing_runs_for_simulation(uid, hemisphere, device_facts)
+    timing = _timing_runs_for_simulation(uid, hemisphere, device_facts,
+                                         band_timing=getattr(rep, "band_timing", None))
     runs = {}
     for _key, _meta in timing.items():
         runs[_key] = _sim.run_models(inputs["t"], inputs["power"], inputs["amp_obs"], plan, pooled_row,
@@ -2944,18 +3037,34 @@ def _place_thresholds_from_record(participant, rep, cands, *, hemisphere, loaded
                                                                 "contact or band centre"}), \
             {"available": False, "reason": "the candidate carries no sensing contact or band centre"}
     uid = str(getattr(participant, "uid", participant))
-    timing = _tr.for_participant(uid) or {}
-    avg_ms = (timing.get("averaging_ms") or {}).get("value_ms")
-    onset_ms = (timing.get("onset_upper_ms") or {}).get("value_ms")
-    if not avg_ms or not onset_ms:
-        pl = {"available": False, "rule": "record",
-              "reason": "no recommended averaging or onset duration is in force for this participant"}
-        return _tpl.apply(plan, pl), pl
     inputs = simulation_inputs_for_participant(uid, contact=contact, centre_hz=float(centre),
                                                loaded=loaded, hemisphere=hemisphere, epochs=epochs)
     if inputs.get("absent_reason") or not len(inputs["t"]):
         pl = {"available": False, "rule": "record",
               "reason": inputs.get("absent_reason") or "no usable pieces for this contact"}
+        return _tpl.apply(plan, pl), pl
+    # THE BAND'S OWN ONSET (decision 417), worked out at the current limits the card programs (the
+    # capture currents held at or below the safe ceiling) and kept on the report, so the card, this
+    # pair and the simulation all read the same onset. Without it, the participant's table.
+    from . import safe_current as _safe_bt
+    _lo_bt, _hi_bt = _safe_bt.apply_to_plan(plan, uid, hemisphere).amplitude_limits()
+    try:
+        band = write_band_timing(participant, candidate=c0, hemisphere=hemisphere, amp_low=_lo_bt,
+                                 amp_high=_hi_bt, inputs=inputs)
+    except Exception as _bt_exc:                         # noqa: BLE001 - the table stands in
+        _log.warning("closed-loop: the band's onset could not be worked out for %s", uid,
+                     exc_info=True)
+        band = {"available": False, "reason": f"could not be worked out: {_bt_exc!r}"}
+    try:
+        rep.band_timing = band
+    except Exception:                                    # noqa: BLE001 - a read-only report
+        pass
+    timing = _tr.for_band(uid, band) or {}
+    avg_ms = (timing.get("averaging_ms") or {}).get("value_ms")
+    onset_ms = (timing.get("onset_upper_ms") or {}).get("value_ms")
+    if not avg_ms or not onset_ms:
+        pl = {"available": False, "rule": "record",
+              "reason": "no recommended averaging or onset duration is in force for this participant"}
         return _tpl.apply(plan, pl), pl
     med = _tpl.median_level(inputs["t"], inputs["power"], averaging_s=float(avg_ms) / 1000.0)
     if not med.get("available"):
@@ -2968,6 +3077,8 @@ def _place_thresholds_from_record(participant, rep, cands, *, hemisphere, loaded
                                    threshold_plan=provisional, loaded=loaded, epochs=epochs)
     dr_payload = design_rule_if_stored(participant, c0, hemisphere=hemisphere)
     rows = [] if not dr_payload or dr_payload.get("refused") else (dr_payload.get("table") or [])
+    if band.get("available") and band.get("design_rows"):
+        rows = band["design_rows"]             # the separations the band's onset was chosen on
     placement = _tpl.record_pair(median=med["median"], design_rows=rows,
                                  averaging_ms=avg_ms, onset_ms=onset_ms)
     placement["median"] = med
@@ -2976,9 +3087,94 @@ def _place_thresholds_from_record(participant, rep, cands, *, hemisphere, loaded
                                 "refused": bool((dr_payload or {}).get("refused")) if dr_payload else None,
                                 "reason": dr_summary.get("reason")}
     placement["capture_upper"], placement["capture_lower"] = plan.upper, plan.lower
+    placement["band_timing"] = {k: band.get(k) for k in ("available", "onset_s",
+                                                         "zero_undone_reached", "reason")}
     new_plan = _tpl.apply(plan, placement, observed_series=inputs["power"])
     placement["placement_rule"] = new_plan.placement_rule
     return new_plan, placement
+
+
+def band_timing_signature(participant, *, tiles_key, contact, centre_hz, hemisphere, amp_low,
+                          amp_high):
+    """The key of the band's onset (decision 417): the tiles and recording set (the series), the
+    band and side, the current limits the replay runs with, and the two rule versions it rests on."""
+    from . import band_timing as _bt
+    from . import design_rule as _dr
+    return (_bt.KIND, _bt.RULE_VERSION, _dr.RULE_VERSION,
+            str(getattr(participant, "uid", participant)), tiles_key,
+            recording_set_signature(participant), str(contact), round(float(centre_hz), 3),
+            str(hemisphere), round(float(amp_low), 6), round(float(amp_high), 6))
+
+
+def write_band_timing(participant, *, candidate, hemisphere, amp_low, amp_high, inputs=None,
+                      loaded=None, epochs=None):
+    """The band's onset (`band_timing.band_timing_for_series`), served when its key matches and
+    worked out and stored otherwise. ``inputs`` is `simulation_inputs_for_participant`'s output
+    when the caller already has it. Returns the payload, with its candidate."""
+    from . import band_timing as _bt
+    try:
+        from modules.CacheStore import provenance as _prov
+    except ImportError:                                # pragma: no cover - depends on the runner
+        from CacheStore import provenance as _prov
+    contact = (candidate or {}).get("channel")
+    centre = (candidate or {}).get("center_hz")
+    if contact is None or centre is None:
+        return {"available": False, "reason": "the candidate carries no sensing contact or band centre"}
+    if amp_low is None or amp_high is None:
+        return {"available": False, "reason": "no adaptive current limits to replay with"}
+    tiles_key = _tiles_key_for(participant)
+    if tiles_key is None:
+        return {"available": False, "reason": "no tile entry key, so nothing could be run or stored"}
+    uid = str(getattr(participant, "uid", participant))
+    sig = band_timing_signature(participant, tiles_key=tiles_key, contact=contact, centre_hz=centre,
+                                hemisphere=hemisphere, amp_low=amp_low, amp_high=amp_high)
+    tag = _simulation_candidate_tag(contact, centre, hemisphere)
+
+    def _build():
+        import time as _time
+        t0 = _time.perf_counter()
+        ins = inputs if inputs is not None else simulation_inputs_for_participant(
+            uid, contact=contact, centre_hz=float(centre), loaded=loaded, hemisphere=hemisphere,
+            epochs=epochs)
+        if ins.get("absent_reason") or not len(ins["t"]):
+            return {"available": False,
+                    "reason": ins.get("absent_reason") or "no usable pieces for this contact"}
+        out = _bt.band_timing_for_series(ins["t"], ins["power"], ins["amp_obs"],
+                                         amp_low=amp_low, amp_high=amp_high)
+        out["seconds"] = _time.perf_counter() - t0
+        return out
+
+    payload, _wrote = _cache_store.store_if_absent(
+        _bt.KIND, uid, sig, _build, writer="closed_loop", trigger="deployment_report",
+        provenance=_prov.flatten([_prov.entry(tiles_key, kind="raw_lsb_tiles", writer="biomarkers")]),
+        extra={"candidate": tag, "rule_version": _bt.RULE_VERSION},
+        root=_SHARED_CACHE_DIR_OVERRIDE)
+    payload = dict(payload or {"available": False, "reason": "nothing was worked out"})
+    payload["candidate"] = {"channel": str(contact), "center_hz": float(centre),
+                            "hemisphere": str(hemisphere)}
+    return payload
+
+
+def band_timing_if_stored(participant, candidate=None, *, hemisphere="Left"):
+    """The newest stored band onset for this candidate (matched on its sidecar tag), or None."""
+    from . import band_timing as _bt
+    if not candidate or candidate.get("channel") is None or candidate.get("center_hz") is None:
+        return None
+    want = _simulation_candidate_tag(candidate["channel"], candidate["center_hz"],
+                                     candidate.get("actuated_hemisphere")
+                                     or candidate.get("sensing_hemisphere") or hemisphere)
+    try:
+        payload, _stamp = _cache_store.load_newest(
+            _bt.KIND, str(getattr(participant, "uid", participant)), consumer="closed_loop",
+            root=_SHARED_CACHE_DIR_OVERRIDE,
+            match=lambda meta: (meta.get("extra") or {}).get("candidate") == want)
+    except Exception:                                  # noqa: BLE001 - a miss is not an error
+        return None
+    if payload is None:
+        return None
+    return dict(payload, candidate={"channel": str(candidate["channel"]),
+                                    "center_hz": float(candidate["center_hz"]),
+                                    "hemisphere": str(want["hemisphere"])})
 
 
 def write_design_rule(participant, *, candidate, hemisphere, threshold_plan, loaded=None,
@@ -3204,6 +3400,42 @@ def cache_status_for_page(participant):
                                         root=_SHARED_CACHE_DIR_OVERRIDE)
 
 
+#: The stored tables a report reads by "newest" rather than by a key it rebuilds, so their newest
+#: entries are part of a saved report's label (decision 423).
+REPORT_READS_NEWEST = ("amplitude_effect_by_band", "within_visit_pooled_shape",
+                       "three_source_run_points", "ground_truth_verdict", "clinic_pain_steps",
+                       "session_report_summary")
+
+
+def report_input_fingerprints(participant, request_data):
+    """Everything besides the code that can change a report (decision 423): the request, the
+    recordings, the stimulation-settings files, the pain reports (fetched fresh; inside a request
+    the fetch is shared with the report itself), the 3 s chunk table, and the newest entry of each
+    stored table the report reads by "newest"."""
+    try:
+        from modules.Biomarkers import bravo_service as _bs
+    except ImportError:                                   # pragma: no cover - host spelling
+        from Biomarkers import bravo_service as _bs
+    try:
+        from modules.StimOptimizer import adapter as _sa
+    except ImportError:                                   # pragma: no cover
+        from StimOptimizer import adapter as _sa
+    uid = str(getattr(participant, "uid", participant))
+    pro = _bs._load_pros({}, participant)
+    newest = {}
+    for kind in REPORT_READS_NEWEST:
+        st = _cache_store.newest_stamp(kind, uid, root=_SHARED_CACHE_DIR_OVERRIDE) or {}
+        newest[kind] = st.get("signature_key")
+    return {
+        "request": {k: v for k, v in sorted((request_data or {}).items()) if k != "ParticipantId"},
+        "recordings": repr(recording_set_signature(participant)),
+        "settings_files": repr(_sa.source_file_signature(participant)),
+        "pain_reports": (_bs._pro_table_digest(pro) if pro is not None and len(pro) else "none"),
+        "tiles": _tiles_key_for(participant),
+        "newest_tables": newest,
+    }
+
+
 def _cache_status_or_reason(participant):
     """`cache_status_for_page`, but it can never be the thing that breaks a report.
 
@@ -3352,6 +3584,53 @@ def rate_commitment_from_active_group(candidate_rate_hz, active_group):
                 f"group and a new threshold capture (PI decision 2026-09-12, option a)")}
 
 
+#: How long the report waits for its helper's stability answer before computing it here instead.
+STABILITY_HELPER_WAIT_S = 600.0
+
+
+def _validate_band_core_here(body):
+    """The stability model in this process, as the report always computed it."""
+    try:
+        from modules.Biomarkers import bravo_service as _bsvc
+    except ImportError:                                   # pragma: no cover - host spelling
+        from Biomarkers import bravo_service as _bsvc
+    return _bsvc._validate_band_core(body)
+
+
+def _submit_stability(participant, cands, pain_key, rd):
+    """Hand the first candidate's stability model to this worker's helper process (decision 427):
+    ``(future or None, body or None)``. None when the candidate names no band or no helper runs."""
+    first = (cands[0] or {}) if cands else {}
+    ch, fc = first.get("channel"), first.get("center_hz")
+    if ch is None or fc is None:
+        return None, None
+    body = stability_request_body(getattr(participant, "uid", participant), ch, float(fc),
+                                  float(first.get("band_width_hz", 5.0)), pain_score=pain_key,
+                                  matching=rd)
+    try:
+        try:
+            from modules.DecodeCommon import side_process as _side
+        except ImportError:                               # pragma: no cover
+            from DecodeCommon import side_process as _side
+        from . import stability_helper as _sh
+        return _side.submit(_sh.stability_core, body, _sh.current_overrides()), body
+    except Exception:                                     # noqa: BLE001 -- computed here instead
+        _log.warning("closed-loop report: the stability model could not be handed to the helper",
+                     exc_info=True)
+        return None, body
+
+
+def _stability_result(future, body):
+    """The helper's stability answer, or the model computed here when there is no helper answer."""
+    if future is not None:
+        try:
+            return future.result(timeout=STABILITY_HELPER_WAIT_S)
+        except Exception:                                 # noqa: BLE001 -- computed here instead
+            _log.warning("closed-loop report: the helper's stability answer failed; computing it "
+                         "here", exc_info=True)
+    return _validate_band_core_here(body)
+
+
 def report_for_participant(participant, request_data=None, *, candidates=None, hemisphere="Left",
                            power_scale="power_linear", force_refresh=None):
     """Fetch this participant's data from the platform and build the report.
@@ -3424,6 +3703,9 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
                           "evaluated for a specific configuration, not for a participant.",
                 "band_sweep_grid": _grid_export,
                 "cache_status": _status}
+    # THE STABILITY MODEL STARTS NOW, IN THE HELPER PROCESS (decision 427), and is read below where
+    # it used to be computed, so its seconds overlap the rest of the report.
+    _stab_future, _stab_body = _submit_stability(participant, cands, _pain["key"], rd)
     # THE TWO SIDES OF THE FIRST CANDIDATE, resolved once here and used everywhere below (review
     # C1, 2026-09-12). Until then one name, ``_hemi``, preferred the ACTUATED side and was used
     # for the impedance and the survey facts too, and the page always sent
@@ -3447,6 +3729,25 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     # column, the prescription's validated side and the simulation's amplitude series all take it.
     hemisphere = _act_hemi or hemisphere
 
+    # THE USER'S STIMULATION PROGRAM (decision 467): sent by the Closed-Loop page's "Stimulation
+    # program" card only when the user changed it. It replaces the device's settings for the rules
+    # (rate and pulse width on the candidate; the stimulating rings below) and fills the parameter
+    # table's program rows. Recorded data are not touched.
+    try:
+        from ClosedLoopDeployment import stim_program as _sp
+    except ImportError:                                   # pragma: no cover - host spelling
+        from . import stim_program as _sp
+    _stim_prog = _sp.normalise(rd.get("StimProgram"))
+    if _stim_prog and cands:
+        _c0 = dict(cands[0] or {}, stim_program=_stim_prog)
+        if _stim_prog.get("rate_hz") is not None:
+            _c0["rate_hz"] = _stim_prog["rate_hz"]
+        if (_stim_prog.get(_sens_hemi) or {}).get("pw_us") is not None:
+            _c0["pulse_width_us"] = _stim_prog[_sens_hemi]["pw_us"]
+        if (_stim_prog.get(_act_hemi) or {}).get("amp_mA") is not None:
+            _c0["paused_amplitude_mA"] = _stim_prog[_act_hemi]["amp_mA"]
+        cands = [_c0] + list(cands[1:])
+
     # Device facts the rules need but the analysis tables cannot supply. Fetched here rather than
     # inside pipeline.run so the pipeline stays free of ORM imports and remains testable on frames.
     dev = {}
@@ -3464,6 +3765,15 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         _log.warning("closed-loop report: device facts unavailable for %s",
                      getattr(participant, "uid", participant), exc_info=True)
         dev = {"_provenance": {}, "_error": f"device facts unavailable: {exc!r}"}
+
+    # The user's program wins over the device's settings for the sensing side's rules (decision 467);
+    # the epoch and active-group fills below only fill what is still None.
+    if _stim_prog:
+        _pf = _sp.device_facts_from_program(_stim_prog, _sens_hemi)
+        _pf_prov = _pf.pop("_provenance", None)
+        for _pk, _pv in _pf.items():
+            dev[_pk] = _pv
+            dev.setdefault("_provenance", {})[_pk] = _pf_prov
 
     # RATE AND PULSE WIDTH THE DEVICE IS ACTUALLY PROGRAMMED AT, read from the exposure-epoch
     # table `eps` already loaded above (`evidence_inputs_cached`) rather than asked of the caller.
@@ -3662,10 +3972,30 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
     def _place(rep_, cands_):
         return _place_thresholds_from_record(participant, rep_, cands_, hemisphere=hemisphere,
                                              loaded=_3loaded, epochs=eps)
+    # THE 7-MAD-ABOVE CHUNK BOUNDS for E2 and the capture pair (decision 412), from the
+    # candidate's contact's own tile cache, the same request every page makes. A failure is logged
+    # and named on the manifest; the run then applies no chunk rule, as before.
+    _chunk_bounds, _chunk_why = None, None
+    try:
+        try:
+            from modules.Biomarkers import bravo_service as _bs_cr
+        except ImportError:                               # pragma: no cover - host spelling
+            from Biomarkers import bravo_service as _bs_cr
+        _chunk_bounds = chunk_bounds_for_candidates(
+            _sa._calibrated_lsb_cache(getattr(participant, "uid", participant), _bs_cr), cands[:1])
+        if not _chunk_bounds:
+            _chunk_why = "no tile cache for the candidate's contact"
+    except Exception as _cr_exc:                       # noqa: BLE001 -- the report stands without it
+        _log.warning("closed-loop report: the chunk bounds could not be built for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        _chunk_why = f"the chunk bounds could not be built: {_cr_exc!r}"
     rep = _pl.run(getattr(participant, "uid", participant), psd_frame=psd, epochs=eps,
                   design_matrix=dm, candidates=cands, hemisphere=hemisphere,
                   power_scale=power_scale, device_facts=dev, pooled_e1=_pooled_e1,
-                  place_thresholds=_place, pain_score=_pain["key"])
+                  place_thresholds=_place, pain_score=_pain["key"],
+                  chunk_bounds=_chunk_bounds)
+    if _chunk_why and isinstance(rep.manifest, dict):
+        rep.manifest["chunk_rule"] = {"applied": False, "reason": _chunk_why}
     out = report_to_dict(rep)
     out["pain_score"] = _pain
     # The matching settings the band-to-pain readings that match reports to recordings (the
@@ -3725,9 +4055,10 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         _ch, _fc = _first.get("channel"), _first.get("center_hz")
         if _ch is not None and _fc is not None:
             _bw = float(_first.get("band_width_hz", 5.0))
-            _core = _bsvc._validate_band_core(stability_request_body(
-                getattr(participant, "uid", participant), _ch, float(_fc), _bw,
-                pain_score=_pain["key"], matching=rd))
+            _core = _stability_result(_stab_future, _stab_body if _stab_body is not None else
+                                      stability_request_body(
+                                          getattr(participant, "uid", participant), _ch,
+                                          float(_fc), _bw, pain_score=_pain["key"], matching=rd))
             _raw = (_core.get("stim") or {}) if _core.get("available") else {
                 "available": False,
                 "reason": (_core.get("reason") or "the biomarkers path returned nothing usable"),

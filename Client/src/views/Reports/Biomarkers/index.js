@@ -26,7 +26,8 @@ import ReportSharingNote from "./ReportSharingNote";
 import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
 import BiomarkerAnalytics, { hasSlidingCorrelation } from "./BiomarkerAnalytics";
 import BinarizationPreview from "./BinarizationPreview";
-import MatchWindowBand from "./MatchWindowBand";
+import lastComputedLine from "./lastComputedLine";
+import MatchWindowBand, { ControlLabel } from "./MatchWindowBand";
 import Fold from "./Fold";
 // BandTimeSweepPanel (the older, non-interactive tables-and-server-figures rendering of this
 // same grid) is superseded on this page by BiomarkerHeatmapGrids below -- kept as a file rather
@@ -44,6 +45,7 @@ import { MATCHING_DEFAULTS as D } from "./matchingDefaults";
 // remains one implementation of each and a fix applied there is a fix here. Editing those files is
 // out of scope for this page; only their placement and their framing change.
 import CalibrationInEffectPanel from "./CalibrationInEffectPanel";
+import ElectrodeIdentifierPanel from "./ElectrodeIdentifierPanel";
 // Colours, type sizes and card style: the shared tokens (the redesign of 2026-09-26).
 import { T, TYPE, LAYOUT } from "assets/theme/base/tokens";
 import PageHead from "views/Reports/paper/PageHead";
@@ -73,7 +75,6 @@ const DEFAULT_METRIC_OPTIONS = PAIN_SCORE_OPTIONS;
 // hairline border, no shadow, 24 px padding; never a card inside a card. The Background heading
 // keeps this title style, and its items are plain rows under it, not cards (C12).
 const SECTION_TITLE_SX = { ...TYPE.title, color: T.ink, m: 0 };
-const LABEL_SX = { ...TYPE.body, fontWeight: 600, color: T.ink, display: "block", mb: 0.25 };
 const NOTE_SX = { ...TYPE.body, color: T.ink3, display: "block" };
 
 // How the continuous pain score is turned into the binary high/low pain_level the detector trains
@@ -386,13 +387,15 @@ function Biomarkers() {
   useEffect(() => {
     if (!participant_uid) return;
     setPainLoading(true);
-    SessionController.query("/api/queryPainScores", { ParticipantId: participant_uid })
+    // With the clinic-sheet switch on, the sheets' ratings too, flagged `sheet` (decision 436).
+    SessionController.query("/api/queryPainScores",
+      { ParticipantId: participant_uid, IncludeClinicSheetRatings: includeClinicSheetRatings })
       .then((response) => {
         setPainScores(response.data);
         setPainLoading(false);
       })
       .catch(() => { setPainLoading(false); /* preview is optional — degrade silently */ });
-  }, [participant_uid]);
+  }, [participant_uid, includeClinicSheetRatings]);
 
 
   // THE ACQUISITION TIMELINE (decision 216): the participant and nothing else. The endpoint carries
@@ -415,10 +418,11 @@ function Biomarkers() {
   const [scanIndexData, setScanIndexData] = useState(null);
   useEffect(() => {
     if (!participant_uid) return;
-    SessionController.query("/api/queryPsdScanIndex", { ParticipantId: participant_uid, LabelMetric: metric })
+    SessionController.query("/api/queryPsdScanIndex", { ParticipantId: participant_uid, LabelMetric: metric,
+      IncludeClinicSheetRatings: includeClinicSheetRatings })
       .then((response) => setScanIndexData((response && response.data) || null))
       .catch(() => setScanIndexData(null));
-  }, [participant_uid, metric]);
+  }, [participant_uid, metric, includeClinicSheetRatings]);
 
   // The object handed to the timeline: the acquisition-timeline endpoint's own payload. Until
   // 2026-09-21 (decision 226) the Compute response carried a second copy of it as a fallback; a
@@ -436,7 +440,8 @@ function Biomarkers() {
     if (metric === "composite_mpq_leftleg") {
       const get = (k) => {
         const m = painScores.metrics.find((x) => x.key === k);
-        return m ? m.points : [];
+        // the sheets carry no MPQ, so the server adds none to the composite (decision 436)
+        return m ? m.points.filter((p) => !p.sheet) : [];
       };
       const zStats = (pts) => {
         const vs = pts.map((p) => p.v).filter((v) => v != null && Number.isFinite(v));
@@ -526,9 +531,11 @@ function Biomarkers() {
       maxPerRatingD, refractoryMinD, matchDirection, allowWindowReuse]);
   // The coverage sentence at the top of the Binarization card (the PI, 2026-09-21): follows the
   // window slider live, from the same two inputs the model reads.
-  const reportCoverageLive = useMemo(
-    () => reportCoverage({ scanIndex, painSeries: painSeriesLive, toleranceMin: matchTolerance }),
-    [scanIndex, painSeriesLive, matchTolerance]);
+  const reportCoverageLive = useMemo(() => {
+    const c = reportCoverage({ scanIndex, painSeries: painSeriesLive, toleranceMin: matchTolerance });
+    // how many of the reports are clinic-sheet ratings (decision 436)
+    return c && { ...c, n_clinic: previewPoints.filter((p) => p && p.sheet).length };
+  }, [scanIndex, painSeriesLive, matchTolerance, previewPoints]);
 
   // TRACK A, TASK A1: THE CALIBRATED GRID'S OWN REQUEST, BUILT FROM THE LIVE CONTROLS.
   //
@@ -590,9 +597,11 @@ function Biomarkers() {
   // the other four matching settings go under "More options".
   const clinicSheetControl = (
     <MDBox>
-      <MDTypography component="span" sx={{ ...LABEL_SX, mb: 0.5 }}>
+      <ControlLabel note={includeClinicSheetRatings
+          ? "Adds clinic scores taken while current was stepped; not more independent evidence."
+          : "The heat maps use the home pain surveys only."}>
         {"Clinic sheet scores"}
-      </MDTypography>
+      </ControlLabel>
       <ToggleButtonGroup
         value={includeClinicSheetRatings ? "include" : "exclude"} exclusive size="small"
         aria-label="clinic sheet scores in the heat maps"
@@ -602,11 +611,6 @@ function Biomarkers() {
         <ToggleButton value="exclude" title="Home pain surveys (REDCap) only">Home surveys only</ToggleButton>
         <ToggleButton value="include" title="Also pool clinic and at-home sheet scores (verbal 0–10; ×10 for VAS). Taken while current was stepped, so treat the larger n with care">+ clinic titration sessions</ToggleButton>
       </ToggleButtonGroup>
-      <MDTypography component="span" sx={{ ...NOTE_SX, mt: 0.5 }}>
-        {includeClinicSheetRatings
-          ? "Adds clinic scores taken while current was stepped; not more independent evidence."
-          : "The heat maps use the home pain surveys only."}
-      </MDTypography>
     </MDBox>
   );
 
@@ -615,9 +619,10 @@ function Biomarkers() {
                  columnGap: 3, rowGap: 2 }}>
       {/* The cap per rating, and the minimum gap between the samples it keeps. */}
       <MDBox>
-        <MDTypography component="span" sx={LABEL_SX}>
+        <ControlLabel note={`${maxPerRating > 1 ? "Rating value: median of its closest readings." : "One closest reading per pair."}`
+            + " Applies to the all-band scan, high/low preview and Closed-Loop summary; not the heat maps."}>
           {`Samples per pain rating, at most: ${maxPerRating}`}
-        </MDTypography>
+        </ControlLabel>
         <MDBox px={0.5}>
           <Slider
             value={maxPerRating} min={1} max={10} step={1}
@@ -625,18 +630,17 @@ function Biomarkers() {
             aria-label="samples per pain rating, at most"
             onChange={(e, v) => setMaxPerRating(v)} />
         </MDBox>
-        <MDTypography component="span" sx={NOTE_SX}>
-          {maxPerRating > 1
-            ? "Rating value: median of its closest readings."
-            : "One closest reading per pair."}
-          {" Applies to the all-band scan, high/low preview and Closed-Loop summary; not the heat maps."}
-        </MDTypography>
       </MDBox>
 
       <MDBox>
-        <MDTypography component="span" sx={LABEL_SX}>
+        <ControlLabel note={`${matchDirection === "pro_first"
+            ? "Unused when each report picks its recordings."
+            : maxPerRating <= 1
+            ? "Unused at one reading per rating."
+            : "Stops a burst of readings dominating a rating."}`
+            + " Applies to the all-band scan, high/low preview and Closed-Loop summary; not the heat maps."}>
           {`Minimum gap between the samples one rating keeps: ${refractoryMin} min`}
-        </MDTypography>
+        </ControlLabel>
         <MDBox px={0.5}>
           <Slider
             value={refractoryMin} min={0} max={30} step={1}
@@ -645,22 +649,15 @@ function Biomarkers() {
             disabled={maxPerRating <= 1 || matchDirection === "pro_first"}
             onChange={(e, v) => setRefractoryMin(v)} />
         </MDBox>
-        <MDTypography component="span" sx={NOTE_SX}>
-          {matchDirection === "pro_first"
-            ? "Unused when each report picks its recordings."
-            : maxPerRating <= 1
-            ? "Unused at one reading per rating."
-            : "Stops a burst of readings dominating a rating."}
-          {" Applies to the all-band scan, high/low preview and Closed-Loop summary; not the heat maps."}
-        </MDTypography>
       </MDBox>
 
       {/* How much time-domain signal each rating aggregates. The match window sets how far to
           search; this sets how much to use. */}
       <MDBox>
-        <MDTypography component="span" sx={LABEL_SX}>
+        <ControlLabel note="Signal used per rating, not search range. Applies to the all-band scan; not the heat maps."
+                      noteTitle={liveMatchCaption}>
           {`TD around each rating: ${matchExtentSec} s (the nearest ${Math.max(1, Math.round(matchExtentSec / 3))} of the 3 s pieces)`}
-        </MDTypography>
+        </ControlLabel>
         <MDBox px={0.5}>
           <Slider
             value={matchExtentSec} min={3} max={300} step={3}
@@ -668,15 +665,14 @@ function Biomarkers() {
             aria-label="TD around each rating (seconds)"
             onChange={(e, v) => setMatchExtentSec(v)} />
         </MDBox>
-        <MDTypography component="span" sx={NOTE_SX} title={liveMatchCaption}>
-          {"Signal used per rating, not search range. Applies to the all-band scan; not the heat maps."}
-        </MDTypography>
       </MDBox>
 
       <MDBox>
-        <MDTypography component="span" sx={{ ...LABEL_SX, mb: 0.5 }}>
+        <ControlLabel note={allowWindowReuse
+            ? "More ratings enter, but ratings sharing signal are not independent."
+            : "Each rating is one independent observation."}>
           {"Let one stretch of recording answer more than one report"}
-        </MDTypography>
+        </ControlLabel>
         <ToggleButtonGroup
           value={allowWindowReuse ? "reuse" : "none"} exclusive size="small"
           aria-label="window reuse mode"
@@ -686,19 +682,11 @@ function Biomarkers() {
           <ToggleButton value="none" title="One recording serves its nearest rating only: independent ratings">No</ToggleButton>
           <ToggleButton value="reuse" title="One recording serves every rating whose window covers it: more ratings, not independent">Yes</ToggleButton>
         </ToggleButtonGroup>
-        <MDTypography component="span" sx={{ ...NOTE_SX, mt: 0.5 }}>
-          {allowWindowReuse
-            ? "More ratings enter, but ratings sharing signal are not independent."
-            : "Each rating is one independent observation."}
-        </MDTypography>
       </MDBox>
 
       {data && data.live_match_stats && (
         <MDTypography component="span" sx={NOTE_SX}>
-          {`Last computed: ${data.live_match_stats.n_pro_td || 0} ratings matched to TD, `
-           + `${data.live_match_stats.n_pro_psd || 0} to a PSD`
-           + `${data.live_match_stats.n_pro_unmatched != null ? `, ${data.live_match_stats.n_pro_unmatched} with nothing in the window` : ""}`
-           + `${data.live_match_stats.n_td_used != null ? ` (${data.live_match_stats.n_td_used} 3 s TD pieces and ${data.live_match_stats.n_psd_used || 0} PSDs used).` : "."}`}
+          {lastComputedLine(data.live_match_stats)}
         </MDTypography>
       )}
     </MDBox>
@@ -763,7 +751,7 @@ function Biomarkers() {
               />
               <MDBox data-testid="developer-details">
                 <Fold show="Stored results, memory" hide="Hide stored results and memory use">
-                  <CacheStatusLine status={data ? data.cache_status : null} />
+                  <CacheStatusLine status={data ? data.cache_status : null} loading={!!computing} />
                   {/* RETENTION STATUS, WHICH HAS THREE ANSWERS. `underMemoryPressure()` returns false
                       both when the heap is comfortably below the eviction ratio and when the browser
                       does not expose heap figures at all (`performance.memory` is Chromium-only), so
@@ -877,6 +865,7 @@ function Biomarkers() {
                   {timelineData && timelineData.availability && timelineData.availability.records
                         && timelineData.availability.records.length > 0 ? (
                     <BiomarkerDataTimeline data={timelineData} painOverride={painSeriesLive}
+                      participantUid={participant_uid}
                       scanModel={scanModel} colorMode={timelineColorMode}
                       setColorMode={setTimelineColorMode} />
                   ) : (data && data.timeline && data.timeline.length > 0 ? (
@@ -1017,6 +1006,8 @@ function Biomarkers() {
                   <SectionRevealedContext.Provider value={checksOpened}>
                     <ControlAnalysesSection participantUid={participant_uid} page="biomarkers" clinicSheets={includeClinicSheetRatings} plain />
                   </SectionRevealedContext.Provider>
+                  {/* the device's electrode identifier runs (the PI, 2026-10-06); fetched on first opening */}
+                  <ElectrodeIdentifierPanel participantUid={participant_uid} revealed={checksOpened} />
                 </Fold>
               </MDBox>
             </Grid>

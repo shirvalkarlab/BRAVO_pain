@@ -23,10 +23,11 @@ import { useCachedResult } from "database/useCachedResult";
 
 import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
 import PanelStaleNote from "./PanelStaleNote";
+import { rocSettings } from "./candidateRequestParams";
 import PAL from "./palette";
 import RocCurrentRemovedLine from "./RocCurrentRemovedLine";
 import { TYPE, WRAP, CARD, STATE } from "assets/theme/base/tokens";
-import { plotlyLayout, REF_LINE, directLabel } from "views/Reports/figureStyle";
+import { plotlyLayout, REF_LINE, directLabel, wrapLabel } from "views/Reports/figureStyle";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not reported" : Number(v).toFixed(d));
 
@@ -116,7 +117,8 @@ function solveCutpoint(roc, rule, costRatio) {
   };
 }
 
-function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCutpoint, lsbThreshold }) {
+function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCutpoint, lsbThreshold,
+  currentRemoved }) {
   const ref = useRef(null);
   const histRef = useRef(null);
   const fwdRef = useRef(null);
@@ -129,7 +131,6 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
   const bc = bandCandidate || {};
   const channelRaw = bc.contact;
   const centerHz = bc.center_freq_hz;
-  const bandWidthHz = bc.bandwidth_hz || 5.0;
 
   // THE REQUEST, MINUS THE PARTICIPANT, IS THE CACHE KEY.
   //
@@ -139,13 +140,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
   // and it is part of the request. The decision rule and the cost ratio only choose a point ON the
   // curve the server already returned; that solve happens in this browser, so putting either in the
   // key would throw away a curve and refit it in order to move a marker along it.
-  const settings = {
-    Channel: channelRaw,
-    CenterHz: centerHz == null ? null : Number(centerHz),
-    BandWidthHz: Number(bandWidthHz),
-    MatchDirection: matchDir,
-    ...requestParams,
-  };
+  const settings = rocSettings(bc, matchDir, requestParams);
 
   const cached = useCachedResult({
     moduleKey: CL.roc,
@@ -186,12 +181,17 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
   // while the on-curve marker (effect B) still tracks the slider live.
   useEffect(() => {
     if (!onCutpoint) return undefined;
+    // `forBand` and `isDefault` let the page send the summary a cut-point only when the reader
+    // moved this ROC off its defaults on this band (decision 416): the server takes the same default
+    // point itself, so sending it would only change the summary's request after it was computed.
     const payload = opThr != null ? { threshold: opThr, rule: opRule, matchDir, auc: rocAuc,
       sensitivity: op && op.sensitivity, specificity: op && op.specificity,
-      fpr: op && op.fpr, tpr: op && op.tpr, degenerate: op && op.degenerate } : null;
+      fpr: op && op.fpr, tpr: op && op.tpr, degenerate: op && op.degenerate,
+      forBand: `${channelRaw}|${centerHz}`,
+      isDefault: rule === "youden" && logCost === 0 && matchDir === "prior" } : null;
     const t = setTimeout(() => onCutpoint(payload), 250);
     return () => clearTimeout(t);
-  }, [opThr, opRule, matchDir, rocAuc]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [opThr, opRule, matchDir, rocAuc, rule, logCost, channelRaw, centerHz]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // (A) Draw the ROC BASE (chance line + curve + an empty cut-point trace) once per ROC dataset.
   // The cut-point marker is trace index CUTPOINT_TRACE; updated in place by effect (B) so changing rule
@@ -304,8 +304,8 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       ? (fh.bin_centers[1] - fh.bin_centers[0]) : (fh.x_max - fh.x_min) || 1;
     const layout = plotlyLayout({
       barmode: "overlay", bargap: 0.04,
-      margin: { l: 56, r: 16, t: 24, b: 48 }, height: 188,
-      xaxis: { title: { text: "band power, standardised (0 = its average; higher goes with more pain)" },
+      margin: { l: 56, r: 16, t: 24, b: 64 }, height: 204,
+      xaxis: { title: { text: wrapLabel("band power, standardised (0 = its average; higher goes with more pain)", 48) },
         range: [fh.x_min - binW, fh.x_max + binW] },
       yaxis: { title: { text: "band-power readings" } },
       shapes: [], annotations: [],
@@ -393,11 +393,14 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
       + (forward.held_out_auc_lo != null ? ` (95% range ${fmt(forward.held_out_auc_lo)} to ${fmt(forward.held_out_auc_hi)})` : "")
       + `, against ${fmt(forward.in_sample_auc)} measured on the data it was fitted to (0.5 = coin toss).`);
     const layout = plotlyLayout({
-      margin: { l: 56, r: 72, t: 16, b: 48 }, height: 200,
+      margin: { l: 72, r: 80, t: 16, b: 48 }, height: 220,
       xaxis: { title: { text: "week tested (trained on every earlier week)" }, range: [xlo, xhi] },
-      yaxis: { title: { text: "how well it tells high pain from low" }, range: [-0.02, 1.02] },
-      annotations: [directLabel(xhi, 0.5, "coin toss", PAL.ink3),
-        ...(forward.in_sample_auc != null ? [directLabel(xhi, forward.in_sample_auc, "fitted data", PAL.ink3)] : [])],
+      yaxis: { title: { text: wrapLabel("how well it tells high pain from low", 22) }, range: [-0.02, 1.02] },
+      // "coin toss" below its line and "fitted data" above its own, so the two never meet
+      // (review 2026-10-02: they overlapped when the fitted reading sat near 0.5)
+      annotations: [{ ...directLabel(xhi, 0.5, "coin toss", PAL.ink3), yanchor: "top" },
+        ...(forward.in_sample_auc != null
+          ? [{ ...directLabel(xhi, forward.in_sample_auc, "fitted data", PAL.ink3), yanchor: "bottom" }] : [])],
     });
     Plotly.react(gd, traces, layout, PAL.MODEBAR);
   }, [forward]);  // eslint-disable-line react-hooks/exhaustive-deps
@@ -457,7 +460,7 @@ function DeploymentRocPanel({ participantUid, bandCandidate, requestParams, onCu
             Plotly graph object survives loading/refit cycles instead of being torn down. */}
         <div ref={ref} style={{ width: "100%", display: roc ? "block" : "none" }} />
         {/* The same area with the stimulation current taken out (2026-09-26), descriptive only. */}
-        <RocCurrentRemovedLine plainAuc={roc ? roc.auc : null} adjusted={envOk ? env.auc_current_removed : null} />
+        <RocCurrentRemovedLine plainAuc={roc ? roc.auc : null} adjusted={currentRemoved || null} />
 
         {/* Feature-distribution histogram beneath the ROC (pain-high vs pain-low), with the cut-point
             threshold line drawn on top. Also always-mounted so it survives refits. Only shown when

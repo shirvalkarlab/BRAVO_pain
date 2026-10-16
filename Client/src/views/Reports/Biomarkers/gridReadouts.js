@@ -211,7 +211,7 @@ export function rowTier(seconds, ranges) {
 /** Short bullets for the caption under the grids (the PI, 2026-09-15: "MUCH more concise, ideally
  * with bullet points"; the row labels themselves stay plain numbers). Sources are named in a word,
  * not spelled out; the full sentences stay on the response for anyone who opens it. */
-export function tierBullets(ranges, secondsList) {
+export function tierBullets(ranges, secondsList, sw) {
   if (!ranges || !Array.isArray(ranges.averaging_s)) return [];
   const rows = (secondsList || []).map(Number).filter(Number.isFinite);
   const avgRows = rows.filter((s) => rowTier(s, ranges).tier === "averaging");
@@ -223,9 +223,10 @@ export function tierBullets(ranges, secondsList) {
     out.push(`Rows \u2264${spacedSeconds(Math.max(...avgRows))}: device averaging window `
       + `(${ranges.averaging_s[0]}\u2013${ranges.averaging_s[1]} s on tablet)`);
   }
-  if (onsetRows.length) {
-    out.push(`Rows ${spacedSeconds(Math.min(...onsetRows))}\u2013${spacedSeconds(Math.max(...onsetRows))}: one averaging window + `
-      + `onset hold (each \u2264${ranges.onset_dual_s[1]} s); device holds level, no averaging`);
+  // Rows over 30 s: only the PSD count, starred, and only when some report was read from PSD.
+  const starred = onsetRows.filter((s) => needsMultiplePsds(sw, s));
+  if (starred.length) {
+    out.push(`*${multiPsdRows({ integration_seconds_delivered: starred }).join("; ")} (ceil(window/30 s))`);
   }
   if (beyondRows.length) {
     out.push(`Rows from ${spacedSeconds(Math.min(...beyondRows))}: beyond any device setting`);
@@ -243,10 +244,41 @@ export function deviceSpectrumBullets(sw) {
   const share = tot > 0 ? ` (${Math.round((100 * n) / tot)}%)` : "";
   const ofTot = tot > 0 ? ` of ${tot}` : "";
   return [
-    `${n}${ofTot} matched reports${share} had no TD in match window; `
-      + "read from PSD (N s row = nearest ceil(N/30) PSDs, else none)",
+    `${n}${ofTot} matched reports${share} had no TD in match window; read from PSD`,
     "Match window defined under \"Adjust matching parameters\"",
   ];
+}
+
+/** One PSD covers 30 s, so a row of N s needs ceil(N/30) of them. */
+const PSD_SNAPSHOT_S = 30;
+
+/** The rows (delivered lengths) that need more than one PSD, as "45 s and 1 min rows need 2 PSDs". */
+function multiPsdRows(sw) {
+  const rows = ((sw && sw.integration_seconds_delivered) || []).map(Number).filter(Number.isFinite);
+  const byK = {};
+  rows.forEach((s) => {
+    const k = Math.ceil(s / PSD_SNAPSHOT_S - 1e-9);
+    if (k > 1) (byK[k] = byK[k] || []).push(s);
+  });
+  return Object.keys(byK).map(Number).sort((a, b) => a - b).map((k) => {
+    const names = byK[k].map(spacedSeconds);
+    const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+    return `${list} row${names.length > 1 ? "s" : ""} ${psdNeed(k, names.length > 1)}`;
+  });
+}
+
+/** "need 2 PSDs" written whole, not assembled, so a search of the built chunks finds it (the rows
+ *  up to 60 s only ever need 2); other counts are assembled. */
+function psdNeed(k, plural) {
+  if (k === 2) return plural ? "need 2 PSDs" : "needs 2 PSDs";
+  return `${plural ? "need" : "needs"} ${k} PSDs`;
+}
+
+/** Rows whose label carries the asterisk: those that need more than one PSD, when any report was
+ *  read from PSD (the asterisk points at that note). */
+export function needsMultiplePsds(sw, seconds) {
+  return !!(sw && Number(sw.n_pain_reports_from_device_spectrum) > 0)
+    && Math.ceil(Number(seconds) / PSD_SNAPSHOT_S - 1e-9) > 1;
 }
 
 /** The clinic-sheet caveat (decision 186): what the heat maps pool, and how many of this contact

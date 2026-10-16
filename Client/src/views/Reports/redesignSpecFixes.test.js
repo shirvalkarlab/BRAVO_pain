@@ -13,10 +13,8 @@
  */
 import "@testing-library/jest-dom";
 import { render as rtlRender } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
 
 import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 import { T } from "assets/theme/base/tokens";
 
 import ParameterTable, { ACTION, TABLE_MIN_WIDTH } from "./ClosedLoopSim/PrescriptionPanel";
@@ -26,6 +24,7 @@ import response from "./StimOptimizer/__fixtures__/rcs08_stim_optimizer_two_stag
 import PageHead, { contextLine } from "./paper/PageHead";
 import { ceilingSentence } from "./paper/CeilingLine";
 import { studyCode } from "./paper/studyCode";
+import { wrap, clone } from "testUtils/render";
 
 jest.mock("layouts/DatabaseLayout", () => ({ children }) => <div>{children}</div>);
 jest.mock("plotly.js-dist", () => ({ react: () => Promise.resolve(), purge: () => {}, newPlot: () => {} }));
@@ -35,13 +34,6 @@ jest.mock("graphing-utility/Plotly", () => ({
 
 // eslint-disable-next-line import/first
 import { ceilingLineProps, CEILING_NOT_SENT } from "./ClosedLoopSim/index";
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
-const clone = (x) => JSON.parse(JSON.stringify(x));
 
 /** The RCS08 payload with the device permitting the configuration, so the table shows its rows. */
 function allowedReport() {

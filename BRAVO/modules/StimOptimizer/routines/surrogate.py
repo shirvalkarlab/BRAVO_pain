@@ -424,8 +424,20 @@ class ObjectiveGP:
     def hyperparameters(self):
         self._check()
         k = self.gp_.kernel_
+        # THE FITTED SIZE OF THE CURRENT'S EFFECT AGAINST THE RATING NOISE (2026-10-02): the
+        # constant factor is the surface's variance, the white kernel the noise. When the constant
+        # sits at its lower bound the fit found no effect of current at all, and the spread of any
+        # difference is the scatter of the ratings (RCS08 L C+2- 60/160 us: 0.001 against 0.881).
+        p = k.get_params(deep=True)
+        cv = [(n, v) for n, v in p.items() if n.endswith("constant_value")]
+        nl = [v for n, v in p.items() if n.endswith("noise_level")]
+        effect = float(cv[0][1]) if cv else float("nan")
+        lo = p.get(cv[0][0] + "_bounds") if cv else None
+        at_min = bool(cv and isinstance(lo, (tuple, list)) and effect <= float(lo[0]) * (1.0 + 1e-2))
         return dict(kernel=str(k), log_marginal_likelihood=float(
-            self.gp_.log_marginal_likelihood_value_))
+            self.gp_.log_marginal_likelihood_value_),
+            effect_variance=effect, noise_variance=float(nl[0]) if nl else float("nan"),
+            current_effect_at_minimum=at_min)
 
     def with_fantasy(self, X_new, var_new):
         """Copy of this GP conditioned on hypothetical observations at ``X_new``.

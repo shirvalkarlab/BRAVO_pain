@@ -24,7 +24,7 @@ export function deploymentSummaryBody({ participantUid, channel, centerHz, bandW
 }
 
 export default function useDeploymentSummary({ participantUid, channel, centerHz, bandWidthHz,
-  matchDir, cutThr, requestParams, enabled = true }) {
+  matchDir, cutThr, requestParams, enabled = true, slot = CL.summary }) {
   const body = deploymentSummaryBody({ participantUid, channel, centerHz, bandWidthHz, matchDir,
     cutThr, requestParams });
   // The request minus the participant, for the reason given at length in useDeploymentReport: the
@@ -34,7 +34,7 @@ export default function useDeploymentSummary({ participantUid, channel, centerHz
   delete settings.ParticipantId;
 
   const cached = useCachedResult({
-    moduleKey: CL.summary,
+    moduleKey: slot,   // CL.summaryOther for the band chosen on the other side
     uid: participantUid,
     settings,
     // `enabled` lets a consumer that receives the summary as a prop skip its own fetch entirely,

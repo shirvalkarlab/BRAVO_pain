@@ -437,6 +437,14 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
   if (!data) return null;
   return (
     <MDBox className="cl-signoff-record">
+      {/* The pain score every reading on this record uses (the odds ratio and the AUCs share it and
+          one band-power feature), named once, on its own line, in bold (the PI, 2026-10-03). */}
+      {id && id.pro_metric ? (
+        <MDTypography variant="caption" display="block" data-testid="signoff-pain-score"
+          sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.ink, mb: 0.5 }}>
+          {`Pain score: ${painScoreLabel(id.pro_metric)}`}
+        </MDTypography>
+      ) : null}
       <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.body, color: PAL.ink2, mb: 1 }}>
         {`Statistical checks, as evidence and not as permission: ${data.n_gates_passed} of ${data.n_gates} passed`}
         {data.n_necessary != null ? `, of which ${data.n_necessary_passed} of ${data.n_necessary} required` : ""}
@@ -458,7 +466,7 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
               <KV k="Region" v={id.region || "not given"} />
               <KV k="Band" v={`${fmt(id.band_lo_hz, 1)}–${fmt(id.band_hi_hz, 1)} Hz`} />
               <KV k="Centre (moved to the nearest band the device computes)" v={`${fmt(id.center_freq_hz, 1)} → ${fmt(id.snapped_center_freq_hz, 2)} Hz`} />
-              <KV k="Pain score / high-low split" v={`${id.pro_metric} / ${id.binarization}`} />
+              <KV k="Pain score / high-low split" v={`${painScoreLabel(id.pro_metric)} / ${id.binarization}`} />
               <KV k="Pain ratings used" v={ratingsUsedText(id.clinic_sheet_ratings)} />
               <KV k="Pain score used" v={painScoreUsedText(_rep && _rep.pain_score, id.pro_metric)} />
               <KV k="Polarity / suggested mode" v={`${dc.polarity} / ${dc.suggested_mode || "not given"}`} />
@@ -519,6 +527,11 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
                 )}
                 <KV k="Odds ratio (95% range)" v={`${fmt(ev.odds_ratio)} (${fmt(ev.or_ci_low)}–${fmt(ev.or_ci_high)})${ev.credible_ci ? " ✓" : ""}`} />
                 <KV k="p from the mixed-effects model (ratings grouped in time)" v={ev.p_glmer != null ? ev.p_glmer.toExponential(2) : "not reported"} />
+                {/* The same model's exact rotation test, beside it (decision 477, "show both"): on
+                    RCS08 the model's own p read <= 0.05 for 8.3 % of unrelated bands, this 5 %. */}
+                <KV k="p from shifting ratings in time" v={ev.p_rotation != null
+                  ? `${fmt(ev.p_rotation, 3)}${ev.rotation_n_orders ? ` (${ev.rotation_n_orders} shifts)` : ""}`
+                  : "not reported"} />
                 <KV k="Readings behind the switching point / reports" v={`${ev.n_matched_samples ?? "not reported"} / ${ev.n_clusters ?? "not reported"}`} />
                 <BurnInNote ev={ev} />
                 {pw && pw.available ? (

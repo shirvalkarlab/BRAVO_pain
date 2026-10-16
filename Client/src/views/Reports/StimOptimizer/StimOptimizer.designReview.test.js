@@ -25,15 +25,12 @@ import "@testing-library/jest-dom";
 import fs from "fs";
 import path from "path";
 import { render as rtlRender } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 
 import oldResponse from "./__fixtures__/rcs08_stim_optimizer_two_stage.json";
 import newResponse from "./__fixtures__/rcs08_stim_optimizer_2026-09-25.json";
 import { statusSummary, STATUS_GLYPH } from "./StatusLine";
 import { CURRENT_MAP_COLORSCALE } from "./CurrentMapCard";
+import { wrap } from "testUtils/render";
 
 jest.mock("react-router-dom", () => ({
   ...jest.requireActual("react-router-dom"),
@@ -63,12 +60,6 @@ jest.mock("database/useCachedResult", () => ({
 
 // eslint-disable-next-line import/first
 import StimOptimizer from "./index";
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 
 function renderPage(fx) {
   global.__SO_FX__ = fx;

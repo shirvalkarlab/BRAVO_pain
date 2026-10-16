@@ -60,11 +60,21 @@ FIVE PARSING TRAPS, every one of which has already produced a wrong number in th
    above the device ceiling. Requiring the rate cell to be populated for the same column bounds each
    block correctly.
 
-FOUR RATES APPEAR IN THE SHEETS THAT THE DEVICE EXPORT NEVER RECORDED: 25, 85, 100 and 180 Hz,
-against the chronic stream's 10, 55, 110, 125, 130, 145 and 165. The 100 Hz case is in the sheet
-itself, not a parser fault (July 2025 records 100.0 Hz for Right Groups C and D at 1.0 and 1.5 mA).
-UNRESOLVED and consequential: either those settings were delivered and the export missed them, or
-the sheets carry planned values that were never delivered. It cannot be settled from the sheets.
+FOUR RATES IN THE SHEETS WERE THOUGHT ABSENT FROM THE DEVICE: 25, 85, 100 and 180 Hz, against the
+chronic stream's 10, 55, 110, 125, 130, 145 and 165. Checked 2026-10-06 (item N-09) against all 586
+stored RCS08 exports (every rate field, tablet clock):
+  * 85 Hz WAS DELIVERED AND RECORDED. It is in the settings carried by 5 of the 300 BrainSense
+    streaming runs (2025-10-02 x1, 2025-10-14 x3, 2025-12-03 x1), each within seconds of an 85 Hz
+    sheet step on the same contact, current and pulse width. The earlier count missed it because it
+    read only the group settings, which the device saves at session start and end.
+  * 100 Hz WAS PLANNED, VERY LIKELY NOT GIVEN. It is only in the July 2025 Stim Testing tab (Right
+    Groups C and D, C+10- and C+11-, no times, "NOT DONE" in the next column); the timed Notes log
+    has no such step, and the export saved at 14:05:32 that day has no group on contacts 10 or 11.
+    The device's only 100 Hz is an inactive pre-set group on 2025-07-17.
+  * 25 Hz (2025-12-17 and 2026-01-05) and 180 Hz (2025-10-14 12:07:54) appear in no export. Every
+    such step falls where the device saved no setting (no streaming run, no session boundary), so
+    the device record can neither confirm nor refute them; this record has no streaming run at 10 Hz
+    either, though 10 Hz was the home setting for months. Only someone present can say.
 """
 import numpy as np
 

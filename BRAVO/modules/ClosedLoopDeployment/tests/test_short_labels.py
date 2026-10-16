@@ -39,7 +39,8 @@ def test_short_labels_are_distinct_so_two_bullets_never_read_the_same():
 
 
 def test_every_row_the_evaluator_emits_carries_its_rules_short_label():
-    cand = passing_candidate(pulse_width_us=160.0)       # D27 fails: above the 120 us ceiling
+    # D16 fails (impedance); 160 us leaves D31 unchecked below; D27 is record only (decision 478)
+    cand = passing_candidate(impedance_ohms=100.0, pulse_width_us=160.0, actuated_hemisphere="Right")
     part = participant_record()
     part.pop("brainsense_max_pulse_width_us", None)      # and a rule made not determinable
     rep = constraints.check_eligibility(cand, part)
@@ -48,7 +49,7 @@ def test_every_row_the_evaluator_emits_carries_its_rules_short_label():
     assert rows, "the mutated candidate should produce rows"
     for row in rows:
         assert row["short_label"] == constraints.RULES_BY_ID[row["rule_id"]].short_label
-    assert any(r["rule_id"] == "D27" for r in rep.failures)
+    assert any(r["rule_id"] == "D16" for r in rep.failures)
 
 
 def test_a_rule_built_without_a_label_still_constructs():

@@ -58,6 +58,24 @@ export const CL = {
   pooled: `${MODULES.closedLoop}/pooled`,
   // the stored closed-loop simulation, fetched after the report the same way (Phase 8)
   simulation: `${MODULES.closedLoop}/simulation`,
+  // ONE REPORT PER STIMULATOR (the sense-to-control wiring, the PI, 2026-10-08), each in a slot of
+  // its own for the grid's reason above: sharing `report` let the stimulator driven from the other
+  // side be shown the band's own-side answer marked "changed since" (decision 470). `reportContra`:
+  // the page's band driving the other stimulator. `reportOther` and `reportOtherContra`: the band
+  // chosen on the other side, driving its own stimulator or the other one; `summaryOther` is that
+  // band's summary.
+  reportContra: `${MODULES.closedLoop}/reportContra`,
+  reportOther: `${MODULES.closedLoop}/reportOther`,
+  reportOtherContra: `${MODULES.closedLoop}/reportOtherContra`,
+  summaryOther: `${MODULES.closedLoop}/summaryOther`,
+  // the three sense-to-control wirings compared by simulation (decision 472)
+  wiring: `${MODULES.closedLoop}/wiring`,
+};
+
+/** The Biomarkers page's own extra slots: answers it fetches beside its main one. The electrode
+ *  identifier check (the PI, 2026-10-06) sits in the bottom fold and feeds nothing else. */
+export const BM = {
+  electrodeIdentifier: `${MODULES.biomarkers}/electrodeIdentifier`,
 };
 
 /** Every slot in the family, in no meaningful order. */
@@ -112,6 +130,20 @@ export function recomputeSlots(uid, keys) {
 /** Every deployment slot for one participant, which is what the page's Recompute control rebuilds. */
 export function recomputeClosedLoop(uid) {
   recomputeSlots(uid, CLOSED_LOOP_SLOTS);
+}
+
+/** The deployment slots whose answer is about the chosen band: every slot but the grid (browsed
+ *  to choose a band) and the pooled three-source view (every visit, every band). */
+export const CLOSED_LOOP_BAND_SLOTS = CLOSED_LOOP_SLOTS.filter((k) => k !== CL.grid && k !== CL.pooled);
+
+/**
+ * A band was chosen on this page (decision 418): the reader's explicit act, so every answer about
+ * the band is computed for the new one, exactly as Recompute would, rather than the previous band's
+ * answers being shown marked stale until Recompute is pressed (the cache never fetches on a changed
+ * request by itself).
+ */
+export function newBandForClosedLoop(uid) {
+  recomputeSlots(uid, CLOSED_LOOP_BAND_SLOTS);
 }
 
 /**

@@ -253,7 +253,8 @@ def threshold_placement(power_low, power_high, *, amp_low, amp_high, expected_si
     captures at two amplitudes. The value added here is the set of predictions that come with them:
     whether the capture will be flagged as inverted, whether it will be flagged as too close, how
     much of the time the signal will sit in each of the three control states, and whether the
-    capture amplitudes themselves violate the artefact ceiling of D27.
+    capture amplitudes themselves violate the artefact ceiling of D27 (since decision 478 that last
+    check is record only: "not evidence based - disregard"; see ``ThresholdPlan.record_only``).
 
     ``pooled_slope`` is the report's E1 when it is the pooled titration slope (an ``EdgeEstimate``
     from ``edges.pooled_actuation_edge``), or None when no slope is stored. Since 2026-09-12 the
@@ -263,6 +264,7 @@ def threshold_placement(power_low, power_high, *, amp_low, amp_high, expected_si
     verdict sentences are judged on, and where they land, changed.
     """
     problems = []
+    record_only = []
     d = control_authority(power_low, power_high)
     a = np.asarray(power_low, float); a = a[np.isfinite(a)]
     b = np.asarray(power_high, float); b = b[np.isfinite(b)]
@@ -277,17 +279,20 @@ def threshold_placement(power_low, power_high, *, amp_low, amp_high, expected_si
     # proposed amplitude and no longer cites "D27" as if it were the ledger row (review C10,
     # 2026-09-12): at 5.5 mA delivered this would have blocked "on D27" while the ledger's D27 row
     # passed on the device's 3.0 mA capture.
+    # NOT EVIDENCE BASED - DISREGARD (the PI, 2026-10-16, decision 478): the two sentences are kept,
+    # with that note, in `record_only`; they no longer reach `problems` (which block) or `warnings`.
+    _DISREGARD = "Not evidence based - disregard: "
     for label, amp in (("lower", amp_low), ("upper", amp_high)):
         if amp is not None and amp > CAPTURE_ARTEFACT_AMP_MA:
             _which = {"lower": "lowest", "upper": "highest"}[label]
-            problems.append(
+            record_only.append(_DISREGARD +
                 f"the proposed {label} capture amplitude of {amp:.2f} mA (the {_which} therapeutic "
                 f"current on record for this cell) exceeds the {CAPTURE_ARTEFACT_AMP_MA} mA artefact "
                 "ceiling, above which stimulation artefact may make the LFP appear elevated during "
                 "capture; a threshold read there would partly measure the stimulator. The ledger's "
                 "D27 row judges the device's own newest capture, which is a different amplitude.")
     if pulse_width_us is not None and pulse_width_us > CAPTURE_ARTEFACT_PW_US:
-        problems.append(
+        record_only.append(_DISREGARD +
             f"the proposed capture's pulse width {pulse_width_us:.0f} us exceeds the "
             f"{CAPTURE_ARTEFACT_PW_US:.0f} us artefact ceiling, with the same consequence for the capture.")
 
@@ -318,7 +323,8 @@ def threshold_placement(power_low, power_high, *, amp_low, amp_high, expected_si
         capture_amp_low=amp_low, capture_amp_high=amp_high,
         frac_time_below=fb, frac_time_between=fbet, frac_time_above=fab,
         predicted_recapture_alert=alert,
-        control_authority=d, problems=problems, warnings=warnings, capture_verdicts=verdicts,
+        control_authority=d, problems=problems, warnings=warnings, record_only=record_only,
+        capture_verdicts=verdicts,
         note=("Thresholds are placed at the two capture means, as the device does. Since 2026-09-12 "
               "the two D26 verdicts (inverted capture, thresholds too close) are judged on the "
               "pooled titration slope across runs of stepped current (both legs), not on the between-visit "

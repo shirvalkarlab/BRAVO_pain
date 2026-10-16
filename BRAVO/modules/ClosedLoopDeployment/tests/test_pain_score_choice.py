@@ -6,6 +6,8 @@ test for its default score, NRS. The page now sends the pain score chosen in a d
 band selection (`PainScore`, one of the Biomarkers heat maps' own choices), and every band-to-pain
 reading on the report follows it. What is saved under the recording set stays free of every pain
 rating (decision 273; CLAUDE.md §7 rule 5): the ratings are joined per request.
+
+Merged here 2026-10-05: test_pain_ratings_never_served_stale.py.
 """
 import ast
 import inspect
@@ -13,11 +15,12 @@ import textwrap
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from ClosedLoopDeployment import adapter as AD
 from ClosedLoopDeployment import pipeline as PL
 from ClosedLoopDeployment.tests.test_adapter_caching import (  # noqa: F401  (fixtures)
-    _epoch_frame, _isolate_caches, _psd_frame, live_inputs)
+    _epoch_frame, _isolate_caches, _pain_report_frame, _psd_frame, live_inputs)
 from ClosedLoopDeployment.tests.test_calibrated_join import _cal_frame
 
 try:
@@ -102,15 +105,21 @@ def test_without_a_pain_score_the_pipeline_reads_nrs_as_before(monkeypatch):
     assert rep.manifest["pain_score"] == "nrs"
 
 
-def test_the_joined_table_memo_tells_two_leg_scores_apart():
+@pytest.mark.parametrize("column,first,second", [("nrs", 7.0, 2.0), ("left_leg_vas", 40.0, 90.0)],
+                         ids=["pain_frames", "leg_scores"])
+def test_the_joined_table_memo_tells_two_pain_frames_apart(column, first, second):
+    """The joined table's in-process memo must be keyed on the pain frame it merges in, or a memo
+    hit hands back the other request's ratings: a corrected NRS rating (from
+    test_pain_ratings_never_served_stale.py), and a different leg score."""
     psd, eps = _psd_frame(), _epoch_frame()
     p1 = pd.DataFrame({"epoch": [1.0], "report_id": ["1"], "nrs": [7.0], "vas": [70.0],
                        "left_leg_vas": [40.0]})
-    p2 = p1.assign(left_leg_vas=[90.0])
+    p2 = p1.assign(**{column: [second]})
     t1 = AD.joined_table_cached(psd, eps, pro_frame=p1)
     t2 = AD.joined_table_cached(psd, eps, pro_frame=p2)
-    assert t1 is not t2, "a memo hit handed back the other request's leg ratings"
-    assert set(t2["left_leg_vas"].dropna()) == {90.0}
+    assert set(t1[column].dropna()) == {first}
+    assert t1 is not t2, "a memo hit handed back the other request's ratings"
+    assert set(t2[column].dropna()) == {second}
 
 
 def test_the_composite_is_blended_per_report_by_biomarkers_then_averaged_per_setting(live_inputs,
@@ -198,3 +207,31 @@ def test_each_state_names_how_many_pain_reports_its_interval_rests_on():
     per = ST.finding_from_stability_result(raw, "ONE_THREE_LEFT", 24.5).as_payload()["odds_ratio_per_state"]
     assert per["stimulation off"]["n_reports"] == 14 and per["low current"]["n_reports"] == 21
     assert per["high current"]["n_reports"] is None
+
+# ------------------------------------------------------------------------------------------------
+# A new pain report is never served stale (from test_pain_ratings_never_served_stale.py, merged
+# 2026-10-05; its memo test is test_the_joined_table_memo_tells_two_pain_frames_apart above)
+# ------------------------------------------------------------------------------------------------
+# A newly filed pain report reaches the Closed-Loop report even when no recording has changed
+# (2026-09-25; CLAUDE.md §7 rule 5: no pain rating in the payload of a recording-derived
+# product, because a saved file then serves a stale rating with no visible symptom).
+#
+# Two places held ratings under a label that did not include them: the saved `inputs` bundle (the
+# evidence frame, the exposure epochs AND the design matrix, whose `nrs` and `vas` columns are the
+# ratings), keyed on the recording set, the constants and a rule version; and the joined table's
+# in-process memo, keyed on the evidence frame and the epochs while the pain frame it merges in was
+# left out. Both would keep serving yesterday's ratings until a recording arrived.
+
+
+def test_a_new_pain_report_reaches_the_design_matrix_with_the_recordings_unchanged(live_inputs, monkeypatch):
+    import sys
+    _psd, _eps, dm1 = AD.evidence_inputs_cached("PARTICIPANT")
+    before = dm1["nrs"].to_list()
+
+    corrected = _pain_report_frame()
+    corrected.loc[0, "nrs"] = 0.0                      # a rating filed or corrected since
+    monkeypatch.setattr(sys.modules["modules.Biomarkers.bravo_service"], "_load_pros",
+                        lambda request_data, participant: corrected)
+    _psd, _eps, dm2 = AD.evidence_inputs_cached("PARTICIPANT")
+    assert dm2["nrs"].to_list() != before, "the saved inputs served the old rating"
+    assert len(live_inputs) == 1, "the settings (recording-derived) must still be read only once"

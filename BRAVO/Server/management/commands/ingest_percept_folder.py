@@ -117,6 +117,12 @@ class Command(BaseCommand):
             else:
                 new_files.append((f, uh))
 
+        # One export at a time, oldest session first by its own SessionDate (CLAUDE.md section 11);
+        # file-name order need not follow the session.
+        from modules.MedtronicPercept.session_order import in_session_order
+        hashes = dict(new_files)
+        new_files = [(f, hashes[f]) for f in in_session_order(list(hashes))]
+
         self.stdout.write(f"  already in BRAVO : {len(dupes)}")
         self.stdout.write(f"  NEW to ingest    : {len(new_files)}")
         if unreadable:

@@ -415,3 +415,6 @@ handoff_*.png
 # planning-with-files per-session runtime state (not the plan)
 .planning/*/.nonce
 .planning/*/.stop_blocks
+
+# daily_ingest.sh: present only while an ingest writes
+BRAVO/_agent_bridge/.ingest_running

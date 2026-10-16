@@ -926,6 +926,14 @@ def _p_d27(candidate, participant):
     hi = _num(candidate, "capture_amp_high_mA")
     if hi is None:
         hi = _num(candidate, "amp_mA")
+    # THE PULSE-WIDTH CEILING IS NOT APPLIED TO A STIMULATOR ON THE OTHER LEAD (the PI, 2026-10-14:
+    # "ignore 120 us limit", answering whether it applies when contralateral sensing drives that
+    # stimulator; decision 471). The sensing contacts are on the other lead, so this stimulator's
+    # pulse width is not what the artefact ceiling is about. The 5 mA amplitude ceiling still applies.
+    sens = _text(candidate, "sensing_hemisphere")
+    act = _text(candidate, "actuated_hemisphere")
+    if sens is not None and act is not None and sens != act:
+        return None if hi is None else hi <= CAPTURE_ARTEFACT_AMP_MA
     if pw is None or hi is None:
         return None
     return hi <= CAPTURE_ARTEFACT_AMP_MA and pw <= CAPTURE_ARTEFACT_PW_US
@@ -1510,6 +1518,11 @@ def _o_d27(c, p):
         pw_label, pw_val = "capture pulse width", c.get("capture_pulse_width_us")
     else:
         pw_label, pw_val = "pulse width", c.get("pulse_width_us")
+    sens, act = _text(c, "sensing_hemisphere"), _text(c, "actuated_hemisphere")
+    if sens is not None and act is not None and sens != act:
+        return (f"capture high amplitude {c.get('capture_amp_high_mA', c.get('amp_mA'))!r} mA against "
+                f"{CAPTURE_ARTEFACT_AMP_MA} mA; {pw_label} {pw_val!r} us not checked, because this "
+                f"stimulator is on the other lead from the sensing contacts (decision 471)")
     return (f"capture high amplitude {c.get('capture_amp_high_mA', c.get('amp_mA'))!r} mA against "
             f"{CAPTURE_ARTEFACT_AMP_MA} mA and {pw_label} {pw_val!r} us against "
             f"{CAPTURE_ARTEFACT_PW_US} us")
@@ -2116,11 +2129,16 @@ RULES = (
     ),
     types.DeviceConstraint(
         rule_id="D27",
-        title="Stimulation artefact contaminates the capture above 5 mA or 120 us",
+        title=("Stimulation artefact contaminates the capture above 5 mA or 120 us "
+               "(not evidence based - disregard)"),
         source="A610", page="p. 73",
-        severity="blocking",
+        # RECORD ONLY (the PI, 2026-10-16, decision 478: "not evidence based - disregard"). Kept in
+        # the ledger with its text and that note; no machine check, so it never refuses, never goes
+        # unchecked and never warns. Its check `_p_d27` and observer `_o_d27` stay in this file.
+        severity="advisory",
         short_label="Stimulation below artefact limits",
         human_text=(
+            "Not evidence based - disregard. "
             "If the stimulation level is above 5 mA or 120 microseconds, the artefact of "
             "stimulation may make the LFP appear elevated when the Lower LFP Threshold is captured. "
             "This is a measurement-validity ceiling on the capture procedure and it is distinct "
@@ -2131,7 +2149,7 @@ RULES = (
             "asymmetric between hemispheres, most commonly 60 microseconds on the left and 160 on "
             "the right, so right-hemisphere captures fail this rule as programmed today."
         ),
-        predicate=_p_d27,
+        predicate=None,
     ),
     types.DeviceConstraint(
         rule_id="D28",

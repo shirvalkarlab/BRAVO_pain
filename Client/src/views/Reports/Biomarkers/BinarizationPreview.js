@@ -494,9 +494,13 @@ function BinarizationPreview({ points, dailyAgg, strategy, percentileLow, percen
         <MDTypography component="h3" sx={{ ...TYPE.body, fontWeight: 600, color: T.ink, m: 0 }}>
           {matchedMode ? "Readings available to split into high and low pain" : "Preview of the high / low pain split"}
         </MDTypography>
-        <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3 }}>
-          {headerCaption}
-        </MDTypography>
+        {/* Matched mode: no grey caption here. It repeated the readout line below word for word
+            (the PI, 2026-10-07: "delete the gray 673 of 3474 band power readings"). */}
+        {matchedMode ? null : (
+          <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3 }}>
+            {headerCaption}
+          </MDTypography>
+        )}
       </MDBox>
 
       {/* Matched band-power reading readout — PRO-first leads the headline (units of independence),

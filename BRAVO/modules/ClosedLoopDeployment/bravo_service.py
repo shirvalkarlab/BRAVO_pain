@@ -92,6 +92,10 @@ def _request_scope():
     return _bs.pro_request_scope()
 
 
+#: The saved Closed-Loop report (decision 423).
+REPORT_KIND = "closed_loop_report"
+
+
 def run_for_participant(request_data):
     """Build the Closed-Loop Deployment report for one participant, inside one request scope."""
     with _request_scope():
@@ -158,12 +162,45 @@ def _run_for_participant(request_data):
             return {"available": False,
                     "reason": f"the stored simulation could not be read: {exc!r}"}
 
-    try:
+    def _build():
         return _adapter.report_for_participant(
             participant, request_data,
             candidates=(request_data or {}).get("Candidates"),
             hemisphere=request_hemisphere(request_data),
             power_scale=(request_data or {}).get("PowerScale", DEFAULT_POWER_SCALE))
+
+    try:
+        # SAVED ON THE SERVER (decision 423): a report for a band is worked out once and served to
+        # every request with the same inputs (`adapter.report_input_fingerprints` plus the code).
+        # The band grid and the stored-results line are read fresh each time. The grid alone (no
+        # band) is not saved. A failure to build the label builds the report as before.
+        if not (request_data or {}).get("Candidates"):
+            return _build()
+        try:
+            inputs = _adapter.report_input_fingerprints(participant, request_data)
+        except Exception:                              # noqa: BLE001 - the report stands without it
+            _log.warning("closed-loop: the saved-report label could not be built for %s",
+                         participant_uid, exc_info=True)
+            return _build()
+        try:
+            from modules.CacheStore import saved_answers as _saved, request_memory as _memory
+        except ImportError:                            # pragma: no cover - host spelling
+            from CacheStore import saved_answers as _saved, request_memory as _memory
+        # remembered, so the server can work it out again when the data change (decision 435)
+        _memory.remember(REPORT_KIND, participant_uid, request_data)
+        # THE BAND GRID LEAVES A BAND'S REPORT (decision 431): the page reads the grid from its own
+        # request (the one with no band), never from here, and re-reading it for a served report
+        # cost about 1.8 s. The report still reads the grid while it is built (its direction check).
+        def _build_without_grid():
+            out = _build()
+            if isinstance(out, dict):
+                out.pop("band_sweep_grid", None)
+            return out
+        return _saved.serve_or_build(
+            REPORT_KIND, participant_uid, inputs, _build_without_grid, writer="closed_loop",
+            volatile=("cache_status",),
+            refresh=lambda: {"cache_status": _adapter._cache_status_or_reason(participant)},
+            root=_adapter._SHARED_CACHE_DIR_OVERRIDE)
     except Exception as exc:                           # noqa: BLE001
         # THE LINE THAT WAS MISSING FOR FIVE DAYS. `exception` rather than `warning`, so the
         # traceback goes with it: the failure this replaces was an ImportError raised at module
@@ -171,3 +208,170 @@ def _run_for_participant(request_data):
         _log.exception("closed-loop: the deployment report failed for %s", participant_uid)
         return {"available": False,
                 "reason": f"the deployment report could not be built: {exc!r}"}
+
+
+def stim_program(request_data):
+    """The stimulation program the device runs today, for the Closed-Loop page's "Inherit current
+    settings" (decision 467): each side's contacts, Amp, PW and closed-loop limits, the shared
+    rate, and each lead's stored target name. Read from the newest export; never raises."""
+    uid = (request_data or {}).get("ParticipantId")
+    if not uid:
+        return {"available": False, "reason": "ParticipantId is required"}
+    try:
+        from . import stim_program as _sp
+        return _sp.current_program(uid)
+    except Exception as exc:                           # noqa: BLE001
+        _log.exception("closed-loop: the current stimulation program could not be read for %s", uid)
+        return {"available": False, "reason": f"the current stimulation program could not be read: {exc!r}"}
+
+
+def wiring_comparison(request_data):
+    """The three sense-to-control wirings compared by simulation, for the wiring card (decision
+    472; `wiring_simulation.py` says how). Never raises.
+
+    Inputs: `ParticipantId`; `Bands` {"Left": {channel, center_hz, band_width_hz}, "Right": {...}},
+    the band chosen on each side; `PainScore`; the matching settings and `StimProgram` exactly as
+    the page sends them with its reports, so the four reports asked for here (each band on each
+    stimulator) are the page's own requests and are served from the same saved answers.
+    """
+    rd = request_data or {}
+    uid = rd.get("ParticipantId")
+    bands = rd.get("Bands") or {}
+    if not uid:
+        return {"available": False, "reason": "ParticipantId is required"}
+    if not all(isinstance(bands.get(s), dict) and bands[s].get("channel") and bands[s].get("center_hz") is not None
+               for s in ("Left", "Right")):
+        return {"available": False, "reason": "choose a band on each side to compare the three wirings"}
+    try:
+        with _request_scope():
+            return _wiring_comparison(rd, uid, bands)
+    except Exception as exc:                           # noqa: BLE001
+        _log.exception("closed-loop: the wiring comparison failed for %s", uid)
+        return {"available": False, "reason": f"the wiring comparison could not be built: {exc!r}"}
+
+
+_PASS_THROUGH = ("ParticipantId", "PainScore", "PowerScale", "StimProgram")
+
+
+def _wiring_comparison(rd, uid, bands):
+    import time as _time
+    import numpy as np
+    import pandas as pd
+    from . import wiring_simulation as W
+    from . import three_source_response as _3src
+    from . import amplitude_effect as _amp
+    try:
+        from modules.Biomarkers import bravo_service as bs
+        from modules.Biomarkers.routines import availability as av
+    except ImportError:                                # pragma: no cover - host spelling
+        from Biomarkers import bravo_service as bs
+        from Biomarkers.routines import availability as av
+    t0 = _time.perf_counter()
+    base = {k: v for k, v in rd.items() if k not in ("Bands", "Candidates", "Hemisphere")}
+    base.setdefault("PowerScale", DEFAULT_POWER_SCALE)
+    pain_score = rd.get("PainScore") or "nrs"
+
+    # 1. Each band on each stimulator: its thresholds, current limits and the device's verdict.
+    ctrls, pairings = {}, {}
+    for band_side in W.SIDES:
+        b = bands[band_side]
+        for stim in W.SIDES:
+            cand = {"channel": b["channel"], "center_hz": float(b["center_hz"]),
+                    "band_width_hz": float(b.get("band_width_hz") or 5.0),
+                    "sensing_hemisphere": band_side, "actuated_hemisphere": stim,
+                    "rate_hz": None, "pulse_width_us": None, "threshold_mode": "dual"}
+            if band_side != stim:
+                cand["contralateral_pairing_acknowledged"] = True
+            rep = _run_for_participant(dict(base, Hemisphere=stim, Candidates=[cand]))
+            th = (rep or {}).get("threshold") or {}
+            vd = (rep or {}).get("verdict_detail") or {}
+            el = (rep or {}).get("eligibility") or {}
+            refused_by = [r.get("rule_id") for r in el.get("failures", [])
+                          if r.get("counts_toward_verdict") is not False]
+            ok = all(th.get(k) is not None for k in ("upper", "lower", "amp_limit_low", "amp_limit_high"))
+            ctrls[(band_side, stim)] = ({"upper": th["upper"], "lower": th["lower"],
+                                         "amp_low_mA": th["amp_limit_low"], "amp_high_mA": th["amp_limit_high"]}
+                                        if ok and rep.get("available") else None)
+            pairings[f"{band_side}>{stim}"] = {
+                "band_side": band_side, "stim_side": stim, "available": bool((rep or {}).get("available")),
+                "device_allows": vd.get("device_eligible"), "refused_by": refused_by,
+                "thresholds_placed": ok, "reason": (rep or {}).get("reason")}
+    allowed = {}
+    for w, drives in W.WIRINGS.items():
+        vals = [pairings[f"{drives[c]}>{c}"]["device_allows"] for c in W.SIDES]
+        allowed[w] = True if all(v is True for v in vals) else (False if any(v is False for v in vals) else None)
+
+    # 2. Each band's 3 s pieces with both stimulators' current.
+    loaded = {}
+    series = {}
+    for side in W.SIDES:
+        b = bands[side]
+        by_hem = {h: _adapter.simulation_inputs_for_participant(uid, contact=b["channel"],
+                                                                centre_hz=float(b["center_hz"]),
+                                                                hemisphere=h, loaded=loaded)
+                  for h in W.SIDES}
+        base_in = by_hem[side]
+        t = np.asarray(base_in["t"], float)
+        amp_other = dict(zip(np.asarray(by_hem[W.SIDES[1 - W.SIDES.index(side)]]["t"], float).tolist(),
+                             np.asarray(by_hem[W.SIDES[1 - W.SIDES.index(side)]]["amp_obs"], float).tolist()))
+        series[side] = {"t": t, "power": np.asarray(base_in["power"], float),
+                        f"amp_{side}": np.asarray(base_in["amp_obs"], float),
+                        "contact": b["channel"], "centre_used_hz": base_in.get("centre_used_hz"),
+                        "absent_reason": base_in.get("absent_reason")}
+        other = W.SIDES[1 - W.SIDES.index(side)]
+        series[side][f"amp_{other}"] = np.array([amp_other.get(x, np.nan) for x in t.tolist()])
+    for side in W.SIDES:
+        if not len(series[side]["t"]):
+            return {"available": False, "gates_nothing": True,
+                    "reason": (f"no 3 s voltage-trace pieces on the {side.lower()} band "
+                               f"({series[side]['absent_reason'] or 'none stored'})")}
+    stretches, med = W.joint_stretches(series["Left"], series["Right"])
+
+    # 3. The change in power per mA: own side from the stored pooled row, other side measured here.
+    pooled = _adapter.pooled_shape_if_stored(uid)
+    power = bs._load_recordings(uid, bs.POWERDOMAIN_TYPES)
+    runs = _3src.find_single_side_runs_from_device(_3src.read_device_current(power)) if power else []
+    k, k_source = {s: {} for s in W.SIDES}, {}
+    for s in W.SIDES:
+        b = bands[s]
+        for c in W.SIDES:
+            if c == s:
+                row = _amp.pooled_row(pooled, b["channel"], float(b["center_hz"]))
+                v = (row or {}).get("pooled_slope_per_mA")
+                if v is not None and np.isfinite(float(v)):
+                    k[s][c] = float(v)
+                    k_source[f"{s}<{c}"] = {"slope_per_mA": float(v), "measured": True,
+                                            "source": "stored pooled line across visits (decision 103)",
+                                            "n": (row or {}).get("n"), "n_runs": None}
+                    continue
+            xs, ys, lab = W.settled_points(runs, c, series[s]["t"], series[s]["power"])
+            est = W.cross_slope(xs, ys, lab)
+            if c == s:
+                est["source"] = est["source"].replace("the other side's", "this side's own")
+            k[s][c] = est["slope_per_mA"]
+            k_source[f"{s}<{c}"] = est
+
+    # 4. The pain ratings, as the page's other pain readings take them.
+    req = {"ParticipantId": uid, "LabelMetric": pain_score}
+    for key in ("IncludeClinicSheetRatings",):
+        if rd.get(key) is not None:
+            req[key] = rd[key]
+    pro = bs._load_pros(req)
+    if str(rd.get("IncludeClinicSheetRatings") or "") in ("1", "true", "True"):
+        pro, _blk = bs._merge_clinic_sheet_ratings_into_pro_df(uid, pain_score, pain_score, pro, req)
+    ps = av.pain_series(pro, pain_score)
+    rt = np.asarray(ps["t"], float)
+    ry = np.asarray(ps["y"], float)
+    rday = (pd.to_datetime(rt, unit="s", utc=True).tz_convert("America/Los_Angeles").strftime("%Y-%m-%d")
+            .to_numpy() if rt.size else np.empty(0, dtype=object))
+
+    # 5. One timing for all three: the participant's record-derived one.
+    timing = (_adapter._timing_runs_for_simulation(uid, "Left", None).get("recommended") or {})
+    out = W.compare(stretches, med, ctrls, k, rt, ry, rday, timing=timing.get("params") or {},
+                    allowed=allowed)
+    out.update({"available": True, "pairings": pairings, "response_per_mA": k_source,
+                "timing_source": timing.get("source"), "pain_score": pain_score,
+                "bands": {s: {"channel": bands[s]["channel"], "center_hz": float(bands[s]["center_hz"]),
+                              "centre_used_hz": series[s]["centre_used_hz"]} for s in W.SIDES},
+                "n_ratings_total": int(rt.size), "seconds": _time.perf_counter() - t0})
+    return out

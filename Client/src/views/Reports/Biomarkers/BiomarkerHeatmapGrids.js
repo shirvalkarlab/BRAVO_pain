@@ -50,6 +50,7 @@ import MDButton from "components/MDButton";
 import Plotly from "plotly.js-dist";
 import { PlotlyRenderManager } from "graphing-utility/Plotly";
 import { SessionController } from "database/session-control";
+import { prefetchClosedLoopFromBiomarkers } from "views/Reports/ClosedLoopSim/neighbourPrefetch";
 import { useCachedResult } from "database/useCachedResult";
 // Read only (the PI's file, not edited): the settings the shown grid was computed under.
 import { getResult, settingsKey } from "database/resultCache";
@@ -65,7 +66,10 @@ import GridSkeleton from "./GridSkeleton";
 import Section from "views/Reports/paper/Section";
 import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB, BIN_MID, diverging } from "./binarizationModel";
 import { contactSortKey } from "./contactOrder";
-import { bestCellReadout, cellNP, fmtP, pEquals, hoverCustomData, tierBullets, deviceSpectrumBullets, stabilityMark, stabilityBullet, clinicSheetBullets, sourceSplitLine } from "./gridReadouts";
+import { bestCellReadout, cellNP, fmtP, pEquals, hoverCustomData, tierBullets, deviceSpectrumBullets, needsMultiplePsds, stabilityMark, stabilityBullet, clinicSheetBullets, sourceSplitLine } from "./gridReadouts";
+
+/** Participants whose likeliest Closed-Loop bands were asked for in this page load (decision 430). */
+const CL_PREFETCHED = new Set();
 
 // The heat maps' hover text, a size under the figure text (the PI, 2026-09-26: "reduce font size");
 // 11 px is the page's floor (decision 258).
@@ -346,7 +350,9 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
 
   // Plain lengths of signal on the axis (the PI, 2026-09-15: nothing appended -- which rows the
   // device can be set to is said once, in the caption's bullets).
-  const yLabels = useMemo(() => seconds.map((s) => secondsLabel(s)), [seconds]);
+  // An asterisk to the left of a row that needed two or more PSDs (see the PSD bullet).
+  const yLabels = useMemo(
+    () => seconds.map((s) => (needsMultiplePsds(sw, s) ? "*" : "") + secondsLabel(s)), [seconds, sw]);
   // Review 2026-09-15, B1: the corrected statistics for each column's best cell, on hover.
   const customdata = useMemo(() => hoverCustomData(sw, kind === "auc" ? "auc" : "corr"), [sw, kind]);
   // Sized 25% larger than the first Plotly pass, per the PI's own comparison against the size
@@ -680,7 +686,8 @@ function PlotlyViolin({ divId, highVals, lowVals, side }) {
     // hover-activated modebar with no override in the shared render-manager class; re-apply the
     // same data/layout with it switched off, and with the responsive resize this component exists
     // for, scoped to just this one div.
-    Plotly.react(divId, fig.traces, fig.layout, { ...PLOTLY_CONFIG, doubleClick: false });
+    // Drag to zoom, double-click back to the full view, no toolbar (the PI, 2026-10-03).
+    Plotly.react(divId, fig.traces, fig.layout, { ...PLOTLY_CONFIG, doubleClick: "reset+autosize" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [divId, highVals, lowVals, side]);
 
@@ -688,8 +695,8 @@ function PlotlyViolin({ divId, highVals, lowVals, side }) {
     // Guarded: Plotly'''s own .purge() throws (uncaught, since this runs in an effect cleanup with
     // no React error boundary anywhere in this app) if the div it manages is already gone from the
     // DOM -- observed live on a native double-click, which Plotly'''s own internal click pipeline
-    // can apparently unmount/rebuild around even with the built-in reset-on-dblclick action turned
-    // off (doubleClick: false, set on the Plotly.react calls below). Checking first makes this
+    // can apparently unmount/rebuild around (this plot's reset-on-double-click is on since
+    // 2026-10-03; the heat maps keep it off). Checking first makes this
     // cleanup robust to that regardless of why the div is already gone, rather than chasing the
     // exact internal Plotly sequence that removes it.
     if (figRef.current && document.getElementById(divId)) figRef.current.purge();
@@ -736,7 +743,7 @@ function DeviceSpectrumCaption({ sw }) {
 /** Which rows the device can be set to, from the ranges on the response (`device_timing_ranges`,
  * the one home), as bullets. */
 function DeviceTierCaption({ ranges, sw }) {
-  return <CaptionBullets items={tierBullets(ranges, (sw && sw.integration_seconds_delivered) || [])} />;
+  return <CaptionBullets items={tierBullets(ranges, (sw && sw.integration_seconds_delivered) || [], sw)} />;
 }
 
 /** The symbols inside the circles (decision 185): one bullet, shown only once a stored stability
@@ -936,7 +943,8 @@ function PlotlyScatter({ divId, cell, pinnedCell, side, metricLabel }) {
       showlegend: false,
     });
     fig.render();
-    Plotly.react(divId, fig.traces, fig.layout, { ...PLOTLY_CONFIG, doubleClick: false });
+    // Drag to zoom, double-click back to the full view, no toolbar (the PI, 2026-10-03).
+    Plotly.react(divId, fig.traces, fig.layout, { ...PLOTLY_CONFIG, doubleClick: "reset+autosize" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [divId, points, side, metricLabel]);
 
@@ -944,8 +952,8 @@ function PlotlyScatter({ divId, cell, pinnedCell, side, metricLabel }) {
     // Guarded: Plotly'''s own .purge() throws (uncaught, since this runs in an effect cleanup with
     // no React error boundary anywhere in this app) if the div it manages is already gone from the
     // DOM -- observed live on a native double-click, which Plotly'''s own internal click pipeline
-    // can apparently unmount/rebuild around even with the built-in reset-on-dblclick action turned
-    // off (doubleClick: false, set on the Plotly.react calls below). Checking first makes this
+    // can apparently unmount/rebuild around (this plot's reset-on-double-click is on since
+    // 2026-10-03; the heat maps keep it off). Checking first makes this
     // cleanup robust to that regardless of why the div is already gone, rather than chasing the
     // exact internal Plotly sequence that removes it.
     if (figRef.current && document.getElementById(divId)) figRef.current.purge();
@@ -1245,6 +1253,20 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
     // the object itself would fire on every render (a new reference each time).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [participantUid, reqKey, metric, loading, options, cachedGrid.stale]);
+
+  // THE CLOSED-LOOP ANSWERS FOR THE LIKELIEST BANDS, asked for from here (decision 430): once this
+  // grid is in and current, and 5 s after, so the reader's own requests go first. Once per page
+  // load per participant; the server saves the answers, so choosing one of these bands on the
+  // Closed-Loop page is served at once.
+  useEffect(() => {
+    if (!participantUid || loading || cachedGrid.stale || !cachedGrid.data) return undefined;
+    if (CL_PREFETCHED.has(participantUid)) return undefined;
+    const t = setTimeout(() => {
+      CL_PREFETCHED.add(participantUid);
+      prefetchClosedLoopFromBiomarkers(participantUid).catch(() => {});
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [participantUid, loading, cachedGrid.stale, cachedGrid.data]);
 
   const corrSweeps = (corrResult && corrResult.band_time_sweep) || {};
   const aucSweeps = (aucResult && aucResult.band_time_sweep) || {};

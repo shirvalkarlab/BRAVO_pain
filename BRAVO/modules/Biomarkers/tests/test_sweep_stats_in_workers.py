@@ -12,19 +12,18 @@ What is held here:
   * BIOMARKER_SWEEP_PROCESSES=1 forces one-after-another and never asks for a pool;
   * a pool that fails falls back to one-after-another, with the same answer;
   * one pair's statistics failing blanks that pair only.
+
+Merged here 2026-10-05: test_sweep_pairs_threads.py.
 """
 import json
 import os
 import sys
 import unittest.mock as mock
-
 import numpy as np
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from modules.Biomarkers import bravo_service as B          # noqa: E402
 from modules.Biomarkers.routines import analytics as A    # noqa: E402
 from modules.DecodeCommon import parallel as PAR          # noqa: E402
-
 PAIRS = {"ZERO_TWO_LEFT": 11, "ONE_THREE_LEFT": 12, "ZERO_TWO_RIGHT": 13, "ONE_THREE_RIGHT": 14}
 CENTERS = A.sweep_center_freqs(np.arange(2.5, 100.0, 1.0))
 N_REPORTS = 40
@@ -177,3 +176,66 @@ def test_one_pair_failing_blanks_that_pair_only_and_the_others_keep_their_answer
     assert list(got) == list(PAIRS)
     assert _real_grids(got, except_for=("ONE_THREE_LEFT",)) == [] and _real_grids(ok_out) == []
     assert not got["ONE_THREE_LEFT"].get("correlation_grid")
+
+
+# --------------------------------------------------------------------------------------------------
+# merged from test_sweep_pairs_threads.py
+# The heat-map grid's contact pairs are swept side by side in threads (2026-10-02, the Jetstream2
+# BRAVO). Each pair reads only its own cache; the answers come back in the pairs' own order and equal
+# the one-after-another answers. Values, not shapes: each pair's entry compared with the serial run,
+# the order of the pairs, and that more than one thread did the work.
+
+
+import threading
+from modules.Biomarkers.routines import analytics
+
+
+def _run_pairs(threads):
+    seen = set()
+    old_power, old_sweep, old_env = (B._band_time_sweep_power_by_seconds,
+                                     analytics.band_time_sweep_from_power,
+                                     os.environ.get("BIOMARKER_SWEEP_THREADS"))
+    old_proc = os.environ.get("BIOMARKER_SWEEP_PROCESSES")
+    os.environ["BIOMARKER_SWEEP_PROCESSES"] = "1"      # this test stands in for the statistics; they stay in-process
+
+    def power(pro_times, raw_cache, _x, **kw):
+        seen.add(threading.get_ident())
+        import time; time.sleep(0.05)
+        return ([raw_cache["v"] * 2], {"10": {"n_pro": 3}}, [1.0], None, None, False)
+
+    def sweep(power, pain_values, **kw):
+        return {"grid": list(power), "channel": kw["channel"]}
+
+    B._band_time_sweep_power_by_seconds = power
+    analytics.band_time_sweep_from_power = sweep
+    os.environ["BIOMARKER_SWEEP_THREADS"] = str(threads)
+    try:
+        out = B._band_time_sweep_channels(
+            {"ZERO_TWO_LEFT": {"v": 1}, "ONE_THREE_LEFT": {"v": 2}, "EMPTY": {},
+             "ZERO_TWO_RIGHT": {"v": 3}},
+            [1.0, 2.0], tol_s=60, allow_window_reuse=False, pain_values=[1, 2],
+            label_strategy="median", low_pct=33, high_pct=67, outlier_n_mad=5,
+            outlier_scale=1.0, metric_key="m", metric_label="m")
+    finally:
+        B._band_time_sweep_power_by_seconds = old_power
+        analytics.band_time_sweep_from_power = old_sweep
+        if old_proc is None:
+            os.environ.pop("BIOMARKER_SWEEP_PROCESSES", None)
+        else:
+            os.environ["BIOMARKER_SWEEP_PROCESSES"] = old_proc
+        if old_env is None:
+            os.environ.pop("BIOMARKER_SWEEP_THREADS", None)
+        else:
+            os.environ["BIOMARKER_SWEEP_THREADS"] = old_env
+    for v in out.values():
+        v.pop("matched_seconds", None); v.pop("total_seconds", None)
+    return out, seen
+
+
+def test_pairs_swept_in_threads_equal_the_one_after_another_answers_in_the_same_order():
+    serial, seen1 = _run_pairs(1)
+    threaded, seen4 = _run_pairs(4)
+    assert list(serial) == list(threaded) == ["ZERO_TWO_LEFT", "ONE_THREE_LEFT", "ZERO_TWO_RIGHT"]
+    assert serial == threaded
+    assert [serial[k]["grid"] for k in serial] == [[2], [4], [6]]
+    assert len(seen1) == 1 and len(seen4) == 3
