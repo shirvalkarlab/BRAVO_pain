@@ -393,13 +393,14 @@ def test_the_helper_answer_is_used_and_a_failed_helper_falls_back(monkeypatch):
 
 
 def test_the_task_applies_the_parents_store_settings(monkeypatch):
+    """With a stand-in for the Biomarkers page module: the real one needs the server's Django
+    settings, MySQL driver and data folder, which the CI runner has none of (decision 476)."""
+    import contextlib
     from modules.ClosedLoopDeployment import stability_helper as SH
-    import os
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "BRAVO.settings")
-    import django
-    django.setup()
+    from modules.ClosedLoopDeployment.tests.test_refresh_saved_answers import stand_in_biomarkers
     from modules.CacheStore import store as ST, ledger as LG
-    from modules.Biomarkers import bravo_service as BS
+    BS = stand_in_biomarkers(monkeypatch, _SHARED_CACHE_DIR_OVERRIDE=None, _validate_band_core=None,
+                             pro_request_scope=contextlib.nullcontext)
     seen = {}
 
     def fake_core(body):

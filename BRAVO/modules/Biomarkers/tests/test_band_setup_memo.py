@@ -77,7 +77,9 @@ def test_off_by_default_so_the_web_workers_never_keep_it():
 def test_the_rebuild_workers_switch_it_on():
     import inspect
     from modules.ClosedLoopDeployment import refresh_saved_answers as job
-    assert "BAND_SETUP_MEMO_ENV" in inspect.getsource(job._replay_process_init)
+    assert 'os.environ[BAND_SETUP_MEMO_ENV] = "1"' in inspect.getsource(job._replay_process_init)
+    # the rebuild names the switch itself, so its replay processes need not import this module
+    assert job.BAND_SETUP_MEMO_ENV == bs.BAND_SETUP_MEMO_ENV
 
 
 # THE CLOSED-LOOP REPORT'S RECORDING READS (decision 476): the recordings, the tile rows' digest and
@@ -148,3 +150,8 @@ def test_the_shared_reads_are_bounded():
         for i in range(bs._PASS_MEMO_MAX + 3):
             _read(("recordings", "u1", (str(i),)), calls)
         assert len(bs._PASS_MEMO) <= bs._PASS_MEMO_MAX
+
+
+def test_a_rebuild_process_keeps_few_preparations():
+    """Moved from the rebuild's own tests (decision 476), which no longer import this module."""
+    assert bs._BAND_SETUP_MEMO_MAX <= 2

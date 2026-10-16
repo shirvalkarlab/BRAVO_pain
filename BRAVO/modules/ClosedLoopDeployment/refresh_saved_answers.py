@@ -154,8 +154,7 @@ def _replay_process_init(parent_pid, sys_path):
     from multiprocessing import util
     from modules.DecodeCommon import side_process
     side_process._child_init(parent_pid, sys_path)
-    from modules.Biomarkers import bravo_service as _bs
-    os.environ[_bs.BAND_SETUP_MEMO_ENV] = "1"                # this worker keeps the band preparation (decision 474)
+    os.environ[BAND_SETUP_MEMO_ENV] = "1"                    # this worker keeps the band preparation (decision 474)
     util.Finalize(None, _stop_helpers, exitpriority=100)
 
 
@@ -168,6 +167,11 @@ def _stop_helpers():
         if name.endswith("DecodeCommon.side_process") and hasattr(mod, "shutdown"):
             mod.shutdown()
 
+
+#: `Biomarkers.bravo_service.BAND_SETUP_MEMO_ENV`, by name: importing that module here would load
+#: the server's Django settings in every replay process before it ran anything, which a process with
+#: no server settings (the CI runner) cannot do (decision 476). The Biomarkers tests check the name.
+BAND_SETUP_MEMO_ENV = "BRAVO_BAND_SETUP_MEMO"
 
 #: A fresh set of replay processes after this many replays per process, on average, so what they
 #: keep cannot grow without end. Counted by the pass itself, never Python's `max_tasks_per_child`:

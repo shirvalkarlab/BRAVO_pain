@@ -16,6 +16,23 @@ from modules.CacheStore.tests.test_request_memory import FakeRedis
 from modules.ClosedLoopDeployment import refresh_saved_answers as job
 
 
+def stand_in_biomarkers(monkeypatch, **attrs):
+    """A stand-in for the Biomarkers page module, under both of its import names, for this test only.
+    The real one needs the server's Django settings, MySQL driver and data folder, which the CI runner
+    has none of (decision 476); these tests check the rebuild's wiring and replace the Biomarkers
+    functions they reach anyway. Returns the stand-in."""
+    import importlib
+    import sys
+    import types
+    stub = types.ModuleType("modules.Biomarkers.bravo_service")
+    for k, v in attrs.items():
+        setattr(stub, k, v)
+    for pkg in ("modules.Biomarkers", "Biomarkers"):
+        monkeypatch.setitem(sys.modules, pkg + ".bravo_service", stub)
+        monkeypatch.setattr(importlib.import_module(pkg), "bravo_service", stub, raising=False)
+    return stub
+
+
 @pytest.fixture
 def fake(monkeypatch):
     f = FakeRedis()
@@ -76,18 +93,26 @@ def test_replays_are_not_remembered(fake, monkeypatch):
 
 
 def test_each_kind_is_answered_by_its_pages_function():
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "BRAVO.settings")
-    import django
-    django.setup()
-    from modules.Biomarkers import bravo_service as bs
-    from modules.ClosedLoopDeployment import bravo_service as cs
-    assert job._function_for("deployment_summary") is bs.deployment_summary
-    assert job._function_for("deployment_roc") is bs.band_deployment_roc
-    assert job._function_for("deployment_roc_by_era") is bs.band_deployment_roc_by_era
-    assert job._function_for("band_lsb_power") is bs.band_lsb_and_power
-    assert job._function_for(cs.REPORT_KIND) is cs.run_for_participant
-    assert set(job.KINDS) == {"deployment_summary", "deployment_roc", "deployment_roc_by_era",
-                              "band_lsb_power", cs.REPORT_KIND}
+    """Each remembered kind is replayed through the function the page itself calls. Read from the
+    two modules' source, so it needs no server settings (decision 476)."""
+    import ast
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    def defined(module):
+        path = os.path.join(here, *module.split(".")[1:]) + ".py"
+        return {n.name for n in ast.parse(open(path).read()).body if isinstance(n, ast.FunctionDef)}
+
+    assert job.KINDS == {
+        "deployment_summary": ("modules.Biomarkers.bravo_service", "deployment_summary"),
+        "deployment_roc": ("modules.Biomarkers.bravo_service", "band_deployment_roc"),
+        "deployment_roc_by_era": ("modules.Biomarkers.bravo_service", "band_deployment_roc_by_era"),
+        "band_lsb_power": ("modules.Biomarkers.bravo_service", "band_lsb_and_power"),
+        "closed_loop_report": ("modules.ClosedLoopDeployment.bravo_service", "run_for_participant"),
+    }
+    for module, name in job.KINDS.values():
+        assert name in defined(module), (module, name)
+    cl_src = open(os.path.join(here, "ClosedLoopDeployment", "bravo_service.py")).read()
+    assert 'REPORT_KIND = "closed_loop_report"' in cl_src
 
 
 def test_workers_are_capped_at_32_and_by_the_memory_left_under_nine_tenths():
@@ -241,11 +266,8 @@ def test_registration_is_kept_and_can_be_undone(fake):
 
 
 def test_band_power_is_asked_at_the_bands_own_roc_cut_point(monkeypatch):
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "BRAVO.settings")
-    import django
-    django.setup()
     from modules.ClosedLoopDeployment import all_band_requests as A
-    from modules.Biomarkers import bravo_service as bs
+    bs = stand_in_biomarkers(monkeypatch, band_deployment_roc=None, band_lsb_and_power=None)
     got = {}
     monkeypatch.setattr(bs, "band_deployment_roc", lambda rd: {"available": True, "roc": {
         "available": True, "operating_points": {"youden": {"threshold": 0.25}}}})
@@ -297,8 +319,8 @@ def test_above_nine_tenths_the_pass_closes_its_processes_before_it_waits():
 
 
 def test_a_replay_process_is_replaced_often_and_keeps_few_preparations():
-    from modules.Biomarkers import bravo_service as bs
-    assert job.REPLAYS_PER_PROCESS <= 20 and bs._BAND_SETUP_MEMO_MAX <= 2
+    """How few preparations each keeps is checked beside the memo, in the Biomarkers tests."""
+    assert job.REPLAYS_PER_PROCESS <= 20
     import inspect
     assert "before_wait=_close_pass_pool" in inspect.getsource(job._run_in_pool)
 
@@ -359,6 +381,10 @@ def test_a_pass_waits_while_an_ingest_is_writing(fake, monkeypatch, tmp_path, ca
     started then would rebuild on half the new exports and again on all of them 10 minutes later."""
     note = tmp_path / ".ingest_running"
     monkeypatch.setattr(job, "INGEST_NOTE", str(note))
+    # main() sets these two for the replay processes it starts; put back after this test (decision
+    # 476: left set, the pool size leaked into the Stim Optimizer tests run after it)
+    monkeypatch.setenv("BRAVO_POOL_JOBS", os.environ.get("BRAVO_POOL_JOBS", "1"))
+    monkeypatch.setenv(rm.OFF_ENV, os.environ.get(rm.OFF_ENV, "0"))
     seen = []
     monkeypatch.setattr(job, "refresh_participant", lambda uid, **k: seen.append(uid) or {"participant": uid})
     note.write_text("")
