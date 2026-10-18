@@ -5651,10 +5651,13 @@ def _band_validation_setup_build(request_data):
     chronic_list = _chronic_list_for(participant_uid)
     try:
         stim = availability.stim_series(chronic_list) if chronic_list else None
+        # each side's own series (decision 483): a band reads its own side's (`_stim_series_for`)
+        stim_by_side = ({s: availability.stim_series(chronic_list, hemisphere=s)
+                         for s in ("Left", "Right")} if chronic_list else None)
     except Exception:
         _log.warning("Biomarkers: the chronic stim series could not be built for %s; the "
                      "stability answer will say 'no stim series'", participant_uid, exc_info=True)
-        stim = None
+        stim = stim_by_side = None
 
     return {
         "available": True,
@@ -5672,8 +5675,28 @@ def _band_validation_setup_build(request_data):
         "pm": pm,
         "pooled": pooled,
         "stim_series": stim,
+        "stim_series_by_side": stim_by_side,
         "clinic_sheet_ratings": sheet_block,
     }
+
+
+#: Each band's stimulation-current series is its own side's (the PI, 2026-10-18: "don't pool both
+#: sides' currents into one ... keep them unilateral"; decision 483, CLAUDE.md rule 13). False is
+#: the neutral setting: the two sides' chronic currents in one series, as before 483. Read from the
+#: environment too (`BRAVO_STIM_SERIES_PER_SIDE=0`), so a process the Closed-Loop report starts
+#: fresh takes the same setting as the one that started it.
+STIM_SERIES_PER_SIDE = os.environ.get("BRAVO_STIM_SERIES_PER_SIDE", "1").strip() != "0"
+
+
+def _stim_series_for(setup, channel):
+    """The current series the stability answer for `channel` reads: its own side's under
+    `STIM_SERIES_PER_SIDE`, else the pooled series. A pair that names no side gets None (no
+    series, which the stability answer reports), never the other side's or both."""
+    if not STIM_SERIES_PER_SIDE:
+        return setup.get("stim_series")
+    side = stim_current.hemisphere_of_channel(channel)
+    by_side = setup.get("stim_series_by_side") or {}
+    return by_side.get(side) if side else None
 
 
 def _validate_band_core(request_data):
@@ -5707,7 +5730,7 @@ def _validate_band_core(request_data):
         return setup
 
     pooled = setup["pooled"]
-    stim = setup["stim_series"]
+    stim = _stim_series_for(setup, channel)
     label_strategy, low_pct, high_pct = setup["label_strategy"], setup["low_pct"], setup["high_pct"]
 
     # Mixed-effects logistic (definitive per-candidate inference).
@@ -5825,7 +5848,7 @@ def _stability_batch_worker(point):
     channel, center_hz = point
     try:
         result = analytics.band_stim_stability(
-            ctx["pooled"], channel, center_hz, stim_series=ctx["stim_series"],
+            ctx["pooled"], channel, center_hz, stim_series=_stim_series_for(ctx, channel),
             band_width_hz=ctx["band_width_hz"], strategy=ctx["label_strategy"],
             low_pct=ctx["low_pct"], high_pct=ctx["high_pct"]) or {}
         return point, result, None
@@ -5914,6 +5937,7 @@ def stability_grid_for_participant(participant_uid, points, *, band_width_hz=5.0
         return {}
 
     ctx = {"pooled": setup["pooled"], "stim_series": setup["stim_series"],
+           "stim_series_by_side": setup.get("stim_series_by_side"),
            "band_width_hz": float(band_width_hz), "label_strategy": setup["label_strategy"],
            "low_pct": setup["low_pct"], "high_pct": setup["high_pct"]}
 
@@ -6011,7 +6035,7 @@ def _stability_batch_worker_serial(point, ctx):
     channel, center_hz = point
     try:
         result = analytics.band_stim_stability(
-            ctx["pooled"], channel, center_hz, stim_series=ctx["stim_series"],
+            ctx["pooled"], channel, center_hz, stim_series=_stim_series_for(ctx, channel),
             band_width_hz=ctx["band_width_hz"], strategy=ctx["label_strategy"],
             low_pct=ctx["low_pct"], high_pct=ctx["high_pct"]) or {}
         return point, result, None
@@ -8441,7 +8465,7 @@ def _wants_band_time_sweep(request_data):
 def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
                                       allow_window_reuse, seconds=None,
                                       match_direction="pro_first", channel=None,
-                                      participant_uid=None):
+                                      participant_uid=None, with_recording_times=False):
     """One band-power matrix per length of signal, each with one row per pain report and one column
     per band centre.
 
@@ -8492,9 +8516,14 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
     # served response whole, so leaving the per-report list there would ship one boolean per pain
     # report per contact pair -- 4,584 of them on RCS08 on 2026-09-15, growing with every report
     # filed -- for a fact the grids already carry summarised per cell.
-    return (power, stats, centers, col,
-            {k: v for k, v in excl.items() if k != "from_device_spectrum"},
-            list(excl.get("from_device_spectrum") or []))
+    # The times of each report's own pieces (decision 483) are lifted out for the same reason.
+    # `with_recording_times=True` hands them back as a seventh value, for the current covariate.
+    out = (power, stats, centers, col,
+           {k: v for k, v in excl.items() if k not in ("from_device_spectrum", "recording_times_s")},
+           list(excl.get("from_device_spectrum") or []))
+    if with_recording_times:
+        return out + (list(excl.get("recording_times_s") or []),)
+    return out
 
 
 def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_reuse,
@@ -8531,20 +8560,23 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
         """Matching and the covariate for one pair: what the statistics are called with."""
         t0 = _time.perf_counter()
         try:
-            power, stats, centers, _, chunk_excl, from_device = _band_time_sweep_power_by_seconds(
+            (power, stats, centers, _, chunk_excl, from_device,
+             recording_times) = _band_time_sweep_power_by_seconds(
                 pro_times, raw_cache, None, tol_s=tol_s,
                 allow_window_reuse=allow_window_reuse, match_direction=match_direction,
-                channel=raw_ch, participant_uid=participant_uid)
+                channel=raw_ch, participant_uid=participant_uid, with_recording_times=True)
             match_s = _time.perf_counter() - t0
             # The switch (decision 233, the PI's ruling of 2026-09-22). When it is on, every cell of
             # THIS pair's grid also gets its correlation with the stimulation current in force on
             # THIS pair's own side taken out of it -- the covariate is one current per pain report,
-            # read from the dated settings the device's own files carry (`stim_current`). The plain
-            # grid is unchanged and still selects every band; the adjusted value is descriptive.
+            # read from the dated settings the device's own files carry (`stim_current`), at the
+            # report's own pieces of recording since decision 483 (the median of the current in
+            # force at each; `stim_current.CURRENT_READ_AT = "report"` reads it at the rating, as
+            # before). The plain grid is unchanged and still selects every band.
             cov_values, cov_block = (None, None)
             if adjust_for_stim_current:
-                cov_values, cov_block = stim_current.current_in_force_for_reports(
-                    participant_uid, pro_times, channel=raw_ch)
+                cov_values, cov_block = stim_current.covariate_for_reports(
+                    participant_uid, pro_times, recording_times, channel=raw_ch)
             kw = dict(
                 center_freqs_hz=centers,
                 tile_seconds=analytics.sweep_tile_seconds(),

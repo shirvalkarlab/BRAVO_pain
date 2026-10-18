@@ -298,8 +298,13 @@ def pain_series(pro_df, metric, timestamp_col="date_time_s1_daily", utc_col="_pr
             "y": vy[order].tolist()}
 
 
-def stim_series(chronic_recordings):
+def stim_series(chronic_recordings, hemisphere=None):
     """Real stimulation-amplitude-over-time (mA) for the shared-axis stim row.
+
+    `hemisphere` ("Left" / "Right") keeps only that side's chronic recordings (their channel names
+    say "LeftHemisphere ..." or "RightHemisphere ..."), so a band's current is its own side's and
+    never the two sides' pooled (the PI, 2026-10-18, decision 483; CLAUDE.md rule 13). None
+    concatenates every recording, as before 483 (the timeline's shared stim row).
 
     The chronic BrainSense Timeline carries per-sample stim amplitude in Data[:,1] paired with its
     absolute Time array (the same packets that carry the 10-min LFP power). Concatenate across
@@ -309,6 +314,9 @@ def stim_series(chronic_recordings):
     ts, ys = [], []
     for r in chronic_recordings or []:
         if not isinstance(r, dict):
+            continue
+        if hemisphere is not None and not any(
+                str(n).startswith(f"{hemisphere}Hemisphere") for n in (r.get("ChannelNames") or [])):
             continue
         tarr = r.get("Time")
         data = r.get("Data")
@@ -1976,7 +1984,14 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
             # number into every row of the grid -- and nothing downstream could tell, because the
             # number is perfectly ordinary. Carried out of here rather than re-derived later so
             # the flag and the value it describes are produced by one pass over one rule.
-            "from_device_spectrum": []}
+            "from_device_spectrum": [],
+            # THE TIMES OF EACH REPORT'S OWN PIECES OF RECORDING (decision 483): the TD pieces it
+            # owns, nearest first, up to as many as the longest length asked for can average (no
+            # cell of any length uses a piece past those), or, for a report with no TD piece, its
+            # device PSD snapshots up to as many as the longest length needs. One list per report,
+            # empty where it owns none. The current the band power was measured under is read at
+            # these times (`stim_current.current_at_recordings`), not at the rating.
+            "recording_times_s": [[] for _ in range(nP)]}
     stats_by_length = {}
     if nP == 0 or nCs == 0 or nCc == 0 or window_s <= 0:
         return out, info, stats_by_length
@@ -2016,6 +2031,10 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
         S = np.take_along_axis(idx, np.argsort(dist, axis=1, kind="stable"), axis=1)
         real = S >= 0
         Ssafe = np.maximum(S, 0)
+        _own = real[:, :cap_max]
+        _own_t = td_t[Ssafe[:, :cap_max]]
+        for _i in np.flatnonzero(td_tier):
+            info["recording_times_s"][_i] = [float(v) for v in _own_t[_i][_own[_i]]]
 
         for j in range(nCs):
             vals = np.where(real, td_mat[Ssafe, col[j]], np.nan)
@@ -2084,6 +2103,11 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
             PS = np.take_along_axis(pidx, np.argsort(pdist, axis=1, kind="stable"), axis=1)
             preal = PS >= 0
             PSsafe = np.maximum(PS, 0)
+            _pk = max(psd_caps) if psd_caps else 1
+            _pown = preal[:, :_pk]
+            _pown_t = psd_t[PSsafe[:, :_pk]]
+            for _i in np.flatnonzero(take):
+                info["recording_times_s"][_i] = [float(v) for v in _pown_t[_i][_pown[_i]]]
             for j in range(nCs):
                 pv = np.where(preal, psd_mat[PSsafe, col[j]], np.nan)
                 pbad = preal & np.isfinite(pv) & (pv > psd_ceil[j])

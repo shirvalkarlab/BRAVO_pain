@@ -266,7 +266,8 @@ def test_the_matrix_store_key_names_the_power_scale_so_no_decibel_entry_is_serve
                                             "v5_one_block_per_report",
                                             "v6_se_clustered_on_report",
                                             "v6_se_clustered_on_report_tablet_clock",
-                                            "v7_grid_own_pain_score"), \
+                                            "v7_grid_own_pain_score",
+                                            "v8_own_side_current"), \
         bs.STABILITY_GRID_RULE_VERSION
 
 

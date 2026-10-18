@@ -39,7 +39,9 @@ def _fake_power(pro_times, raw_cache, _x, **kw):
         m[:, 5] += 0.8 * np.asarray(PAIN)
         power[float(s)] = m
     stats = {str(float(s)): {"n_pro": N_REPORTS} for s in A.BAND_TIME_SWEEP_SECONDS}
-    return power, stats, CENTERS, None, None, [False] * N_REPORTS
+    out = (power, stats, CENTERS, None, None, [False] * N_REPORTS)
+    # the times of each report's own pieces, when asked for (decision 483)
+    return out + ([[] for _ in range(N_REPORTS)],) if kw.get("with_recording_times") else out
 
 
 def _canon(o):
@@ -201,7 +203,8 @@ def _run_pairs(threads):
     def power(pro_times, raw_cache, _x, **kw):
         seen.add(threading.get_ident())
         import time; time.sleep(0.05)
-        return ([raw_cache["v"] * 2], {"10": {"n_pro": 3}}, [1.0], None, None, False)
+        out = ([raw_cache["v"] * 2], {"10": {"n_pro": 3}}, [1.0], None, None, False)
+        return out + ([],) if kw.get("with_recording_times") else out
 
     def sweep(power, pain_values, **kw):
         return {"grid": list(power), "channel": kw["channel"]}

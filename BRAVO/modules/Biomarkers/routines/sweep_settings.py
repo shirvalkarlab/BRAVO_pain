@@ -32,7 +32,7 @@ STABILITY_GRID_KIND = "biomarker_band_stability_grid"
 # v5 (2026-09-25, P-03) one pain report counted in one stimulation state and one week, and each
 # state's odds ratio carries its interval; v6 (2026-09-25 night) the per-state standard errors,
 # and so the "behaves the same" check, are clustered on the pain report.
-STABILITY_GRID_RULE_VERSION = "v7_grid_own_pain_score"  # 2026-09-26: answers on the grid's own pain score (was NRS for SweepMetric-only requests); tablet clock since v6  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+STABILITY_GRID_RULE_VERSION = "v8_own_side_current"  # 2026-10-18: each band's stimulation eras from its own side's current only (decision 483); v7 2026-09-26: answers on the grid's own pain score (was NRS for SweepMetric-only requests); tablet clock since v6  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 # THE STORED HEAT-MAP GRID ITSELF: its kind name and the rule it is built under. ONE HOME since
 # decision 317 (2026-09-26), for the same reason as the stability grid's above: the Biomarkers
@@ -46,7 +46,7 @@ STABILITY_GRID_RULE_VERSION = "v7_grid_own_pain_score"  # 2026-09-26: answers on
 # source; v22: effective count on each cell; v21: outlier rule on raw power; v20: cell p-values,
 # decision 188.
 GRID_KIND = "biomarker_band_sweep"
-GRID_RULE_VERSION = "v27_psd_own_bound"  # 2026-10-03: device PSD snapshots judged by 7 MAD above their own median, not the TD chunks' (decision 411); v26: single 3 s chunks dropped only when more than 7 MAD above their contact's own median, every contact of every participant (decision 410); v25 3 MAD both sides; v24 exact rotation null, tablet clock  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+GRID_RULE_VERSION = "v28_current_at_recording"  # 2026-10-18: the current taken out read at each report's own pieces of recording (decision 483); v27 2026-10-03: device PSD snapshots judged by 7 MAD above their own median, not the TD chunks' (decision 411); v26: single 3 s chunks dropped only when more than 7 MAD above their contact's own median, every contact of every participant (decision 410); v25 3 MAD both sides; v24 exact rotation null, tablet clock  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 # The two raw inputs every grid names in its chain, in the order its key carries them: the saved
 # 3-second tiles (`bravo_service._RAW_LSB_SHARED_KIND`) and the pain-report snapshot.
 GRID_INPUT_KINDS = ("raw_lsb_tiles", "redcap_reports")
