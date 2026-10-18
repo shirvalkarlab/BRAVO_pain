@@ -5,7 +5,7 @@ five words or less, and evidence that should have been evaluated and was not in 
 the same form. The words live beside the rules and checks they describe, on the server, so the page
 prints them and cannot drift from them:
 
-* every one of the 52 device rules carries a ``short_label`` of at most four words, carried on
+* every one of the 53 device rules carries a ``short_label`` of at most four words, carried on
   every row the evaluator emits, so "Unmet: <label>" or "Unchecked: <label>" is at most five;
 * the report carries ``evidence_not_evaluated``: each evidence check that should have run and did
   not, with its own label of at most four words ("Untested: <label>" is at most five).
@@ -30,7 +30,7 @@ def test_every_device_rule_has_a_short_label_of_at_most_four_words():
     assert missing == []
     too_long = [(r.rule_id, r.short_label) for r in constraints.RULES if _words(r.short_label) > 4]
     assert too_long == []
-    assert len(constraints.RULES) == 52
+    assert len(constraints.RULES) == 53
 
 
 def test_short_labels_are_distinct_so_two_bullets_never_read_the_same():

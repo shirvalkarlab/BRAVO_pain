@@ -3087,17 +3087,70 @@ def _place_thresholds_from_record(participant, rep, cands, *, hemisphere, loaded
                                 "refused": bool((dr_payload or {}).get("refused")) if dr_payload else None,
                                 "reason": dr_summary.get("reason")}
     placement["capture_upper"], placement["capture_lower"] = plan.upper, plan.lower
-    placement["band_timing"] = {k: band.get(k) for k in ("available", "onset_s",
+    placement["band_timing"] = {k: band.get(k) for k in ("available", "averaging_s", "onset_s",
                                                          "zero_undone_reached", "reason")}
     new_plan = _tpl.apply(plan, placement, observed_series=inputs["power"])
     placement["placement_rule"] = new_plan.placement_rule
     return new_plan, placement
 
 
+# ---------------------------------------------------------------------------------------------
+# THE BAND'S PEAK ABOVE THE DEVICE PSDs' SMOOTH BACKGROUND (item 7b, the PI, 2026-10-18)
+# ---------------------------------------------------------------------------------------------
+def peak_above_background_signature(participant):
+    """The key: the module's rule version and every stored device-PSD recording (uid, content
+    hash, type), so a new or re-decoded PSD rebuilds the table and nothing else does."""
+    from . import background_peak as _bp
+    from Server import models as _m
+    p = participant if hasattr(participant, "uid") else _m.Participant.find(uid=participant)
+    rows = sorted((str(u), str(h), str(t)) for (u, h, t) in _m.Recording.objects.filter(
+        source__owner=p, type__in=_bp.PSD_TYPES).values_list("uid", "hashed", "type"))
+    blob = "|".join("~".join(r) for r in rows).encode("utf8")
+    return (_bp.KIND, _bp.RULE_VERSION, str(getattr(p, "uid", participant)), len(rows),
+            _hashlib.blake2b(blob, digest_size=16).hexdigest())
+
+
+def peak_above_background_table(participant):
+    """Every contact pair's median ratio per band centre (`background_peak.ratios_from_psds`),
+    served when its key matches and worked out from the stored device PSDs and stored otherwise
+    (RCS08, 1,810 PSDs: about 17 s to work out, once per new PSD). None when it cannot be built."""
+    from . import background_peak as _bp
+    from Server import models as _m
+    p = participant if hasattr(participant, "uid") else _m.Participant.find(uid=participant)
+    if p is None:
+        return None
+    sig = peak_above_background_signature(p)
+
+    def _build():
+        psds, bad = _bp.psds_for_participant(p)
+        out = _bp.ratios_from_psds(psds)
+        out["counts"]["undecodable_recordings"] = int(bad)
+        return out
+
+    payload, _wrote = _cache_store.store_if_absent(
+        _bp.KIND, str(p.uid), sig, _build, writer="closed_loop", trigger="deployment_report",
+        provenance=[], extra={"rule_version": _bp.RULE_VERSION},
+        root=_SHARED_CACHE_DIR_OVERRIDE)
+    return payload
+
+
+def peak_above_background_for(participant, candidate):
+    """The chosen band's entry (`background_peak.for_band`) for the report: its median ratio on its
+    own contact pair. Evidence and a tie-break only; it gates nothing."""
+    from . import background_peak as _bp
+    c = candidate or {}
+    if c.get("channel") is None or c.get("center_hz") is None:
+        return {"available": False, "reason": "the candidate carries no sensing contact or band centre",
+                "use": "tie-break only between otherwise-equal candidates; never a verdict"}
+    return _bp.for_band(peak_above_background_table(participant), c["channel"], c["center_hz"])
+
+
 def band_timing_signature(participant, *, tiles_key, contact, centre_hz, hemisphere, amp_low,
                           amp_high):
-    """The key of the band's onset (decision 417): the tiles and recording set (the series), the
-    band and side, the current limits the replay runs with, and the two rule versions it rests on."""
+    """The key of the band's averaging and onset (decision 417; the averaging since 2026-10-18):
+    the tiles and recording set (the series), the band and side, the current limits the replay runs
+    with, and the two rule versions it rests on (the band-timing version moved with the averaging,
+    so every answer saved under the onset-only rule is rebuilt)."""
     from . import band_timing as _bt
     from . import design_rule as _dr
     return (_bt.KIND, _bt.RULE_VERSION, _dr.RULE_VERSION,
@@ -4094,6 +4147,19 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
             from . import consistency as _consistency_err
             out["coherence"]["note"] = _consistency_err.note_with_stability(
                 out["coherence"].get("note"), out["band_stability"])
+
+    # THE BAND'S PEAK ABOVE THE SMOOTH BACKGROUND (item 7b, the PI, 2026-10-18): the chosen band's
+    # median ratio of device-PSD power to the fitted a*f^-b + c on its own contact pair. Evidence
+    # beside the band and a tie-break between otherwise-equal candidates; it gates nothing.
+    try:
+        out["peak_above_background"] = peak_above_background_for(
+            participant, (cands[0] or {}) if cands else {})
+    except Exception as _exc:                      # noqa: BLE001 - never takes down the report
+        _log.warning("closed-loop report: the peak above background could not be read for %s",
+                     getattr(participant, "uid", participant), exc_info=True)
+        out["peak_above_background"] = {
+            "available": False, "reason": f"could not be worked out: {_exc!r}",
+            "use": "tie-break only between otherwise-equal candidates; never a verdict"}
 
     # TRACK D: the grid computed once, at the top of this function -- see the note there on why it
     # runs before either early return, and `band_sweep_grid_for_closed_loop` above for the design.

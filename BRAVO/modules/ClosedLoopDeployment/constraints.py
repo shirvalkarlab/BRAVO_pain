@@ -1,10 +1,12 @@
-"""The Percept device rule table (D01-D52) and the eligibility evaluator that reads it.
+"""The Percept device rule table (D01-D53) and the eligibility evaluator that reads it.
 
 WHAT THIS FILE IS FOR
 =====================
 Every rule below was read out of ``percept_device_constraints.md``, which in turn quotes one of the
 Medtronic documents for the Percept neurostimulator family and records the page on which the
-sentence appears. Nothing here is inferred from general knowledge of the device. Each rule carries
+sentence appears (one exception: D53, the PI's own rule of 2026-10-18 about folded multiples of
+the stimulation rate, which rests on the documented 250 Hz sampling rate and says so). Nothing here
+is inferred from general knowledge of the device. Each rule carries
 the document tag and page so that a failed check can name the sentence it violates, which is what a
 clinician needs in order to argue with the result rather than merely accept it.
 
@@ -1241,6 +1243,103 @@ def _p_d52(candidate, participant):
     return bool(_sensing_rule.pair_flanks_stimulation(channel, {int(r) for r in rings}))
 
 
+# ------------------------------------------------------------------------------------------------
+# D53: no folded multiple of the stimulation rate in or near the band (the PI, 2026-10-18)
+# ------------------------------------------------------------------------------------------------
+#: How close to a band edge a folded multiple may land before the band refuses (the PI's 5 Hz).
+FOLDED_RATE_MARGIN_HZ = 5.0
+#: The rates the refusal suggests are searched on this grid inside the general envelope. OURS, not
+#: the device's: no Medtronic document prints the rate step, and every rate this device has run
+#: (55, 60, 110, 125, 130, 145, 165 Hz) is a whole multiple of 5 Hz.
+FOLDED_RATE_STEP_HZ = 5.0
+#: How many clearing rates the refusal names, nearest first.
+FOLDED_RATE_CLEARING_SHOWN = 4
+
+
+def _harmonic_landings(rate_hz, f_lo, f_hi):
+    """The landing arithmetic's one home, `Biomarkers.routines.analytics.harmonic_landings_hz`
+    (multiples 1 to 8 at the device's 250 samples a second), imported at call time so this table
+    stays importable without the Biomarkers routines."""
+    try:
+        from Biomarkers.routines import analytics as _an
+    except ImportError:                               # pragma: no cover - container spelling
+        from modules.Biomarkers.routines import analytics as _an
+    return _an.harmonic_landings_hz(float(rate_hz), float(f_lo), float(f_hi), fs=SAMPLE_RATE_HZ)
+
+
+def folded_rate_check(rate_hz, center_hz, band_width_hz, *, margin_hz=FOLDED_RATE_MARGIN_HZ,
+                      clearing=True):
+    """Where the multiples of ``rate_hz`` land within ``margin_hz`` of the band ``center_hz`` +-
+    ``band_width_hz``/2 (edges included), whether the band is clear, and -- when ``clearing`` -- the
+    nearest rates on the ``FOLDED_RATE_STEP_HZ`` grid inside the general envelope that would clear
+    it. None when the rate or the band is missing."""
+    try:
+        rate, c, w = float(rate_hz), float(center_hz), float(band_width_hz)
+    except (TypeError, ValueError):
+        return None
+    lo, hi = c - w / 2.0, c + w / 2.0
+    land = _harmonic_landings(rate, lo - margin_hz, hi + margin_hz)
+    out = {"rate_hz": rate, "band_hz": [lo, hi], "zone_hz": [lo - margin_hz, hi + margin_hz],
+           "landings": land, "clear": not land, "clearing_rates_hz": []}
+    if clearing and land:
+        r_lo, r_hi = GENERAL_ENVELOPE["rate_hz"]
+        grid = [k * FOLDED_RATE_STEP_HZ for k in range(1, int(r_hi // FOLDED_RATE_STEP_HZ) + 1)
+                if r_lo <= k * FOLDED_RATE_STEP_HZ <= r_hi]
+        clean = [g for g in grid
+                 if not _harmonic_landings(g, lo - margin_hz, hi + margin_hz)]
+        out["clearing_rates_hz"] = sorted(clean, key=lambda g: (abs(g - rate), g))[
+            :FOLDED_RATE_CLEARING_SHOWN]
+    return out
+
+
+def _p_d53(candidate, participant):
+    """No folded multiple of the stimulation rate may land inside the band or within 5 Hz of its
+    edges. Not determinable without the rate or the band; a sensing-only candidate is not checked
+    (it drives nothing)."""
+    if not _is_adaptive(candidate):
+        return True
+    edges = band_edges(candidate)
+    rate = _num(candidate, "rate_hz")
+    if edges is None or rate is None:
+        return None
+    chk = folded_rate_check(rate, _num(candidate, "center_hz"), _num(candidate, "band_width_hz"),
+                            clearing=False)
+    return None if chk is None else bool(chk["clear"])
+
+
+def _o_d53(c, p):
+    """The rate, the band, each landing (with its multiple) and the rates that would clear it."""
+    rate, cen, wid = _num(c, "rate_hz"), _num(c, "center_hz"), _num(c, "band_width_hz")
+    if rate is None or cen is None or wid is None:
+        return (f"stimulation rate {c.get('rate_hz')!r} Hz, band centre {c.get('center_hz')!r} Hz, "
+                f"width {c.get('band_width_hz')!r} Hz -- not enough to place the landings")
+    chk = folded_rate_check(rate, cen, wid)
+    lo, hi = chk["band_hz"]
+    head = f"at {rate:g} Hz stimulation, band {lo:g}-{hi:g} Hz"
+    if chk["clear"]:
+        near = _harmonic_landings(rate, 0.0, SAMPLE_RATE_HZ / 2.0)
+        if near:
+            d = min(near, key=lambda x: min(abs(x["lands_at_hz"] - lo), abs(x["lands_at_hz"] - hi)))
+            gap = min(abs(d["lands_at_hz"] - lo), abs(d["lands_at_hz"] - hi))
+            return (head + f": no multiple lands within {FOLDED_RATE_MARGIN_HZ:g} Hz of it; the "
+                    f"nearest lands at {d['lands_at_hz']:g} Hz (multiple {d['harmonic']}), "
+                    f"{gap:g} Hz from the band")
+        return head + ": no multiple lands below half the sampling rate"
+    lands = "; ".join(f"{d['lands_at_hz']:g} Hz (multiple {d['harmonic']}, {d['raw_hz']:g} Hz folded)"
+                      for d in chk["landings"])
+    clear = chk["clearing_rates_hz"]
+    hemi = {"left": "Left", "right": "Right"}.get(_text(c, "sensing_hemisphere") or "")
+    seen = {r for (r, _pw) in (_DF.BRAINSENSE_PROGRAMMED_PAIRS.get(hemi) or {})} if hemi else set()
+
+    def _rate(r):
+        return f"{r:g} Hz" + (" (run in a BrainSense group on this side before)" if r in seen else "")
+    tail = (f". Rates whose multiples all land at least {FOLDED_RATE_MARGIN_HZ:g} Hz from the band, "
+            f"nearest first: " + ", ".join(_rate(r) for r in clear)
+            if clear else f". No rate on a {FOLDED_RATE_STEP_HZ:g} Hz step clears this band; "
+                          f"choose another band")
+    return head + f": multiples land at {lands}" + tail
+
+
 def _p_d40(candidate, participant):
     """In Single Threshold mode with both hemispheres configured, either hemisphere drives therapy.
 
@@ -1619,7 +1718,7 @@ _OBSERVED = {
     "D10": _o_d10, "D11": _o_d11, "D12": _o_d12, "D13": _o_d13, "D15": _o_d15, "D16": _o_d16,
     "D17": _o_d17, "D18": _o_d18, "D19": _o_d19, "D24": _o_d24, "D26": _o_d26, "D27": _o_d27, "D28": _o_d28,
     "D30": _o_d30, "D31": _o_d31, "D32": _o_d32, "D34": _o_d34, "D38": _o_d38, "D39": _o_d39,
-    "D40": _o_d40, "D44": _o_d44, "D52": _o_d52,
+    "D40": _o_d40, "D44": _o_d44, "D52": _o_d52, "D53": _o_d53,
 }
 
 #: Rules whose observed value is recorded on the report even when the rule PASSES.
@@ -1636,7 +1735,9 @@ _OBSERVED = {
 #: the candidate was matched against.
 #: D52 joined on 2026-09-22 for D30's reason: its pass is derived from the contacts programmed on
 #: the device, so the reader must see which contacts and which pair it was checked against.
-_RECORD_VALUE_ON_PASS = ("D03", "D04", "D16", "D19", "D30", "D31", "D52")
+#: D53 joined on 2026-10-18: a pass names the rate and the nearest landing, so a reader sees how
+#: close the band sits to a folded multiple of the stimulation rate.
+_RECORD_VALUE_ON_PASS = ("D03", "D04", "D16", "D19", "D30", "D31", "D52", "D53")
 
 
 # ------------------------------------------------------------------------------------------------
@@ -2629,6 +2730,28 @@ RULES = (
         ),
         predicate=_p_d52,
     ),
+    types.DeviceConstraint(
+        rule_id="D53",
+        title="No folded multiple of the stimulation rate in or near the band",
+        source="BRAVO rule (the PI, 2026-10-18); sampling rate from D13",
+        page="A610 sampling 250 Hz (D13); landing arithmetic analytics.harmonic_landings_hz",
+        severity="blocking",
+        short_label="Clear of stimulation multiples",
+        human_text=(
+            "The device samples at 250 Hz, so a whole multiple of the stimulation rate above 125 Hz "
+            "reappears at a lower frequency; at 55 Hz the multiples land at 25, 30, 55, 60, 80, 85, "
+            "110 and 115 Hz (multiples 1 to 8). A band that carries a folded multiple of the "
+            "stimulation rate moves with the current for a reason that is not the brain's, so a "
+            "band refuses when any multiple lands inside it or within 5 Hz of its edges, at the "
+            "rate in force or the rate proposed on the page's stimulation program. A different "
+            "rate whose multiples all land at least 5 Hz from the band clears it; the refusal "
+            "lists the nearest such rates (on a 5 Hz step, inside the device's 2 to 250 Hz "
+            "envelope, which is necessary and not sufficient: D31 still decides whether a "
+            "BrainSense group accepts the rate). Until 2026-10-18 this was a warning only "
+            "(decision 220); the PI made it a refusal for the Closed-Loop check."
+        ),
+        predicate=_p_d53,
+    ),
 )
 
 
@@ -2659,7 +2782,7 @@ RESOLVED_BY = {
     "D18": "configuration", "D19": "band", "D24": "configuration", "D27": "configuration",
     "D28": "configuration", "D29": "configuration", "D30": "configuration", "D32": "configuration",
     "D34": "configuration", "D38": "configuration", "D39": "configuration", "D40": "configuration",
-    "D52": "configuration",
+    "D52": "configuration", "D53": "configuration",
 }
 
 

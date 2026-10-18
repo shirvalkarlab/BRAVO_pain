@@ -46,7 +46,10 @@ def passing_candidate(**overrides):
         "impedance_tested": True,
         "artifact_flags": [],
         # Stimulation parameters.
-        "rate_hz": 110.0,
+        # 125 Hz since 2026-10-18 (D53): at 110 Hz, the value until then, multiple 7 folds to 20 Hz,
+        # inside this band, which now refuses; 125 Hz's multiples fold to 0 or 125 Hz, so every
+        # adaptive band is clear. (125 Hz with 60 us is in RCS08's measured right-side table, D31.)
+        "rate_hz": 125.0,
         "pulse_width_us": 60.0,
         "amp_mA": 3.0,
         # Sensing and control.
@@ -128,16 +131,19 @@ def ids(rows):
 # ------------------------------------------------------------------------------------------------
 # The table itself.
 # ------------------------------------------------------------------------------------------------
-def test_table_encodes_all_fifty_two_rules_exactly_once():
-    """D01 to D52 with no gaps and no duplicates, because a skipped rule is an invisible rule.
+def test_table_encodes_all_fifty_three_rules_exactly_once():
+    """D01 to D53 with no gaps and no duplicates, because a skipped rule is an invisible rule.
+
+    Was fifty-two until 2026-10-18, when D53 (no folded multiple of the stimulation rate in or
+    within 5 Hz of the band) joined at the PI's ruling; the name moved with the table again.
 
     Was fifty-one until 2026-09-22, when D52 (the sensing pair must flank the stimulating contacts,
     decision 247) joined at the PI's request after the page said the device permitted L 0-2+ while
     the left lead stimulated on contact 2. The name moved with the table on purpose: a test named
     for fifty-one rules over a table of fifty-two would assert something untrue."""
     got = [rule.rule_id for rule in constraints.RULES]
-    assert got == [f"D{n:02d}" for n in range(1, 53)]
-    assert len(set(got)) == 52
+    assert got == [f"D{n:02d}" for n in range(1, 54)]
+    assert len(set(got)) == 53
 
 
 def test_every_rule_carries_its_citation_and_a_plain_english_reason():
@@ -151,7 +157,10 @@ def test_every_rule_carries_its_citation_and_a_plain_english_reason():
 
 
 def test_severity_counts_are_the_documented_split():
-    """21 blocking, 29 advisory, 2 unknown. The two unknowns are the point of the split.
+    """21 blocking, 30 advisory, 2 unknown. The two unknowns are the point of the split.
+
+    Was 20 blocking until 2026-10-18, when D53 (folded multiples of the stimulation rate) joined
+    as blocking at the PI's ruling.
 
     Was 20/29/2 until 2026-09-22, when D52 joined as blocking (decision 247): a configuration whose
     sensing pair the stimulating contacts do not allow cannot be programmed, so it is a refusal,
@@ -164,7 +173,7 @@ def test_severity_counts_are_the_documented_split():
     check that the change was deliberate and recorded.
     """
     counts = constraints.severity_counts()
-    assert counts == {"blocking": 20, "advisory": 30, "unknown": 2}   # D27 advisory (decision 478)
+    assert counts == {"blocking": 21, "advisory": 30, "unknown": 2}   # D27 advisory (decision 478)
     unknown_ids = {rule.rule_id for rule in constraints.RULES if rule.severity == "unknown"}
     assert unknown_ids == {"D04", "D31"}
 
@@ -188,7 +197,7 @@ def test_fully_declared_candidate_is_eligible():
     assert report.failures == [], [r["rule_id"] for r in report.failures]
     assert report.unknowns == [], [r["rule_id"] for r in report.unknowns]
     assert report.eligible is True
-    assert report.checked == 52
+    assert report.checked == 53
     assert isinstance(report, types.EligibilityReport)
 
 
@@ -208,7 +217,8 @@ def test_passing_report_records_the_programming_regime_it_was_written_in():
     # sensing group, so its pass must show which group and rate it was matched against.
     # D52 joined on 2026-09-22 for D30's reason: its pass is derived from the contacts programmed on
     # the device, so it must show which contacts and which pair it was checked against.
-    assert ids(recorded) == {"D03", "D04", "D16", "D19", "D30", "D31", "D52"}
+    # D53 joined on 2026-10-18: its pass names the rate and the nearest folded multiple.
+    assert ids(recorded) == {"D03", "D04", "D16", "D19", "D30", "D31", "D52", "D53"}
     d03 = next(row for row in recorded if row["rule_id"] == "D03")
     assert "parkinsons" in d03["observed"]
 
@@ -336,8 +346,9 @@ def test_the_remaining_unknown_blocks_on_the_record_as_it_stands():
     is absent from all 1,154 session reports, so waiting for it meant blocking forever; D31 now
     resolves through the measured pair table instead, asking whether the device has already
     accepted this rate and pulse width in a BrainSense group on this hemisphere. The fixture
-    candidate is a Right-hemisphere configuration at 110 Hz and 60 us, which appears 304 times in
-    the measured Right table, so D31 passes on evidence.
+    candidate is a Right-hemisphere configuration at 125 Hz and 60 us (110 Hz until 2026-10-18,
+    when D53 made 110 Hz refuse its 20 Hz band), which appears 80 times in the measured Right
+    table, so D31 passes on evidence.
 
     The required behaviour on the remaining unknown is unchanged: refusal, not a quiet pass.
     """
@@ -346,7 +357,7 @@ def test_the_remaining_unknown_blocks_on_the_record_as_it_stands():
     assert ids(report.unknowns) == {"D04"}
     assert all(row["kind"] == "value_not_read_off_programmer" for row in report.unknowns)
     assert report.eligible is False
-    assert report.checked == 52
+    assert report.checked == 53
 
 
 def test_the_two_unknowns_are_distinguishable_from_an_undeclared_input():
@@ -403,9 +414,9 @@ def test_empty_inputs_produce_no_passes_at_all():
     """
     report = check({}, {})
     assert report.failures == []
-    assert len(report.unknowns) == 22          # 20 blocking + 2 unknown (D09, D27 advisory; D52 blocking)
+    assert len(report.unknowns) == 23          # 21 blocking + 2 unknown (D09, D27 advisory; D52, D53 blocking)
     assert len(report.advisories) == 30        # 28 + D09 (softened 2026-09-04) + D27 (record only, decision 478)
-    assert report.checked == 52
+    assert report.checked == 53
     assert report.eligible is False
 
 
@@ -461,7 +472,7 @@ def test_check_eligibility_returns_every_failure_rather_than_the_first():
     assert expected.issubset(ids(report.failures))
     assert "D27" not in ids(report.failures) | ids(report.unknowns)
     assert len(report.failures) >= len(expected)
-    assert report.checked == 52                # nothing was skipped on the way past the failures
+    assert report.checked == 53                # nothing was skipped on the way past the failures
     assert report.eligible is False
     assert "NOT eligible" in report.summary()
 
