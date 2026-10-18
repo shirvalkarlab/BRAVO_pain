@@ -2635,8 +2635,14 @@ def simulation_inputs_for_participant(uid, *, contact, centre_hz, hemisphere, ep
         if not m.any():
             continue
         k = np.clip(np.searchsorted(bt, t[m]), 0, bt.size - 1)
-        amp[m] = ba[k]
-        src[m] = 1
+        # the device reports only its own readings (decision 480 (e)); across a stretch with no
+        # reading the current is known only when the readings on both sides of it agree
+        kp = np.clip(k - 1, 0, bt.size - 1)
+        step = float(np.median(np.diff(bt)))
+        known = (ba[kp] == ba[k]) | ((bt[k] - bt[kp]) <= 1.5 * step)
+        idx = np.where(m)[0][known]
+        amp[idx] = ba[k[known]]
+        src[idx] = 1
     # then the settings epochs -- through the ONE epoch assignment the joined table uses
     # (`_assign_epoch`; review C9, 2026-09-12). This used to be a private copy with a closed end
     # (`t <= t_end` where `_assign_epoch` is half-open) and without the nanosecond cast that

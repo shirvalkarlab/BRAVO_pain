@@ -191,6 +191,18 @@ def device_power_ceiling(sensing_contact, centre_hz):
 # -------------------------------------------------------------------------------------------------
 # Reading the device's own band power (route 3) out of the stored streaming recordings
 # -------------------------------------------------------------------------------------------------
+def _missing_like(rec, data):
+    """The recording's own missing marks (1 = no reading at that place), shaped like its data;
+    all zeros when it carries none or they do not fit."""
+    m = rec.get("Missing")
+    if m is None:
+        return np.zeros(data.shape)
+    m = np.asarray(m, dtype=float)
+    if m.shape != data.shape and m.T.shape == data.shape:
+        m = m.T
+    return m if m.shape == data.shape else np.zeros(data.shape)
+
+
 def read_device_band_power(power_domain_recordings) -> Dict[str, Dict[str, Any]]:
     """Pull the device's own band power, and the current beside it, out of the streaming records.
 
@@ -226,6 +238,7 @@ def read_device_band_power(power_domain_recordings) -> Dict[str, Dict[str, Any]]
         if not np.isfinite(t0) or not np.isfinite(fs) or fs <= 0:
             continue
         t = t0 + np.arange(data.shape[0], dtype=float) / fs
+        missing = _missing_like(rec, data)
         therapy = (rec.get("Descriptor") or {}).get("Therapy") or {}
 
         # The columns are named "<CONTACT> Power" and "<CONTACT> Stimulation". Pair them by contact
@@ -246,9 +259,12 @@ def read_device_band_power(power_domain_recordings) -> Dict[str, Dict[str, Any]]
             entry = out.setdefault(contact, {"t": [], "power": [], "mA": [], "centre_hz": [],
                                              "rate_hz": [], "averaging_s": [],
                                              "hemisphere": side, "n_recordings": 0})
-            entry["t"].append(t)
-            entry["power"].append(data[:, ip])
-            entry["mA"].append(data[:, ia])
+            # only the device's own readings (decision 480 (e)): a place on the grid with no
+            # reading is marked missing and holds no number; it is no sample and counts as none
+            real = (missing[:, ip] == 0) & (missing[:, ia] == 0) & np.isfinite(data[:, ip]) & np.isfinite(data[:, ia])
+            entry["t"].append(t[real])
+            entry["power"].append(data[real, ip])
+            entry["mA"].append(data[real, ia])
             entry["n_recordings"] += 1
             # The band the device was sensing, the rate it was stimulating at and how long it
             # averaged over are recorded PER SAMPLE rather than once per contact. They are settings
@@ -256,7 +272,7 @@ def read_device_band_power(power_domain_recordings) -> Dict[str, Dict[str, Any]]
             # shows them doing exactly that: the right 0-3 contact was sensed at 10.74 hertz in some
             # sessions and 7.81 hertz in others. Keeping one value per contact would report whichever
             # session happened to be read first and quietly mislabel every other one.
-            n_here = data.shape[0]
+            n_here = int(real.sum())
             for key, src, scale in (("centre_hz", "FrequencyInHertz", 1.0),
                                     ("rate_hz", "RateInHertz", 1.0),
                                     ("averaging_s", "AveragingDurationInMilliSeconds", 1e-3)):
@@ -614,8 +630,13 @@ def read_device_current(power_domain_recordings):
         if not cols:
             continue
         contacts |= set(cols)
-        blocks.append({"t": t0 + np.arange(data.shape[0], dtype=float) / fs,
-                       "mA": {c: data[:, i] for c, i in cols.items()}})
+        # only the rows where the device reported the current on every side (decision 480 (e)): a
+        # place on the grid with no reading is marked missing and holds no number
+        missing = _missing_like(rec, data)
+        idx = list(cols.values())
+        real = np.all(missing[:, idx] == 0, axis=1) & np.all(np.isfinite(data[:, idx]), axis=1)
+        blocks.append({"t": (t0 + np.arange(data.shape[0], dtype=float) / fs)[real],
+                       "mA": {c: data[real, i] for c, i in cols.items()}})
     blocks.sort(key=lambda b: float(b["t"][0]) if len(b["t"]) else np.inf)
     return {"blocks": blocks, "contacts": sorted(contacts)}
 

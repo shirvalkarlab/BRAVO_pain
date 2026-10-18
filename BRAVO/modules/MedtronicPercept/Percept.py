@@ -1710,36 +1710,44 @@ def extractPowerDomainStreamingData(JSON, sourceData=dict()):
                 _kept.append(_stream)
         Data["StreamingPower"] = _kept
         Data["StreamingPowerSetAside"] = _aside
+        # ONLY THE DEVICE'S OWN READINGS ARE STORED (the PI, 2026-10-18; decision 480 (e)). Until
+        # then a block with a gap was rebuilt on an even grid by straight-line interpolation of the
+        # power AND the current, and a grid point within one spacing of a real reading was marked
+        # present: on RCS08, 849 readings the device never made were stored as real, and 18,541
+        # real readings after a late packet were stored at a moved time with an interpolated value.
+        # Now each real reading goes to the place on the stated-rate grid nearest its own time
+        # (readers count times as row / SamplingRate, so the grid stays), carrying its own power
+        # and current; a place with no reading holds NaN and is marked missing; nothing is stored
+        # past the last reading. `Time` keeps each row's own time from the first reading (NaN for an
+        # empty place); the grid place is at most half a spacing from it (on RCS08 at most 100 ms
+        # at 2 readings a second). Readings closer together than one spacing cannot each have a
+        # place; such a block is kept as recorded, back to back (`SlotLayout`), none dropped.
         for nStream in range(len(Data["StreamingPower"])):
-            if len(Data["StreamingPower"][nStream]["Time"]) < 2:
-                Data["StreamingPower"][nStream]["Missing"] = np.zeros(Data["StreamingPower"][nStream]["Power"].shape)
+            S = Data["StreamingPower"][nStream]
+            S["Missing"] = np.zeros(S["Power"].shape)
+            if len(S["Time"]) < 2 or not S.get("SamplingRate"):
                 continue
-            ChangesInMs = np.around(np.diff(Data["StreamingPower"][nStream]["Time"]),3)
-            TimePerPacket = np.percentile(ChangesInMs,5)
-            MissingPacket = np.where(ChangesInMs > TimePerPacket)[0] + 1
-
-            Data["StreamingPower"][nStream]["Missing"] = np.zeros(Data["StreamingPower"][nStream]["Power"].shape)
-            if len(MissingPacket) > 0:
-                newTimestamp = np.arange(Data["StreamingPower"][nStream]["Time"][0], Data["StreamingPower"][nStream]["Time"][-1]+TimePerPacket*len(MissingPacket), TimePerPacket)
-                
-                processedPower = np.zeros((len(newTimestamp),2))
-                processedStimulation = np.zeros((len(newTimestamp),2))
-                for i in range(2):
-                    processedPower[:,i] = np.interp(newTimestamp, Data["StreamingPower"][nStream]["Time"], Data["StreamingPower"][nStream]["Power"][:,i])
-                    processedStimulation[:,i] = np.interp(newTimestamp, Data["StreamingPower"][nStream]["Time"], Data["StreamingPower"][nStream]["Stimulation"][:,i])
-                
-                Data["StreamingPower"][nStream]["Missing"] = np.zeros(processedPower.shape)
-                for t in range(len(newTimestamp)):
-                    if np.min(np.abs(newTimestamp[t] - Data["StreamingPower"][nStream]["Time"])) > TimePerPacket:
-                        Data["StreamingPower"][nStream]["Missing"][t,:] = 1
-                        
-                Data["StreamingPower"][nStream]["Power"] = processedPower
-                Data["StreamingPower"][nStream]["Stimulation"] = processedStimulation
-                Data["StreamingPower"][nStream]["Time"] = newTimestamp
+            rate = float(S["SamplingRate"])
+            slot = np.floor(S["Time"] * rate + 0.5 + 1e-9).astype(int)
+            if np.any(np.diff(slot) < 1):
+                S["SlotLayout"] = "as recorded"
+                continue
+            if slot[-1] == len(slot) - 1:
+                continue                                   # no gap: one reading per place already
+            n = int(slot[-1]) + 1
+            power = np.full((n, 2), np.nan)
+            stimulation = np.full((n, 2), np.nan)
+            missing = np.ones((n, 2))
+            times = np.full(n, np.nan)
+            power[slot] = S["Power"]
+            stimulation[slot] = S["Stimulation"]
+            missing[slot] = 0
+            times[slot] = S["Time"]
+            S["Power"], S["Stimulation"], S["Missing"], S["Time"] = power, stimulation, missing, times
 
         # Every power block starts at its own `FirstPacketDateTime`, as the time-domain blocks above
         # (the PI, 2026-09-26). The ticks give the readings' times WITHIN the block (`Time`, from 0)
-        # and the interpolation over missing readings; they set no block's start.
+        # and each reading's place on the grid; they set no block's start.
 
     for key in Data.keys():
         sourceData[key] = Data[key]
