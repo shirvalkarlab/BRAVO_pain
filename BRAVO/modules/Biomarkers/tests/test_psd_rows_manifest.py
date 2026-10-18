@@ -206,7 +206,7 @@ def test_empty_directory_reports_all_zeros():
 def test_current_generation_files_are_counted_together_pro_sig_and_all():
     """Two rating-centred files under the SAME current naming rule but DIFFERENT PRO-set hashes
     (as two different report sets would produce) land in ONE current-generation bucket, not two."""
-    cur = f"{B._CHANNEL_CANON_VERSION}_{B._TD_MISSING_VERSION}"
+    cur = B._PSD_ROWS_BARE
     with _TempCacheDir() as t:
         t.write(f"rec1_hash1_w30p0_{cur}.npz", 100)                                    # non-centred
         t.write(f"rec2_hash2_w30p0_{cur}_pabc123abc123_{B._TD_CENTERED_VERSION}.npz", 200)
@@ -223,7 +223,7 @@ def test_an_older_generation_is_counted_apart_from_current_and_by_size():
     """A file named under an earlier channel-canon rule (as `_CHANNEL_CANON_VERSION` was before its
     last bump) is a different generation: counted separately, never mistaken for current, and the
     generations are reported largest-first."""
-    cur = f"{B._CHANNEL_CANON_VERSION}_{B._TD_MISSING_VERSION}"
+    cur = B._PSD_ROWS_BARE
     old_channel_canon = "v1_no_ring_awareness"     # stands in for whatever the value was before v2
     with _TempCacheDir() as t:
         t.write(f"rec1_hash1_w30p0_{cur}.npz", 10)
@@ -239,7 +239,7 @@ def test_an_older_generation_is_counted_apart_from_current_and_by_size():
 
 
 def test_two_older_generations_are_kept_apart_and_sorted_biggest_first():
-    cur = f"{B._CHANNEL_CANON_VERSION}_{B._TD_MISSING_VERSION}"
+    cur = B._PSD_ROWS_BARE
     with _TempCacheDir() as t:
         t.write(f"rec1_hash1_w30p0_generationA.npz", 50)
         t.write(f"rec2_hash2_w30p0_generationB.npz", 500)
@@ -263,7 +263,7 @@ def test_a_name_with_no_recognizable_suffix_is_counted_as_unparsed_not_silently_
 def test_an_in_flight_temp_write_is_never_counted():
     """`_save_recording_psd_rows`'s own temp file (`<name>.tmp.npz`) is a write in progress, not a
     finished cache entry -- a dry run (or a later, real sweep) must never count or touch it."""
-    cur = f"{B._CHANNEL_CANON_VERSION}_{B._TD_MISSING_VERSION}"
+    cur = B._PSD_ROWS_BARE
     with _TempCacheDir() as t:
         t.write(f"rec1_hash1_w30p0_{cur}.npz", 10)
         t.write(f"rec1_hash1_w30p0_{cur}.tmp.npz", 999999)
@@ -272,7 +272,7 @@ def test_an_in_flight_temp_write_is_never_counted():
 
 
 def test_the_dry_run_deletes_nothing():
-    cur = f"{B._CHANNEL_CANON_VERSION}_{B._TD_MISSING_VERSION}"
+    cur = B._PSD_ROWS_BARE
     with _TempCacheDir() as t:
         paths = [t.write(f"rec1_hash1_w30p0_{cur}.npz", 10),
                  t.write("rec2_hash2_w30p0_generationX.npz", 20)]

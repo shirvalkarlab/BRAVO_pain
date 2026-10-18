@@ -301,6 +301,146 @@ def chronic_pair_keys(rec, times, hemi, fallback_key):
     return [sched[i][1] for i in idx.tolist()]
 
 
+#: A chronic (10-minute) band-power reading at or above this is not a reading (the PI, 2026-10-18,
+#: item 6b). The device writes 4,294,967,295 (2**32 - 1) for an invalid power value
+#: (DEVICE_percept_rc.md, parsing trap 3); in the chronic log that code arrives AVERAGED into the
+#: 10-minute reading, so it reads about 71.6 million, which the 2**31 - 1 cut never caught. On
+#: RCS08 the 15 such readings run from 71,582,891 to 71,587,026, each 103 to 4,238 above
+#: (2**32 - 1) / 60 = 71,582,788.25 -- the code over 60 plus the rest of the average (the "60" is
+#: read off these values, not from a Medtronic document); the largest real reading is 36,718.
+CHRONIC_INVALID_LSB = (2 ** 32 - 1) / 60.0
+
+
+def chronic_band_tags(rec, times, hemi):
+    """The band (snapped Hz, or None) each chronic sample was sensed in: the recording's own
+    frequency schedule (the last change at or before the sample, else the first), else its stamped
+    `CenterFrequencyHz`, else the therapy snapshot's sensing band for the side -- the rule
+    `native_lsb_by_channel` files chronic samples by."""
+    times = np.asarray(times, dtype=float)
+    sched = []
+    sched_raw = rec.get("FreqScheduleHz")
+    if isinstance(sched_raw, (list, tuple)):
+        for item in sched_raw:
+            try:
+                ts, shz = float(item[0]), snap_freq(item[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if shz is not None:
+                sched.append((ts, shz))
+        sched.sort(key=lambda p: p[0])
+    if sched:
+        starts = np.asarray([c for c, _ in sched], dtype=float)
+        idx = np.searchsorted(starts, times, side="right") - 1
+        idx[idx < 0] = 0
+        return [sched[i][1] for i in idx.tolist()]
+    hz = snap_freq(rec.get("CenterFrequencyHz"))
+    if hz is None and hemi:
+        desc = rec.get("Descriptor")
+        therapy = desc.get("Therapy") if isinstance(desc, dict) else None
+        if isinstance(therapy, dict):
+            hz = snap_freq(sensing_center_hz(therapy.get("Left" if hemi == "LEFT" else "Right")))
+    return [hz] * times.size
+
+
+def _chronic_order_key(rec):
+    """Where a chronic recording sits when repeats are merged: by its content alone (first and last
+    sample time, sample count, side, then a digest of its samples and settings), never by the order
+    the exports arrived or the database returned them."""
+    import hashlib
+    t = np.asarray(rec.get("Time", []), dtype=float)
+    d = np.ascontiguousarray(np.asarray(rec.get("Data"), dtype=float))
+    h = hashlib.blake2b(digest_size=16)
+    h.update(np.ascontiguousarray(t).tobytes())
+    h.update(d.tobytes())
+    h.update(repr((rec.get("ChannelNames"), rec.get("FreqScheduleHz"), rec.get("ContactSchedule"),
+                   rec.get("CenterFrequencyHz"))).encode("utf8"))
+    return (float(t[0]) if t.size else float("inf"), float(t[-1]) if t.size else float("inf"),
+            int(t.size), str((rec.get("ChannelNames") or [""])[0]), h.hexdigest())
+
+
+def merge_chronic_repeats(chronic_recordings):
+    """The chronic (10-minute) log with every reading once (the PI, 2026-10-18, items 6a and 6b).
+
+    Each export carries the device's whole chronic log, so one reading is stored in every export
+    made while it was in the log (RCS08: 97,941 samples for 52,129 distinct side-and-time
+    readings; copies never differed in value). A reading is identified by its side, the contact
+    pair and band its own recording files it under (`chronic_pair_keys`, `chronic_band_tags`), and
+    its time; copies with identical values (band power and current) collapse to one. Copies that
+    differ in value are BOTH kept and counted (CLAUDE.md section 11: merged, never first copy
+    wins). Recordings are walked in an order set by their content (`_chronic_order_key`), so the
+    result -- which samples, and which recording holds each -- does not depend on the order the
+    exports arrived. Every recording is kept, emptied if all its readings were repeats, so the
+    settings it carries (its band and contact schedules) still reach their readers.
+
+    A band-power value at or above `CHRONIC_INVALID_LSB` is the device's invalid code averaged into
+    the reading: set to NaN, which every reader already leaves out; the current at that time is
+    kept. Exact zeros are left as they are.
+
+    Never changes its input: a recording that changes is a shallow copy with new arrays. Returns
+    ``(recordings, counts)``; ``counts`` holds ``repeats_removed``, ``conflicting_kept`` (copies
+    kept because their values differ), ``readings_under_two_labels`` (side-and-time readings still
+    filed under more than one contact pair or band, because two exports' own settings history
+    disagree) and ``invalid_code_values``.
+    """
+    recs = [r for r in (chronic_recordings or [])]
+    counts = {"repeats_removed": 0, "conflicting_kept": 0, "readings_under_two_labels": 0,
+              "invalid_code_values": 0}
+    usable = []
+    for i, r in enumerate(recs):
+        if not isinstance(r, dict) or "Time" not in r or "Data" not in r:
+            continue
+        t = np.asarray(r.get("Time"), dtype=float)
+        d = np.asarray(r.get("Data"), dtype=float)
+        if d.ndim != 2 or d.shape[0] != t.shape[0]:
+            continue
+        usable.append(i)
+    order = sorted(usable, key=lambda i: _chronic_order_key(recs[i]))
+    seen = {}                 # (hemi, pair, band, t) -> set of value rows already handed on
+    labels = {}               # (hemi, t) -> set of (pair, band) it is filed under
+    out = list(recs)
+    for i in order:
+        r = recs[i]
+        t = np.asarray(r.get("Time"), dtype=float)
+        d = np.asarray(r.get("Data"), dtype=float)
+        n = t.shape[0]
+        names = list(r.get("ChannelNames", []) or [])
+        cu = str(names[0]).upper() if names else ""
+        hemi = "LEFT" if "LEFT" in cu else ("RIGHT" if "RIGHT" in cu else "")
+        pairs = chronic_pair_keys(r, t, hemi, "SIDE_" + (hemi or "UNKNOWN"))
+        bands = chronic_band_tags(r, t, hemi)
+        keep = np.ones(n, dtype=bool)
+        for k in range(n):
+            key = (hemi, pairs[k], bands[k], float(t[k]))
+            val = tuple(d[k].tolist())
+            got = seen.get(key)
+            if got is None:
+                seen[key] = {val}
+            elif val in got:
+                keep[k] = False
+                counts["repeats_removed"] += 1
+            else:
+                got.add(val)
+                counts["conflicting_kept"] += 1
+            labels.setdefault((hemi, float(t[k])), set()).add((pairs[k], bands[k]))
+        invalid = keep & (d[:, 0] >= CHRONIC_INVALID_LSB) if n else np.zeros(0, dtype=bool)
+        counts["invalid_code_values"] += int(invalid.sum())
+        if keep.all() and not invalid.any():
+            continue
+        c = dict(r)
+        for k_, v in r.items():
+            if k_ == "ChannelNames" or not isinstance(v, (list, np.ndarray)) or len(v) != n:
+                continue
+            arr = np.asarray(v)
+            c[k_] = arr[keep] if isinstance(v, np.ndarray) else list(arr[keep])
+        if invalid.any():
+            nd = np.array(np.asarray(r["Data"], dtype=float)[keep], dtype=float)
+            nd[invalid[keep], 0] = np.nan
+            c["Data"] = nd
+        out[i] = c
+    counts["readings_under_two_labels"] = sum(1 for v in labels.values() if len(v) > 1)
+    return out, counts
+
+
 def native_lsb_by_channel(chronic_recordings, powerdomain_recordings):
     """The device's OWN sensed band-power series (Power-Domain streaming + Chronic Timeline),
     grouped by canonical channel, values UNCONVERTED -- `_native_lsb_by_channel_loop`'s answer,

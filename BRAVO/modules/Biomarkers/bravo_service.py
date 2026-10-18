@@ -47,6 +47,7 @@ from .routines import sheet_ratings
 from .routines import local_time
 from modules.DecodeCommon import data_start as _data_start
 from modules.DecodeCommon import parallel as _PAR
+from modules.DecodeCommon import representation as _repr
 from .routines import streaming_psd
 
 _log = logging.getLogger(__name__)
@@ -516,7 +517,28 @@ def _load_recordings_uncached(participant_uid, types):
     if not Recordings:
         return []
     loaded = _decoded_with_row_labels(participant_uid, Recordings)
-    return _trim_chronic_before(loaded, _data_start.data_start_s(participant_uid))
+    loaded = _trim_chronic_before(loaded, _data_start.data_start_s(participant_uid))
+    return _merge_chronic_repeats(loaded)
+
+
+def _merge_chronic_repeats(loaded):
+    """Every chronic (10-minute) reading once, and the averaged-in invalid code blanked (the PI,
+    2026-10-18, items 6a/6b; `DecodeCommon.representation.merge_chronic_repeats`). Each export
+    carries the device's whole chronic log, so before this every reader -- the sign-off threshold,
+    the stimulation series, the band-power timeline, the all-band scan's power source -- counted
+    one reading once per export that held it (RCS08: 97,941 samples for 52,129 readings). Other
+    recordings are returned as they are, in place."""
+    idx = [i for i, d in enumerate(loaded)
+           if isinstance(d, dict) and d.get("RecordingType") in CHRONIC_TYPES]
+    if not idx:
+        return loaded
+    merged, counts = _repr.merge_chronic_repeats([loaded[i] for i in idx])
+    out = list(loaded)
+    for i, d in zip(idx, merged):
+        out[i] = d
+    if counts["conflicting_kept"] or counts["readings_under_two_labels"]:
+        _log.info("Biomarkers: chronic log merged: %s", counts)
+    return out
 
 
 #: ==========================================================================================
@@ -879,6 +901,46 @@ def _event_psd_lsb_blocks(participant_uid, sensing_hz_by_channel=None, sensing_i
 _ENUM_TAIL_RE = re.compile(r"\.([A-Za-z_]+)$")
 
 
+def _psd_artifact_flagged(status):
+    """Whether the device flagged an artefact on this PSD (the PI, 2026-10-18, item 6c):
+    SQC_ARTIFACT_PRESENT (montage and electrode survey) or CT_ARTIFACT_PRESENT (signal check), with
+    or without the "ArtifactStatusDef." prefix. ARTIFACT_NOT_PRESENT, IMPEDANCE_FAILURE (not an
+    artefact flag, as in the Closed-Loop device rule D17, `D17_NON_ARTEFACT_STATUSES`) and a
+    missing status are not flags."""
+    tail = str(status or "").split(".")[-1].strip().upper()
+    return tail.endswith("_ARTIFACT_PRESENT")
+
+
+def _montage_psd_artifact_excluded(montage_recordings):
+    """{channel: n}: the montage, electrode-survey and signal-check PSDs `_montage_psd_lsb_blocks`
+    leaves out because the device flagged an artefact on them, per contact pair (item 6c)."""
+    out = {}
+    for r in (montage_recordings or []):
+        if not isinstance(r, dict):
+            continue
+        desc = r.get("Descriptor") or {}
+        check = desc.get("SignalCheck")
+        if isinstance(check, dict):
+            if _psd_artifact_flagged(check.get("ArtifactStatus")):
+                ch = _canon_channel(str(check.get("Channel") or "").split(".")[-1])
+                if ch:
+                    out[ch] = out.get(ch, 0) + 1
+            continue
+        keys = ("MedtronicPSD",) if r.get("RunUnknown") else ("MedtronicPSD", "SurveyPSD")
+        for k in keys:
+            for e in (desc.get(k) or []) if isinstance(desc.get(k), list) else []:
+                if not isinstance(e, dict) or not _psd_artifact_flagged(e.get("ArtifactStatus")):
+                    continue
+                mse = _ENUM_TAIL_RE.search(str(e.get("SensingElectrodes") or ""))
+                pair = _EVENT_SENSE_CONTACT.get(mse.group(1), mse.group(1)) if mse else ""
+                hemi = str(e.get("Hemisphere") or "")
+                h = "LEFT" if "Left" in hemi else ("RIGHT" if "Right" in hemi else "")
+                ch = _canon_channel(f"{pair}_{h}") if pair and h else None
+                if ch:
+                    out[ch] = out.get(ch, 0) + 1
+    return out
+
+
 def _montage_psd_lsb_blocks(participant_uid, montage_recordings=None):
     """Build PSD->LSB bridge input blocks from MONTAGE/SURVEY device-PSD snapshots.
 
@@ -896,6 +958,11 @@ def _montage_psd_lsb_blocks(participant_uid, montage_recordings=None):
     its canonical channel via SensingElectrodes (+ Hemisphere); ring pairs go through
     _EVENT_SENSE_CONTACT, segmented contacts fall to _canon_channel. The whole-recording
     StartTime is the window timestamp (the survey sweep is a near-instant snapshot).
+
+    A PSD the device flagged for an artefact (`_psd_artifact_flagged`) gives no block (the PI,
+    2026-10-18, item 6c): these blocks feed band choice only (the heat maps, the cells, the
+    Closed-Loop band answers); the PSD stays stored and drawn on the timeline with its flag, and
+    `_montage_psd_artifact_excluded` counts what was left out, per contact pair.
 
     Returns a list of {channel, t, freq, power, source} — the schema
     raw_lsb_spectrum_cache consumes for its PSD family. `source` is tagged
@@ -916,6 +983,8 @@ def _montage_psd_lsb_blocks(participant_uid, montage_recordings=None):
         check = desc.get("SignalCheck")
         if isinstance(check, dict):
             ch = _canon_channel(str(check.get("Channel") or "").split(".")[-1])
+            if _psd_artifact_flagged(check.get("ArtifactStatus")):
+                continue                     # the device flagged an artefact (item 6c)
             if ch and check.get("SignalFrequencies") is not None and check.get("SignalPsdValues") is not None:
                 blocks.append({"channel": ch, "t": float(t0), "freq": check["SignalFrequencies"],
                                "power": check["SignalPsdValues"], "source": MONTAGE_PSD_SOURCE,
@@ -930,6 +999,8 @@ def _montage_psd_lsb_blocks(participant_uid, montage_recordings=None):
         for e, origin in entries:
             if not isinstance(e, dict):
                 continue
+            if _psd_artifact_flagged(e.get("ArtifactStatus")):
+                continue                     # the device flagged an artefact (item 6c)
             # the montage and the survey spell the same fields differently (decision 446)
             freq = e.get("LFPFrequency") if e.get("LFPFrequency") is not None else e.get("LFPFrequencyinHertz")
             power = e.get("LFPMagnitude") if e.get("LFPMagnitude") is not None else e.get("LFPMagnitudeinMicroVoltPeak")
@@ -1316,7 +1387,10 @@ _RAW_LSB_SHARED_KIND = "raw_lsb_tiles"
 # date -- the implant date is in the key beside this.
 # v3 (2026-09-26): a survey or montage recording's 3 s pieces are labelled "Montage" instead of the
 # fallback "time-domain"; every value is unchanged, the saved copy rebuilds to carry the label.
-_RAW_LSB_RULE_VERSION = "v3_montage_pieces_labelled_montage_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+# v4 (2026-10-18, item 6c): a montage, survey or signal-check PSD the device flagged for an
+# artefact gives no PSD-derived window (`_psd_artifact_flagged`); the rows do not show it, so the
+# rule is here.
+_RAW_LSB_RULE_VERSION = "v4_montage_pieces_labelled_montage_tablet_clock_flagged_psds_out"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 #: ===========================================================================================
 #: THE STORE ITSELF NOW LIVES IN ONE PLACE: `modules/CacheStore/store.py`.
@@ -2123,6 +2197,17 @@ def _td_missing_version_for(max_missing_frac):
 
 _TD_MISSING_VERSION = _td_missing_version_for(streaming_psd.WELCH_MAX_MISSING_FRAC)
 
+# Version of the saturation rule on the 30 s Welch windows (the PI, 2026-10-18, item 6d): a channel
+# whose window holds a sample at the rail (`streaming_psd.WELCH_SATURATION_UV`) gives no spectrum.
+# Built from the limit, like `_TD_MISSING_VERSION`, and carried in every per-recording spectrum
+# file's name and the assembled matrix's key beside it, so no spectrum Welch'd before the rule
+# (or under another limit) is served.
+_TD_SATURATION_VERSION = "sat%guv" % float(streaming_psd.WELCH_SATURATION_UV)
+
+#: The rule part of a per-recording spectrum file's name after the Welch-window token: the
+#: channel-name rule, the missing-sample rule and the saturation rule.
+_PSD_ROWS_BARE = f"{_CHANNEL_CANON_VERSION}_{_TD_MISSING_VERSION}_{_TD_SATURATION_VERSION}"
+
 # The scale the assembled matrix's spectra are stored on. Folded into the matrix signature so an
 # entry assembled under one rule is never served under another: until 2026-09-19 every spectrum was
 # stored as decibels (`logX`); the PI's rule of that day (decision 202: log power enters no
@@ -2257,6 +2342,8 @@ def _welch_rows_into(rows, recs, source_label, _sp, pro_times=None, counts=None)
                     for kk in range(psd_k.shape[0]):
                         tk = float(kept_times[kk]); dk = float(used_k[kk])
                         for j, n in enumerate(keep_names):
+                            if not np.isfinite(psd_k[kk, j, :]).any():
+                                continue       # this channel's window reached the rail (item 6d)
                             rows.append({"channel": _canon_channel(n), "source": source_label,
                                          "t": tk, "freq": _sp.F_SET, "power": psd_k[kk, j, :],
                                          "dur": dk})
@@ -2296,6 +2383,8 @@ def _welch_rows_into(rows, recs, source_label, _sp, pro_times=None, counts=None)
         # downstream as mean +/- SD so the clinician knows the TD epoch length feeding each PSD.
         used_dur = float(min(_sp.WELCH_MAX_SECONDS, nsamp / fs)) if fs > 0 else float("nan")
         for j, n in enumerate(keep_names):
+            if not np.isfinite(psd[0, j, :]).any():
+                continue                       # this channel's window reached the rail (item 6d)
             # Store the CANONICAL channel so ring-named survey rows pool with the short-named TD/Stim
             # rows for the same physical bipolar pair (e.g. ZERO_AND_THREE_LEFT_RING -> ZERO_THREE_LEFT).
             rows.append({"channel": _canon_channel(n), "source": source_label,
@@ -2633,7 +2722,7 @@ def _sweep_recording_psd_siblings(path):
     (no `_p` part) is not touched: it is a different product, still read by the ingest's warm and
     the calibration panel. Best-effort, like every cache write here."""
     d, base = os.path.split(path)
-    marker = f"_{_TD_MISSING_VERSION}_p"
+    marker = f"_{_TD_MISSING_VERSION}_{_TD_SATURATION_VERSION}_p"
     if marker not in base:
         return []
     stem = base.split(marker, 1)[0] + marker
@@ -2672,7 +2761,7 @@ def _recording_psd_cache_path(rec_uid, rec_hash, pro_sig=""):
     # the first-window path too, which serves montage/survey/event recordings (pro_sig=""), so every
     # entry must invalidate when the rejection rule changes.
     return os.path.join(_psd_rows_cache_dir(),
-                        f"{rec_uid}_{h}_w{w}_{_CHANNEL_CANON_VERSION}_{_TD_MISSING_VERSION}{p}.npz")
+                        f"{rec_uid}_{h}_w{w}_{_PSD_ROWS_BARE}{p}.npz")
 
 
 #: Matches everything in a per-recording PSD file's name after the Welch-window token
@@ -2721,7 +2810,7 @@ def psd_rows_cache_generation_report():
         return {"total_files": 0, "total_bytes": 0, "current_generation": None,
                 "other_generations": [], "unparsed": {"files": 0, "bytes": 0}}
 
-    current_bare = f"{_CHANNEL_CANON_VERSION}_{_TD_MISSING_VERSION}"
+    current_bare = _PSD_ROWS_BARE
 
     total_files = 0
     total_bytes = 0
@@ -3103,6 +3192,8 @@ def _psd_matrix_signature_orm(participant_uid, pro_times=None):
     # Missing-aware TD Welch rejection is part of the matrix CONTENT (it decides which windows yield a
     # spectrum), and it runs in the first-window path too, so fold it in unconditionally.
     parts.append(f"td_missing:{_TD_MISSING_VERSION}")
+    # The saturation rule on the same windows (item 6d) likewise decides which yield a spectrum.
+    parts.append(f"td_saturation:{_TD_SATURATION_VERSION}")
     # The power scale of the stored spectra is part of the matrix CONTENT (decision 204).
     parts.append(f"power_scale:{_MATRIX_POWER_SCALE_VERSION}")
     # Every recording and patient-event time on the tablet's clock (2026-09-26): an event row's
@@ -4465,7 +4556,7 @@ _ACQ_TIMELINE_KIND = "acquisition_timeline"
 # v2 (decision 313): a chronic file spanning the implant date is dated from it, not from 2025-06-18.
 # v3 (item P-11, 2026-10-06): indefinite streaming adds modelled points at the band in force.
 # v4 (decision 461, 2026-10-06): each streaming run's own band; chronic samples under the pair in force.
-_ACQ_TIMELINE_RULE_VERSION = "v5_zero_runs_left_out"   # v5: decision 462  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+_ACQ_TIMELINE_RULE_VERSION = "v6_chronic_readings_once"   # v5: decision 462; v6: each chronic reading once, the averaged-in invalid code blanked (item 6a/6b, 2026-10-18)  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 
 def _acquisition_timeline_key(recording_set):
