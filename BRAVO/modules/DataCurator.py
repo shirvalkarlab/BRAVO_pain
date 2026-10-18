@@ -212,6 +212,23 @@ def NeuroPacePersystDatDecoder(source_file, person=None):
     person.save()
     return True
 
+def restamp_chronic_schedule(person, device):
+    """Rebuild the one chronic contact/band schedule of `device` (every device record sharing its
+    serial number, for this participant: one implant can be filed as several records, decision 444)
+    from all its exports' settings records and write it onto all its chronic recordings. Returns
+    the counts from `chronic_schedule.restamp_device_chronic`."""
+    from modules.MedtronicPercept import chronic_schedule
+    serial = getattr(device, "serial_number", None)
+    uids = list(models.DBSDevice.objects.filter(owner=person, serial_number=serial).values_list("uid", flat=True)) if serial else []
+    uids = sorted(set(uids) | {str(device.uid)})
+    sfs = list(models.SourceFile.objects.filter(owner=person, device__in=uids, type="MedtronicJSON"))
+    rows = list(models.Recording.objects.filter(source__in=sfs, type="MedtronicChronicBrainSense"))
+    by_source = {}
+    for r in rows:
+        by_source.setdefault(str(r.source_id), []).append(r)
+    return chronic_schedule.restamp_device_chronic(sfs, by_source)
+
+
 def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     """Decode one Percept export and store everything in it, ONE EXPORT AT A TIME (decision 439).
     Copies of the same item in different exports are merged, so what is stored must not depend on
@@ -552,8 +569,19 @@ def _MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     source_file.metadata["Device"] = device.uid
     source_file.device = device.uid
     source_file.metadata["SessionEndTimestamp"] = DatabaseEntries["SessionOverview"]["SessionEndTimestamp"]
+    source_file.metadata["SensingSettingsRecord"] = DatabaseEntries.get("SensingSettingsRecord") or {}
     source_file.owner = person
     source_file.date = DatabaseEntries["SessionOverview"]["SessionTimestamp"]
+    source_file.save()
+
+    # ONE chronic contact/band schedule per device, from every export's settings record, written
+    # onto every chronic recording of the device (decision 487; MedtronicPercept/chronic_schedule.py).
+    # A failure is written on this export's row, never swallowed (decision 441).
+    try:
+        source_file.metadata["ChronicScheduleRestamp"] = restamp_chronic_schedule(person, device)
+    except Exception as e:
+        source_file.metadata["ChronicScheduleRestamp"] = {"failed": repr(e)[:500]}
+        print(f"[ingest] chronic schedule restamp failed for {source_file.uid}: {e!r}", flush=True)
     source_file.save()
 
     person.last_update = models.current_time()

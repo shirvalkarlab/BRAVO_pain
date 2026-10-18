@@ -23,6 +23,7 @@ import json
 
 from modules import Database
 from modules.MedtronicPercept import BrainSenseEvent, BrainSenseStream, BrainSenseSurvey, IndefiniteStream, ChronicBrainSense, Therapy, Percept
+from modules.MedtronicPercept import chronic_schedule
 from modules.HelperFunctions import current_time, get_or_none
 
 key = os.environ.get('DATASERVER_ENCRYPTION')
@@ -552,5 +553,10 @@ def decodeMedtronicJSON(JSON):
         # NOTHING SWALLOWED (decision 441): the extractors that failed and the band-power
         # recordings set aside, written onto the export's row by the ingest.
         "ProcessFailure": [str(f) for f in (Data.get("ProcessFailure") or [])],
+        # this export's settings record: session start and end settings, GroupHistory entries and
+        # event-log switches of active group. The ingest builds ONE chronic contact/band schedule
+        # per device from every export's record and writes it onto every chronic recording
+        # (`chronic_schedule.py`, decision 487); the per-export schedules above are replaced by it.
+        "SensingSettingsRecord": chronic_schedule.settings_record(JSON),
         "StreamingPowerSetAside": list(Data.get("StreamingPowerSetAside") or []),
     }

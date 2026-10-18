@@ -130,12 +130,26 @@ def test_the_invalid_code_averaged_into_a_reading_is_blanked_and_its_current_kep
     assert sorted(ys) == [120.0, 36718.0], ys
 
 
-def test_exact_zero_readings_are_left_as_they_are():
-    """Zero is not the invalid code; decision 462 covers whole streaming runs, not this log."""
+def test_exact_zero_readings_are_not_readings_and_their_current_is_kept():
+    """The PI, 2026-10-18: "Don't count the 50 chronic log readings of exactly zero" (decision 462
+    extended to the chronic log). Blanked like the invalid code, counted apart from it; the
+    current at that time is real; the band-power series no longer carries them."""
     t = T0 + 600.0 * np.arange(3)
-    out, counts = R.merge_chronic_repeats([_rec(t, [0.0, 0.0, 5.0], [1, 1, 1], center=23.44)])
-    assert list(np.asarray(out[0]["Data"])[:, 0]) == [0.0, 0.0, 5.0]
-    assert counts["invalid_code_values"] == 0
+    out, counts = R.merge_chronic_repeats([_rec(t, [0.0, 0.0, 5.0], [1, 1.5, 2], center=23.44)])
+    d = np.asarray(out[0]["Data"])
+    assert np.isnan(d[0, 0]) and np.isnan(d[1, 0]) and d[2, 0] == 5.0, d
+    assert list(d[:, 1]) == [1.0, 1.5, 2.0]
+    assert counts["zero_values"] == 2 and counts["invalid_code_values"] == 0, counts
+    ys = [y for v in R.native_lsb_by_channel(out, []).values() for y in v["y"]]
+    assert ys == [5.0], ys
+
+
+def test_a_zero_repeated_in_two_exports_is_counted_once():
+    t = T0 + 600.0 * np.arange(2)
+    a = _rec(t, [0.0, 7.0], [1, 1], center=23.44)
+    b = _rec(t, [0.0, 7.0], [1, 1], center=23.44)
+    out, counts = R.merge_chronic_repeats([a, b])
+    assert counts["zero_values"] == 1 and counts["repeats_removed"] == 2, counts
 
 
 def test_inputs_are_not_changed_and_a_second_merge_changes_nothing():

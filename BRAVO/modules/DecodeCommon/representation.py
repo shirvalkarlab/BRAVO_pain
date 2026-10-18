@@ -374,17 +374,19 @@ def merge_chronic_repeats(chronic_recordings):
 
     A band-power value at or above `CHRONIC_INVALID_LSB` is the device's invalid code averaged into
     the reading: set to NaN, which every reader already leaves out; the current at that time is
-    kept. Exact zeros are left as they are.
+    kept. A band-power value of exactly 0 is not a reading either (the PI, 2026-10-18: "Don't
+    count the 50 chronic log readings of exactly zero"; decision 462 extended to this log): NaN as
+    well, current kept, counted in ``zero_values``. Both stay stored.
 
     Never changes its input: a recording that changes is a shallow copy with new arrays. Returns
     ``(recordings, counts)``; ``counts`` holds ``repeats_removed``, ``conflicting_kept`` (copies
     kept because their values differ), ``readings_under_two_labels`` (side-and-time readings still
     filed under more than one contact pair or band, because two exports' own settings history
-    disagree) and ``invalid_code_values``.
+    disagree), ``invalid_code_values`` and ``zero_values``.
     """
     recs = [r for r in (chronic_recordings or [])]
     counts = {"repeats_removed": 0, "conflicting_kept": 0, "readings_under_two_labels": 0,
-              "invalid_code_values": 0}
+              "invalid_code_values": 0, "zero_values": 0}
     usable = []
     for i, r in enumerate(recs):
         if not isinstance(r, dict) or "Time" not in r or "Data" not in r:
@@ -424,6 +426,9 @@ def merge_chronic_repeats(chronic_recordings):
             labels.setdefault((hemi, float(t[k])), set()).add((pairs[k], bands[k]))
         invalid = keep & (d[:, 0] >= CHRONIC_INVALID_LSB) if n else np.zeros(0, dtype=bool)
         counts["invalid_code_values"] += int(invalid.sum())
+        zero = keep & (d[:, 0] == 0) if n else np.zeros(0, dtype=bool)
+        counts["zero_values"] += int(zero.sum())
+        invalid = invalid | zero
         if keep.all() and not invalid.any():
             continue
         c = dict(r)
