@@ -1,5 +1,6 @@
 """The band's mixed model carries its exact rotation test beside its own p (decision 477; the PI,
-2026-10-16: "show both"). Needs R (lme4): runs in the container suite.
+2026-10-16: "show both"), and since decision 482 the verdict reads the rotation p. Needs R (lme4):
+runs in the container suite.
 
 Run:  python3 modules/Biomarkers/tests/test_band_rotation_in_model.py   (in the container)
 """
@@ -47,15 +48,86 @@ def test_reported_not_raised_when_it_cannot_run():
     assert "no time" in A._band_rotation_test(df, t_bad)["reason"]
 
 
-def test_every_fitted_answer_carries_it_and_the_verdict_does_not_read_it():
+def test_every_fitted_answer_carries_it():
     src = inspect.getsource(A.band_mixedmodel_inference)
     assert src.count('"rotation": rotation') == 3                # separated, not converged, fitted
-    import ast
+
+
+# ---- THE VERDICT READS THE ROTATION p (decision 482; the PI, 2026-10-18: "do all", change 4) ----
+# Until 482 the verdict read the mixed model's own p, which read <= 0.05 for 8.3 % of unrelated
+# made-up bands at RCS08's persistence against 4.95 % for the rotation test (decision 477).
+
+def _bs():
+    _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    for p in (_root, os.path.join(_root, "modules")):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "BRAVO.settings")
+    import django
+    django.setup()
+    try:
+        from modules.Biomarkers import bravo_service as bs
+    except ImportError:                                        # pragma: no cover - host spelling
+        from Biomarkers import bravo_service as bs
+    return bs
+
+
+def _fit(p, rotation):
+    return {"available": True, "separation": False, "singular": False, "converged": True,
+            "p": p, "rotation": rotation}
+
+
+_STABLE = {"available": True, "stim_stable": True, "stability_verdict": "equivalent"}
+
+
+def test_model_p_small_rotation_p_large_is_a_candidate():
+    bs = _bs()
+    assert bs.VERDICT_P_SOURCE == "rotation"
+    v = bs._band_decide_verdict(_fit(0.01, {"available": True, "p": 0.2, "n_orders": 141}), _STABLE)
+    assert v == "candidate (rotation test n.s.)", v
+
+
+def test_model_p_large_rotation_p_small_is_validated():
+    bs = _bs()
+    v = bs._band_decide_verdict(_fit(0.2, {"available": True, "p": 0.01, "n_orders": 141}), _STABLE)
+    assert v == "VALIDATED (stim-stable)", v
+
+
+def test_a_missing_rotation_test_never_validates():
+    bs = _bs()
+    for rot in (None, {}, {"available": False, "reason": "every sample is in one week"},
+                {"available": True, "p": None}, {"available": True, "p": float("nan")}):
+        v = bs._band_decide_verdict(_fit(0.001, rot), _STABLE)
+        assert v == "candidate (rotation test unavailable)", (rot, v)
+        assert "VALIDATED" not in v
+
+
+def test_the_fit_failures_still_come_first():
+    bs = _bs()
+    rot = {"available": True, "p": 0.001}
+    assert bs._band_decide_verdict(dict(_fit(0.001, rot), separation=True), _STABLE) == "failed (separation)"
+    assert bs._band_decide_verdict(dict(_fit(0.001, rot), converged=False), _STABLE) == "failed (did not converge)"
+
+
+def test_the_neutral_setting_gives_the_old_answer():
+    bs = _bs()
+    keep = bs.VERDICT_P_SOURCE
+    try:
+        bs.VERDICT_P_SOURCE = "glmer"
+        assert bs._band_decide_verdict(_fit(0.01, {"available": True, "p": 0.2}), _STABLE) == "VALIDATED (stim-stable)"
+        assert bs._band_decide_verdict(_fit(0.2, {"available": True, "p": 0.01}), _STABLE) == "candidate (mixed-effects n.s.)"
+        assert bs._band_decide_verdict(_fit(0.001, None), _STABLE) == "VALIDATED (stim-stable)"
+    finally:
+        bs.VERDICT_P_SOURCE = keep
+
+
+def test_the_sign_off_gate_names_the_rotation_test():
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bravo_service.py")
-    src_bs = open(path).read()
-    fn = next(n for n in ast.walk(ast.parse(src_bs))
-              if isinstance(n, ast.FunctionDef) and n.name == "_band_decide_verdict")
-    assert "rotation" not in ast.get_source_segment(src_bs, fn)
+    src = open(path).read()
+    # the gate's label names the p that decides; the model's name only under the neutral setting
+    assert 'else "Band validated (rotation test)")' in src
+    assert src.count('"Band validated (mixed-effects)"') == 1
+    assert 'if VERDICT_P_SOURCE == "glmer"\n' in src.split('"Band validated (mixed-effects)"')[1][:40]
 
 
 if __name__ == "__main__":

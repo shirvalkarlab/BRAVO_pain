@@ -5382,13 +5382,25 @@ PAIN_METRICS = [
 ]
 
 
-def _band_decide_verdict(g, h):
-    """Badge text from the glmer + stim-stability results.
+#: Which p decides the band's verdict (decision 482; the PI, 2026-10-18: "do all", change 4).
+#: "rotation": the exact rotation test of the same mixed model (decision 477), which read <= 0.05
+#: for 4.95 % of unrelated made-up bands at RCS08's persistence where the model's own p read 8.3 %.
+#: "glmer" is the neutral setting: the model's own p, as before 482.
+VERDICT_P_SOURCE = "rotation"
 
-    Uses the RAW glmer p (a single-click validate is one test; the band x channel q lives on the
-    scan side). alpha=0.05 mirrors the scan FDR; bands that survived FDR on the scan arrive here
-    with q<0.05, so this is a per-band reaffirmation in the mixed-effects frame, with the
-    stim-stability flag deciding which validated label shows.
+
+def _band_decide_verdict(g, h):
+    """Badge text from the mixed-model fit, its rotation test and the stim-stability results.
+
+    The p that decides is the exact rotation test's (`g["rotation"]["p"]`, decision 482): the pain
+    ratings, with their weeks, slid along band power in time by every possible number of samples.
+    The model's own p reads too small on this record (decision 477) and is shown beside it, never
+    deciding. A rotation test that did not run gives "candidate (rotation test unavailable)" and
+    never a pass (decision 9: a check that cannot run abstains, it does not pass). The fit's own
+    failures (separation, singular, not converged, too few) still come first: the rotation test
+    scores the same model. alpha 0.05, one band, one test; the stim-stability answer decides which
+    validated label shows. `VERDICT_P_SOURCE = "glmer"` puts the model's p back (the neutral
+    setting).
     """
     if not g.get("available"):
         return "unavailable"
@@ -5400,9 +5412,18 @@ def _band_decide_verdict(g, h):
         return "failed (did not converge)"
     if g.get("too_few_in_smaller_group"):
         return f"failed (too few {g.get('smaller_group') or 'low'}-pain samples)"
-    p = g.get("p")
-    if p is None or not isinstance(p, (int, float)) or p >= 0.05:
-        return "candidate (mixed-effects n.s.)"
+    if VERDICT_P_SOURCE == "glmer":
+        p = g.get("p")
+        if p is None or not isinstance(p, (int, float)) or p >= 0.05:
+            return "candidate (mixed-effects n.s.)"
+    else:
+        rot = g.get("rotation") or {}
+        p = rot.get("p") if rot.get("available") else None
+        if (p is None or isinstance(p, bool) or not isinstance(p, (int, float))
+                or not np.isfinite(p)):
+            return "candidate (rotation test unavailable)"
+        if p >= 0.05:
+            return "candidate (rotation test n.s.)"
     if h.get("available") and h.get("stim_stable") is False:
         return "VALIDATED (stim-dependent)"
     # THE THREE-WAY VERDICT DECIDES THE PARENTHETICAL, not the legacy boolean.
@@ -7913,7 +7934,8 @@ def _deployment_summary_build(request_data):
                 "short_label": DEPLOYMENT_GATE_SHORT_LABELS[key], "evaluated": bool(evaluated)}
 
     gates = []
-    gates.append(_gate("validated", "Band validated (mixed-effects)",
+    gates.append(_gate("validated", ("Band validated (mixed-effects)" if VERDICT_P_SOURCE == "glmer"
+                                     else "Band validated (rotation test)"),
                        "pass" if (verdict and "VALIDATED" in str(verdict)) else "fail",
                        verdict, necessary=True))
     # The gate checks the band EDGES against the device's adaptive range, not merely the centre --

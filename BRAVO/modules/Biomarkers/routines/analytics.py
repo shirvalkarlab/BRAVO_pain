@@ -4809,7 +4809,8 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
     formula = "pain_high ~ band_power + (1|cluster)" if n_clusters > 1 else "pain_high ~ band_power"
     # BESIDE THE MODEL'S OWN p, THE EXACT ROTATION TEST OF THE SAME MODEL (decision 477; the PI,
     # 2026-10-16: "show both"). On RCS08's layout the model's own p read <= 0.05 for 8.3 % of
-    # unrelated bands, the rotation test's for 4.95 %. Nothing below reads it: the verdict stays on p.
+    # unrelated bands, the rotation test's for 4.95 %. Since decision 482 the band's verdict reads
+    # this p, not the model's (`bravo_service._band_decide_verdict`, `VERDICT_P_SOURCE`).
     rotation = _band_rotation_test(df, _times_epoch_s(times)[m])
     try:
         # The fit + the pandas<->R conversion it triggers must run with rpy2's converter active in

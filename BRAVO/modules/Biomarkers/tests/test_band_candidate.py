@@ -87,12 +87,14 @@ def test_decide_verdict_branches():
     assert bs._band_decide_verdict(
         {"available": True, "separation": False, "singular": False, "too_few_in_smaller_group": True,
          "smaller_group": "low", "p": 0.15}, {}) == "failed (too few low-pain samples)"
-    # n.s. p
+    # n.s. p: the rotation test's p decides since decision 482
     assert bs._band_decide_verdict(
-        {"available": True, "separation": False, "singular": False, "p": 0.2}, {}
-    ) == "candidate (mixed-effects n.s.)"
+        {"available": True, "separation": False, "singular": False, "p": 0.2,
+         "rotation": {"available": True, "p": 0.2}}, {}
+    ) == "candidate (rotation test n.s.)"
     # validated stim-stable vs stim-dependent
-    g = {"available": True, "separation": False, "singular": False, "p": 0.001}
+    g = {"available": True, "separation": False, "singular": False, "p": 0.001,
+         "rotation": {"available": True, "p": 0.001}}
     assert bs._band_decide_verdict(g, {"available": True, "stim_stable": True}) == "VALIDATED (stim-stable)"
     assert bs._band_decide_verdict(g, {"available": True, "stim_stable": False}) == "VALIDATED (stim-dependent)"
 
