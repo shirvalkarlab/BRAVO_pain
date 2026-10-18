@@ -5736,7 +5736,12 @@ def _validate_band_core(request_data):
     # Mixed-effects logistic (definitive per-candidate inference).
     glmer = analytics.band_mixedmodel_inference(
         pooled, channel, center_hz, band_width_hz=band_width_hz,
-        strategy=label_strategy, low_pct=low_pct, high_pct=high_pct)
+        strategy=label_strategy, low_pct=low_pct, high_pct=high_pct,
+        # the same rotation test with the band's own side's current as a covariate, a warning
+        # only (decision 484); never read by the verdict or a gate
+        **({"current_removed": {"stream": stim_current.settings_stream_for(participant_uid),
+                                "hemisphere": stim_current.hemisphere_of_channel(channel)}}
+           if sweep_settings.CURRENT_REMOVED_CHECK else {}))
     # Stim-state heterogeneity (band x stim-era LRT), on the stim series the setup already built.
     hetero = analytics.band_stim_stability(
         pooled, channel, center_hz, stim_series=stim, band_width_hz=band_width_hz,
@@ -8204,6 +8209,12 @@ def _deployment_summary_build(request_data):
             f"({thr_estimate['note']}). Sense this band "
             "on the device to confirm before committing it as an adaptive threshold.")
 
+    # THE CURRENT-REMOVED CHECK, A WARNING ONLY (decision 484; the PI, 2026-10-18: "warning
+    # only"): listed with the caveats when it warns; no gate, verdict or ready_to_program reads it.
+    _crc = g.get("rotation_current_removed") if sweep_settings.CURRENT_REMOVED_CHECK else None
+    if _crc is not None and _crc.get("warning"):
+        caveats.append("Current-removed check (warning only): " + str(_crc.get("words")))
+
     def _ff(x):
         try:
             return float(x) if x is not None and np.isfinite(x) else None
@@ -8276,6 +8287,8 @@ def _deployment_summary_build(request_data):
             "operating_point": roc.get("operating_point") if roc.get("available") else None,
             # the area under the curve above, read again with the current taken out (answer 6)
             "auc_current_removed": auc_current_removed,
+            # the rotation test with the current as a covariate, a warning only (decision 484)
+            **({"current_removed_check": _crc} if sweep_settings.CURRENT_REMOVED_CHECK else {}),
         },
         "power": power,
         # Forward / out-of-sample validation (audit C2): the held-out AUC + CI shown beside the
@@ -8589,6 +8602,8 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                 from_clinic_sheet=from_clinic_sheet,
                 covariate=cov_values,
                 covariate_label=(stim_current.CURRENT_LABEL if cov_values is not None else None),
+                # the current-removed check on every band row, a warning only (decision 484)
+                **({"current_removed_check": True} if sweep_settings.CURRENT_REMOVED_CHECK else {}),
                 power_feature=("band power in the device's own least-significant-bit units, "
                                "reached from the 250 samples-per-second voltage trace by the "
                                "validated transform, or from the device's own spectrum where no "

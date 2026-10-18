@@ -375,12 +375,19 @@ def test_the_grid_rule_and_kind_have_one_home():
 
 
 def test_the_stim_optimizers_grid_is_in_a_keep_group():
-    """The tag the Stim Optimizer asks for (an empty request) names a group; plain and
-    current-adjusted grids are separate groups, since each is read on its own."""
+    """The tag the Stim Optimizer asks for (an empty request) names a group. Since decision 484
+    every grid carries the current-removed values, so there is one group per score; under the
+    neutral setting (no check) plain and current-adjusted grids are separate groups again."""
     tag = ss.sweep_settings_tag_from_request({})
     assert ss.default_settings_keep_group(tag) == "default_settings:nrs"
-    assert ss.default_settings_keep_group(tag, adjust_for_stim_current=True) == (
-        "default_settings:nrs:current_adjusted")
+    assert ss.default_settings_keep_group(tag, adjust_for_stim_current=True) == "default_settings:nrs"
+    keep = ss.CURRENT_REMOVED_CHECK
+    try:
+        ss.CURRENT_REMOVED_CHECK = False
+        assert ss.default_settings_keep_group(tag, adjust_for_stim_current=True) == (
+            "default_settings:nrs:current_adjusted")
+    finally:
+        ss.CURRENT_REMOVED_CHECK = keep
 
 
 def test_every_pain_score_at_the_defaults_has_its_own_group():

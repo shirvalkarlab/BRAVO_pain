@@ -4686,7 +4686,8 @@ def read_band_pain_auc_from_export(auc_table, *, channel, center_hz, tol_hz=0.01
 def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
                               strategy="tertile", low_pct=33.3333, high_pct=66.6667,
                               pain_cutoff=None, cluster="era",
-                              exclude_first_weeks=VALIDATION_EXCLUDE_FIRST_WEEKS):
+                              exclude_first_weeks=VALIDATION_EXCLUDE_FIRST_WEEKS,
+                              current_removed=None):
     """Cluster-robust inference for ONE selected (channel, band) via a logistic MIXED-EFFECTS model
     (pymer4 -> R lme4 glmer): pain_high ~ band_power + (1 | session_cluster).
 
@@ -4694,6 +4695,10 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
     effect of band power (coef, OR, z, p) with the within-cluster correlation modelled explicitly —
     the honest 'is this band real?' number for clustered repeated measures. Degrades to
     {available: False, reason: ...} when pymer4/R is unavailable, so the sweep still works without R.
+
+    ``current_removed`` (decision 484): ``{"stream": settings stream or None, "hemisphere": side}``
+    adds ``rotation_current_removed``, the same rotation test with the current in force at each
+    sample as a covariate (`_band_rotation_current_removed`), a warning only. None leaves it out.
     """
     try:
         from pymer4.models import Lmer
@@ -4812,6 +4817,13 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
     # unrelated bands, the rotation test's for 4.95 %. Since decision 482 the band's verdict reads
     # this p, not the model's (`bravo_service._band_decide_verdict`, `VERDICT_P_SOURCE`).
     rotation = _band_rotation_test(df, _times_epoch_s(times)[m])
+    extra_cr = {}
+    if current_removed is not None:
+        from . import stim_current as _sc
+        _t_m = _times_epoch_s(times)[m]
+        _cur = _sc.current_in_force_at(_t_m, current_removed.get("stream"),
+                                       hemisphere=current_removed.get("hemisphere"))
+        extra_cr = {"rotation_current_removed": _band_rotation_current_removed(df, _t_m, _cur)}
     try:
         # The fit + the pandas<->R conversion it triggers must run with rpy2's converter active in
         # THIS thread (see _rpy2_converter_ctx). pymer4 populates .coefs/.ranef_var as plain pandas
@@ -4861,7 +4873,7 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
                 "one_block_per_report": _one_block_summary(weeks=_one_week),
                 "coef": _f(est), "odds_ratio": None,
                 "or_lo": None, "or_hi": None,
-                "z": None, "p": None, "rotation": rotation,
+                "z": None, "p": None, "rotation": rotation, **extra_cr,
                 "separation": True, "singular": False,
                 "note": ("Complete/quasi-complete separation — band power separates high/low "
                          "pain perfectly at this window, so the logistic estimate is degenerate. "
@@ -4889,7 +4901,7 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
                 "n_weeks_before_exclusion": n_weeks_before,
                 "one_block_per_report": _one_block_summary(weeks=_one_week),
                 "coef": None, "odds_ratio": None, "or_lo": None, "or_hi": None,
-                "z": None, "p": None, "rotation": rotation, "separation": False, "singular": singular,
+                "z": None, "p": None, "rotation": rotation, **extra_cr, "separation": False, "singular": singular,
                 "converged": False, "fit_warnings": fit_warnings,
                 "note": ("The mixed-effects fit did not converge (lme4's words are in "
                          "fit_warnings), so it gives no odds ratio, interval or p."),
@@ -4908,7 +4920,7 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
             "coef": _f(est), "odds_ratio": _f(odds),
             "or_lo": _f(or_lo) if or_lo is not None else None,
             "or_hi": _f(or_hi) if or_hi is not None else None,
-            "z": _f(z), "p": _f(p), "rotation": rotation, "separation": False, "singular": singular,
+            "z": _f(z), "p": _f(p), "rotation": rotation, **extra_cr, "separation": False, "singular": singular,
             "converged": True, "fit_warnings": fit_warnings,
             "note": "Random intercept per weekly era; band power z-scored. Exploratory inference.",
         }
@@ -4944,6 +4956,56 @@ def _band_rotation_test(df, t_rows):
                         "power in time by every possible number of samples")}
     except Exception as e:                                         # noqa: BLE001
         return {"available": False, "reason": f"rotation test failed: {e}"}
+
+
+def _band_rotation_current_removed(df, t_rows, current):
+    """The band's rotation test (`_band_rotation_test`) with the current in force at each sample as
+    a covariate of the model without band power: lme4 fits pain on the current with the week as a
+    random intercept, band power is residualized on the same (decision 477's Smith residualizing),
+    and every rotation is scored. A WARNING ONLY (decision 484): ``warning`` when p > 0.05 or it
+    could not be assessed (no current: decision 9); a constant current holds, saying so. Samples
+    with no known current are left out and counted. Never raises."""
+    cur = np.asarray(current, float)
+    base = {"available": False, "status": "not assessed", "warning": True, "p": None,
+            "n_orders": 0, "n_samples": int(len(df)), "n_samples_without_current": 0,
+            "n_distinct_currents": 0, "what": CURRENT_REMOVED_CHECK_WHAT}
+    try:
+        has = np.isfinite(cur)
+        base["n_samples_without_current"] = int((~has).sum())
+        if not has.any():
+            return dict(base, words="not assessed: no sample carries a current on this band's side")
+        nd = int(np.unique(np.round(cur[has], 6)).size)
+        base["n_distinct_currents"] = nd
+        if nd < 2:
+            return dict(base, available=True, status="constant current", warning=False,
+                        words="the current was constant on every sample, so there is nothing to "
+                              "take out; the plain answer stands")
+        try:
+            from modules.Biomarkers.routines import mixed_model_shuffle as MS
+        except ImportError:                                        # pragma: no cover - host spelling
+            from Biomarkers.routines import mixed_model_shuffle as MS
+        d = df[has]
+        cl = d["cluster"].to_numpy()
+        if len(np.unique(cl)) < 2:
+            return dict(base, words="not assessed: every sample with a current is in one week")
+        # one named column beyond the intercept lme4 adds itself (`null_fit_lme4` pairs names with
+        # columns, so the intercept is not passed)
+        null, converged, warns = MS.null_fit_lme4(d["pain_high"].to_numpy(float), cl,
+                                                  X0=cur[has][:, None], names=["current"])
+        if null.X0.shape[1] != 2:
+            return dict(base, words="not assessed: the current did not enter the model")
+        if not converged:
+            return dict(base, fit_warnings=warns,
+                        words="not assessed: the model of pain on the current did not converge")
+        out = MS.shuffle_test(null, d["band_power"].to_numpy(float), order=np.asarray(t_rows)[has])
+        p = _f(out["p"])
+        return dict(base, available=True, status="warning" if p > 0.05 else "holds",
+                    warning=bool(p > 0.05), p=p, z=_f(out["z"]), n_orders=int(out["n_orders"]),
+                    p_floor=_f(out["p_floor"]),
+                    words=("holds with the current taken out" if p <= 0.05 else
+                           f"warning: with the current taken out, the rotation p is {p:.3g}"))
+    except Exception as e:                                         # noqa: BLE001
+        return dict(base, words=f"not assessed: it raised {e!r}")
 
 
 #: Declared equivalence margin for the stim-stability verdict, on the log-odds-ratio scale.
@@ -6303,7 +6365,8 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
                                metric_key=None, metric_label=None,
                                tile_seconds=None, requested_seconds=None, chunk_exclusion=None,
                                from_device_spectrum=None, from_clinic_sheet=None,
-                               covariate=None, covariate_label=None):
+                               covariate=None, covariate_label=None,
+                               current_removed_check=False):
     """The whole grid: for every band centre and every length of signal averaged into one
     measurement, how well that band's power tracks the chosen pain score.
 
@@ -6334,6 +6397,11 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     descriptively"). A covariate that is absent, constant, or usable on too few reports is refused
     with a reason under ``covariate_adjustment`` rather than published as an adjustment that found
     nothing -- those are different answers.
+
+    ``current_removed_check`` (decision 484) adds, on every band row's chosen cell, the link with
+    the covariate taken out as a straight line, its interval and a rotation p
+    (`_current_removed_check`), as a WARNING only: it moves no answer and draws on its own random
+    numbers, so no other number moves either.
     """
     rng = np.random.default_rng(int(seed))
     tile_s = float(sweep_tile_seconds() if tile_seconds is None else tile_seconds)
@@ -6493,7 +6561,10 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         band_width_hz=band_width_hz, n_boot=int(n_boot), rng=rng,
         power_feature=power_feature, channel=channel,
         corr_adjusted=corr_adj, corr_adjusted_n=corr_adj_n,
-        covariate_label=cov_block.get("label"))
+        covariate_label=cov_block.get("label"),
+        current_check=({"cov": (np.full(P, np.nan) if cov is None or cov.size != P else cov),
+                        "seed": int(seed), "n_boot": int(n_boot)}
+                       if current_removed_check else None))
     best_auc_rows = _best_rows_auc(
         auc, auc_pos, auc_neg, X, y_bin, centers, kept_req, delivered, tiles, auc_null,
         band_width_hz=band_width_hz, n_boot=int(n_boot), rng=rng,
@@ -7069,7 +7140,8 @@ def _interval_block_length(y_used):
 
 def _best_rows_correlation(corr, corr_n, X, pain, centers, requested, delivered, tiles, null,
                            *, band_width_hz, n_boot, rng, power_feature, channel,
-                           corr_adjusted=None, corr_adjusted_n=None, covariate_label=None):
+                           corr_adjusted=None, corr_adjusted_n=None, covariate_label=None,
+                           current_check=None):
     """One row per band centre: the strongest correlation any length of signal produced for that
     band, which length produced it, and how to read it.
 
@@ -7192,8 +7264,102 @@ def _best_rows_correlation(corr, corr_n, X, pain, centers, requested, delivered,
                                  observed=r_obs, shuffled_p95=shuf_p95),
                 r_obs, boot_lo, boot_hi, float(delivered[t]), int(T), shuf_p95),
         })
+        if current_check is not None:
+            # A WARNING ONLY (decision 484): its own generator, one per band centre, so neither
+            # the shared one nor any number above moves.
+            row["current_removed_check"] = _current_removed_check(
+                x, y, current_check["cov"], r_plain=r_obs, n_boot=current_check["n_boot"],
+                rng=np.random.default_rng([int(current_check["seed"]), 484, int(c)]))
         rows.append(row)
     return rows
+
+
+#: The words beside the current-removed check, wherever it is printed (decision 484).
+CURRENT_REMOVED_CHECK_WHAT = (
+    "the link to pain with the stimulation current on the band's own side, read at each report's "
+    "own recording, taken out of both band power and pain as a straight line; a warning only, it "
+    "changes no answer")
+
+
+def _current_removed_check(x, y, cov, *, r_plain, n_boot, rng):
+    """The chosen cell's link to pain with the current taken out, as a warning (decision 484).
+
+    The straight-line fit on the current (decisions 241, 242) is taken out of both band power and
+    pain (`stats_utils._residualize`) on the rows with all three; the partial r is the correlation
+    of what is left. Its interval: whole blocks of consecutive reports resampled, the block length
+    the headline interval uses (decision 183), the partial r recomputed in each resample. Its p: the
+    pain remainder slid along the band-power remainder by every other number of reports (the exact
+    rotation test, decision 315), two-sided, smallest p 1 / n. ``status``: "holds" (interval wholly
+    on the plain r's side of zero and p <= 0.05), "warning" (either fails), "constant current" (one
+    current on every row: nothing to take out, so the plain answer stands, no warning), "not
+    assessed" (no current, or fewer than 8 rows: a warning, decision 9)."""
+    from .stats_utils import _residualize
+    blank = {"available": False, "status": "not assessed", "warning": True, "partial_r": None,
+             "partial_r_low": None, "partial_r_high": None, "p_rotation": None, "n_rotations": 0,
+             "n_pain_reports": 0, "n_distinct_currents": 0, "what": CURRENT_REMOVED_CHECK_WHAT}
+    x = np.asarray(x, float); y = np.asarray(y, float)
+    c = np.asarray(cov, float) if cov is not None else np.full(x.size, np.nan)
+    m = np.isfinite(x) & np.isfinite(y) & np.isfinite(c)
+    n = int(m.sum())
+    blank["n_pain_reports"] = n
+    if n == 0:
+        return dict(blank, words="not assessed: no report carries a current on this band's side")
+    nd = int(np.unique(np.round(c[m], 6)).size)
+    blank["n_distinct_currents"] = nd
+    if nd < 2:
+        return dict(blank, available=True, status="constant current", warning=False,
+                    words="the current was constant on every report, so there is nothing to take "
+                          "out; the plain answer stands")
+    if n < 8:
+        return dict(blank, words=f"not assessed: {n} reports carry a current, fewer than 8")
+    xm, ym, cm = x[m], y[m], c[m]
+    xr, yr = _residualize(xm, cm), _residualize(ym, cm)
+
+    def _r(a, b):
+        a = a - a.mean(); b = b - b.mean()
+        d = np.sqrt((a * a).sum() * (b * b).sum())
+        return float((a * b).sum() / d) if d > 0 else np.nan
+    r0 = _r(xr, yr)
+    if not np.isfinite(r0):
+        return dict(blank, words="not assessed: nothing of band power or pain is left once the "
+                                 "current is taken out")
+    # rotation null, exact: every other shift once
+    from .stats_utils import rotations
+    R = rotations(n, n - 1, rng)
+    Yr = yr[R]
+    Yc = Yr - Yr.mean(axis=1, keepdims=True)
+    xc = xr - xr.mean()
+    rk = (Yc @ xc) / np.sqrt((Yc * Yc).sum(axis=1) * float((xc * xc).sum()))
+    p = float((int(np.sum(np.abs(rk) >= abs(r0))) + 1) / (R.shape[0] + 1))
+    # interval: block resampling of whole reports; partial r from the three pairwise correlations
+    # of each resample (the same number as residualizing within it on a straight line)
+    block = _interval_block_length(ym)
+    picks = block_bootstrap_picks(n, block, int(n_boot), rng)
+    def _rows_r(A, B):
+        A = A - A.mean(axis=1, keepdims=True); B = B - B.mean(axis=1, keepdims=True)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return (A * B).sum(axis=1) / np.sqrt((A * A).sum(axis=1) * (B * B).sum(axis=1))
+    xb, yb, cb = xm[picks], ym[picks], cm[picks]
+    rxy, rxc, ryc = _rows_r(xb, yb), _rows_r(xb, cb), _rows_r(yb, cb)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        pr = (rxy - rxc * ryc) / np.sqrt((1 - rxc ** 2) * (1 - ryc ** 2))
+    lo, hi, n_res = _percentile_interval(pr)
+    same_side = (lo is not None and hi is not None
+                 and ((r_plain > 0 and lo > 0) or (r_plain < 0 and hi < 0)))
+    holds = bool(same_side and p <= 0.05)
+    why = []
+    if not same_side:
+        why.append("its interval reaches the other side of zero" if lo is not None
+                   else "no interval could be formed")
+    if p > 0.05:
+        why.append(f"its rotation p is {p:.3g}")
+    return {"available": True, "status": "holds" if holds else "warning", "warning": not holds,
+            "partial_r": r0, "partial_r_low": lo, "partial_r_high": hi,
+            "interval_block_length": int(block), "n_resamples_used": int(n_res),
+            "p_rotation": p, "n_rotations": int(R.shape[0]), "n_pain_reports": n,
+            "n_distinct_currents": nd, "what": CURRENT_REMOVED_CHECK_WHAT,
+            "words": ("holds with the current taken out" if holds else
+                      "warning: with the current taken out, " + " and ".join(why))}
 
 
 def _best_rows_auc(auc, auc_pos, auc_neg, X, y_bin, centers, requested, delivered, tiles, null,

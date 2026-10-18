@@ -18,6 +18,7 @@ of `bravo_service._resolve_biomarker_metric` (the composite blend that function 
 the report table and does not change which KEY the grid is stored under).
 """
 from __future__ import annotations
+import os as _os
 
 # THE STORED CROSS-SETTING-STABILITY GRID: its kind name and the rule its answers are computed
 # under. ONE HOME since 2026-09-26: `bravo_service` (the writer) and the Closed-Loop page's reader
@@ -46,7 +47,7 @@ STABILITY_GRID_RULE_VERSION = "v8_own_side_current"  # 2026-10-18: each band's s
 # source; v22: effective count on each cell; v21: outlier rule on raw power; v20: cell p-values,
 # decision 188.
 GRID_KIND = "biomarker_band_sweep"
-GRID_RULE_VERSION = "v28_current_at_recording"  # 2026-10-18: the current taken out read at each report's own pieces of recording (decision 483); v27 2026-10-03: device PSD snapshots judged by 7 MAD above their own median, not the TD chunks' (decision 411); v26: single 3 s chunks dropped only when more than 7 MAD above their contact's own median, every contact of every participant (decision 410); v25 3 MAD both sides; v24 exact rotation null, tablet clock  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+GRID_RULE_VERSION = "v29_current_removed_check"  # 2026-10-18: the current-removed check on every band row, a warning only, and the adjusted grid always built (decision 484); v28 2026-10-18: the current taken out read at each report's own pieces of recording (decision 483); v27 2026-10-03: device PSD snapshots judged by 7 MAD above their own median, not the TD chunks' (decision 411); v26: single 3 s chunks dropped only when more than 7 MAD above their contact's own median, every contact of every participant (decision 410); v25 3 MAD both sides; v24 exact rotation null, tablet clock  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 # The two raw inputs every grid names in its chain, in the order its key carries them: the saved
 # 3-second tiles (`bravo_service._RAW_LSB_SHARED_KIND`) and the pain-report snapshot.
 GRID_INPUT_KINDS = ("raw_lsb_tiles", "redcap_reports")
@@ -276,6 +277,14 @@ def sweep_metric_param(request_data):
     return metric
 
 
+#: The current-removed check (decision 484; the PI, 2026-10-18: "warning only"): the grid with the
+#: current taken out is always built, and every band row's chosen cell, and the sign-off card's
+#: band, carry the check as a warning. False is the neutral setting: built only on request, no check.
+#: Read from the environment too (`BRAVO_CURRENT_REMOVED_CHECK=0`), so a process the Closed-Loop
+#: report starts fresh takes the same setting as the one that started it.
+CURRENT_REMOVED_CHECK = _os.environ.get("BRAVO_CURRENT_REMOVED_CHECK", "1").strip() != "0"
+
+
 def adjust_for_stim_current_param(request_data):
     """Whether the grid also reports each cell's correlation with the stimulation current taken out.
 
@@ -283,6 +292,8 @@ def adjust_for_stim_current_param(request_data):
     switch, the plain grid the default). The adjusted value never selects a band or moves a verdict;
     it is reported beside the plain one, descriptively.
     """
+    if CURRENT_REMOVED_CHECK:
+        return True                     # always built since decision 484 (a warning, never a gate)
     return str((request_data or {}).get("AdjustForStimCurrent", "")).lower() in ("1", "true", "yes", "on")
 
 
@@ -339,7 +350,10 @@ def default_settings_keep_group(tag, adjust_for_stim_current=False):
     if tag != sweep_settings_tag_from_request({"SweepMetric": tag["sweep_metric"]}):
         return None
     group = f"default_settings:{tag['sweep_metric']}"
-    return group + (":current_adjusted" if adjust_for_stim_current else "")
+    # Since decision 484 every grid carries the current-removed values, so there is no separate
+    # plain grid to keep apart from it: one group per pain score.
+    return group + (":current_adjusted" if adjust_for_stim_current and not CURRENT_REMOVED_CHECK
+                    else "")
 
 
 def metric_label(key):
