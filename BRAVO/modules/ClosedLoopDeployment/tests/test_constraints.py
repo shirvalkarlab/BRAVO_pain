@@ -157,10 +157,11 @@ def test_every_rule_carries_its_citation_and_a_plain_english_reason():
 
 
 def test_severity_counts_are_the_documented_split():
-    """21 blocking, 30 advisory, 2 unknown. The two unknowns are the point of the split.
+    """20 blocking, 31 advisory, 2 unknown. The two unknowns are the point of the split.
 
-    Was 20 blocking until 2026-10-18, when D53 (folded multiples of the stimulation rate) joined
-    as blocking at the PI's ruling.
+    D53 (folded multiples of the stimulation rate) joined on 2026-10-18 as blocking (decision 481)
+    and was made advisory the same day (decision 485, the PI: "a warning but not a blocker"), so the
+    blocking count is back at 20 and the advisory count one up.
 
     Was 20/29/2 until 2026-09-22, when D52 joined as blocking (decision 247): a configuration whose
     sensing pair the stimulating contacts do not allow cannot be programmed, so it is a refusal,
@@ -173,7 +174,7 @@ def test_severity_counts_are_the_documented_split():
     check that the change was deliberate and recorded.
     """
     counts = constraints.severity_counts()
-    assert counts == {"blocking": 21, "advisory": 30, "unknown": 2}   # D27 advisory (decision 478)
+    assert counts == {"blocking": 20, "advisory": 31, "unknown": 2}   # D27 (478), D53 (485) advisory
     unknown_ids = {rule.rule_id for rule in constraints.RULES if rule.severity == "unknown"}
     assert unknown_ids == {"D04", "D31"}
 
@@ -414,8 +415,8 @@ def test_empty_inputs_produce_no_passes_at_all():
     """
     report = check({}, {})
     assert report.failures == []
-    assert len(report.unknowns) == 23          # 21 blocking + 2 unknown (D09, D27 advisory; D52, D53 blocking)
-    assert len(report.advisories) == 30        # 28 + D09 (softened 2026-09-04) + D27 (record only, decision 478)
+    assert len(report.unknowns) == 22          # 20 blocking + 2 unknown (D09, D27, D53 advisory; D52 blocking)
+    assert len(report.advisories) == 31        # 28 + D09 (softened 2026-09-04) + D27 (record only, 478) + D53 (warning only, 485)
     assert report.checked == 53
     assert report.eligible is False
 

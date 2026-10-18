@@ -1,15 +1,17 @@
-"""Device rule D53: a band refuses when a folded multiple of the stimulation rate lands inside it or
-within 5 Hz of its edges (the PI, 2026-10-18, "do all", item 7; until then decision 220 had it warn
-only).
+"""Device rule D53: a band is WARNED about when a folded multiple of the stimulation rate lands
+inside it or within 5 Hz of its edges. A warning only, never a refusal (the PI, 2026-10-18, decision
+485: "make it a warning but not a blocker or not a refusal outright"); it refused for a few hours
+that day (decision 481, item 7) and warned before that (decision 220).
 
 At 250 samples a second a whole multiple of the stimulation rate above 125 Hz reappears at a lower
 frequency (`Biomarkers.routines.analytics.harmonic_landings_hz`, multiples 1 to 8, the order every
 existing caller uses). At 55 Hz the multiples land at 25, 30, 55, 60, 80, 85, 110 and 115 Hz.
 
-Pinned on values: the 55 Hz refusal names the rate, the landing and the multiple, and lists rates
-that would clear it; 125 Hz (whose multiples fold to 0 or 125 Hz) clears every adaptive band; the
-5 Hz margin is inclusive at its edge; the landings come from the existing function, not a copy; a
-missing rate is not determinable (it blocks), and a sensing-only candidate is not checked.
+Pinned on values: the 55 Hz warning names the rate, the landing and the multiple, and lists rates
+that would clear it, and never blocks; 125 Hz (whose multiples fold to 0 or 125 Hz) clears every
+adaptive band; the 5 Hz margin is inclusive at its edge; the landings come from the existing
+function, not a copy; a missing rate is not determinable (reported, never blocking), and a
+sensing-only candidate is not checked; `BRAVO_D53_REFUSES=1` puts the refusal back.
 """
 from __future__ import annotations
 
@@ -30,16 +32,38 @@ def _cand(rate, centre, **kw):
     return passing_candidate(rate_hz=rate, center_hz=centre, band_width_hz=5.0, **kw)
 
 
-def test_d53_refuses_a_band_at_55_hz_where_its_multiples_land_and_names_the_landing():
+def test_d53_warns_about_a_band_at_55_hz_where_its_multiples_land_and_names_the_landing():
     c = _cand(55.0, 26.5)                                   # band 24-29 Hz; zone 19-34 Hz
     rep = constraints.check_eligibility(c, resolved_participant())
-    rows = [r for r in rep.failures if r["rule_id"] == "D53"]
-    assert rows, "a landing at 25 Hz inside a 24-29 Hz band must refuse"
+    rows = [r for r in rep.advisories if r["rule_id"] == "D53" and r["kind"] == "advisory_failed"]
+    assert rows, "a landing at 25 Hz inside a 24-29 Hz band must warn"
     obs = rows[0]["observed"]
     assert "55 Hz" in obs and "25 Hz" in obs and "30 Hz" in obs
     assert "multiple 5" in obs and "multiple 4" in obs
     assert rows[0]["resolved_by"] == "configuration"
-    assert rep.eligible is False
+
+
+def test_d53_never_blocks_a_band_it_warns_about():
+    c = _cand(55.0, 26.5)
+    rep = constraints.check_eligibility(c, resolved_participant())
+    assert "D53" not in {r["rule_id"] for r in rep.failures + rep.unknowns}
+    clear = constraints.check_eligibility(_cand(125.0, 26.5), resolved_participant())
+    # eligibility is what it is at a clearing rate: D53 no longer decides it
+    assert rep.eligible == clear.eligible
+    assert constraints.RULES_BY_ID["D53"].severity == "advisory"
+    assert constraints.FOLDED_RATE_REFUSES is False
+
+
+def test_d53_the_neutral_setting_puts_the_refusal_back():
+    import os, subprocess, sys
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    code = ("from ClosedLoopDeployment import constraints as c\n"
+            "from ClosedLoopDeployment.tests.test_constraints import passing_candidate, resolved_participant\n"
+            "rep = c.check_eligibility(passing_candidate(rate_hz=55.0, center_hz=26.5, band_width_hz=5.0), resolved_participant())\n"
+            "print(c.RULES_BY_ID['D53'].severity, 'D53' in {r['rule_id'] for r in rep.failures}, rep.eligible)")
+    out = subprocess.run([sys.executable, "-c", code], cwd=here, capture_output=True, text=True,
+                         env=dict(os.environ, BRAVO_D53_REFUSES="1", PYTHONPATH=here))
+    assert out.stdout.split() == ["blocking", "True", "False"], (out.stdout, out.stderr[-2000:])
 
 
 def test_d53_landings_are_the_existing_functions_not_a_copy(monkeypatch):
@@ -84,12 +108,13 @@ def test_d53_lists_the_nearest_rates_that_clear_the_band_and_each_one_does():
     assert clear == nearest
 
 
-def test_d53_a_missing_rate_is_not_determinable_and_blocks():
+def test_d53_a_missing_rate_is_not_determinable_and_is_reported_not_blocking():
     c = _cand(55.0, 26.5)
     c["rate_hz"] = None
     assert constraints._p_d53(c, resolved_participant()) is None
     rep = constraints.check_eligibility(c, resolved_participant())
-    assert "D53" in {r["rule_id"] for r in rep.unknowns}
+    assert "D53" not in {r["rule_id"] for r in rep.unknowns}
+    assert ("D53", "advisory_not_determinable") in {(r["rule_id"], r["kind"]) for r in rep.advisories}
 
 
 def test_d53_does_not_check_a_sensing_only_candidate():
@@ -109,7 +134,7 @@ def test_d53_says_which_clearing_rates_the_device_has_run_in_a_brainsense_group_
     assert "50 Hz (run" not in obs
 
 
-def test_d53_at_55_hz_allows_the_adaptive_centres_10_5_to_16_5_hz_and_refuses_17_5_to_27_5():
+def test_d53_at_55_hz_clears_the_adaptive_centres_10_5_to_16_5_hz_and_warns_at_17_5_to_27_5():
     allowed = [c for c in np.arange(10.5, 28.0, 1.0)
                if constraints._p_d53(_cand(55.0, float(c)), resolved_participant())]
     assert allowed == [10.5, 11.5, 12.5, 13.5, 14.5, 15.5, 16.5]

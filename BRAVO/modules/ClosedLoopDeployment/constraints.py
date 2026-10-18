@@ -1246,13 +1246,20 @@ def _p_d52(candidate, participant):
 # ------------------------------------------------------------------------------------------------
 # D53: no folded multiple of the stimulation rate in or near the band (the PI, 2026-10-18)
 # ------------------------------------------------------------------------------------------------
-#: How close to a band edge a folded multiple may land before the band refuses (the PI's 5 Hz).
+#: D53 WARNS, IT DOES NOT REFUSE (the PI, 2026-10-18, decision 485: "Make that device rule D53,
+#: the stimulation multiples, make it a warning but not a blocker or not a refusal outright").
+#: Its severity is "advisory": a landing raises a warning with the same words (the rate, each
+#: landing and multiple, the nearest clearing rates) and never blocks eligibility. True (env
+#: `BRAVO_D53_REFUSES=1`) is the neutral setting: the refusal of decision 481.
+import os as _os
+FOLDED_RATE_REFUSES = _os.environ.get("BRAVO_D53_REFUSES", "0").strip() == "1"
+#: How close to a band edge a folded multiple may land before the band warns (the PI's 5 Hz).
 FOLDED_RATE_MARGIN_HZ = 5.0
 #: The rates the refusal suggests are searched on this grid inside the general envelope. OURS, not
 #: the device's: no Medtronic document prints the rate step, and every rate this device has run
 #: (55, 60, 110, 125, 130, 145, 165 Hz) is a whole multiple of 5 Hz.
 FOLDED_RATE_STEP_HZ = 5.0
-#: How many clearing rates the refusal names, nearest first.
+#: How many clearing rates the warning names, nearest first.
 FOLDED_RATE_CLEARING_SHOWN = 4
 
 
@@ -2735,20 +2742,21 @@ RULES = (
         title="No folded multiple of the stimulation rate in or near the band",
         source="BRAVO rule (the PI, 2026-10-18); sampling rate from D13",
         page="A610 sampling 250 Hz (D13); landing arithmetic analytics.harmonic_landings_hz",
-        severity="blocking",
+        severity=("blocking" if FOLDED_RATE_REFUSES else "advisory"),
         short_label="Clear of stimulation multiples",
         human_text=(
             "The device samples at 250 Hz, so a whole multiple of the stimulation rate above 125 Hz "
             "reappears at a lower frequency; at 55 Hz the multiples land at 25, 30, 55, 60, 80, 85, "
             "110 and 115 Hz (multiples 1 to 8). A band that carries a folded multiple of the "
             "stimulation rate moves with the current for a reason that is not the brain's, so a "
-            "band refuses when any multiple lands inside it or within 5 Hz of its edges, at the "
-            "rate in force or the rate proposed on the page's stimulation program. A different "
-            "rate whose multiples all land at least 5 Hz from the band clears it; the refusal "
-            "lists the nearest such rates (on a 5 Hz step, inside the device's 2 to 250 Hz "
-            "envelope, which is necessary and not sufficient: D31 still decides whether a "
-            "BrainSense group accepts the rate). Until 2026-10-18 this was a warning only "
-            "(decision 220); the PI made it a refusal for the Closed-Loop check."
+            "band is warned about when any multiple lands inside it or within 5 Hz of its edges, "
+            "at the rate in force or the rate proposed on the page's stimulation program. A "
+            "different rate whose multiples all land at least 5 Hz from the band clears it; the "
+            "warning lists the nearest such rates (on a 5 Hz step, inside the device's 2 to 250 "
+            "Hz envelope, which is necessary and not sufficient: D31 still decides whether a "
+            "BrainSense group accepts the rate). A warning only, never a refusal (the PI, "
+            "2026-10-18, decision 485); for a few hours that day it refused (decision 481), and "
+            "before that it warned (decision 220)."
         ),
         predicate=_p_d53,
     ),
@@ -3037,6 +3045,12 @@ def check_eligibility(candidate, participant, rules=None) -> types.EligibilityRe
                     rule, "advisory_not_determinable",
                     f"{rule.title}: could not be determined from the inputs given, so it is "
                     f"reported rather than resolved. {rule.human_text}", observed))
+            elif rule.rule_id in _RECORD_VALUE_ON_PASS and observed:
+                # an advisory whose pass a reader must see (D53 since decision 485), as below
+                report.advisories.append(_entry(
+                    rule, "recorded_value",
+                    f"{rule.title}: satisfied, and the value is recorded here because the meaning "
+                    f"of the rest of this report depends on it.", observed))
             continue
 
         # Blocking and unknown rules from here down. Both can disqualify; they differ in what a
