@@ -1644,6 +1644,7 @@ def extractPowerDomainStreamingData(JSON, sourceData=dict()):
     if "BrainSenseLfp" in JSON.keys():
         key = "BrainSenseLfp"
         Data["StreamingPower"] = _shallowCopyStreamList(JSON[key])
+        _repeats_aside = []
         for Stream in Data["StreamingPower"]:
             Stream["Power"] = np.ndarray((len(Stream["LfpData"]), 2))
             Stream["Stimulation"] = np.ndarray((len(Stream["LfpData"]), 2))
@@ -1662,8 +1663,24 @@ def extractPowerDomainStreamingData(JSON, sourceData=dict()):
                 Stream["Ticks"][PackageID] = Stream["LfpData"][PackageID]["TicksInMs"]
             
             if len(Stream["Sequences"]) > 4:
-                while True:
-                    if np.all(Stream["Sequences"][:2] == Stream["Sequences"][2:4]):
+                # The first two readings are dropped as repeats only when their sequence numbers AND
+                # ticks repeat the next two (CLAUDE.md section 11; decision 491): sequence numbers alone
+                # used to decide, which would drop real readings after a counter restart. When the
+                # values differ too, the pair is still dropped (kept, its ticks would run backwards and
+                # the whole stream would be set aside below), but its values are recorded on the
+                # export's row in `StreamingPowerSetAside`, so nothing is lost without a record.
+                while len(Stream["Sequences"]) >= 4:
+                    if (np.array_equal(Stream["Sequences"][:2], Stream["Sequences"][2:4])
+                            and np.array_equal(Stream["Ticks"][:2], Stream["Ticks"][2:4])):
+                        if not (np.array_equal(Stream["Power"][:2], Stream["Power"][2:4])
+                                and np.array_equal(Stream["Stimulation"][:2], Stream["Stimulation"][2:4])):
+                            _repeats_aside.append({
+                                "FirstPacketDateTime": Stream["FirstPacketDateTime"], "Channel": Stream.get("Channel"),
+                                "reason": "first two readings repeat the next two's sequence numbers and ticks "
+                                          "with other values; dropped",
+                                "Ticks": Stream["Ticks"][:2].flatten().tolist(),
+                                "Power": Stream["Power"][:2].tolist(),
+                                "Stimulation": Stream["Stimulation"][:2].tolist()})
                         Stream["Power"] = Stream["Power"][2:,:]
                         Stream["Stimulation"] = Stream["Stimulation"][2:,:]
                         Stream["Sequences"] = Stream["Sequences"][2:]
@@ -1709,7 +1726,7 @@ def extractPowerDomainStreamingData(JSON, sourceData=dict()):
             else:
                 _kept.append(_stream)
         Data["StreamingPower"] = _kept
-        Data["StreamingPowerSetAside"] = _aside
+        Data["StreamingPowerSetAside"] = _aside + _repeats_aside
         # ONLY THE DEVICE'S OWN READINGS ARE STORED (the PI, 2026-10-18; decision 480 (e)). Until
         # then a block with a gap was rebuilt on an even grid by straight-line interpolation of the
         # power AND the current, and a grid point within one spacing of a real reading was marked
