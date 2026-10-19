@@ -421,6 +421,7 @@ def _concat_chronic(chronic, mad_k=None):
         chronic = list(chronic)
         for i, c in zip(_ci, _merged):
             chronic[i] = c
+        chronic.extend(_merged[len(_ci):])     # readings moved to their signal's lead (decision 488)
     times_list, datas_list, src_list, freq_list = [], [], [], []
     for c in chronic:
         t = np.asarray(c["Time"], dtype=float)

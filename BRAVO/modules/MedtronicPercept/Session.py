@@ -374,6 +374,10 @@ def brainSenseStreamRecordings(Data, fix_breaking=False):
 
 
 def decodeMedtronicJSON(JSON):
+    # The settings record is read BEFORE the decode: `Percept.processTherapySettings` deletes each
+    # sensing entry's `ChannelSignalResult` from the export in place, and that field names the lead
+    # each entry's signal comes from (decision 488; read after the decode, no record carried it).
+    _settings_record = chronic_schedule.settings_record(JSON)
     Data = get_or_none(Percept.extractPerceptJSON)(JSON)
     if not Data:
         raise Exception("Medtronic Percept Content Extraction Error")
@@ -557,6 +561,6 @@ def decodeMedtronicJSON(JSON):
         # event-log switches of active group. The ingest builds ONE chronic contact/band schedule
         # per device from every export's record and writes it onto every chronic recording
         # (`chronic_schedule.py`, decision 487); the per-export schedules above are replaced by it.
-        "SensingSettingsRecord": chronic_schedule.settings_record(JSON),
+        "SensingSettingsRecord": _settings_record,
         "StreamingPowerSetAside": list(Data.get("StreamingPowerSetAside") or []),
     }

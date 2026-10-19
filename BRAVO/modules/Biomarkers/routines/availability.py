@@ -310,14 +310,24 @@ def stim_series(chronic_recordings, hemisphere=None):
     absolute Time array (the same packets that carry the 10-min LFP power). Concatenate across
     chronic recordings, sort by time, drop non-finite. Returns {"t": [epoch_s...], "y": [mA...]}.
     Falls back to empty when no chronic recordings carry an amplitude column.
+
+    EACH LEAD'S CURRENT STAYS ITS OWN (the PI's ruling; decision 488). When the chronic merge files
+    a copy of one lead's signal under that lead (`DecodeCommon.representation.merge_chronic_repeats`),
+    the lead whose log held the copy keeps its own current: it is read from the kept reading's
+    ``OtherLeadCurrentMilliAmps`` (the lead opposite the recording's), and a recording moved to its
+    signal's lead (``MovedFromLead``) gives its current to the lead whose log held it. So every
+    lead's series, and the pooled one, holds the same currents as before the merge.
     """
     ts, ys = [], []
     for r in chronic_recordings or []:
         if not isinstance(r, dict):
             continue
-        if hemisphere is not None and not any(
-                str(n).startswith(f"{hemisphere}Hemisphere") for n in (r.get("ChannelNames") or [])):
-            continue
+        names = [str(n) for n in (r.get("ChannelNames") or [])]
+        named = "Left" if any(n.startswith("LeftHemisphere") for n in names) else (
+            "Right" if any(n.startswith("RightHemisphere") for n in names) else None)
+        moved = str(r.get("MovedFromLead") or "").capitalize() or None
+        own = moved or named                         # the lead whose current Data[:, 1] is
+        other = {"Left": "Right", "Right": "Left"}.get(named) if named else None
         tarr = r.get("Time")
         data = r.get("Data")
         if tarr is None or data is None:
@@ -326,10 +336,16 @@ def stim_series(chronic_recordings, hemisphere=None):
         data = np.asarray(data, dtype=float)
         if data.ndim != 2 or data.shape[1] < 2 or len(tarr) != data.shape[0]:
             continue
-        amp = data[:, 1]
-        finite = np.isfinite(amp) & np.isfinite(tarr) & (tarr >= 1e9)
-        ts.extend(tarr[finite].tolist())
-        ys.extend(amp[finite].tolist())
+        parts = [(own, data[:, 1])]
+        olc = r.get("OtherLeadCurrentMilliAmps")
+        if olc is not None and other is not None and len(olc) == len(tarr):
+            parts.append((other, np.asarray(olc, dtype=float)))
+        for lead, amp in parts:
+            if hemisphere is not None and lead != hemisphere:
+                continue
+            finite = np.isfinite(amp) & np.isfinite(tarr) & (tarr >= 1e9)
+            ts.extend(tarr[finite].tolist())
+            ys.extend(amp[finite].tolist())
     order = np.argsort(ts) if ts else []
     return {"t": [ts[i] for i in order], "y": [ys[i] for i in order]}
 

@@ -536,6 +536,8 @@ def _merge_chronic_repeats(loaded):
     out = list(loaded)
     for i, d in zip(idx, merged):
         out[i] = d
+    # readings moved to the lead their signal came from (decision 488), in recordings of their own
+    out.extend(merged[len(idx):])
     if counts["conflicting_kept"] or counts["readings_under_two_labels"]:
         _log.info("Biomarkers: chronic log merged: %s", counts)
     return out
@@ -647,12 +649,15 @@ def _decoded_with_row_labels(participant_uid, recs):
         chz = None
         fsched = None
         csched = None
+        lsched = None
         md = getattr(rec, "metadata", None)
         if isinstance(md, dict):
             chz = md.get("CenterFrequencyHz")
             fsched = md.get("FreqScheduleHz")
             csched = md.get("ContactSchedule")
-        if chz is not None or fsched is not None or csched is not None:
+            # the lead each chronic reading's signal came from (decision 488; chronic_schedule.py)
+            lsched = md.get("SignalLeadSchedule")
+        if chz is not None or fsched is not None or csched is not None or lsched is not None:
             for d in (data if isinstance(data, list) else [data]):
                 if isinstance(d, dict):
                     if chz is not None:
@@ -661,6 +666,8 @@ def _decoded_with_row_labels(participant_uid, recs):
                         d.setdefault("FreqScheduleHz", fsched)
                     if csched is not None:
                         d.setdefault("ContactSchedule", csched)
+                    if lsched is not None:
+                        d.setdefault("SignalLeadSchedule", lsched)
         # Stamp the AUTHORITATIVE DB recording type onto every decoded dict. The .bdat payload
         # carries no type/Source field (BrainSenseTimeDomain and IndefiniteStream decode to the
         # IDENTICAL key set), so the only reliable BrainSense-vs-Indefinite discriminator is the
@@ -1587,6 +1594,8 @@ def _raw_lsb_recording_identity_uncached(participant_uid):
         elif isinstance(md, dict):
             extra = "%r|%r|%r" % (md.get("CenterFrequencyHz"), md.get("FreqScheduleHz"),
                                   md.get("ContactSchedule"))
+            if md.get("SignalLeadSchedule") is not None:      # decision 488; absent: key as before
+                extra += "|%r" % (md.get("SignalLeadSchedule"),)
         else:
             extra = ""
         parts.append("%s~%s~%s~%s" % (getattr(r, "uid", ""), getattr(r, "hashed", "") or "",

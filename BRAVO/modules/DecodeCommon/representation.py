@@ -354,8 +354,68 @@ def _chronic_order_key(rec):
     h.update(d.tobytes())
     h.update(repr((rec.get("ChannelNames"), rec.get("FreqScheduleHz"), rec.get("ContactSchedule"),
                    rec.get("CenterFrequencyHz"))).encode("utf8"))
+    if rec.get("SignalLeadSchedule") is not None:
+        h.update(repr(rec.get("SignalLeadSchedule")).encode("utf8"))
     return (float(t[0]) if t.size else float("inf"), float(t[-1]) if t.size else float("inf"),
             int(t.size), str((rec.get("ChannelNames") or [""])[0]), h.hexdigest())
+
+
+def chronic_signal_leads(rec, times, hemi):
+    """The lead ("LEFT"/"RIGHT") each chronic sample's signal came from (decision 488): the
+    recording's `SignalLeadSchedule` entry in force at the sample's time (the last at or before it,
+    else the first), written by the one schedule from the device settings
+    (`MedtronicPercept/chronic_schedule.py`); `hemi`, the lead whose log holds the sample, when the
+    recording has none."""
+    times = np.asarray(times, dtype=float)
+    sched = []
+    for item in (rec.get("SignalLeadSchedule") or []) if isinstance(rec, dict) else []:
+        try:
+            ts, lead = float(item[0]), str(item[1]).upper()
+        except (TypeError, ValueError, IndexError):
+            continue
+        if lead in ("LEFT", "RIGHT"):
+            sched.append((ts, lead))
+    if not sched or hemi not in ("LEFT", "RIGHT"):
+        return [hemi] * times.size
+    sched.sort(key=lambda p: p[0])
+    starts = np.asarray([t for t, _ in sched], dtype=float)
+    idx = np.searchsorted(starts, times, side="right") - 1
+    idx[idx < 0] = 0
+    return [sched[i][1] for i in idx.tolist()]
+
+
+def _pair_on_lead(pair_key, lead):
+    """A contact-pair key ("ONE_THREE_RIGHT", or "SIDE_RIGHT") named on another lead."""
+    return pair_key.rsplit("_", 1)[0] + "_" + lead
+
+
+def _same_power(a, b):
+    return a == b or (a != a and b != b)
+
+
+def _chronic_rows(r, keep, counts):
+    """One chronic recording with only the rows in `keep`, the invalid code and exact zeros blanked
+    (band power NaN, current kept) and counted. `r` itself when nothing changes."""
+    d = np.asarray(r.get("Data"), dtype=float)
+    n = keep.shape[0]
+    invalid = keep & (d[:, 0] >= CHRONIC_INVALID_LSB) if n else np.zeros(0, dtype=bool)
+    counts["invalid_code_values"] += int(invalid.sum())
+    zero = keep & (d[:, 0] == 0) if n else np.zeros(0, dtype=bool)
+    counts["zero_values"] += int(zero.sum())
+    invalid = invalid | zero
+    if keep.all() and not invalid.any():
+        return r
+    c = dict(r)
+    for k_, v in r.items():
+        if k_ == "ChannelNames" or not isinstance(v, (list, np.ndarray)) or len(v) != n:
+            continue
+        arr = np.asarray(v)
+        c[k_] = arr[keep] if isinstance(v, np.ndarray) else list(arr[keep])
+    if invalid.any():
+        nd = np.array(d[keep], dtype=float)
+        nd[invalid[keep], 0] = np.nan
+        c["Data"] = nd
+    return c
 
 
 def merge_chronic_repeats(chronic_recordings):
@@ -383,10 +443,25 @@ def merge_chronic_repeats(chronic_recordings):
     kept because their values differ), ``readings_under_two_labels`` (side-and-time readings still
     filed under more than one contact pair or band, because two exports' own settings history
     disagree), ``invalid_code_values`` and ``zero_values``.
+
+    THE LEAD THE SIGNAL CAME FROM (the PI, 2026-10-19; decision 488). A reading whose recording's
+    `SignalLeadSchedule` names the other lead (`chronic_signal_leads`: the device settings had both
+    leads' entries sense that lead) is a copy of that lead's reading, filed under the wrong lead.
+    It is filed under the lead it came from (same contact pair and band) and, when its band power
+    equals that lead's reading at that time, merged into it: counted once, that lead's current
+    kept, the copy's current recorded beside it in ``OtherLeadCurrentMilliAmps`` (NaN elsewhere).
+    Equal power alone never moves a reading. Counted: ``other_lead_copies_merged``,
+    ``other_lead_current_differs`` (merged copies whose current differs), ``other_lead_power_differs``
+    (kept beside that lead's reading under its lead) and ``other_lead_moved_alone`` (no reading of
+    that lead at that time: kept under it). Copies kept are handed on in recordings APPENDED after
+    the input's, named on the lead they came from (``MovedFromLead`` says which log held them);
+    the first ``len(input)`` outputs stay aligned with the input.
     """
     recs = [r for r in (chronic_recordings or [])]
     counts = {"repeats_removed": 0, "conflicting_kept": 0, "readings_under_two_labels": 0,
-              "invalid_code_values": 0, "zero_values": 0}
+              "invalid_code_values": 0, "zero_values": 0, "other_lead_copies_merged": 0,
+              "other_lead_current_differs": 0, "other_lead_power_differs": 0,
+              "other_lead_moved_alone": 0}
     usable = []
     for i, r in enumerate(recs):
         if not isinstance(r, dict) or "Time" not in r or "Data" not in r:
@@ -397,10 +472,10 @@ def merge_chronic_repeats(chronic_recordings):
             continue
         usable.append(i)
     order = sorted(usable, key=lambda i: _chronic_order_key(recs[i]))
-    seen = {}                 # (hemi, pair, band, t) -> set of value rows already handed on
+    seen = {}                 # (hemi, pair, band, t) -> {value row: (recording, row) holding it}
     labels = {}               # (hemi, t) -> set of (pair, band) it is filed under
-    out = list(recs)
-    for i in order:
+    keeps, moved = {}, []     # recording -> rows kept in it; copies of the other lead's signal
+    for pos, i in enumerate(order):
         r = recs[i]
         t = np.asarray(r.get("Time"), dtype=float)
         d = np.asarray(r.get("Data"), dtype=float)
@@ -410,38 +485,89 @@ def merge_chronic_repeats(chronic_recordings):
         hemi = "LEFT" if "LEFT" in cu else ("RIGHT" if "RIGHT" in cu else "")
         pairs = chronic_pair_keys(r, t, hemi, "SIDE_" + (hemi or "UNKNOWN"))
         bands = chronic_band_tags(r, t, hemi)
+        sigs = chronic_signal_leads(r, t, hemi)
         keep = np.ones(n, dtype=bool)
         for k in range(n):
-            key = (hemi, pairs[k], bands[k], float(t[k]))
             val = tuple(d[k].tolist())
+            if sigs[k] != hemi:
+                # the other lead's signal filed under this lead (decision 488): handled below
+                keep[k] = False
+                key = (sigs[k], _pair_on_lead(pairs[k], sigs[k]), bands[k], float(t[k]))
+                moved.append((key, val, pos, k, i))
+                continue
+            key = (hemi, pairs[k], bands[k], float(t[k]))
             got = seen.get(key)
             if got is None:
-                seen[key] = {val}
+                seen[key] = {val: (i, k)}
             elif val in got:
                 keep[k] = False
                 counts["repeats_removed"] += 1
             else:
-                got.add(val)
+                got[val] = (i, k)
                 counts["conflicting_kept"] += 1
             labels.setdefault((hemi, float(t[k])), set()).add((pairs[k], bands[k]))
-        invalid = keep & (d[:, 0] >= CHRONIC_INVALID_LSB) if n else np.zeros(0, dtype=bool)
-        counts["invalid_code_values"] += int(invalid.sum())
-        zero = keep & (d[:, 0] == 0) if n else np.zeros(0, dtype=bool)
-        counts["zero_values"] += int(zero.sum())
-        invalid = invalid | zero
-        if keep.all() and not invalid.any():
+        keeps[i] = keep
+    # Copies of the other lead's signal, in an order set by content. A copy whose band power equals
+    # a reading of the lead it came from is that reading: merged into it, that lead's current kept,
+    # the copy's current recorded beside it (`OtherLeadCurrentMilliAmps`) and counted when the two
+    # differ. A copy with other band power is kept under its lead and counted; so is a copy with
+    # no reading of its lead at that time.
+    other_cur = {}            # recording -> {row: the other lead's current}
+    extra = {}                # recording -> rows moved to the lead the signal came from
+    moved_seen = {}
+    for key, val, pos, k, i in sorted(moved, key=lambda m: (m[0], m[1], m[2], m[3])):
+        mk = moved_seen.setdefault(key, set())
+        if val in mk:
+            counts["repeats_removed"] += 1
             continue
-        c = dict(r)
-        for k_, v in r.items():
-            if k_ == "ChannelNames" or not isinstance(v, (list, np.ndarray)) or len(v) != n:
-                continue
-            arr = np.asarray(v)
-            c[k_] = arr[keep] if isinstance(v, np.ndarray) else list(arr[keep])
-        if invalid.any():
-            nd = np.array(np.asarray(r["Data"], dtype=float)[keep], dtype=float)
-            nd[invalid[keep], 0] = np.nan
-            c["Data"] = nd
-        out[i] = c
+        mk.add(val)
+        own = seen.get(key) or {}
+        same_power = [v for v in own if _same_power(v[0], val[0])]
+        if same_power:
+            counts["other_lead_copies_merged"] += 1
+            if not any(v[1:] == val[1:] for v in same_power):
+                counts["other_lead_current_differs"] += 1
+            holder = own[min(same_power)]
+            if holder is not None and len(val) > 1:
+                other_cur.setdefault(holder[0], {}).setdefault(holder[1], val[1])
+            continue
+        if own:
+            counts["other_lead_power_differs"] += 1
+        else:
+            counts["other_lead_moved_alone"] += 1
+        own_key = seen.setdefault(key, {})
+        if val not in own_key:
+            own_key[val] = None
+        extra.setdefault(i, []).append(k)
+        labels.setdefault((key[0], key[3]), set()).add((key[1], key[2]))
+    out = list(recs)
+    for i in order:
+        r = recs[i]
+        keep = keeps[i]
+        n = keep.shape[0]
+        d = np.asarray(r.get("Data"), dtype=float)
+        oc = sorted((other_cur.get(i) or {}).items())
+        c = _chronic_rows(r, keep, counts)
+        if oc:
+            col = np.full(n, np.nan)
+            for k, v in oc:
+                col[k] = v
+            c = dict(c) if c is r else c
+            c["OtherLeadCurrentMilliAmps"] = col[keep]
+        if c is not r:
+            out[i] = c
+        if extra.get(i):
+            rows = np.zeros(n, dtype=bool)
+            rows[sorted(extra[i])] = True
+            mv = _chronic_rows(r, rows, counts)
+            mv = dict(mv) if mv is r else mv
+            names = list(r.get("ChannelNames", []) or [])
+            cu = str(names[0]).upper() if names else ""
+            frm, to = ("Left", "Right") if "LEFT" in cu else ("Right", "Left")
+            mv["ChannelNames"] = [str(x).replace(frm + "Hemisphere", to + "Hemisphere") for x in names]
+            mv["SignalLeadSchedule"] = []
+            mv["MovedFromLead"] = frm.upper()
+            out.append(mv)
     counts["readings_under_two_labels"] = sum(1 for v in labels.values() if len(v) > 1)
     return out, counts
 
