@@ -1939,7 +1939,8 @@ def _whole_matrix_nanmedian(values, keep):
 
 def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, centers_hz,
                                     band_ceilings, allow_window_reuse=False,
-                                    match_direction="nearest", psd_band_ceilings=None):
+                                    match_direction="nearest", psd_band_ceilings=None,
+                                    sources="both"):
     """Band power per pain report and per length of signal, excluding contaminated 3 s chunks
     BEFORE they are averaged, and taking the next-nearest clean chunk in place of each one dropped.
 
@@ -1967,6 +1968,14 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
     Which chunks are eligible, and which rating owns each one, are decided by the SAME two helpers
     `live_lsb_spectrum_match` uses (`_pad_windows_in_extent` / `_pad_owned_windows` over
     `_nearest_pro_idx`), so only the surviving-chunk step differs between the two paths.
+
+    WHICH SOURCES (wave 2, C4; the PI, 2026-10-18: "PSD-only results shown, cannot choose").
+    `sources="both"` (the default) is the rule above: TD whenever the report owns any TD piece, the
+    device PSD snapshots only when it owns none ("TD, PSD where no TD"). `"td"` is the same matcher
+    with the PSD fill switched off: every TD value is the same, and a report with no TD piece is
+    empty. `"psd"` ignores TD altogether: every report with a PSD snapshot in its window is read
+    from its snapshots, including a report that also owns TD. So a report with both counts in the
+    TD-only and in the PSD-only matrix, and once (from its TD) in the mixed one.
 
     `band_ceilings` is one ceiling per entry of `centers_hz`, `np.inf` where that centre has none
     (that band then keeps every chunk). `psd_band_ceilings` is the same for the device PSD
@@ -2027,6 +2036,11 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
     td_ok = np.atleast_1d(np.asarray(td.get("ok") or [], dtype=bool))
     td_mat = _lsb_family_mat(td, nCc)
     td_valid = (td_ok if td_ok.size == td_t.size else np.zeros(td_t.size, bool)) & np.isfinite(td_t)
+    sources = str(sources or "both").lower()
+    if sources not in ("both", "td", "psd"):
+        raise ValueError(f"sources must be 'both', 'td' or 'psd', not {sources!r}")
+    if sources == "psd":
+        td_valid = np.zeros(td_t.size, dtype=bool)       # no report owns TD: every PSD is read
 
     if allow_window_reuse:
         idx, cnt = _pad_windows_in_extent(td_t, td_valid, pro, tol_s, nP, direction=match_direction)
@@ -2102,7 +2116,7 @@ def live_lsb_band_medians_by_length(pro_times, raw_cache, *, tol_s, lengths_s, c
     info["psd_snapshots_needed_by_length"] = {float(s): int(k) for s, k in zip(lengths, psd_caps)}
     info["n_psd_ratings_short_by_length"] = {float(s): 0 for s in lengths}
     psd_filled = {s: np.zeros(nP, dtype=bool) for s in lengths}
-    if psd_t.size and (~td_tier).any():
+    if sources != "td" and psd_t.size and (~td_tier).any():
         if allow_window_reuse:
             pidx, pcnt = _pad_windows_in_extent(psd_t, psd_valid, pro, tol_s, nP,
                                                 direction=match_direction)

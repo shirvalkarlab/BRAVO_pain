@@ -8487,9 +8487,14 @@ def _wants_band_time_sweep(request_data):
 def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
                                       allow_window_reuse, seconds=None,
                                       match_direction="pro_first", channel=None,
-                                      participant_uid=None, with_recording_times=False):
+                                      participant_uid=None, with_recording_times=False,
+                                      sources="both"):
     """One band-power matrix per length of signal, each with one row per pain report and one column
     per band centre.
+
+    `sources` (wave 2, C4) picks which recordings answer a report (`availability.
+    live_lsb_band_medians_by_length`): "both", the mixed rule (TD, PSD where no TD); "td", TD alone
+    (the PSD fill off); "psd", every report with a PSD snapshot in its window, ignoring TD.
 
     THERE IS NO LOOP OVER BANDS ANYWHERE. Every band centre arrives as a column of one matrix, so
     every statistic downstream is a matrix operation across all bands at once.
@@ -8533,7 +8538,7 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
     power, excl, stats = availability.live_lsb_band_medians_by_length(
         pt, raw_cache, tol_s=tol_s, lengths_s=secs, centers_hz=centers,
         band_ceilings=list(ceilings), psd_band_ceilings=list(psd_ceilings),
-        allow_window_reuse=allow_window_reuse, match_direction=match_direction)
+        allow_window_reuse=allow_window_reuse, match_direction=match_direction, sources=sources)
     # LIFTED OUT of the exclusion block rather than left in it. `chunk_exclusion` is copied into the
     # served response whole, so leaving the per-report list there would ship one boolean per pain
     # report per contact pair -- 4,584 of them on RCS08 on 2026-09-15, growing with every report
@@ -8617,10 +8622,97 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                                "reached from the 250 samples-per-second voltage trace by the "
                                "validated transform, or from the device's own spectrum where no "
                                "voltage trace was in range"))
-            return {"t0": t0, "match_s": match_s, "power": power, "stats": stats,
-                    "kw": kw, "cov_values": cov_values, "cov_block": cov_block}
+            ctx = {"t0": t0, "match_s": match_s, "power": power, "stats": stats,
+                   "kw": kw, "cov_values": cov_values, "cov_block": cov_block}
+            if sweep_settings.SOURCE_GRIDS:
+                ctx["sources"] = _prepare_source_grids(raw_ch, raw_cache, kw)
+            ctx["match_s"] = _time.perf_counter() - t0
+            return ctx
         except Exception as e:
             return {"blank": _blank(raw_ch, e)}
+
+    def _prepare_source_grids(raw_ch, raw_cache, kw):
+        """TD AND PSD KEPT APART (wave 2, C4; the PI, 2026-10-18). The same pair matched twice more:
+        on TD alone (the PSD fill off) and on PSD alone (every report with a snapshot in its window,
+        ignoring TD). Each takes its own current at its own pieces of recording, and its own
+        statistics (`kw` with its own matrices), so each grid has its own shuffles and best rows.
+        Also the per-cell count that ties the three grids together: the PSD-only grid's count over
+        the reports that own no TD piece (`sweep_settings.SOURCE_COUNTING_RULE`)."""
+        out = {}
+        for src in (sweep_settings.GRID_SOURCE_TD, sweep_settings.GRID_SOURCE_PSD):
+            (p_src, st_src, _c, _col, ex_src, dev_src,
+             rec_src) = _band_time_sweep_power_by_seconds(
+                pro_times, raw_cache, None, tol_s=tol_s, allow_window_reuse=allow_window_reuse,
+                match_direction=match_direction, channel=raw_ch, participant_uid=participant_uid,
+                with_recording_times=True, sources=src)
+            cv, cb = (None, None)
+            if adjust_for_stim_current:
+                cv, cb = stim_current.covariate_for_reports(
+                    participant_uid, pro_times, rec_src, channel=raw_ch)
+            out[src] = {"power": p_src, "stats": st_src, "cov_block": cb, "rec": rec_src,
+                        "kw": dict(kw, chunk_exclusion=ex_src, from_device_spectrum=dev_src,
+                                   covariate=cv,
+                                   covariate_label=(stim_current.CURRENT_LABEL if cv is not None
+                                                    else None),
+                                   by_recording_source=False)}
+        no_td = np.asarray([len(r or []) == 0 for r in out[sweep_settings.GRID_SOURCE_TD]["rec"]],
+                           dtype=bool)
+        y_ok = np.isfinite(np.asarray(pain_values, dtype=float))
+        p_psd = out[sweep_settings.GRID_SOURCE_PSD]["power"]
+        lengths = [float(x) for x in analytics.BAND_TIME_SWEEP_SECONDS if float(x) in p_psd]
+        out["psd_without_td_n"] = [
+            [int(v) for v in (np.isfinite(np.asarray(p_psd[x], dtype=float))
+                              & (no_td & y_ok)[:, None]).sum(axis=0)] for x in lengths]
+        out["lengths"] = lengths
+        return out
+
+    def _match_stats(stats):
+        return {str(k): {kk: v[kk] for kk in ("n_pro", "n_pro_td", "n_pro_psd",
+                                              "n_pro_unmatched", "td_n_epochs_cap",
+                                              "n_td_assigned", "n_td_used")
+                         if kk in (v or {})}
+                for k, v in (stats or {}).items()}
+
+    def _label_rows(sw, name, why):
+        for key in ("best_correlation_rows", "best_auc_rows"):
+            for r in (sw or {}).get(key) or []:
+                if isinstance(r, dict):
+                    r["grid_source"] = name
+                    r["can_choose_band"] = why is None
+                    if why is not None:
+                        r["cannot_choose_why"] = why
+
+    def _attach_source_grids(sweep, ctx):
+        """The TD-only and PSD-only grids on the pair's sweep (`by_source_grid`), every best row
+        labelled with its grid and whether it may choose a band, and the count that ties the three
+        grids together, checked cell by cell."""
+        src = ctx["sources"]
+        grids = {}
+        for name in (sweep_settings.GRID_SOURCE_TD, sweep_settings.GRID_SOURCE_PSD):
+            g = ctx["source_sweeps"][name]
+            if src[name]["cov_block"] is not None:
+                g["stim_current_covariate"] = dict(src[name]["cov_block"])
+            g["match_stats_by_seconds"] = _match_stats(src[name]["stats"])
+            _label_rows(g, name, None if name == sweep_settings.GRID_SOURCE_TD
+                        else sweep_settings.CANNOT_CHOOSE_PSD)
+            grids[name] = g
+        _label_rows(sweep, sweep_settings.GRID_SOURCE_MIXED, sweep_settings.CANNOT_CHOOSE_MIXED)
+        n_mixed = sweep.get("n_grid") or []
+        n_td = grids[sweep_settings.GRID_SOURCE_TD].get("n_grid") or []
+        n_psd0 = src["psd_without_td_n"]
+        cells = adding = 0
+        for t in range(len(n_mixed)):
+            for c in range(len(n_mixed[t])):
+                cells += 1
+                try:
+                    adding += int(n_mixed[t][c] == n_td[t][c] + n_psd0[t][c])
+                except (IndexError, TypeError):
+                    pass
+        grids["counting"] = {"rule": sweep_settings.SOURCE_COUNTING_RULE,
+                             "psd_reports_without_td_n_grid": n_psd0,
+                             "n_cells": int(cells), "n_cells_adding_up": int(adding)}
+        sweep["by_source_grid"] = grids
+        sweep["grid_source"] = sweep_settings.GRID_SOURCE_MIXED
 
     def _finish(raw_ch, ctx, sweep):
         """The labels and timings that go on one pair's answer, once its statistics are in."""
@@ -8644,12 +8736,9 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                 else "prospective")
             sweep["matched_seconds"] = float(match_s)
             sweep["total_seconds"] = float(_time.perf_counter() - t0)
-            sweep["match_stats_by_seconds"] = {
-                str(k): {kk: v[kk] for kk in ("n_pro", "n_pro_td", "n_pro_psd",
-                                              "n_pro_unmatched", "td_n_epochs_cap",
-                                              "n_td_assigned", "n_td_used")
-                         if kk in (v or {})}
-                for k, v in (stats or {}).items()}
+            sweep["match_stats_by_seconds"] = _match_stats(stats)
+            if "source_sweeps" in ctx:
+                _attach_source_grids(sweep, ctx)
             # No `figures` entry: the server-drawn heat-map descriptions were built into every
             # response and stored, and drawn by nothing (the page draws its own heat maps from
             # the grids, BiomarkerHeatmapGrids.js). Deleted on the PI's decision of 2026-09-12
@@ -8694,8 +8783,27 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
         prepared = [_prepare(ch, c) for ch, c in todo]
 
     live = [(ch, ctx) for (ch, _c), ctx in zip(todo, prepared) if "blank" not in ctx]
-    results = _sweep_statistics(
-        [(ctx["power"], pain_values, ctx["kw"]) for _ch, ctx in live])
+    # One job per grid: the mixed grid, then (wave 2, C4) the TD-only and PSD-only grids of the same
+    # pair, all in one list so the pool spreads them; each draws from its own generator.
+    jobs, owner = [], []
+    for i, (_ch, ctx) in enumerate(live):
+        jobs.append((ctx["power"], pain_values, ctx["kw"]))
+        owner.append((i, None))
+        for name in (sweep_settings.GRID_SOURCE_TD, sweep_settings.GRID_SOURCE_PSD):
+            if name in (ctx.get("sources") or {}):
+                jobs.append((ctx["sources"][name]["power"], pain_values,
+                             ctx["sources"][name]["kw"]))
+                owner.append((i, name))
+    flat = _sweep_statistics(jobs)
+    results = [None] * len(live)
+    for (i, name), (status, value) in zip(owner, flat):
+        if name is None:
+            results[i] = (status, value)
+        else:
+            live[i][1].setdefault("source_sweeps", {})[name] = (
+                value if status == "ok" else analytics._sweep_blank(
+                    f"the {name.upper()}-only grid could not be completed for contact pair "
+                    f"{live[i][0]}: {value}"))
     answers = {}
     for (ch, ctx), (status, value) in zip(live, results):
         answers[ch] = (_finish(ch, ctx, value) if status == "ok"

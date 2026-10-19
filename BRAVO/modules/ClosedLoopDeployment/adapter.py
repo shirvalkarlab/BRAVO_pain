@@ -706,7 +706,9 @@ def stored_current_adjusted_grid(participant_uid, request_data=None, *, consumer
         return {"available": False,
                 "reason": ("no grid with the stimulation current taken out is stored under these "
                            "settings; the Biomarkers page's switch builds one")}
-    out = dict(payload)
+    # The TD-only grid's rows, as on every page that chooses a band (wave 2, C4): this table reads
+    # these rows beside `band_sweep_grid_for_closed_loop`'s, so the two must be the same grid's.
+    out = _sweep_settings.choosing_grid(payload)
     out["available"] = True
     out["stamp"] = dict(stamp or {})
     return out
@@ -867,7 +869,13 @@ def band_sweep_grid_for_closed_loop(participant_uid, request_data=None, *, consu
                      "will show 'not tested'", participant_uid, exc_info=True)
         stored_stability = {}
 
-    sweeps = payload.get("band_time_sweep") or {}
+    # THE BAND IS CHOSEN FROM THE TD-ONLY GRID (wave 2, C4; the PI, 2026-10-18: "PSD-only results
+    # shown, cannot choose"). Every reader of this function chooses or judges a band: the "Choose a
+    # band" panel and its prefetch, the report's direction check, the Stim Optimizer's pain
+    # relationship. Each pair's sweep is replaced by its TD-only grid here, once, before the
+    # stability answers are put on its rows (`sweep_settings.choosing_sweep`; "mixed" puts the
+    # mixed grid back, the neutral setting).
+    sweeps = (_sweep_settings.choosing_grid(payload).get("band_time_sweep") or {})
     out_sweeps = {}
     any_stability = False
     stability_from_store = 0
@@ -915,6 +923,7 @@ def band_sweep_grid_for_closed_loop(participant_uid, request_data=None, *, consu
 
     return {"available": True, "band_time_sweep": out_sweeps, "stamp": stamp,
             "grid_settings": grid_settings,
+            "choosing_grid": _sweep_settings.CHOOSING_GRID,
             "cross_setting_stability_included": any_stability,
             # How many rows got their answer from the stored grid rather than from the row itself.
             # Reported so a reader can tell "the background job has run" from "the request computed

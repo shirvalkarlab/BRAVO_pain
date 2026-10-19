@@ -6366,7 +6366,7 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
                                tile_seconds=None, requested_seconds=None, chunk_exclusion=None,
                                from_device_spectrum=None, from_clinic_sheet=None,
                                covariate=None, covariate_label=None,
-                               current_removed_check=False):
+                               current_removed_check=False, by_recording_source=True):
     """The whole grid: for every band centre and every length of signal averaged into one
     measurement, how well that band's power tracks the chosen pain score.
 
@@ -6402,6 +6402,11 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     the covariate taken out as a straight line, its interval and a rotation p
     (`_current_removed_check`), as a WARNING only: it moves no answer and draws on its own random
     numbers, so no other number moves either.
+
+    ``by_recording_source=False`` leaves out ``correlation_by_recording_source`` (each cell split into
+    its TD-read and PSD-read reports): the TD-only and PSD-only grids (wave 2, C4) hold one source
+    each, so the split has nothing to split there. It runs last, on its own generators, so leaving it
+    out moves no other number.
     """
     rng = np.random.default_rng(int(seed))
     tile_s = float(sweep_tile_seconds() if tile_seconds is None else tile_seconds)
@@ -6602,8 +6607,9 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         _r.pop("_grid_center_index", None)
     # P-19: each cell on its TD-read and PSD-read reports alone. After every use of the shared
     # generator, and on its own generators, so no number above can move.
-    by_source = _correlation_by_recording_source(X, pain, from_device_spectrum,
-                                                 n_boot=int(n_boot), seed=int(seed))
+    by_source = (_correlation_by_recording_source(X, pain, from_device_spectrum,
+                                                  n_boot=int(n_boot), seed=int(seed))
+                 if by_recording_source else None)
     # The count of shuffles the correlation reference really ran: every other slide of the pain
     # scores once (decision 315), not the number asked for.
     n_slides = int(corr_null.get("n_used") or 0)
@@ -6666,7 +6672,7 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         "clinic_sheet_n_grid_auc": [[int(v) for v in row] for row in sheet_n_auc],
         "n_pain_reports_from_clinic_sheet": n_sheet_reports,
         "device_spectrum_axis_note": DEVICE_SPECTRUM_AXIS_NOTE,
-        "correlation_by_recording_source": by_source,
+        **({"correlation_by_recording_source": by_source} if by_recording_source else {}),
         "best_correlation_rows": best_corr_rows,
         # Does the shuffle null run on the family the circled cells were chosen from? Measured on
         # every build, for both grids (panel A item 3; `RECONCILIATION_F8.md` on the older search).

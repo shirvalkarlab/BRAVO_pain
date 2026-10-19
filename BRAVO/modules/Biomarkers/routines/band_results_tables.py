@@ -17,14 +17,39 @@ reader of the file alone cannot get that wrong.
 
 Pure pandas and numpy, no Django, so it is testable on either runner.
 """
+import os as _os
+
 import numpy as np
 import pandas as pd
+
+from . import sweep_settings as _sw
+
+#: WHICH GRID EACH ROW IS FROM (wave 2, C4). The mixed grid's rows ("TD, PSD where no TD"), then the
+#: TD-only grid's and the PSD-only grid's (`by_source_grid`), each row naming its grid
+#: (`grid_source`) and whether a band may be chosen from it (`can_choose_band`: TD only).
+_SOURCES = ((None, _sw.GRID_SOURCE_MIXED), (_sw.GRID_SOURCE_TD, _sw.GRID_SOURCE_TD),
+            (_sw.GRID_SOURCE_PSD, _sw.GRID_SOURCE_PSD))
+
+
+def _each_grid(sweep):
+    """``(grid_source, the grid)`` for the pair's mixed grid and each source grid it carries."""
+    for key, name in _SOURCES:
+        g = sweep if key is None else ((sweep.get("by_source_grid") or {}).get(key))
+        if isinstance(g, dict) and g.get("center_freqs_hz"):
+            yield name, g
+
+
+def _tag(rows, name):
+    for r in rows:
+        r["grid_source"] = name
+        r["can_choose_band"] = name == _sw.GRID_SOURCE_TD
+    return rows
 
 #: The kinds the two tables are stored under, and the rule version bumped when a column's meaning
 #: changes. The columns themselves are part of the table, so a new column does not need a bump.
 CORRELATION_KIND = "biomarker_band_correlation"
 DISCRIMINATION_KIND = "biomarker_band_discrimination"
-RULE_VERSION = "v3_current_removed_check"  # 2026-10-18: decision 484; v2 decision 483; v1 "v1_grid_rows_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+RULE_VERSION = ("v4_td_psd_apart" if _os.environ.get("BRAVO_SOURCE_GRIDS", "1").strip() != "0" else "v3_current_removed_check")  # (`BRAVO_SOURCE_GRIDS=0`: the neutral setting, `sweep_settings.SOURCE_GRIDS`) 2026-10-19: the TD-only and PSD-only grids' rows too, a `grid_source` and a `can_choose_band` column (wave 2, C4); v3 2026-10-18: decision 484; v2 decision 483; v1 "v1_grid_rows_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 #: Columns copied from the best row for each centre. Anything not in this list stays with the
 #: response (the sentences, the row's own wording), because a table is for numbers.
@@ -136,8 +161,9 @@ def correlation_table(sweeps_by_channel, *, metric_key=None):
     for channel, sweep in (sweeps_by_channel or {}).items():
         if not sweep or not sweep.get("center_freqs_hz"):
             continue
-        rows += _rows(sweep, channel, _grid(sweep, "correlation_grid"), "pearson_r",
-                      sweep.get("best_correlation_rows"), _BEST_CORRELATION_COLUMNS, {})
+        for name, g in _each_grid(sweep):
+            rows += _tag(_rows(g, channel, _grid(g, "correlation_grid"), "pearson_r",
+                               g.get("best_correlation_rows"), _BEST_CORRELATION_COLUMNS, {}), name)
     return _finish(rows, sweeps_by_channel, {
         "no_relationship_value": 0.0,
         "metric_key": (str(metric_key) if metric_key is not None else None),
@@ -154,11 +180,12 @@ def discrimination_table(sweeps_by_channel, *, metric_key=None):
         if not sweep or not sweep.get("center_freqs_hz"):
             continue
         first = first or sweep
-        rows += _rows(sweep, channel, _grid(sweep, "auc_grid"), "auc",
-                      sweep.get("best_auc_rows"), _BEST_DISCRIMINATION_COLUMNS,
-                      {"auc_direction_folded": _grid(sweep, "auc_direction_folded_grid"),
-                       "n_high_pain_reports": _grid(sweep, "auc_n_high_grid"),
-                       "n_low_pain_reports": _grid(sweep, "auc_n_low_grid")})
+        for name, g in _each_grid(sweep):
+            rows += _tag(_rows(g, channel, _grid(g, "auc_grid"), "auc",
+                               g.get("best_auc_rows"), _BEST_DISCRIMINATION_COLUMNS,
+                               {"auc_direction_folded": _grid(g, "auc_direction_folded_grid"),
+                                "n_high_pain_reports": _grid(g, "auc_n_high_grid"),
+                                "n_low_pain_reports": _grid(g, "auc_n_low_grid")}), name)
     first = first or {}
     return _finish(rows, sweeps_by_channel, {
         "no_relationship_value": 0.5,
@@ -169,15 +196,20 @@ def discrimination_table(sweeps_by_channel, *, metric_key=None):
     })
 
 
-def count_matches(table, sweeps_by_channel, value_name, grid_name):
+def count_matches(table, sweeps_by_channel, value_name, grid_name, grid_source=None):
     """(fields compared, fields differing) between a table's value column and the response grid it
-    was copied from. Exact equality, NaN equal to NaN; never a tolerance."""
+    was copied from. Exact equality, NaN equal to NaN; never a tolerance. `grid_source` names which
+    of the pair's grids to check (`None`: the mixed grid; "td" or "psd": that source's grid)."""
     compared = differ = 0
     for channel, sweep in (sweeps_by_channel or {}).items():
+        if grid_source is not None:
+            sweep = (sweep.get("by_source_grid") or {}).get(grid_source) or {}
         grid = _grid(sweep, grid_name)
         centres = [float(c) for c in (sweep.get("center_freqs_hz") or [])]
         requested = [float(s) for s in (sweep.get("integration_seconds_requested") or [])]
         sub = table[table["channel"] == str(channel)]
+        if "grid_source" in sub:
+            sub = sub[sub["grid_source"] == (grid_source or _sw.GRID_SOURCE_MIXED)]
         for t, s in enumerate(requested):
             for c, centre in enumerate(centres):
                 got = sub[(sub["integration_seconds_requested"] == s)

@@ -47,7 +47,16 @@ STABILITY_GRID_RULE_VERSION = "v8_own_side_current"  # 2026-10-18: each band's s
 # source; v22: effective count on each cell; v21: outlier rule on raw power; v20: cell p-values,
 # decision 188.
 GRID_KIND = "biomarker_band_sweep"
-GRID_RULE_VERSION = "v29_current_removed_check"  # 2026-10-18: the current-removed check on every band row, a warning only, and the adjusted grid always built (decision 484); v28 2026-10-18: the current taken out read at each report's own pieces of recording (decision 483); v27 2026-10-03: device PSD snapshots judged by 7 MAD above their own median, not the TD chunks' (decision 411); v26: single 3 s chunks dropped only when more than 7 MAD above their contact's own median, every contact of every participant (decision 410); v25 3 MAD both sides; v24 exact rotation null, tablet clock  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+
+#: TD AND PSD KEPT APART (wave 2, C4; the PI, 2026-10-18: "PSD-only results shown, cannot choose").
+#: True: every contact pair's grid also carries a grid on TD alone and one on PSD alone, each with its
+#: own shuffles and best rows (`by_source_grid: {td, psd}`). False is the neutral setting: the grid
+#: as before C4, under the rule before C4 (`BRAVO_SOURCE_GRIDS=0`, read when this file is imported,
+#: so the rule below follows it and a grid without the two is never filed under the rule with them).
+SOURCE_GRIDS = _os.environ.get("BRAVO_SOURCE_GRIDS", "1").strip() != "0"
+GRID_RULE_VERSION = "v30_td_psd_apart"  # v30 2026-10-19: a TD-only and a PSD-only grid beside the mixed one, the band chosen from the TD grid (wave 2, C4); v29 2026-10-18: the current-removed check on every band row, a warning only, and the adjusted grid always built (decision 484); v28 2026-10-18: the current taken out read at each report's own pieces of recording (decision 483); v27 2026-10-03: device PSD snapshots judged by 7 MAD above their own median, not the TD chunks' (decision 411); v26: single 3 s chunks dropped only when more than 7 MAD above their contact's own median, every contact of every participant (decision 410); v25 3 MAD both sides; v24 exact rotation null, tablet clock  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+if not SOURCE_GRIDS:                                  # the neutral setting: the rule before C4
+    GRID_RULE_VERSION = "v29_current_removed_check"
 # The two raw inputs every grid names in its chain, in the order its key carries them: the saved
 # 3-second tiles (`bravo_service._RAW_LSB_SHARED_KIND`) and the pain-report snapshot.
 GRID_INPUT_KINDS = ("raw_lsb_tiles", "redcap_reports")
@@ -438,3 +447,63 @@ def grid_written_under_rule_in_force(meta):
         return _store.signature_key(sig) == meta.get("signature_key")
     except Exception:                                           # noqa: BLE001
         return False
+
+
+# ---- WHICH GRID A BAND IS CHOSEN FROM (wave 2, C4) ------------------------------------------------
+#: "td": every page that chooses or judges a band off the heat-map grid reads each pair's TD-only
+#: grid (the Closed-Loop page's "Choose a band" panel and its prefetch, the Closed-Loop report's
+#: direction check, the Stim Optimizer's pain relationship and its "still positive without the
+#: current" table), through `choosing_sweep`. "mixed" is the neutral setting: the grid as before C4
+#: ("TD, PSD where no TD"). Read from the environment too (`BRAVO_CHOOSING_GRID=mixed`), so a process
+#: the refresh job starts takes the same setting.
+CHOOSING_GRID = (_os.environ.get("BRAVO_CHOOSING_GRID", "td").strip().lower() or "td")
+
+#: What each best row says about the grid it came from (`grid_source`).
+GRID_SOURCE_MIXED = "td_psd_where_no_td"
+GRID_SOURCE_TD = "td"
+GRID_SOURCE_PSD = "psd"
+#: Why a row cannot choose a band, in words, on every row that cannot.
+CANNOT_CHOOSE_MIXED = ("mixed grid (TD, PSD where no TD): shown, never chooses a band; the band is "
+                       "chosen from the TD-only grid")
+CANNOT_CHOOSE_PSD = ("PSD only: shown, cannot choose a band (the PI, 2026-10-18); the band is chosen "
+                     "from the TD-only grid")
+#: How a pain report with both TD and PSD is counted, stated on every grid that carries the two.
+SOURCE_COUNTING_RULE = (
+    "a report with both TD and PSD in its window is counted in the TD-only grid (from its TD) and "
+    "in the PSD-only grid (from its PSD), and once in the mixed grid (from its TD); so in every cell "
+    "the mixed count is the TD count plus the PSD count over the reports with no TD")
+
+
+def choosing_sweep(sweep):
+    """The one pair's grid a band is chosen from: under `CHOOSING_GRID = "td"`, the pair's TD-only
+    grid in place of the mixed one, every field of it (grids, best rows, counts, answer), with the
+    pair's own labels (`display_short`, `display_region`, ...) kept; the PSD-only and mixed grids are
+    not carried. A pair whose sweep holds no TD-only grid offers no band (`choosing_grid: "none"`)
+    rather than falling back to the mixed rows, which hold PSD-read reports. Never raises."""
+    if not isinstance(sweep, dict):
+        return sweep
+    out = {k: v for k, v in sweep.items() if k != "by_source_grid"}
+    if CHOOSING_GRID == "mixed":
+        return out
+    td = (sweep.get("by_source_grid") or {}).get(GRID_SOURCE_TD)
+    out.pop("correlation_by_recording_source", None)
+    if not isinstance(td, dict):
+        out.update({"best_correlation_rows": [], "best_auc_rows": [], "choosing_grid": "none",
+                    "choosing_grid_reason": ("this pair's sweep carries no TD-only grid, so no band "
+                                             "on it can be chosen (the mixed grid holds PSD-read "
+                                             "reports and never chooses)")})
+        return out
+    out.update(td)
+    out["choosing_grid"] = GRID_SOURCE_TD
+    return out
+
+
+def choosing_grid(payload):
+    """A stored grid payload with every pair's sweep replaced by `choosing_sweep` (a copy)."""
+    if not isinstance(payload, dict):
+        return payload
+    out = dict(payload)
+    sweeps = payload.get("band_time_sweep")
+    if isinstance(sweeps, dict):
+        out["band_time_sweep"] = {ch: choosing_sweep(sw) for ch, sw in sweeps.items()}
+    return out

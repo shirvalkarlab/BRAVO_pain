@@ -63,9 +63,16 @@ def _timeless(out):
         sw = dict(sw)
         sw.pop("matched_seconds", None)
         sw.pop("total_seconds", None)
-        if isinstance(sw.get("logistic_fit_crosscheck"), dict):
-            sw["logistic_fit_crosscheck"] = {k: v for k, v in sw["logistic_fit_crosscheck"].items()
-                                             if k != "seconds"}
+        # the pair's grid and (wave 2, C4) its TD-only and PSD-only grids each time their own check
+        grids = [sw] + [g for g in (sw.get("by_source_grid") or {}).values() if isinstance(g, dict)]
+        if sw.get("by_source_grid"):
+            sw["by_source_grid"] = {k: (dict(v) if isinstance(v, dict) else v)
+                                    for k, v in sw["by_source_grid"].items()}
+            grids = [sw] + [g for g in sw["by_source_grid"].values() if isinstance(g, dict)]
+        for g in grids:
+            if isinstance(g.get("logistic_fit_crosscheck"), dict):
+                g["logistic_fit_crosscheck"] = {k: v for k, v in g["logistic_fit_crosscheck"].items()
+                                                if k != "seconds"}
         res[ch] = json.dumps(_canon(sw), sort_keys=True, default=str)
     return res
 

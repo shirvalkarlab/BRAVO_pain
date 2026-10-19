@@ -49,8 +49,19 @@ def _write(sig, r, *, request=None, tagged=True):
     extra = ({"sweep_settings": sweep_settings.sweep_settings_tag_from_request(request or {}),
               "rule_version": sweep_settings.GRID_RULE_VERSION}
              if tagged else None)
-    assert st.store("biomarker_band_sweep", UID, sig, payload, writer="biomarkers",
+    assert st.store("biomarker_band_sweep", UID, sig, _with_td_grid(payload), writer="biomarkers",
                     trigger="band_time_sweep", provenance=chain, fmt="pickle", extra=extra)
+
+
+def _with_td_grid(payload):
+    """A stored grid as the Biomarkers writer stores it since wave 2's C4: each pair's sweep also
+    carries its TD-only grid (`by_source_grid.td`), which is the grid every choosing reader serves.
+    Here the TD-only grid holds the same rows, so what these tests assert is unchanged."""
+    import copy
+    out = dict(payload)
+    out["band_time_sweep"] = {ch: dict(sw, by_source_grid={"td": copy.deepcopy(sw)})
+                              for ch, sw in (payload.get("band_time_sweep") or {}).items()}
+    return out
 
 
 def _r(got):
@@ -210,7 +221,7 @@ def _write_ruled(sig, r, *, rule, request=None, adjusted=False):
              "metric_label": "NRS (0–10)", "adjust_for_stim_current": bool(adjusted)}
     if rule is not None:
         extra["rule_version"] = rule
-    assert st.store("biomarker_band_sweep", UID, sig, _payload(r), writer="biomarkers",
+    assert st.store("biomarker_band_sweep", UID, sig, _with_td_grid(_payload(r)), writer="biomarkers",
                     trigger="band_time_sweep", provenance=chain, fmt="pickle", extra=extra)
 
 
