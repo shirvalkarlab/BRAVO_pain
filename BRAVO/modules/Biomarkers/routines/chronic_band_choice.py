@@ -336,7 +336,7 @@ def answer_for(x, y, cov, *, n_boot, seed, key):
 
 def chronic_band_choice(samples_by_pair, currents_by_side, report_t, pain, *, centres, tol_s,
                         match_direction="nearest", allow_window_reuse=False, n_boot=None, seed=0,
-                        pairs=None, chronic_match=CHRONIC_MATCH_DEFAULT):
+                        pairs=None, chronic_match=CHRONIC_MATCH_DEFAULT, daily_swing=False):
     """``{pair: block}`` for every pair in ``pairs`` (default: every pair the chronic log holds).
 
     ``block``: ``{"frequencies": [one entry per chronic frequency on the pair], "by_centre":
@@ -347,7 +347,12 @@ def chronic_band_choice(samples_by_pair, currents_by_side, report_t, pain, *, ce
     ``chronic_match`` "covering" (the default) pairs each report with the one reading whose 10
     minutes cover it (`covering_reports`; ``tol_s``, ``match_direction`` and ``allow_window_reuse``
     are not read); "window" with the median of the readings in the heat map's window
-    (`match_reports`), and every block and entry then carries the non-default warning."""
+    (`match_reports`), and every block and entry then carries the non-default warning.
+
+    ``daily_swing`` (wave 2, C6; a warning only): each entry also carries `daily_swing.swing_block`,
+    the hourly profile of ALL the readings at that frequency on the pair and the hours of day of
+    the reports its answer used. It reads nothing the answer reads and moves no number. False (the
+    neutral setting) skips it."""
     if chronic_match not in CHRONIC_MATCH_CHOICES:
         raise ValueError(f"chronic_match must be one of {CHRONIC_MATCH_CHOICES}, got {chronic_match!r}")
     warning = non_default_warning(chronic_match, tol_s)
@@ -432,6 +437,11 @@ def chronic_band_choice(samples_by_pair, currents_by_side, report_t, pain, *, ce
                      **ans}
             entry["covered"] = bool(centre is not None and ans["n_reports"] >= MIN_REPORTS
                                     and ans["pearson_r"] is not None)
+            if daily_swing:
+                from . import daily_swing as _ds
+                used_r = np.isfinite(xv) & np.isfinite(py)
+                entry["daily_swing"] = _ds.swing_block(_ds.hourly_profile(ts, ys),
+                                                       _ds.report_hours(rt[used_r]), freq_hz=f)
             block["frequencies"].append(entry)
             if centre is not None:
                 prev = block["by_centre"].get(centre)
@@ -453,7 +463,8 @@ def row_block(pair_block, centre):
             "first_reading_s", "last_reading_s", "first_matched_report_s", "last_matched_report_s",
             "n_reports", "pearson_r", "pearson_r_low", "pearson_r_high", "p_rotation",
             "n_rotations", "answer", "direction", "current_removed_check", "covered", "why",
-            "n_reports_in_gap", "n_reports_log_elsewhere", "chronic_match", "warning")
+            "n_reports_in_gap", "n_reports_log_elsewhere", "chronic_match", "warning",
+            "daily_swing")
     out = {k: entry.get(k) for k in keep if k in entry}
     if not out["covered"]:
         out["words"] = (f"home record at this band too thin to decide: {out.get('why')}"
@@ -485,4 +496,32 @@ def label_rows(rows, pair_block, grid_source, *, correlation=True):
                 r["choice_source_why"] = AUC_STAYS_TD
         else:
             r["choice_source"] = CHOICE_CHRONIC if r["chronic"]["covered"] else CHOICE_TD
+    return rows
+
+
+def attach_daily_swing(rows, pair_block):
+    """Complete ``daily_swing`` on each best correlation row of one grid, in place (wave 2, C6; a
+    warning only). The row already holds the hours of day of its own reports (`analytics.
+    _attach_report_hours`); this adds the chronic log's daily profile on the row's contact pair at
+    the chronic frequency put on the row's band centre (the same mapping that decides which chronic
+    answer a band carries, `by_centre`), the status, and the warning, appended to the row's `why`.
+    No profile there: "no home record at this band", the profile and ratio None, the report hours
+    kept. Reads and changes nothing else on the row."""
+    from . import daily_swing as _ds
+    by_centre = (pair_block or {}).get("by_centre") or {}
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        hours = (r.get("daily_swing") or {}).get("report_hours")
+        c = r.get("band_center_hz")
+        entry = by_centre.get(float(c)) if c is not None else None
+        ent_ds = (entry or {}).get("daily_swing")
+        if ent_ds is None or ent_ds.get("status") != _ds.STATUS_MEASURED:
+            r["daily_swing"] = _ds.swing_block(None, hours)
+        else:
+            profile = {k: ent_ds.get(k) for k in ("hourly_median", "n_readings_by_hour", "ratio",
+                                                  "hour_high", "hour_low", "n_readings", "n_days")}
+            r["daily_swing"] = _ds.swing_block(profile, hours, freq_hz=ent_ds.get("chronic_freq_hz"))
+        if r["daily_swing"].get("warning"):
+            r["why"] = _ds.append_warning(r.get("why"), r["daily_swing"]["warning"])
     return rows

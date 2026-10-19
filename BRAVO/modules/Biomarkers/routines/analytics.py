@@ -6366,7 +6366,8 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
                                tile_seconds=None, requested_seconds=None, chunk_exclusion=None,
                                from_device_spectrum=None, from_clinic_sheet=None,
                                covariate=None, covariate_label=None,
-                               current_removed_check=False, by_recording_source=True):
+                               current_removed_check=False, by_recording_source=True,
+                               report_times_s=None):
     """The whole grid: for every band centre and every length of signal averaged into one
     measurement, how well that band's power tracks the chosen pain score.
 
@@ -6402,6 +6403,12 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     the covariate taken out as a straight line, its interval and a rotation p
     (`_current_removed_check`), as a WARNING only: it moves no answer and draws on its own random
     numbers, so no other number moves either.
+
+    ``report_times_s`` (wave 2, C6; one UTC time per pain report, in the order of the pain scores):
+    every best correlation row gains ``daily_swing: {"report_hours": ...}``, the hours of day
+    (California local time) of the reports its chosen cell used (`daily_swing.report_hours`), for
+    the caller to complete with the chronic log's daily profile. A warning only: it draws no random
+    number and moves no other number. None (the neutral setting) skips it.
 
     ``by_recording_source=False`` leaves out ``correlation_by_recording_source`` (each cell split into
     its TD-read and PSD-read reports): the TD-only and PSD-only grids (wave 2, C4) hold one source
@@ -6588,6 +6595,9 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     # selectable and exportable.
     _apply_family_wise_correction(best_corr_rows)
     _apply_family_wise_correction(best_auc_rows)
+    if report_times_s is not None:
+        # wave 2, C6: the hours of day of each row's own reports, a warning only (no random number)
+        _attach_report_hours(best_corr_rows, X, pain, kept_req, report_times_s)
 
     # The headline row for each band centre names ONE cell -- the length of signal that won. The
     # mark has to travel with it, or a reader who never looks at the grid itself would see a
@@ -7278,6 +7288,28 @@ def _best_rows_correlation(corr, corr_n, X, pain, centers, requested, delivered,
                 rng=np.random.default_rng([int(current_check["seed"]), 484, int(c)]))
         rows.append(row)
     return rows
+
+
+def _attach_report_hours(rows, X, pain, requested, report_times_s):
+    """``daily_swing: {"report_hours": ...}`` on each best correlation row (wave 2, C6): the hours
+    of day of the reports its chosen cell (its band, at the length of signal it names) correlated,
+    those with both a band-power value and a pain score. In place; nothing else is read or moved."""
+    from . import daily_swing as _ds
+    rt = np.asarray(report_times_s, dtype=float)
+    y = np.asarray(pain, dtype=float)
+    if rt.size != X.shape[1]:
+        return
+    req = [float(v) for v in requested]
+    for c, row in enumerate(rows or []):
+        if not isinstance(row, dict):
+            continue
+        s = row.get("integration_seconds_requested")
+        if s is None or float(s) not in req:
+            row["daily_swing"] = {"report_hours": _ds.report_hours([])}
+            continue
+        x = X[req.index(float(s)), :, c]
+        m = np.isfinite(x) & np.isfinite(y)
+        row["daily_swing"] = {"report_hours": _ds.report_hours(rt[m])}
 
 
 #: The words beside the current-removed check, wherever it is printed (decision 484).

@@ -8621,6 +8621,9 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                 covariate_label=(stim_current.CURRENT_LABEL if cov_values is not None else None),
                 # the current-removed check on every band row, a warning only (decision 484)
                 **({"current_removed_check": True} if sweep_settings.CURRENT_REMOVED_CHECK else {}),
+                # the hours of day of each best row's own reports (wave 2, C6, a warning only)
+                **({"report_times_s": np.asarray(pro_times, dtype=float)}
+                   if _SWEEP_SETTINGS_MODULE.DAILY_SWING else {}),
                 power_feature=("band power in the device's own least-significant-bit units, "
                                "reached from the 250 samples-per-second voltage trace by the "
                                "validated transform, or from the device's own spectrum where no "
@@ -9536,7 +9539,9 @@ def _attach_chronic_choice(participant_uid, sweeps, pro_times, pain_values, *, t
                 samples, currents, pro_times, pain_values,
                 centres=sw.get("center_freqs_hz") or [], tol_s=float(tol_s),
                 match_direction=match_direction, allow_window_reuse=bool(allow_window_reuse),
-                seed=0, pairs=[ch], chronic_match=chronic_match)[availability._canon_channel(ch)]
+                seed=0, pairs=[ch], chronic_match=chronic_match,
+                **({"daily_swing": True} if sweep_settings.DAILY_SWING else {}))[
+                    availability._canon_channel(ch)]
         sw["chronic_band_choice"] = {k: v for k, v in blk.items() if k != "by_centre"}
         grids = [(sweep_settings.GRID_SOURCE_MIXED, sw)] + [
             (name, g) for name, g in (sw.get("by_source_grid") or {}).items()
@@ -9545,6 +9550,9 @@ def _attach_chronic_choice(participant_uid, sweeps, pro_times, pain_values, *, t
         for name, g in grids:
             chronic_band_choice.label_rows(g.get("best_correlation_rows"), blk, name)
             chronic_band_choice.label_rows(g.get("best_auc_rows"), blk, name, correlation=False)
+            if sweep_settings.DAILY_SWING:
+                # wave 2, C6: the daily swing at each band, a warning only (the PI, 2026-10-19)
+                chronic_band_choice.attach_daily_swing(g.get("best_correlation_rows"), blk)
     return float(_time.perf_counter() - t0)
 
 
