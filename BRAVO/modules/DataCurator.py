@@ -58,6 +58,31 @@ def loadCacheFile(source_file):
     rawBytes = secureEncoder.decrypt(rawBytes)
     return rawBytes
 
+def implant_device_uids(device_uid=None, serial=None, owner_uid=None, owner_only=None):
+    """Every device record of one implant (decisions 444 and 489, `DecodeCommon/implants.py`): the
+    records sharing a serial number with `device_uid`'s record or with `serial`, and, for an owner the
+    PI's ruling lists, every record of that owner of the listed type (`owner_uid` adds them for an
+    export whose own record is not known yet). `owner_only` keeps the records of that owner."""
+    from modules.DecodeCommon import implants
+    rows = list(models.DBSDevice.objects.values_list("uid", "serial_number", "owner_id", "type"))
+    seeds = [r for r in rows if (device_uid and r[0] == device_uid) or (serial and r[1] == serial)]
+    out = {r[0] for r in seeds} | ({device_uid} if device_uid else set())
+    t = implants.one_implant_type(owner_uid)
+    if t:
+        out |= {r[0] for r in rows if str(r[2]) == str(owner_uid) and r[3] == t}
+    while True:                       # every record linked to one already in, so the set is the same
+        by = {r[0]: r for r in rows}  # whichever record of the implant it starts from
+        more = {r[0] for r in rows for u in out if u in by
+                and implants.same_implant(by[u][2], by[u][3], by[u][1], r[2], r[3], r[1])} - out
+        if not more:
+            break
+        out |= more
+    if owner_only is not None:
+        own = {r[0] for r in rows if str(r[2]) == str(owner_only)}
+        out = {u for u in out if u in own or u == device_uid}
+    return sorted(out)
+
+
 def clock_anchor_table(device_uid=None, owner=None, extra=()):
     """The clock anchors of one device's stored Percept exports (`SourceFile.metadata["ClockAnchor"]`,
     written at ingest), plus `extra`. By device where it is known, since clock blocks are numbered
@@ -65,9 +90,8 @@ def clock_anchor_table(device_uid=None, owner=None, extra=()):
     if device_uid:
         # every device record of the same implant (same serial number), as the ingest builds it
         # (`_ingest_clock_table`): RCS08's one implant is filed as three device records (decision 444)
-        serial = models.DBSDevice.objects.filter(uid=device_uid).values_list("serial_number", flat=True).first()
-        uids = list(models.DBSDevice.objects.filter(serial_number=serial).values_list("uid", flat=True)) if serial else []
-        q = models.SourceFile.objects.filter(device__in=sorted(set(uids) | {device_uid}))
+        # (one implant can be several records: same serial, or the PI's ruling, decision 489)
+        q = models.SourceFile.objects.filter(device__in=implant_device_uids(device_uid))
     elif owner is not None:
         q = models.SourceFile.objects.filter(owner=owner)
     else:
@@ -80,15 +104,17 @@ def clock_anchor_tables(owner):
     """{device uid: AnchorTable} over an owner's stored exports, for a caller that reads many of
     them; the key "" holds the exports with no device recorded. One query."""
     rows = {}
-    serial_of = dict(models.DBSDevice.objects.values_list("uid", "serial_number"))
+    devs = set(models.SourceFile.objects.filter(owner=owner).values_list("device", flat=True))
+    # each record's implant (decisions 444, 489): the sorted uids of every record of it
+    implant_of = {dev: (tuple(implant_device_uids(dev)) if dev else ("",)) for dev in devs}
     for dev, md in models.SourceFile.objects.filter(owner=owner).values_list("device", "metadata"):
         a = (md or {}).get("ClockAnchor")
         if a:
-            rows.setdefault(serial_of.get(dev) or dev or "", []).append(a)
-    # keyed by device uid as before, each holding every record of its implant (decision 444)
+            rows.setdefault(implant_of.get(dev, (dev or "",)), []).append(a)
+    # keyed by device uid as before, each holding every record of its implant
     out = {}
-    for dev in set(models.SourceFile.objects.filter(owner=owner).values_list("device", flat=True)):
-        key = serial_of.get(dev) or dev or ""
+    for dev in devs:
+        key = implant_of.get(dev)
         if key in rows:
             out[dev or ""] = TabletClock.AnchorTable(rows[key])
     return out
@@ -118,16 +144,17 @@ def _ingest_clock_table(JSON, source_file, device=None):
     it), plus this export's own anchor."""
     own = TabletClock.export_anchor(JSON)
     uids = []
+    owner_uid = getattr(source_file, "owner_id", None)
     if device is not None:
-        uids = [device.uid]
+        uids = implant_device_uids(device.uid)            # every record of its implant (decision 489)
     else:
         try:
             serial = JSON["DeviceInformation"]["Final"]["NeurostimulatorSerialNumber"]
             if source_file.metadata.get("automatic_deidentification"):
                 serial = hmac.new(HASH_KEY.encode("utf8"), serial.encode("utf-8"), hashlib.sha256).hexdigest()
-            uids = list(models.DBSDevice.objects.filter(serial_number=serial).values_list("uid", flat=True))
+            uids = implant_device_uids(serial=serial, owner_uid=owner_uid)
         except Exception:
-            uids = []
+            uids = implant_device_uids(owner_uid=owner_uid) if owner_uid else []
     anchors = []
     for u in uids:
         anchors += [(m or {}).get("ClockAnchor") for m in
@@ -218,9 +245,8 @@ def restamp_chronic_schedule(person, device):
     from all its exports' settings records and write it onto all its chronic recordings. Returns
     the counts from `chronic_schedule.restamp_device_chronic`."""
     from modules.MedtronicPercept import chronic_schedule
-    serial = getattr(device, "serial_number", None)
-    uids = list(models.DBSDevice.objects.filter(owner=person, serial_number=serial).values_list("uid", flat=True)) if serial else []
-    uids = sorted(set(uids) | {str(device.uid)})
+    # every record of the implant (same serial, or the PI's ruling: decision 489), this owner's
+    uids = implant_device_uids(str(device.uid), owner_only=getattr(person, "uid", person))
     sfs = list(models.SourceFile.objects.filter(owner=person, device__in=uids, type="MedtronicJSON"))
     rows = list(models.Recording.objects.filter(source__in=sfs, type="MedtronicChronicBrainSense"))
     by_source = {}
