@@ -250,3 +250,20 @@ def test_readings_before_the_first_labelled_record_take_its_label_and_are_listed
     t = np.asarray([T0 - 95 * 24 * H, T0 + 12 * H])
     rec = _rec("Left", t, [10.0, 20.0], [1.0, 1.0], sched)
     assert R.chronic_pair_keys(rec, t, "LEFT", "X") == ["ONE_THREE_LEFT", "ONE_THREE_LEFT"]
+
+
+def test_a_schedule_whose_last_stretch_has_no_record_can_be_stored_as_json():
+    """The live re-ingest of 2026-10-19 (decision 490): 350 of 600 exports' restamps failed with
+    MySQL error 3140, "Invalid JSON text", because a stretch with no settings record (or a flagged
+    one) that runs to the end of the schedule was written ending at float("inf"), which Python's
+    JSON writes as `Infinity` and MySQL refuses. A failed restamp leaves the device's chronic
+    recordings on the previous schedule until a later export's restamp succeeds. An open end is now
+    written as null (JSON has no infinity)."""
+    import json
+    no_sensing = [{"GroupId": "GroupIdDef.GROUP_B", "ActiveGroup": True, "ProgramSettings": {}}]
+    s1 = _export(T0, T0 + 300, _groups("A"), _groups("A"))
+    s2 = _export(T0 + 24 * H, T0 + 24 * H + 300, _groups("A"), no_sensing)
+    sched = _sched([s1, s2])
+    json.dumps(sched, allow_nan=False)                 # raises ValueError on an infinity
+    nr = sched["LeftHemisphere"]["ScheduleNoRecord"]
+    assert nr and nr[-1][1] is None, nr

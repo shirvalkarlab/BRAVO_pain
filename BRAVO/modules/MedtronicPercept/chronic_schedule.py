@@ -284,7 +284,7 @@ def side_schedules(U):
             lab, lead, flag = label_and_lead_at(U, r, side)
             if lab is None:
                 unknown += 1
-                t_end = probes[i + 1][0] if i + 1 < len(probes) else float("inf")
+                t_end = probes[i + 1][0] if i + 1 < len(probes) else None   # open end: null (decision 490)
                 if norec and norec[-1][1] == t_cp:
                     norec[-1][1] = t_end
                 else:
@@ -302,7 +302,7 @@ def side_schedules(U):
             if lab[1] is not None and (not freq or freq[-1][1] != lab[1]):
                 freq.append([t_cp, lab[1]])
             if flag:
-                t_end = probes[i + 1][0] if i + 1 < len(probes) else float("inf")
+                t_end = probes[i + 1][0] if i + 1 < len(probes) else None   # open end: null (decision 490)
                 if flagged and flagged[-1][1] == t_cp:
                     flagged[-1][1] = t_end
                 else:
