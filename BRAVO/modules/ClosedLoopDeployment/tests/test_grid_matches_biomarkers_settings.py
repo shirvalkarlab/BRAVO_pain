@@ -313,7 +313,10 @@ def _default_key_settings():
             "label_strategy": "tertile", "percentile_low": 33.3333, "percentile_high": 66.6667,
             "outlier_n_mad": float(A.OUTLIER_N_MAD), "outlier_scale": A.OUTLIER_SCALE,
             "match_direction": "nearest", "include_cross_setting_stability": False,
-            "include_clinic_sheet_ratings": False, "adjust_for_stim_current": False}
+            "include_clinic_sheet_ratings": False, "adjust_for_stim_current": False,
+            # wave 2, C5: while the chronic log chooses, the key names how a report meets it
+            # ("covering", the recommended default)
+            **({"chronic_match": "covering"} if sweep_settings.CHRONIC_CHOICE else {})}
 
 
 def _real_signature(rule):

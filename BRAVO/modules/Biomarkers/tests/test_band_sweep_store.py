@@ -268,6 +268,9 @@ def test_the_writers_key_is_the_one_home_signature():
         sig, _prov, tiles_sig = B._band_sweep_signature("u", pro_df, "nrs", settings)
         tiles_key = st.product_key(B._RAW_LSB_SHARED_KIND, "u", tiles_sig)
         report_key = pro_df.attrs[B.PRO_STORE_KEY_ATTR]
+        if SS.CHRONIC_CHOICE:
+            # wave 2, C5: the chronic log decides bands, so the key carries its recordings
+            settings = dict(settings, chronic_recordings=B._chronic_recording_identity("u"))
         assert sig == SS.grid_signature("u", tiles_key, report_key, "nrs", settings)
         assert sig[1] == SS.GRID_RULE_VERSION
 

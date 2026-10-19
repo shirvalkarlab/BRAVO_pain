@@ -49,7 +49,7 @@ def _tag(rows, name):
 #: changes. The columns themselves are part of the table, so a new column does not need a bump.
 CORRELATION_KIND = "biomarker_band_correlation"
 DISCRIMINATION_KIND = "biomarker_band_discrimination"
-RULE_VERSION = ("v4_td_psd_apart" if _os.environ.get("BRAVO_SOURCE_GRIDS", "1").strip() != "0" else "v3_current_removed_check")  # (`BRAVO_SOURCE_GRIDS=0`: the neutral setting, `sweep_settings.SOURCE_GRIDS`) 2026-10-19: the TD-only and PSD-only grids' rows too, a `grid_source` and a `can_choose_band` column (wave 2, C4); v3 2026-10-18: decision 484; v2 decision 483; v1 "v1_grid_rows_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+RULE_VERSION = ("v6_chronic_covering" if _sw.CHRONIC_CHOICE else "v4_td_psd_apart" if _sw.SOURCE_GRIDS else "v3_current_removed_check")  # (`BRAVO_CHRONIC_CHOICE=0` / `BRAVO_SOURCE_GRIDS=0`: the neutral settings, `sweep_settings.CHRONIC_CHOICE` / `SOURCE_GRIDS`) v6 2026-10-19: each best row's `choice_source` and the chronic log's answer at its band, each report paired with the 10-minute chronic average covering it (wave 2, C5; "v5_chronic_choice" was the first C5 build, never to be served); v4 2026-10-19: the TD-only and PSD-only grids' rows too, a `grid_source` and a `can_choose_band` column (wave 2, C4); v3 2026-10-18: decision 484; v2 decision 483; v1 "v1_grid_rows_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 #: Columns copied from the best row for each centre. Anything not in this list stays with the
 #: response (the sentences, the row's own wording), because a table is for numbers.
@@ -63,6 +63,11 @@ _BEST_DISCRIMINATION_COLUMNS = (
     "chosen_as_best_of_n_windows", "shuffled_best_of_windows_p95",
     "shuffled_best_of_windows_p99", "p_selection_aware", "beats_shuffled_best_of_windows_p95",
 )
+
+
+#: The chronic log's numbers copied onto each best row's table line (wave 2, C5), as `chronic_<name>`.
+_CHRONIC_COLUMNS = ("freq_hz", "n_readings", "n_reports", "pearson_r", "pearson_r_low",
+                    "pearson_r_high", "p_rotation")
 
 
 def _f(v):
@@ -131,6 +136,16 @@ def _rows(sweep, channel, value_grid, value_name, best_rows, best_columns, extra
             for name, g in extra_grids.items():
                 row[name] = (_f(g[t][c]) if t < len(g) and c < len(g[t]) else np.nan)
             row["is_best_for_centre"] = is_best
+            if b is not None and "choice_source" in b:
+                # wave 2, C5: which source decides this band, and the chronic log's answer at it,
+                # on the best row only (copied, never recomputed)
+                ch = (b.get("chronic") or {}) if is_best else {}
+                row["choice_source"] = (str(b.get("choice_source")) if is_best else None)
+                row["chronic_covered"] = (bool(ch.get("covered")) if is_best else None)
+                for col in _CHRONIC_COLUMNS:
+                    row["chronic_" + col] = _f(ch.get(col)) if is_best else np.nan
+                row["chronic_answer"] = (str(ch["answer"]) if ch.get("answer") is not None
+                                         else None)
             for col in best_columns:
                 v = b.get(col) if is_best else None
                 if col in ("answer",):

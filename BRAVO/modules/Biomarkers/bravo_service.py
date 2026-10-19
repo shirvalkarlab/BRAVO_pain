@@ -45,6 +45,9 @@ from .routines import stim_current
 from .routines import deployment_current
 from .routines import sheet_ratings
 from .routines import local_time
+from .routines import chronic_band_choice
+#: the module under a name no function's local `sweep_settings` dict can hide (wave 2, C5)
+_SWEEP_SETTINGS_MODULE = sweep_settings
 from modules.DecodeCommon import data_start as _data_start
 from modules.DecodeCommon import parallel as _PAR
 from modules.DecodeCommon import representation as _repr
@@ -9117,6 +9120,11 @@ def band_time_sweep_for_participant(request_data):
         # so those entries stay valid and are still served; a request with the switch on cannot be
         # answered from one of them, because this makes its key a different key.
         "adjust_for_stim_current": bool(adjust_current)}
+    # How a pain report meets the chronic log (wave 2, C5; the PI, 2026-10-19): in the KEY, so the
+    # recommended default and the page's override never share a saved answer.
+    chronic_match = _SWEEP_SETTINGS_MODULE.chronic_match_param(request_data)
+    if _SWEEP_SETTINGS_MODULE.CHRONIC_CHOICE:
+        sweep_settings["chronic_match"] = chronic_match
     sweep_sig, sweep_prov, tiles_sig = _band_sweep_signature(participant_uid, pro_df,
                                                              label_metric, sweep_settings)
     if sweep_sig is not None:
@@ -9178,6 +9186,15 @@ def band_time_sweep_for_participant(request_data):
         metric_key=label_metric, metric_label=metric_label, match_direction=match_direction,
         region_map=_region_map(Participant, chan_order), participant_uid=participant_uid,
         from_clinic_sheet=from_clinic_sheet, adjust_for_stim_current=adjust_current)
+    # THE CHRONIC LOG AS THE MAIN SOURCE (wave 2, C5): its own answer per pair and chronic
+    # frequency, on the same pain series as the grid (`pro_times`, `pain_values`, after the
+    # clinic-sheet merge), and on every best row which source decides the band.
+    chronic_s = None
+    if _SWEEP_SETTINGS_MODULE.CHRONIC_CHOICE:
+        chronic_s = _attach_chronic_choice(
+            participant_uid, sweeps, pro_times, pain_values, tol_s=tol_s,
+            match_direction=match_direction, allow_window_reuse=allow_window_reuse,
+            chronic_match=chronic_match)
     # The switch's own block on every contact pair's sweep too, because the heat maps' caption is
     # drawn from the pair it shows (the same reason `display_short` sits on each pair).
     for _sw in (sweeps or {}).values():
@@ -9218,11 +9235,15 @@ def band_time_sweep_for_participant(request_data):
             "match_direction": match_direction,
             "include_clinic_sheet_ratings": bool(include_sheets),
             "adjust_for_stim_current": bool(adjust_current),
+            **({"chronic_match": chronic_match,
+                "chronic_match_is_default": chronic_match == chronic_band_choice.CHRONIC_MATCH_DEFAULT}
+               if _SWEEP_SETTINGS_MODULE.CHRONIC_CHOICE else {}),
             "match_extent_sec_ignored": ("the top-of-page slider for how much recording goes into "
                                          "one measurement is not read here, because that quantity "
                                          "is the axis this section sweeps"),
         },
         "wall_seconds": wall,
+        **({"chronic_seconds": chronic_s} if chronic_s is not None else {}),
         "message": None,
         "served_from_store": False,
         "store_keys": None,
@@ -9446,6 +9467,87 @@ _BAND_SWEEP_RULE_VERSION = sweep_settings.GRID_RULE_VERSION
 BAND_SWEEP_TIMING_FIELDS = ("wall_seconds", "matched_seconds", "total_seconds")
 
 
+#: What a chronic recording's database row says about where each reading is filed (put on the
+#: decoded recording by `_decoded_with_row_labels`): part of the chronic log's identity, because a
+#: restamp of the one schedule (decisions 487-489) changes these and not the file.
+_CHRONIC_ROW_LABELS = ("CenterFrequencyHz", "FreqScheduleHz", "ContactSchedule", "SignalLeadSchedule")
+
+
+def _chronic_recording_identity(participant_uid):
+    """A digest of everything the chronic log's answer is read from (wave 2, C5), from the database
+    rows alone: every chronic recording's (uid, content hash, the row labels that file its
+    readings), every streaming band-power recording's (uid, content hash) (they name the fallback
+    contact pair, `representation.native_lsb_by_channel`), the implant date and the filing rule's
+    version. None when the participant is unknown."""
+    import hashlib
+    Participant = models.Participant.find(uid=participant_uid)
+    if not Participant:
+        return None
+    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    ident = []
+    for u, h, t, md in models.Recording.find_all(source__in=SourceFiles, type__in=CHRONIC_TYPES) \
+            .values_list("uid", "hashed", "type", "metadata"):
+        md = md if isinstance(md, dict) else {}
+        ident.append((str(u), str(h), str(t),
+                      json.dumps({k: md.get(k) for k in _CHRONIC_ROW_LABELS}, sort_keys=True,
+                                 default=str)))
+    for u, h, t in models.Recording.find_all(source__in=SourceFiles, type__in=POWERDOMAIN_TYPES) \
+            .values_list("uid", "hashed", "type"):
+        ident.append((str(u), str(h), str(t), ""))
+    ident.sort()
+    blob = (repr(ident) + "|start=%r|index=%r" % (
+        float(_data_start.data_start_s(participant_uid) or 0.0), _repr.CHANNEL_INDEX_VERSION))
+    return "%d:%s" % (len(ident), hashlib.blake2b(blob.encode("utf8"), digest_size=16).hexdigest())
+
+
+def _attach_chronic_choice(participant_uid, sweeps, pro_times, pain_values, *, tol_s,
+                           match_direction, allow_window_reuse, chronic_match="covering"):
+    """The chronic log's answer on every pair's sweep and every best row (wave 2, C5; the PI,
+    2026-10-18: "the chronic log may choose"), in place. Returns the seconds it took.
+
+    The chronic recordings are the loader's (`_load_recordings`: repeats merged, each reading filed
+    under the lead its signal came from, zeros and the invalid code blanked; decisions 480, 487,
+    488), read through `chronic_band_choice` with each reading's own contact pair, band and lead
+    current. On each pair's sweep: `chronic_band_choice` (one entry per chronic frequency). On every
+    best row of the mixed, TD-only and PSD-only grids: `chronic` (the answer at the row's band, or
+    "no home record at this band") and `choice_source` ("chronic" or "TD" on TD-only correlation
+    rows, "TD" on TD-only area-under-the-curve rows, "none" on rows that never choose)."""
+    t0 = _time.perf_counter()
+    pairs = [ch for ch, sw in (sweeps or {}).items()
+             if isinstance(sw, dict) and isinstance(sw.get("by_source_grid"), dict)]
+    if not pairs:
+        return float(_time.perf_counter() - t0)
+    try:
+        chronic = _load_recordings(participant_uid, CHRONIC_TYPES)
+        pdl = _load_recordings(participant_uid, POWERDOMAIN_TYPES)
+        samples = chronic_band_choice.chronic_samples_by_pair(chronic, pdl)
+        currents = chronic_band_choice.lead_currents(chronic)
+    except Exception as exc:                                   # noqa: BLE001 - said on each pair
+        _log.warning("Biomarkers: the chronic log could not be read for %s", participant_uid,
+                     exc_info=True)
+        samples, currents = None, None
+        why = f"the chronic log could not be read: {exc!r}"
+    for ch in pairs:
+        sw = sweeps[ch]
+        if samples is None:
+            blk = {"pair": ch, "frequencies": [], "by_centre": {}, "why": why}
+        else:
+            blk = chronic_band_choice.chronic_band_choice(
+                samples, currents, pro_times, pain_values,
+                centres=sw.get("center_freqs_hz") or [], tol_s=float(tol_s),
+                match_direction=match_direction, allow_window_reuse=bool(allow_window_reuse),
+                seed=0, pairs=[ch], chronic_match=chronic_match)[availability._canon_channel(ch)]
+        sw["chronic_band_choice"] = {k: v for k, v in blk.items() if k != "by_centre"}
+        grids = [(sweep_settings.GRID_SOURCE_MIXED, sw)] + [
+            (name, g) for name, g in (sw.get("by_source_grid") or {}).items()
+            if name in (sweep_settings.GRID_SOURCE_TD, sweep_settings.GRID_SOURCE_PSD)
+            and isinstance(g, dict)]
+        for name, g in grids:
+            chronic_band_choice.label_rows(g.get("best_correlation_rows"), blk, name)
+            chronic_band_choice.label_rows(g.get("best_auc_rows"), blk, name, correlation=False)
+    return float(_time.perf_counter() - t0)
+
+
 def _band_sweep_signature(participant_uid, pro_df, label_metric, settings):
     """`(signature, provenance, tile_signature)` for the sweep's three products, or three Nones
     when an input cannot be named: no tile entry key (no recordings identity) or no pain-report
@@ -9462,6 +9564,10 @@ def _band_sweep_signature(participant_uid, pro_df, label_metric, settings):
     if tiles_sig is None or not report_key:
         return None, None, tiles_sig
     tiles_key = _cache_store.product_key(_RAW_LSB_SHARED_KIND, participant_uid, tiles_sig)
+    if sweep_settings.CHRONIC_CHOICE:
+        # The chronic log decides bands (wave 2, C5), so its recordings are an input: their rows,
+        # content and the schedules that file each reading (`_chronic_recording_identity`).
+        settings = dict(settings, chronic_recordings=_chronic_recording_identity(participant_uid))
     # The key's one assembly (decision 317): the other pages' readers rebuild it through the same
     # function to recognise a grid whose sidecar was written before sidecars named their rule.
     sig = sweep_settings.grid_signature(participant_uid, tiles_key, report_key, label_metric,
@@ -9526,7 +9632,8 @@ def _store_sweep_results(participant_uid, sig, prov, response, *, n_recordings=N
             match_direction=sa.get("match_direction"), allow_window_reuse=sa.get("allow_window_reuse"),
             label_strategy=sa.get("label_strategy"), percentile_low=sa.get("percentile_low"),
             percentile_high=sa.get("percentile_high"),
-            include_clinic_sheet_ratings=bool(sa.get("include_clinic_sheet_ratings", False)))
+            include_clinic_sheet_ratings=bool(sa.get("include_clinic_sheet_ratings", False)),
+            chronic_match=sa.get("chronic_match"))
     except (TypeError, ValueError):                             # a response without the block
         tag = None
     common = dict(writer="biomarkers", trigger="band_time_sweep", provenance=prov,
@@ -9542,6 +9649,10 @@ def _store_sweep_results(participant_uid, sig, prov, response, *, n_recordings=N
                          # the Stim Optimizer's readiness table finds the adjusted one by this flag
                          # (panel C item 6). Descriptive only: no reader selects a band by it.
                          "adjust_for_stim_current": bool(sa.get("adjust_for_stim_current", False)),
+                         # The chronic recordings' identity the key was built with (wave 2, C5), so
+                         # a reader can rebuild the key from this sidecar
+                         # (`sweep_settings._key_settings_from_sidecar`).
+                         **sweep_settings.chronic_identity_of_signature(sig),
                          # A grid at the daily default settings names a keep group, so the store
                          # keeps its newest one however many grids other settings write (the PI,
                          # 2026-09-26; decision 317 found it evicted and rebuilt on every request).

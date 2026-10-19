@@ -54,7 +54,17 @@ GRID_KIND = "biomarker_band_sweep"
 #: as before C4, under the rule before C4 (`BRAVO_SOURCE_GRIDS=0`, read when this file is imported,
 #: so the rule below follows it and a grid without the two is never filed under the rule with them).
 SOURCE_GRIDS = _os.environ.get("BRAVO_SOURCE_GRIDS", "1").strip() != "0"
-GRID_RULE_VERSION = "v30_td_psd_apart"  # v30 2026-10-19: a TD-only and a PSD-only grid beside the mixed one, the band chosen from the TD grid (wave 2, C4); v29 2026-10-18: the current-removed check on every band row, a warning only, and the adjusted grid always built (decision 484); v28 2026-10-18: the current taken out read at each report's own pieces of recording (decision 483); v27 2026-10-03: device PSD snapshots judged by 7 MAD above their own median, not the TD chunks' (decision 411); v26: single 3 s chunks dropped only when more than 7 MAD above their contact's own median, every contact of every participant (decision 410); v25 3 MAD both sides; v24 exact rotation null, tablet clock  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+#: THE CHRONIC LOG AS THE MAIN SOURCE (wave 2, C5; the PI, 2026-10-18: "the chronic log may
+#: choose", a departure from CLAUDE.md section 10's "clinic chooses, home confirms"). True: every grid
+#: also carries, per contact pair, the chronic log's own answer at each chronic sensing frequency
+#: (`routines/chronic_band_choice.py`), each TD-only row says which source decides it
+#: (`choice_source`), and the choosing readers read the chronic answer where it covers the band
+#: (`choosing_sweep`). False is the neutral setting (`BRAVO_CHRONIC_CHOICE=0`): no chronic answer, the
+#: grid and its key as before C5. Needs the TD-only grid (C4), so it is off when that is.
+CHRONIC_CHOICE = SOURCE_GRIDS and _os.environ.get("BRAVO_CHRONIC_CHOICE", "1").strip() != "0"
+GRID_RULE_VERSION = "v32_chronic_covering"  # v32 2026-10-19: the chronic log's answer on every TD-only row, deciding the band where it covers it, each report paired with the one 10-minute chronic average covering it (wave 2, C5; the PI's ruling of 2026-10-19). "v31_chronic_choice" was the first C5 build (window median), saved by the refresh job while it was being proved and never to be served; v30 2026-10-19: a TD-only and a PSD-only grid beside the mixed one, the band chosen from the TD grid (wave 2, C4); v29 2026-10-18: the current-removed check on every band row, a warning only, and the adjusted grid always built (decision 484); v28 2026-10-18: the current taken out read at each report's own pieces of recording (decision 483); v27 2026-10-03: device PSD snapshots judged by 7 MAD above their own median, not the TD chunks' (decision 411); v26: single 3 s chunks dropped only when more than 7 MAD above their contact's own median, every contact of every participant (decision 410); v25 3 MAD both sides; v24 exact rotation null, tablet clock  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+if not CHRONIC_CHOICE:                                # the neutral setting: the rule before C5
+    GRID_RULE_VERSION = "v30_td_psd_apart"
 if not SOURCE_GRIDS:                                  # the neutral setting: the rule before C4
     GRID_RULE_VERSION = "v29_current_removed_check"
 # The two raw inputs every grid names in its chain, in the order its key carries them: the saved
@@ -276,6 +286,23 @@ def include_clinic_sheet_ratings_param(request_data):
     return str(value).lower() in ("1", "true", "yes", "on")
 
 
+#: HOW A PAIN REPORT MEETS THE CHRONIC LOG (wave 2, C5; the PI, 2026-10-19). "covering", the
+#: recommended default: the one chronic reading whose 10-minute average covers the report; "window":
+#: the readings within the heat map's matching window (the answer then carries a warning that it is
+#: not the recommended default). Its own request key, so moving the page's matching window never
+#: changes the default. One home: `chronic_band_choice.CHRONIC_MATCH_*` must say the same.
+CHRONIC_MATCH_KEY = "ChronicMatch"
+CHRONIC_MATCH_DEFAULT = "covering"
+CHRONIC_MATCH_CHOICES = ("covering", "window")
+
+
+def chronic_match_param(request_data):
+    """`ChronicMatch` as "covering" (the default) or "window"; anything else takes the default."""
+    value = request_data.get("ChronicMatch", "") if request_data else ""
+    value = str(value or "").strip().lower()
+    return value if value in CHRONIC_MATCH_CHOICES else CHRONIC_MATCH_DEFAULT
+
+
 def sweep_metric_param(request_data):
     """The section's own `SweepMetric`, else the page's `LabelMetric`, else the default; an
     unknown score falls back to the default the way `_resolve_biomarker_metric` does."""
@@ -308,7 +335,7 @@ def adjust_for_stim_current_param(request_data):
 
 def sweep_settings_tag(*, label_metric, match_tolerance_min, match_direction, allow_window_reuse,
                        label_strategy, percentile_low, percentile_high,
-                       include_clinic_sheet_ratings=False):
+                       include_clinic_sheet_ratings=False, chronic_match=None):
     """The settings a stored grid was built under, as one normalised, JSON-safe dict.
 
     WHY, 2026-09-11. The store keeps up to twelve grids per participant (decision 107), one per
@@ -328,6 +355,11 @@ def sweep_settings_tag(*, label_metric, match_tolerance_min, match_direction, al
         "percentile_low": float(percentile_low),
         "percentile_high": float(percentile_high),
         "include_clinic_sheet_ratings": bool(include_clinic_sheet_ratings),
+        # wave 2, C5: named only when not the recommended default, so every tag written before
+        # it and every default tag stays as it was, and a reader asking for the default (every
+        # page but the Biomarkers page's override) never matches a non-default grid
+        **({"chronic_match": str(chronic_match)}
+           if CHRONIC_CHOICE and chronic_match not in (None, CHRONIC_MATCH_DEFAULT) else {}),
     }
 
 
@@ -339,7 +371,8 @@ def sweep_settings_tag_from_request(request_data):
         label_metric=sweep_metric_param(rd), match_tolerance_min=match_tolerance_param(rd),
         match_direction=sweep_match_direction(rd), allow_window_reuse=allow_window_reuse_param(rd),
         label_strategy=strategy, percentile_low=low, percentile_high=high,
-        include_clinic_sheet_ratings=include_clinic_sheet_ratings_param(rd))
+        include_clinic_sheet_ratings=include_clinic_sheet_ratings_param(rd),
+        chronic_match=chronic_match_param(rd))
 
 
 def default_settings_keep_group(tag, adjust_for_stim_current=False):
@@ -412,7 +445,24 @@ def _key_settings_from_sidecar(extra):
         "include_cross_setting_stability": False,
         "include_clinic_sheet_ratings": bool(tag.get("include_clinic_sheet_ratings")),
         "adjust_for_stim_current": bool(extra.get("adjust_for_stim_current", False)),
+        # wave 2, C5: the chronic recordings' identity is in the key while the chronic log chooses
+        **({"chronic_recordings": extra["chronic_recordings"]}
+           if CHRONIC_CHOICE and "chronic_recordings" in extra else {}),
+        **({"chronic_match": tag.get("chronic_match") or CHRONIC_MATCH_DEFAULT}
+           if CHRONIC_CHOICE else {}),
     }
+
+
+def chronic_identity_of_signature(sig):
+    """``{"chronic_recordings": identity}`` when a grid key (`grid_signature`) carries the chronic
+    recordings' identity (wave 2, C5), else ``{}``: what the grid's sidecar records so its key can
+    be rebuilt from it."""
+    try:
+        settings = dict(sig[7])
+    except (TypeError, ValueError, IndexError):
+        return {}
+    return ({"chronic_recordings": settings["chronic_recordings"]}
+            if "chronic_recordings" in settings else {})
 
 
 def grid_written_under_rule_in_force(meta):
@@ -495,7 +545,74 @@ def choosing_sweep(sweep):
         return out
     out.update(td)
     out["choosing_grid"] = GRID_SOURCE_TD
+    if CHRONIC_CHOICE:
+        out["best_correlation_rows"] = [chronic_decides(r) for r in
+                                        (td.get("best_correlation_rows") or [])]
     return out
+
+
+#: The fields of a TD-only correlation row that the chronic log's answer replaces in the choosing
+#: view where it covers the band (wave 2, C5). Every reader that chooses a band reads these: the
+#: Stim Optimizer's pain relationship (`pearson_r`, `pearson_r_low`, `answer`) and its "still
+#: positive without the current" table (`pearson_r`, `pearson_r_adjusted`), the Closed-Loop report's
+#: direction check (the sign of `pearson_r`), the Closed-Loop "Choose a band" panel (r, its interval,
+#: the answer, the count). TD's own values are kept beside them under `td_values`.
+CHRONIC_DECIDES_FIELDS = ("pearson_r", "pearson_r_abs", "pearson_r_low", "pearson_r_high", "answer",
+                          "direction", "n_pain_reports", "why", "current_removed_check",
+                          "pearson_r_adjusted", "pearson_r_adjustment", "pearson_r_adjusted_n")
+
+
+def chronic_decides(row):
+    """One TD-only correlation row as the choosing readers see it (wave 2, C5; the PI, 2026-10-18:
+    "the chronic log may choose"). Where the row says `choice_source: "chronic"`, the chronic log's
+    correlation, interval, answer and current-removed check (a warning only) stand in the fields the
+    readers read, so where the chronic log and TD disagree the chronic log decides; TD's own values
+    go under `td_values`, and `decided_by` says which source the fields now hold. `can_choose_band`
+    is unchanged: it says whether a row may choose at all (TD-only rows yes; PSD-only and mixed rows
+    never), and `choice_source` says whose answer it chooses by. Any other row is returned as it is.
+    A copy: the stored row is never changed."""
+    if not isinstance(row, dict) or row.get("choice_source") != "chronic":
+        return row
+    ch = row.get("chronic") or {}
+    if not ch.get("covered"):
+        return row
+    out = dict(row)
+    out["td_values"] = {k: row.get(k) for k in CHRONIC_DECIDES_FIELDS if k in row}
+    r = ch.get("pearson_r")
+    chk = ch.get("current_removed_check") or None
+    pr = (chk or {}).get("partial_r")
+    if pr is None and (chk or {}).get("status") == "constant current":
+        pr = r                  # one current on every report: nothing to take out (decision 484)
+    out.update({
+        "pearson_r": r,
+        "pearson_r_abs": (abs(r) if r is not None else None),
+        "pearson_r_low": ch.get("pearson_r_low"),
+        "pearson_r_high": ch.get("pearson_r_high"),
+        "answer": ch.get("answer"),
+        "direction": ch.get("direction"),
+        "n_pain_reports": ch.get("n_reports"),
+        "current_removed_check": chk,
+        "pearson_r_adjusted": pr,
+        "pearson_r_adjustment": (pr - r if pr is not None and r is not None else None),
+        "pearson_r_adjusted_n": (chk or {}).get("n_pain_reports"),
+        "why": ("decided by the home record (chronic log, %s Hz): r %s, interval %s to %s, "
+                "rotation p %s, %s reports" % (ch.get("freq_hz"), _fmt(r), _fmt(ch.get("pearson_r_low")),
+                                               _fmt(ch.get("pearson_r_high")),
+                                               _fmt(ch.get("p_rotation")), ch.get("n_reports"))),
+        "decided_by": "chronic",
+    })
+    if ch.get("warning"):
+        # not the recommended default way of meeting the chronic log (the PI, 2026-10-19)
+        out["chronic_match_warning"] = ch["warning"]
+        out["why"] = out["why"] + ". " + ch["warning"]
+    return out
+
+
+def _fmt(v):
+    try:
+        return "%+.3f" % float(v)
+    except (TypeError, ValueError):
+        return "none"
 
 
 def choosing_grid(payload):
