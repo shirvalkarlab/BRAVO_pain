@@ -1,0 +1,16 @@
+{
+  "role": "source",
+  "hostname": "SOURCE_HOSTNAME",
+  "host_config": "/etc/bravo-aditya/daily-source.json",
+  "worker_lock": "/run/lock/bravo-aditya-manual-source.lock",
+  "ledger": "/var/lib/bravo-aditya/manual-source.json",
+  "mailbox": {
+    "request_directory": "/SHARED_DATA/manual-sync/request",
+    "status_directory": "/SHARED_PRIVATE/manual-sync/status",
+    "target_participant_uid": "TARGET_PARTICIPANT_UID",
+    "target_institute_uid": "TARGET_INSTITUTE_UID",
+    "owner_uid": 10001,
+    "source_mode": "upstream_files",
+    "upstream_available": true
+  }
+}

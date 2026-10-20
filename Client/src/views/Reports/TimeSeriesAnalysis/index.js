@@ -30,11 +30,13 @@ import {
   Slider
 } from "@mui/material"
 
-import ChevronRightIcon from "@mui/icons-material/ChevronRight";
-import SettingsIcon from "@mui/icons-material/Settings";
-import KeyboardDoubleArrowUpIcon from "@mui/icons-material/KeyboardDoubleArrowUp";
-import DashboardIcon from "@mui/icons-material/Dashboard";
-import CachedIcon from "@mui/icons-material/Cached";
+import { 
+  ChevronRight as ChevronRightIcon,
+  Settings as SettingsIcon,
+  KeyboardDoubleArrowUp as KeyboardDoubleArrowUpIcon, 
+  Dashboard as DashboardIcon,
+  Cached as CachedIcon
+} from "@mui/icons-material";
 
 // core components
 import MDBox from "components/MDBox";
@@ -485,27 +487,6 @@ function TimeSeriesAnalysis() {
                 </Card>
               </Grid>
             ) : null}
-            {!TimeSeriesAnalysisLayout.BurstDynamics && data ? (
-            <Grid item xs={12}>
-              <Card>
-                <MDBox display={"flex"} justifyContent={"space-between"} p={3}>
-                  <Grid container>
-                    <Grid item xs={12}>
-                      <MDBox display={"flex"} flexDirection={"column"}>
-                        <MDTypography variant="h5" fontWeight={"bold"} fontSize={24}>
-                          {"Burst Analysis"}
-                        </MDTypography>
-                      </MDBox>
-                    </Grid>
-                    <Grid item xs={12}>
-                      <BurstDynamics dataToRender={data} annotations={annotations} 
-                        participant_uid={participant_uid} figureTitle={"Burst Analysis"} />
-                    </Grid>
-                  </Grid>
-                </MDBox>
-              </Card>
-            </Grid>
-            ) : null}
             {!TimeSeriesAnalysisLayout.EventStatePSD && annotations.length > 0 ? (
               <Grid item xs={12} lg={6}>
                 <Card>
@@ -522,7 +503,7 @@ function TimeSeriesAnalysis() {
           </Grid>
           
           <Dialog open={timeseriesPlayback.playing} onClose={() => setTimeseriesPlayback({...timeseriesPlayback, playing: false})} 
-            PaperProps={{ sx: {minWidth: 0, width: 1000, maxWidth: "calc(100vw - 32px)"} }}
+            PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 1000 }} }}
           >
             <TimeseriesPlayback dataToRender={timeseriesPlayback.data} />
           </Dialog>

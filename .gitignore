@@ -214,12 +214,12 @@ web_modules/
 
 # dotenv environment variable files
 .env
+.env.*
+!.env.example
 .env.development.local
 .env.test.local
 .env.production.local
 .env.local
-.env.appliance
-secrets/
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -309,7 +309,6 @@ packages/react-devtools-inline/dist
 packages/react-devtools-shell/dist
 packages/react-devtools-timeline/dist
 
-Client/package-lock.json
 
 DataStorage
 BRAVO/venv
@@ -318,31 +317,46 @@ BRAVO/BRAVOStorage
 BRAVO/Certificates
 
 *.sql
-CLAUDE.md
-sample_data
-docs/BRAVO_Reference.html
-changes.txt
-handoff.md
-update.html
-bravo_filter_results.csv
-BRAVOStorage/
-backups/
 
-# Local participant QC artifacts (keep source, rules and builders versionable)
-/reports/
-/output/
-/outputs/
-/tmp/oura-qc/
-/outputs/01a065ca-efeb-7041-a5ca-edd51e369b54/
-/reports/oura-qc-2026-09-03/audit.json
-/reports/oura-qc-2026-09-03/excluded_sample_times.csv
-/reports/oura-qc-2026-09-03/preview-*.png
-/reports/oura-qc-2026-09-03/node_modules
 
-# Private local CSV snapshots; never stage patient exports.
-/output/rcs08-export-initialize/
-/output/rcs08-exports/
+# Local secrets (REDCap tokens, etc.)
+secrets/
+*.env
 
-# Participant-specific runtime assets are transferred privately, never published.
-/BRAVO/config/*.csv
-/BRAVO/modules/Biomarkers/data/psd_lsb_models/*.json
+# Transient async-job scripts generated at runtime
+BRAVO/modules/AsyncJobScheduler/*.sh
+
+# Private participant inputs, derived outputs and operational state.
+BRAVO/_pro_dump*/
+BRAVO/_agent_bridge/
+BRAVO/modules/Biomarkers/data/calibration/
+BRAVO/modules/AIModels/BetaPeakDetection/*.pkl
+/cl_docs/
+/handoff/
+/task-state/
+/.claude/
+/.mcp.json
+/.planning/
+*.sql
+*.sqlite3
+*.sqlite3-*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Rebuild the frontend from locked source; never publish stale generated bundles.
+/Client/build/
+
+# Integration environments and private deployment configuration.
+/.venv/
+/.uv-cache/
+/.runtime/
+/.env.jetstream
+/.env.isolated
+/coverage.xml
+/coverage.json
+/htmlcov/
+/.coverage*
+
+/runtime-coverage.json

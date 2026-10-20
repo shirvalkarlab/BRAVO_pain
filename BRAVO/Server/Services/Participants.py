@@ -87,7 +87,7 @@ class QueryParticipants(RestViews.APIView):
                     "Id": AllParticipants[i].uid,
                     "Name": AllParticipants[i].name,
                     "MRN": AllParticipants[i].mrn,
-                    "DateOfBirth": 0,  # Do not disclose stored birthdates to clients.
+                    "DateOfBirth": AllParticipants[i].date_of_birth * 1000 if AllParticipants[i].date_of_birth else 0,
                     "Diagnosis": AllParticipants[i].diagnosis,
                     "Gender": AllParticipants[i].sex,
                     "Notes": "",
@@ -292,7 +292,7 @@ class DeleteDeviceInformation(RestViews.APIView):
         if not DBSDevice:
             return Response(status=403)
         
-        models.SourceFile.find_all(owner=Participant, **Database.deviceMetadataLookup(DBSDevice.uid)).delete()
+        models.SourceFile.find_all(owner=Participant, metadata__contains={"Device": DBSDevice.uid}).delete()
         DBSDevice.delete()
         ParticipantInfo = Database.extractParticipantInformation(request.data["ParticipantId"])
         return Response(status=200, data=ParticipantInfo)

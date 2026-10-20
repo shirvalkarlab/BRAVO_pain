@@ -53,8 +53,7 @@ const FormTable = ({data, onDelete}) => {
     totalPages: 0
   });
 
-  const [accessLinks, setAccessLinks] = useState([]);
-  const [accessMessage, setAccessMessage] = useState("");
+  const [currentAccessCode, setAccessCode] = useState("");
   const [showAccessDialog, setShowAccessDialog] = useState(false);
 
   useEffect(() => {
@@ -75,22 +74,19 @@ const FormTable = ({data, onDelete}) => {
       tokenModification: "view"
     }).then((response) => {
       setShowAccessDialog(id);
-      setAccessLinks(response.data.links || []);
-      setAccessMessage(response.data.message || "");
+      setAccessCode(response.data.token);
     }).catch((error) => {
       console.log(error);
     });
   };
 
-  const newAccessCode = (id, code) => {
+  const newAccessCode = (id) => {
     SessionController.query("/api/requestSurveyAccessCode", {
       id: id,
-      tokenModification: "new",
-      LinkCode: code,
+      tokenModification: "new"
     }).then((response) => {
       setShowAccessDialog(id);
-      setAccessLinks(response.data.links || []);
-      setAccessMessage(response.data.message || "");
+      setAccessCode(response.data.token);
     }).catch((error) => {
       console.log(error);
     });
@@ -104,29 +100,25 @@ const FormTable = ({data, onDelete}) => {
     onDelete(id);
   };
 
-  return (
+  return useMemo(() => (
     <MDBox style={{overflowX: "auto"}}>
-      <Dialog open={Boolean(showAccessDialog)} onClose={()=>setShowAccessDialog(false)} maxWidth="md" fullWidth >
+      <Dialog open={showAccessDialog} onClose={()=>setShowAccessDialog(false)} sx={{ padding: 15 }} >
         <DialogTitle>
           <MDTypography align="center" fontSize={30}>
-            {"Participant survey links"}
+            {"Access Code"}
           </MDTypography>
         </DialogTitle>
         <DialogContent sx={{paddingLeft: 5, paddingRight: 5}}>
           <DialogContentText>
             <MDTypography variant="p" align="center" fontSize={20}>
-              {accessLinks.length === 0 ? accessMessage : "Each link submits responses for its linked participant. Regenerating a link invalidates the previous link."}
+              {currentAccessCode === "" ? "No Access Token Available" : currentAccessCode}
             </MDTypography>
           </DialogContentText>
-          {accessLinks.map((link) => <MDBox key={link.Token} py={2}>
-            <MDTypography variant="h6">{link.Participant}</MDTypography>
-            <MDTypography component="a" href={link.URL} target="_blank" rel="noreferrer" variant="body2" sx={{overflowWrap: "anywhere"}}>
-              {window.location.origin + link.URL}
-            </MDTypography>
-            <MDButton color="warning" onClick={() => newAccessCode(showAccessDialog, link.Token)}>Regenerate link</MDButton>
-          </MDBox>)}
         </DialogContent>
         <MDBox display={"flex"} justifyContent={"space-around"} sx={{paddingLeft: 5, paddingRight: 5, paddingTop: 2, paddingBottom: 2}}>
+          <MDButton variant="gradient" color="error" onClick={()=>newAccessCode(showAccessDialog)} sx={{minWidth: 100}}>
+            {"New Token"}
+          </MDButton>
           <MDButton variant="gradient" color="info" onClick={()=>setShowAccessDialog(false)} sx={{minWidth: 100}}>
             {"Close"}
           </MDButton>
@@ -196,7 +188,7 @@ const FormTable = ({data, onDelete}) => {
       </Table>
       <FormTablePagination totalCount={data.length} totalPages={paginationControl.totalPages} currentPage={paginationControl.currentPage} setPagination={setPagination} />
     </MDBox>
-  );
+  ), [displayData, paginationControl]);
 };
 
 export default FormTable;

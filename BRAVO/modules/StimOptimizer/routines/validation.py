@@ -1,9 +1,15 @@
 """Phase 4 validation of the warm-start surrogate — one parameterised entry point.
 
-    from modules.StimOptimizer.routines import validation as VAL
+Everything in this module is a function of a design-matrix path plus an explicit
+``data_horizon``. Nothing is hard-coded to a particular vintage of the participant record, so a data
+refresh regenerates every number, table and figure by re-pointing :func:`run_validation` at the
+new CSV. The horizon string is stamped onto every output file and into the report header, so a
+stale artifact can always be told apart from a fresh one.
+
+    from StimOptimizer.routines import validation as VAL
     res = VAL.run_validation(
-        design_matrix_path="rcs08_bo_design_matrix.csv",
-        per_report_path="rcs08_pro_epoch_assignment.csv",
+        design_matrix_path="design_matrix.csv",
+        per_report_path="per_report_assignment.csv",
         data_horizon="settings to 2026-06-24, PROs to 2026-06-16",
         outdir=".",
     )
@@ -20,7 +26,8 @@ Four steps, in the order the pre-registration requires:
 4. :func:`replay` — retrospective sample-efficiency replay against the visited cells as a
    lookup-table simulator, versus uniform random and an equal-interval sweep.
 
-The pass criterion in :data:`PASS_CRITERION` is pre-registered. Do not tune it to a result."""
+The pass criterion in :data:`PASS_CRITERION` is pre-registered. Do not tune it to a result.
+"""
 from __future__ import annotations
 
 import json
@@ -43,7 +50,7 @@ AMP_GRID = np.round(np.arange(0.8, 4.01, 0.1), 2)
 # Pinning both dimensions would make every fold inherit the full-data amplitude hyperparameter,
 # which leaks the held-out epoch into the fold and voids the calibration claim.
 FIXED_LENGTH_SCALE = [0.823, None]
-INCUMBENT_EPOCH = 50.0               # 55 Hz, 1.6 mA left / 1.2 mA right, 60 us
+INCUMBENT_EPOCH = None              # caller must identify the actual reference epoch
 KAPPA = 2.0                          # optimistic bound is mu - KAPPA*sigma (J is minimised)
 MIN_REPORTS_EXPLORED = 3             # UNEXPLORED = {x : n_reports(x) < 3}
 DEFAULT_WASHIN_MIN = 5.0             # declared exclusion window after a setting change, minutes
@@ -61,17 +68,6 @@ PASS_CRITERION = dict(
 
 
 # --- loading and warm-start fit -----------------------------------------------------------
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
-
-
-
-
-
 def load_design(path: str) -> pd.DataFrame:
     """Read an epoch-level design matrix and parse ``t0`` as UTC."""
     es = pd.read_csv(path)
@@ -92,7 +88,10 @@ def fit_warm_start(es: pd.DataFrame, grid: SUR.ParameterGrid, *,
     still excluded from the *explored-cell* bookkeeping in :func:`explored_counts`, because a
     cell outside the grid cannot be a grid cell.
     """
+    if incumbent_epoch is None:
+        raise ValueError("incumbent_epoch must explicitly identify the reference epoch")
     D = OBJ.build_objective(es, incumbent_epoch=incumbent_epoch)
+    D.attrs["incumbent_epoch"] = incumbent_epoch
     X = D[["freq_hz", "amp_mA_Left"]].to_numpy(float)
     gp = SUR.ObjectiveGP(grid, fixed_length_scale=FIXED_LENGTH_SCALE,
                          random_state=random_state).fit(
@@ -231,7 +230,10 @@ def plateau(gp, grid: SUR.ParameterGrid, D: pd.DataFrame, *, data_horizon: str,
     mu, sd = gp.predict_grid()
     gx = grid.grid_X()
     n_reports, mapping = explored_counts(D, grid)
-    inc_row = D.loc[D["epoch"] == INCUMBENT_EPOCH].iloc[0]
+    incumbent_epoch = D.attrs.get("incumbent_epoch")
+    if incumbent_epoch is None:
+        raise ValueError("plateau requires the explicit reference epoch from fit_warm_start")
+    inc_row = D.loc[D["epoch"] == incumbent_epoch].iloc[0]
     inc_x = np.array([[float(inc_row["freq_hz"]), float(inc_row["amp_mA_Left"])]])
     inc_mu, inc_sd = gp.predict(inc_x)
     incumbent_mu = float(inc_mu[0])
@@ -262,6 +264,7 @@ def plateau(gp, grid: SUR.ParameterGrid, D: pd.DataFrame, *, data_horizon: str,
         data_horizon=data_horizon, kappa=kappa, min_reports=min_reports,
         n_grid_cells=int(len(grid)), n_unexplored=int(unexplored.sum()),
         n_explored=int((~unexplored).sum()),
+        incumbent_frequency_hz=float(inc_x[0, 0]), incumbent_amplitude_mA=float(inc_x[0, 1]),
         incumbent_mu=incumbent_mu, incumbent_sd=float(inc_sd[0]),
         grid_mu_min=float(mu.min()), grid_mu_max=float(mu.max()),
         grid_sd_min=float(sd.min()), grid_sd_max=float(sd.max()),
@@ -564,7 +567,7 @@ def run_validation(design_matrix_path: str, *, data_horizon: str, per_report_pat
     """Run all four validation steps and write the three deliverables into ``outdir``.
 
     ``data_horizon`` is a free-text statement of how current the input data is (e.g.
-    ``"settings to 2026-06-24, PROs to 2026-06-16"``). It is stamped into every CSV, the report
+    ``"settings and reports through the supplied export cutoff"``). It is stamped into every CSV, the report
     header and the figure caption, and it is required — there is no default, because an
     unlabelled vintage is how a stale number gets read as a current one. ``washin_min`` is the
     declared post-change exclusion window the design matrix was built with; it is stamped
@@ -585,16 +588,16 @@ def run_validation(design_matrix_path: str, *, data_horizon: str, per_report_pat
     rep = replay(D, grid, data_horizon=stamp, n_seeds=n_seeds, n_jobs=n_jobs)
 
     paths = {}
-    paths["loo"] = os.path.join(outdir, "rcs08_loo_calibration.csv")
+    paths["loo"] = os.path.join(outdir, "loo_calibration.csv")
     per_fold.to_csv(paths["loo"], index=False)
-    paths["queue"] = os.path.join(outdir, "rcs08_exploration_queue.csv")
+    paths["queue"] = os.path.join(outdir, "exploration_queue.csv")
     queue.to_csv(paths["queue"], index=False)
 
     if make_figure:
         try:
             from .validation_plots import plot_pit_calibration
             paths["figure"] = plot_pit_calibration(
-                per_fold, verdict, os.path.join(outdir, "rcs08_pit_calibration.png"),
+                per_fold, verdict, os.path.join(outdir, "pit_calibration.png"),
                 data_horizon=stamp)
         except Exception as exc:            # a figure must never take the numbers down
             paths["figure_error"] = repr(exc)
@@ -611,7 +614,7 @@ def run_validation(design_matrix_path: str, *, data_horizon: str, per_report_pat
                   n_epochs_n_ge_3=int((D["n"] >= 3).sum()))
 
     if write_report:
-        paths["report"] = os.path.join(outdir, "PHASE4_validation_RCS08.md")
+        paths["report"] = os.path.join(outdir, "PHASE4_validation.md")
         with open(paths["report"], "w") as fh:
             fh.write(render_report(result, per_fold, queue, audit))
     paths["json"] = os.path.join(outdir, "phase4_validation_summary.json")
@@ -626,6 +629,3 @@ def render_report(result: dict, per_fold: pd.DataFrame, queue: pd.DataFrame,
     """Markdown report. Import from :func:`run_validation`; not intended to be called alone."""
     from .validation_report import render
     return render(result, per_fold, queue, audit)
-
-
-# Retained active Aditya interfaces.

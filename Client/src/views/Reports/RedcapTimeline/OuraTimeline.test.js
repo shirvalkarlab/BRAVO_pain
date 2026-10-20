@@ -1,11 +1,12 @@
 import React from 'react';
 import {createRoot} from 'react-dom/client';
 import {act} from 'react-dom/test-utils';
+import {SYNC_COMPLETED_EVENT} from 'utils/syncEvents';
 import {SessionController} from 'database/session-control';
 import OuraTimeline from './OuraTimeline';
 import {OURA_DEFAULTS} from './ouraData';
 jest.mock('context',()=>({usePlatformContext:()=>[{}]}));
-jest.mock('database/resultCache',()=>({cacheScope:()=> 'account-a'}));
+jest.mock('./requestScope',()=>({cacheScope:()=> 'account-a'}));
 jest.mock('database/session-control',()=>({SessionController:{query:jest.fn()}}));
 jest.mock('components/MDTypography',()=>({__esModule:true,default:({children,role,variant})=>variant==='h4'?<h4>{children}</h4>:<span role={role}>{children}</span>}));
 jest.mock('./OuraChart',()=>({__esModule:true,default:props=><pre data-oura={props.metric.key}>{JSON.stringify(props)}</pre>}));
@@ -85,4 +86,20 @@ test('Oura uses reviewed home records, limits dense overlays and selects complet
   await input('Through','2026-08-12');expect(charts().every(chart=>chart.transitions.length===12)).toBe(true);
   await toggle('Stimulation context');expect(element.textContent).not.toContain('Stimulation settings');
   expect(charts().every(chart=>chart.transitions.length===0&&chart.homeTransitions.length===13)).toBe(true);
+});
+
+test('automatic sync and page-wide refresh update Oura values while preserving selected dates and metrics',async()=>{
+ await render();await input('From','2026-08-01');await openOptions();await option('sleep_efficiency');
+ SessionController.query.mockResolvedValue({data:{...payload,metrics:payload.metrics.map(m=>({...m,points:[...m.points,point('2026-09-03',999)]}))}});
+ await act(async()=>window.dispatchEvent(new CustomEvent(SYNC_COMPLETED_EVENT,{detail:{participantUid:'p1',scope:'account-a',state:'failed'}})));
+ expect(charts().at(-1).metric.key).toBe('sleep_efficiency');expect(charts()[0].metric.points.at(-1).value).toBe(999);
+ expect(charts().every(c=>c.range.start==='2026-08-01')).toBe(true);
+ const count=SessionController.query.mock.calls.length;await render({refreshRevision:1});expect(SessionController.query).toHaveBeenCalledTimes(count+1);
+ expect(charts().at(-1).metric.key).toBe('sleep_efficiency');expect(charts().every(c=>c.range.start==='2026-08-01')).toBe(true);
+});
+
+test('Oura exposes a failed automatic revision check alongside retained charts',async()=>{
+ jest.useFakeTimers();SessionController.query.mockResolvedValueOnce({data:{...payload,revision:'a'.repeat(64)}}).mockRejectedValueOnce(new Error('offline'));
+ await render();await act(async()=>jest.advanceTimersByTime(60000));expect(charts()).toHaveLength(6);
+ expect(element.textContent).toContain('Automatic update check unavailable');jest.useRealTimers();
 });

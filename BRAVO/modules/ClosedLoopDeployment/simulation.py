@@ -18,29 +18,43 @@ The offset formulation is the reason M0 is exact: with the zero curve the target
 delta never leaves zero, and `p_sim == p_obs` to the last bit, so the coupled loop reproduces the
 replay's arithmetic rather than approximating it (test 1 of the design).
 
+THE MODELS, one loop, run side by side as replicates of a vectorised controller:
+  M0  the zero curve -- the replay as it is, kept as the reference;
+  M1  the pooled straight line of the stored row (decision 103), the default today;
+  M2  the fitted quadratic with the post-peak line, only when the stored row has an established
+      bend (`curves`); otherwise it is explicitly not assessable (decision 11);
+  M3  the active model rerun with the curve refitted on runs resampled WITH REPLACEMENT (runs,
+      never points: six settings on one visit are not six visits), giving an interval on every
+      number.
+
 WHAT IT REFUSES, exactly as the replay does: a series whose sample interval cannot resolve the
 device's ramp (chronic snapshots minutes apart), too few steps, a plan with no thresholds or no
 capture range. Amplitude limits are HELD to the capture range (decision 16). The wrong-side-of-
 the-peak time is a number with a warning line and gates nothing (decision 17).
 
-It gates nothing. `gates_nothing` is on every payload and no verdict on the page reads it."""
+It gates nothing. `gates_nothing` is on every payload and no verdict on the page reads it.
+"""
 from __future__ import annotations
 
+import logging
 import math
+import os
 from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
-from modules.StimOptimizer.routines import percept_adaptive
-from modules.StimOptimizer.routines import within_visit as _wv
-from modules.StimOptimizer.routines.amplitude_response import ResponseCurve, NONE, LINEAR, QUADRATIC
+from StimOptimizer.routines import percept_adaptive
+from StimOptimizer.routines import within_visit as _wv
+from StimOptimizer.routines.amplitude_response import ResponseCurve, NONE, LINEAR, QUADRATIC
 
 from . import replay as _replay
+
+_log = logging.getLogger(__name__)
 
 KIND = "closed_loop_simulation"
 #: Bumped whenever the numbers a stored entry holds would change: v2 put the pieces on the device
 #: clock before the loop (regrid_stretches), which admitted 114 stretches where v1 ran 16.
-RULE_VERSION = "v7_timing_qualifier"   # v7: each regime names the timing values the record cannot decide (C3, decision 200)
+RULE_VERSION = "v7_timing_qualifier_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py #   # v7: each regime names the timing values the record cannot decide (C3, decision 200)
 # v6_two_timing_runs   # v6: the stored payload carries TWO replays -- "as programmed"
 # and "recommended" timing (T2, 2026-09-13, contest_2026-09-13_SYNTHESIS.md section 4) -- plus a
 # reversal (undone-switch) count on every model; v5: the pooled table's rule version is in the key
@@ -64,7 +78,7 @@ MAX_TRAJECTORY_POINTS = 800
 _ABOVE, _BETWEEN, _BELOW, _NONE = 1, 0, -1, 2
 
 CAVEAT = ("The model of how this band's power responds to amplitude is a curve fitted to N settled "
-          "points across V runs of rising current on this contact; it has not been observed under "
+          "points across V runs of stepped current on this contact; it has not been observed under "
           "closed-loop control. The amplitude trajectory is what the device's control law does to "
           "that model, not a prediction of what the device would deliver.")
 
@@ -72,15 +86,6 @@ CAVEAT = ("The model of how this band's power responds to amplitude is a curve f
 # --------------------------------------------------------------------------------------------
 # The curves as arrays, so K replicates evaluate in one numpy call
 # --------------------------------------------------------------------------------------------
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
-
-
-
 def _bank(curves: Sequence[ResponseCurve]) -> Dict[str, np.ndarray]:
     K = len(curves)
     kind = np.array([{NONE: 0, LINEAR: 1, QUADRATIC: 2}[c.kind] for c in curves], dtype=int)
@@ -110,6 +115,300 @@ def _bank_dg(bank, x):
     d_quad = np.where(has_post & (x > np.where(has_post, bank["peak"], 0.0)),
                       np.where(has_post, bank["post"], 0.0), d_quad)
     return np.where(bank["kind"] == 0, 0.0, np.where(bank["kind"] == 1, bank["slope"], d_quad))
+
+
+# --------------------------------------------------------------------------------------------
+# The controller loop itself, one time step at a time, K replicates at once
+# --------------------------------------------------------------------------------------------
+def _run_controller_loop_numpy(bank, p, a_obs, alpha, dt, upper, lower, amp_low, amp_high,
+                               amp_init, rate_up, rate_down, onset_steps, blank_steps,
+                               target_hi, target_lo):
+    """Step the Dual Threshold controller once per sample, K replicates in lockstep: the plant
+    (`_bank_g`, decision 15's offset formulation), the onset run, the detection blanking, the ramp
+    rate. `_run_controller_loop_kernel` performs the SAME operations in the SAME order, replicate
+    by replicate, compiled with numba (speed-up item 4, decision 269's pattern); see
+    `_run_controller_loop` for the choice and `tests/test_simulation_compiled_controller.py` for
+    the equality proof. Unlike the design rule's filter, nothing here sums across replicates
+    inside the loop, so no pairwise-summation kernel is needed to match: every step is elementwise,
+    and an elementwise numpy operation gives the identical bit pattern as the same arithmetic run
+    one replicate at a time, because IEEE 754 gives every element its own, independent result."""
+    K = bank["K"]
+    n = int(p.size)
+    amp = np.full(K, float(amp_init))
+    delta = np.zeros(K)
+    adopted = np.full(K, _BETWEEN, dtype=int)
+    pending = np.full(K, _NONE, dtype=int)
+    pending_run = np.zeros(K, dtype=int)
+    blank_left = np.zeros(K, dtype=int)
+    n_trans = np.zeros(K, dtype=int)
+    n_onset_supp = np.zeros(K, dtype=int)
+    n_blank_supp = np.zeros(K, dtype=int)
+    wrong_side_steps = np.zeros(K, dtype=int)
+    n_missing = 0
+
+    amp_out = np.empty((K, n))
+    p_out = np.empty((K, n))
+    state_out = np.empty((K, n), dtype=int)
+
+    for i in range(n):
+        pi = p[i]
+        if math.isnan(pi):
+            # A missing estimate is not a crossing: hold, as the replay does, and hold delta too.
+            n_missing += 1
+            pending[:] = _NONE
+            pending_run[:] = 0
+            blank_left = np.maximum(blank_left - 1, 0)
+            state_out[:, i] = adopted
+            amp_out[:, i] = amp
+            p_out[:, i] = np.nan
+            continue
+
+        ao = a_obs[i] if np.isfinite(a_obs[i]) else amp
+        target_delta = _bank_g(bank, amp) - _bank_g(bank, ao)
+        delta = delta + (target_delta - delta) * alpha
+        p_sim = pi + delta
+        raw = np.where(p_sim > upper, _ABOVE, np.where(p_sim < lower, _BELOW, _BETWEEN))
+
+        same = raw == adopted
+        pending = np.where(same, _NONE, pending)
+        pending_run = np.where(same, 0, pending_run)
+        cont = (~same) & (pending == raw)
+        pending_run = np.where(cont, pending_run + 1, pending_run)
+        fresh = (~same) & (~cont)
+        pending = np.where(fresh, raw, pending)
+        pending_run = np.where(fresh, 1, pending_run)
+        ready = (~same) & (pending_run >= onset_steps)
+        blocked = ready & (blank_left > 0)
+        adopt = ready & ~blocked
+        n_blank_supp += blocked.astype(int)
+        n_onset_supp += ((~same) & (~ready)).astype(int)
+        adopted = np.where(adopt, raw, adopted)
+        n_trans += adopt.astype(int)
+        blank_left = np.where(adopt, blank_steps, blank_left)
+        pending = np.where(adopt, _NONE, pending)
+        pending_run = np.where(adopt, 0, pending_run)
+        blank_left = np.maximum(blank_left - 1, 0)
+
+        target = np.where(adopted == _ABOVE, target_hi, np.where(adopted == _BELOW, target_lo, amp))
+        step = np.clip(target - amp, -rate_down * dt, rate_up * dt)
+        amp = np.clip(amp + step, amp_low, amp_high)
+
+        wrong_side_steps += (_bank_dg(bank, amp) > 0).astype(int)
+        state_out[:, i] = adopted
+        amp_out[:, i] = amp
+        p_out[:, i] = p_sim
+
+    return amp_out, p_out, state_out, n_trans, n_onset_supp, n_blank_supp, wrong_side_steps, n_missing
+
+
+# SPEED-UP ITEM 4 (the PI, 2026-09-25; `artifacts/research_2026-09-25_options/06_remaining_speed_ups.md`
+# #4; decision 269's pattern applied here). The loop above does about 15 small array operations per
+# sample, all of them ELEMENTWISE across the K replicates: unlike the design rule's filter, nothing
+# here sums across replicates inside the loop, so an elementwise numpy operation and the same
+# arithmetic run one replicate at a time in a scalar loop give the identical bit pattern -- no
+# pairwise-sum kernel is needed to match a numpy reduction, because there is no reduction inside
+# this loop (the reductions over time -- frac_time_above, mean_amplitude_mA and the rest -- run in
+# plain numpy AFTER the loop, on the arrays it filled, unchanged, so they inherit numpy's own
+# reduction order automatically). The compiled loop below performs the SAME operations in the SAME
+# order, replicate by replicate; `tests/test_simulation_compiled_controller.py` holds it equal to
+# the numpy loop on constructed series exercising every curve kind (none, linear, the quadratic
+# both sides of its peak), gaps in the power and the amplitude, and every controller branch (onset
+# suppression, blanking, both transition directions), and holds `simulate_series` and `run_models`
+# equal too. `COMPILED_CONTROLLER = False` forces the numpy loop.
+# ON-DISK CACHE (`cache=True`, speed-up item B9, 2026-10-02). Decision 269 kept the design rule's
+# filter out of numba's disk cache because a cached RECURSIVE function crashed the process when
+# loaded under the server's libraries; this loop was first kept uncached too, "rather than assumed
+# safe for an untested case". It is now tested: it calls nothing compiled, reads only constants
+# defined in this file (so editing the file invalidates the cache), and on the Jetstream2 BRAVO a
+# second process loaded it from the cache and returned the identical bits
+# (`tests/test_worker_warmup.py`). It matters most in the simulation's worker processes: each one
+# compiled the loop on its first segment (700 segments: 2.7 s on the first call, 0.42 s warm).
+try:
+    from numba import njit as _njit
+    # numba logs its own type checking at DEBUG, and the server logs at DEBUG (decision 269: 38,760
+    # lines on the design rule's first fit); this is the same process-wide logger the design rule
+    # quiets, so the call here is a no-op once that module has run and the one that matters if this
+    # module compiles first.
+    logging.getLogger("numba").setLevel(logging.WARNING)
+
+    @_njit(cache=True)
+    def _run_controller_loop_kernel(kind, slope, a_coef, b_coef, peak, post, p, a_obs, alpha, dt,
+                                    upper, lower, amp_low, amp_high, amp_init, rate_up, rate_down,
+                                    onset_steps, blank_steps, target_hi, target_lo):
+        K = slope.size
+        n = p.size
+        amp = np.full(K, amp_init)
+        delta = np.zeros(K)
+        adopted = np.full(K, _BETWEEN, dtype=np.int64)
+        pending = np.full(K, _NONE, dtype=np.int64)
+        pending_run = np.zeros(K, dtype=np.int64)
+        blank_left = np.zeros(K, dtype=np.int64)
+        n_trans = np.zeros(K, dtype=np.int64)
+        n_onset_supp = np.zeros(K, dtype=np.int64)
+        n_blank_supp = np.zeros(K, dtype=np.int64)
+        wrong_side_steps = np.zeros(K, dtype=np.int64)
+        n_missing = 0
+
+        amp_out = np.empty((K, n))
+        p_out = np.empty((K, n))
+        state_out = np.empty((K, n), dtype=np.int64)
+
+        has_post = np.zeros(K, dtype=np.bool_)
+        peak0 = np.zeros(K)
+        post0 = np.zeros(K)
+        gp = np.zeros(K)
+        for k in range(K):
+            hp = np.isfinite(peak[k]) and np.isfinite(post[k])
+            has_post[k] = hp
+            pk = peak[k] if hp else 0.0
+            peak0[k] = pk
+            po = post[k] if hp else 0.0
+            post0[k] = po
+            gp[k] = a_coef[k] * pk * pk + b_coef[k] * pk
+
+        for i in range(n):
+            pi = p[i]
+            if np.isnan(pi):
+                # A missing estimate is not a crossing: hold, as the replay does, and hold delta too.
+                n_missing += 1
+                for k in range(K):
+                    pending[k] = _NONE
+                    pending_run[k] = 0
+                    bl = blank_left[k] - 1
+                    blank_left[k] = bl if bl > 0 else 0
+                    state_out[k, i] = adopted[k]
+                    amp_out[k, i] = amp[k]
+                    p_out[k, i] = np.nan
+                continue
+
+            a_i = a_obs[i]
+            a_finite = np.isfinite(a_i)
+            for k in range(K):
+                amp_k = amp[k]
+                ao_k = a_i if a_finite else amp_k
+
+                if kind[k] == 0:
+                    g_amp = 0.0
+                elif kind[k] == 1:
+                    g_amp = slope[k] * amp_k
+                else:
+                    g_amp = a_coef[k] * amp_k * amp_k + b_coef[k] * amp_k
+                    if has_post[k] and amp_k > peak0[k]:
+                        g_amp = gp[k] + post0[k] * (amp_k - peak0[k])
+
+                if kind[k] == 0:
+                    g_ao = 0.0
+                elif kind[k] == 1:
+                    g_ao = slope[k] * ao_k
+                else:
+                    g_ao = a_coef[k] * ao_k * ao_k + b_coef[k] * ao_k
+                    if has_post[k] and ao_k > peak0[k]:
+                        g_ao = gp[k] + post0[k] * (ao_k - peak0[k])
+
+                target_delta = g_amp - g_ao
+                delta_k = delta[k] + (target_delta - delta[k]) * alpha[k]
+                delta[k] = delta_k
+                p_sim_k = pi + delta_k
+
+                if p_sim_k > upper:
+                    raw = _ABOVE
+                elif p_sim_k < lower:
+                    raw = _BELOW
+                else:
+                    raw = _BETWEEN
+
+                adopted_k = adopted[k]
+                same = raw == adopted_k
+                pend = _NONE if same else pending[k]
+                prun = 0 if same else pending_run[k]
+                cont = (not same) and (pend == raw)
+                prun = (prun + 1) if cont else prun
+                fresh = (not same) and (not cont)
+                pend = raw if fresh else pend
+                prun = 1 if fresh else prun
+                ready = (not same) and (prun >= onset_steps)
+                blocked = ready and (blank_left[k] > 0)
+                adopt = ready and (not blocked)
+                if blocked:
+                    n_blank_supp[k] += 1
+                if (not same) and (not ready):
+                    n_onset_supp[k] += 1
+                new_adopted = raw if adopt else adopted_k
+                if adopt:
+                    n_trans[k] += 1
+                bl = blank_steps if adopt else blank_left[k]
+                pend = _NONE if adopt else pend
+                prun = 0 if adopt else prun
+                bl = bl - 1
+                bl = bl if bl > 0 else 0
+
+                pending[k] = pend
+                pending_run[k] = prun
+                blank_left[k] = bl
+                adopted[k] = new_adopted
+
+                if new_adopted == _ABOVE:
+                    target_k = target_hi
+                elif new_adopted == _BELOW:
+                    target_k = target_lo
+                else:
+                    target_k = amp_k
+                step_k = target_k - amp_k
+                lo_c = -rate_down * dt
+                hi_c = rate_up * dt
+                if step_k < lo_c:
+                    step_k = lo_c
+                elif step_k > hi_c:
+                    step_k = hi_c
+                new_amp_k = amp_k + step_k
+                if new_amp_k < amp_low:
+                    new_amp_k = amp_low
+                elif new_amp_k > amp_high:
+                    new_amp_k = amp_high
+                amp[k] = new_amp_k
+
+                if kind[k] == 0:
+                    dg_k = 0.0
+                elif kind[k] == 1:
+                    dg_k = slope[k]
+                else:
+                    dg_k = 2.0 * a_coef[k] * new_amp_k + b_coef[k]
+                    if has_post[k] and new_amp_k > peak0[k]:
+                        dg_k = post0[k]
+                if dg_k > 0:
+                    wrong_side_steps[k] += 1
+
+                state_out[k, i] = new_adopted
+                amp_out[k, i] = new_amp_k
+                p_out[k, i] = p_sim_k
+
+        return amp_out, p_out, state_out, n_trans, n_onset_supp, n_blank_supp, wrong_side_steps, n_missing
+
+    COMPILED_CONTROLLER = True
+except Exception:                                        # noqa: BLE001 -- no numba: the numpy loop
+    COMPILED_CONTROLLER = False
+
+
+def _run_controller_loop(bank, p, a_obs, alpha, dt, upper, lower, amp_low, amp_high, amp_init,
+                         rate_up, rate_down, onset_steps, blank_steps, target_hi, target_lo):
+    """Run the controller loop, compiled when numba is installed and as the numpy loop otherwise,
+    with the same answer either way (decision 269's pattern)."""
+    if COMPILED_CONTROLLER:
+        return _run_controller_loop_kernel(
+            np.ascontiguousarray(bank["kind"], dtype=np.int64),
+            np.ascontiguousarray(bank["slope"], dtype=float),
+            np.ascontiguousarray(bank["a"], dtype=float),
+            np.ascontiguousarray(bank["b"], dtype=float),
+            np.ascontiguousarray(bank["peak"], dtype=float),
+            np.ascontiguousarray(bank["post"], dtype=float),
+            np.ascontiguousarray(p, dtype=float), np.ascontiguousarray(a_obs, dtype=float),
+            np.ascontiguousarray(alpha, dtype=float),
+            float(dt), float(upper), float(lower), float(amp_low), float(amp_high),
+            float(amp_init), float(rate_up), float(rate_down), int(onset_steps), int(blank_steps),
+            float(target_hi), float(target_lo))
+    return _run_controller_loop_numpy(bank, p, a_obs, alpha, dt, upper, lower, amp_low, amp_high,
+                                      amp_init, rate_up, rate_down, onset_steps, blank_steps,
+                                      target_hi, target_lo)
 
 
 # --------------------------------------------------------------------------------------------
@@ -164,8 +463,15 @@ def simulate_series(t_s, power, amp_obs, plan, curves: Sequence[ResponseCurve], 
     if upper is None or lower is None or not (float(upper) > float(lower)):
         raise ValueError(f"the ThresholdPlan has no usable thresholds (upper={upper!r}, lower={lower!r})")
     upper, lower = float(upper), float(lower)
-    amp_low = plan.capture_amp_low if p_in["amp_low_mA"] is None else p_in["amp_low_mA"]
-    amp_high = plan.capture_amp_high if p_in["amp_high_mA"] is None else p_in["amp_high_mA"]
+    # The limits the card recommends, capped at the participant's safe ceiling (decision 306).
+    _lim_low, _lim_high = _replay._plan_limits(plan)
+    amp_low = _lim_low if p_in["amp_low_mA"] is None else p_in["amp_low_mA"]
+    amp_high = _lim_high if p_in["amp_high_mA"] is None else p_in["amp_high_mA"]
+    # the plan's own sentence(s) when the ceiling lowered a limit this run uses (the card prints it)
+    _notes = [n for n, used in ((getattr(plan, "amp_limit_low_note", None), p_in["amp_low_mA"] is None),
+                                (getattr(plan, "amp_limit_high_note", None), p_in["amp_high_mA"] is None))
+              if n and used]
+    amp_limit_note = " ".join(_notes) or None
     if amp_low is None or amp_high is None or not (float(amp_high) > float(amp_low)):
         raise ValueError(f"no usable amplitude limits (low={amp_low!r}, high={amp_high!r})")
     amp_low, amp_high = float(amp_low), float(amp_high)
@@ -195,72 +501,13 @@ def simulate_series(t_s, power, amp_obs, plan, curves: Sequence[ResponseCurve], 
     K, n = bank["K"], int(p.size)
     tau = np.broadcast_to(np.asarray(tau_s, dtype=float), (K,)).astype(float)
     alpha = np.where(tau > 0, 1.0 - np.exp(-dt / np.where(tau > 0, tau, 1.0)), 1.0)
-
-    amp = np.full(K, amp_init)
-    delta = np.zeros(K)
-    adopted = np.full(K, _BETWEEN, dtype=int)
-    pending = np.full(K, _NONE, dtype=int)
-    pending_run = np.zeros(K, dtype=int)
-    blank_left = np.zeros(K, dtype=int)
-    n_trans = np.zeros(K, dtype=int)
-    n_onset_supp = np.zeros(K, dtype=int)
-    n_blank_supp = np.zeros(K, dtype=int)
-    wrong_side_steps = np.zeros(K, dtype=int)
-    n_missing = 0
-
-    amp_out = np.empty((K, n))
-    p_out = np.empty((K, n))
-    state_out = np.empty((K, n), dtype=int)
     target_hi = amp_high if action == "increase" else amp_low
     target_lo = amp_low if action == "increase" else amp_high
 
-    for i in range(n):
-        pi = p[i]
-        if math.isnan(pi):
-            # A missing estimate is not a crossing: hold, as the replay does, and hold delta too.
-            n_missing += 1
-            pending[:] = _NONE
-            pending_run[:] = 0
-            blank_left = np.maximum(blank_left - 1, 0)
-            state_out[:, i] = adopted
-            amp_out[:, i] = amp
-            p_out[:, i] = np.nan
-            continue
-
-        ao = a_obs[i] if np.isfinite(a_obs[i]) else amp
-        target_delta = _bank_g(bank, amp) - _bank_g(bank, ao)
-        delta = delta + (target_delta - delta) * alpha
-        p_sim = pi + delta
-        raw = np.where(p_sim > upper, _ABOVE, np.where(p_sim < lower, _BELOW, _BETWEEN))
-
-        same = raw == adopted
-        pending = np.where(same, _NONE, pending)
-        pending_run = np.where(same, 0, pending_run)
-        cont = (~same) & (pending == raw)
-        pending_run = np.where(cont, pending_run + 1, pending_run)
-        fresh = (~same) & (~cont)
-        pending = np.where(fresh, raw, pending)
-        pending_run = np.where(fresh, 1, pending_run)
-        ready = (~same) & (pending_run >= onset_steps)
-        blocked = ready & (blank_left > 0)
-        adopt = ready & ~blocked
-        n_blank_supp += blocked.astype(int)
-        n_onset_supp += ((~same) & (~ready)).astype(int)
-        adopted = np.where(adopt, raw, adopted)
-        n_trans += adopt.astype(int)
-        blank_left = np.where(adopt, blank_steps, blank_left)
-        pending = np.where(adopt, _NONE, pending)
-        pending_run = np.where(adopt, 0, pending_run)
-        blank_left = np.maximum(blank_left - 1, 0)
-
-        target = np.where(adopted == _ABOVE, target_hi, np.where(adopted == _BELOW, target_lo, amp))
-        step = np.clip(target - amp, -rate_down * dt, rate_up * dt)
-        amp = np.clip(amp + step, amp_low, amp_high)
-
-        wrong_side_steps += (_bank_dg(bank, amp) > 0).astype(int)
-        state_out[:, i] = adopted
-        amp_out[:, i] = amp
-        p_out[:, i] = p_sim
+    (amp_out, p_out, state_out, n_trans, n_onset_supp, n_blank_supp, wrong_side_steps,
+     n_missing) = _run_controller_loop(bank, p, a_obs, alpha, dt, upper, lower, amp_low, amp_high,
+                                       amp_init, rate_up, rate_down, onset_steps, blank_steps,
+                                       target_hi, target_lo)
 
     tol = float(p_in["amp_at_limit_tol_mA"])
     at_high = np.mean(np.abs(amp_out - amp_high) <= tol, axis=1)
@@ -289,7 +536,7 @@ def simulate_series(t_s, power, amp_obs, plan, curves: Sequence[ResponseCurve], 
                    "dt_controller_s": float(dt), "samples_per_averaging_window": int(n_per),
                    "onset_steps": int(onset_steps), "blanking_steps": int(blank_steps),
                    "ramp_up_mA_per_s": rate_up, "ramp_down_mA_per_s": rate_down,
-                   "tau_s": float(tau[0]) if K else None},
+                   "tau_s": float(tau[0]) if K else None, "amp_limit_note": amp_limit_note},
     }
 
 
@@ -310,10 +557,19 @@ def regrid_stretches(t, p, a, med, *, gap_factor=_replay.SEGMENT_GAP_FACTOR):
     pieces on a uniform grid of that interval. Returns (stretches, n_cells_empty, n_cells_merged,
     bounds), each stretch as (t_grid, power, amp).
 
+    THE PIECES ARE PUT ON THE DEVICE'S OWN CLOCK BEFORE THE LOOP RUNS. Irregular piece spacing
+    can exceed `replay.dual_threshold`'s tolerance even inside a streaming recording. Each
+    stretch is therefore regridded to the median interval: a cell holding
+    several pieces averages them, and a cell holding none is a MISSING estimate the controller
+    holds across, which is the replay's own documented handling of a dropped estimate. The
+    controller loop itself is unchanged and still refuses a non-uniform series; this only makes
+    the series it is given the series the device would have formed. Counts are reported.
+
     Each piece's cell is the previous piece's cell plus its gap in whole intervals -- 0 when two
     pieces sit inside one interval (merged), 2 or more across a hole (empty cells). The gaps are
     rounded one at a time, so an interval of 2.98 s rather than 3.00 s cannot accumulate into a
-    drift that skips cells down a long stretch."""
+    drift that skips cells down a long stretch.
+    """
     gaps = np.diff(t)
     cut = np.flatnonzero(gaps > gap_factor * med) + 1
     bounds = np.concatenate([[0], cut, [t.size]])
@@ -335,6 +591,58 @@ def regrid_stretches(t, p, a, med, *, gap_factor=_replay.SEGMENT_GAP_FACTOR):
         n_cells_merged += int((counts > 1).sum())
         regridded.append((seg_t[0] + np.arange(n_cells) * med, _cell_mean(p[lo:hi]), _cell_mean(a[lo:hi])))
     return regridded, n_cells_empty, n_cells_merged, bounds
+
+
+#: The segments of a gappy record are independent, so they are simulated in joblib's reusable
+#: process pool in chunks and combined in segment order with the same loop as before (every sum
+#: added in the same order). `CLOSED_LOOP_SEGMENT_JOBS` sets the worker count ("1": as before).
+SEGMENT_JOBS_ENV = "CLOSED_LOOP_SEGMENT_JOBS"
+
+
+def _segment_n_jobs() -> int:
+    """CLOSED_LOOP_SEGMENT_JOBS, else the shared pool size (DecodeCommon.parallel), so this pool
+    and the Stim Optimizer's are one pool and a web worker never rebuilds it between them."""
+    try:
+        from modules.DecodeCommon import parallel as _POOL
+    except ImportError:                                 # the host runner's spelling
+        from DecodeCommon import parallel as _POOL
+    raw = os.environ.get(SEGMENT_JOBS_ENV, "").strip()
+    try:
+        n = int(raw) if raw else _POOL.pool_jobs()
+    except ValueError:
+        n = _POOL.pool_jobs()
+    return max(1, n)
+
+
+def _simulate_chunk(chunk, plan, curves, tau_s, params):
+    out = []
+    for gt, gp, ga in chunk:
+        try:
+            out.append(simulate_series(gt - gt[0], gp, ga, plan, curves, tau_s=tau_s, params=params))
+        except Exception:                               # noqa: BLE001 -- counted, never fatal
+            out.append(None)
+    return out
+
+
+def _simulate_all(segs, plan, curves, tau_s, params):
+    k = min(_segment_n_jobs(), len(segs))
+    if k > 1:
+        n_chunks = min(len(segs), 4 * k)
+        bounds = np.linspace(0, len(segs), n_chunks + 1).astype(int)
+        chunks = [segs[bounds[i]:bounds[i + 1]] for i in range(n_chunks)]
+        try:
+            import joblib
+            try:                                # the shared pool settings (decision 368)
+                from modules.DecodeCommon import parallel as _PAR
+            except ImportError:
+                from DecodeCommon import parallel as _PAR
+            parts = joblib.Parallel(n_jobs=k, backend=_PAR.loky_backend())(
+                joblib.delayed(_simulate_chunk)(c, plan, curves, tau_s, params) for c in chunks)
+            return [r for part in parts for r in part]
+        except Exception as exc:                        # noqa: BLE001 -- no pool: run them here
+            _log.warning("segments simulated one at a time: the worker processes failed (%s: %s)",
+                         type(exc).__name__, exc)
+    return _simulate_chunk(segs, plan, curves, tau_s, params)
 
 
 def simulate_segments(t_s, power, amp_obs, plan, curves: Sequence[ResponseCurve], *, tau_s,
@@ -401,13 +709,14 @@ def simulate_segments(t_s, power, amp_obs, plan, curves: Sequence[ResponseCurve]
     hist_edges = None; hist = None
     drawn = []
     seg_params = None
+    sims = iter(_simulate_all([g for g in regridded if g[0].size >= min_segment_steps],
+                              plan, curves, tau_s, params))
     for si, (gt, gp, ga) in enumerate(regridded):
         if gt.size < min_segment_steps:
             skipped += 1
             continue
-        try:
-            r = simulate_series(gt - gt[0], gp, ga, plan, curves, tau_s=tau_s, params=params)
-        except Exception:                               # noqa: BLE001 -- counted, never fatal
+        r = next(sims)
+        if r is None:
             skipped += 1
             continue
         w = float(r["n_steps"])
@@ -490,7 +799,7 @@ def resampled_curves(points_x, points_y, run_labels, *, n_resample=DEFAULT_N_RES
     runs = sorted(set(lab.tolist()))
     if len(runs) < MIN_RUNS_FOR_RESAMPLE:
         return {"curves": [], "n_runs": len(runs), "n_fitted": 0,
-                "reason": f"only {len(runs)} run(s) of rising current on this contact; at least "
+                "reason": f"only {len(runs)} run(s) of stepped current on this contact; at least "
                           f"{MIN_RUNS_FOR_RESAMPLE} are needed to resample runs"}
     rng = np.random.default_rng(seed)
     curves, n_fitted = [], 0
@@ -683,6 +992,3 @@ def run_models(t_s, power, amp_obs, plan, pooled_row, *, run_points=None, run_wi
     out["n_runs_in_curve"] = int(m1.n_runs)
     out["caveat"] = CAVEAT.replace("N settled", f"{m1.n_points} settled").replace("V runs", f"{m1.n_runs} runs")
     return out
-
-
-# Retained active Aditya interfaces.

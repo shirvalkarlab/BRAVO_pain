@@ -31,11 +31,6 @@ from scipy.stats import norm
 
 
 # --- acquisition functions ---------------------------------------------------------------
-
-# Aditya canonical compatibility imports/constants.
-
-
-
 def expected_improvement(mu, sd, best, xi=0.0):
     """EI for MINIMISATION. ``best`` is the incumbent posterior mean (smaller is better)."""
     mu = np.asarray(mu, float)
@@ -340,62 +335,3 @@ def check_stopping(best_history, mu, sd, n_reports, incumbent_mu, cfg=None):
         best_history=h, queue_size=int(idx.size),
         best_optimistic_unexplored=float(meta.get("best_optimistic", float("nan"))),
         incumbent_mu=float(incumbent_mu))
-
-
-# Retained active Aditya interfaces.
-def lower_confidence_bound(mu, sd, t=1, eta=1.0):
-    """GP-UCB adapted to minimisation: ``mu - sqrt(eta*kappa_t)*sigma``.
-
-    ``eta`` is the exploration weight. Cole et al.'s configuration sweep found it did *not*
-    significantly predict unsafe overshoot — only the safety conservatism beta did — so it is a
-    genuine tuning knob rather than a safety-critical one.
-    """
-    return np.asarray(mu, float) - np.sqrt(float(eta) * ucb_kappa(t)) * np.asarray(sd, float)
-
-
-def select_batch_between_visit(gp, grid, *, q, min_separation, safe_mask=None, n_reports=None,
-                               incumbent_mu=None, fantasy_var=None, t=1, eta=1.0,
-                               exclude_tested=True, expansion_edge_amp=None):
-    """q settings to be programmed as home groups over a follow-up interval.
-
-    Same sequential-greedy machinery, plus a hard minimum separation in *standardised grid
-    units* between batch members. Between visits each setting is evaluated over days, so a batch
-    that clusters wastes the whole interval confirming one region; the separation constraint buys
-    coverage at some cost in expected improvement.
-
-    ``min_separation`` is measured on the same standardised (log2-frequency, amplitude) axes the
-    kernel uses, so a value near the fitted amplitude length scale means "batch members should
-    not be within one correlation length of each other".
-    """
-    if float(min_separation) <= 0:
-        raise ValueError("min_separation must be positive; use the within-visit selector for 0")
-    q = int(q)
-    cand = candidate_mask(grid, safe_mask=safe_mask, n_reports=n_reports,
-                          exclude_tested=exclude_tested)
-    if not cand.any():
-        raise ValueError("no eligible candidates for a between-visit batch")
-    fv = float(np.median(gp.y_var_)) if fantasy_var is None else float(fantasy_var)
-    gx = grid.grid_X()
-    Z = grid.transform(gx)
-    model = gp
-    chosen, out = [], []
-    for k in range(q):
-        mu, sd = model.predict_grid()
-        best = float(np.min(mu)) if incumbent_mu is None else float(incumbent_mu)
-        acq = expected_improvement(mu, sd, best)
-        avail = cand.copy()
-        avail[chosen] = False
-        for c in chosen:
-            avail &= np.linalg.norm(Z - Z[c], axis=1) >= float(min_separation)
-        if not avail.any():
-            break                     # separation exhausted the space; short batch is correct
-        idx = int(np.flatnonzero(avail)[np.argmax(acq[avail])])
-        ef = float(exploration_fraction(sd[idx], t=t + k, eta=eta, mu=mu[idx] - best))
-        edge = (expansion_edge_amp is not None
-                and gx[idx, 1] > float(expansion_edge_amp) - 1e-9)
-        out.append(BatchMember(idx, float(gx[idx, 0]), float(gx[idx, 1]), float(mu[idx]),
-                               float(sd[idx]), float(acq[idx]),
-                               _reason(mu[idx], sd[idx], best, ef, edge), ef))
-        chosen.append(idx)
-        model = model.with_fantasy(gx[[idx]], fv)
-    return out

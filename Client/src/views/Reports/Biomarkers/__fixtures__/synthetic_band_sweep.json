@@ -1,0 +1,3096 @@
+{
+  "_fixture_provenance": "Authored synthetic grid; no participant data. Uniform cells isolate UI/cache behavior; values are not model-performance evidence.",
+  "band_time_sweep": {
+    "ZERO_THREE_RIGHT": {
+      "display_hemisphere": "Right",
+      "display_short": "R 0\u207b3\u207a",
+      "display_region": "Synthetic target",
+      "center_freqs_hz": [
+        10.5,
+        15.5,
+        20.5
+      ],
+      "integration_seconds_requested": [
+        1,
+        3,
+        6,
+        9,
+        15,
+        21,
+        30,
+        45,
+        60
+      ],
+      "integration_seconds_delivered": [
+        1,
+        3,
+        6,
+        9,
+        15,
+        21,
+        30,
+        45,
+        60
+      ],
+      "correlation_grid": [
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ]
+      ],
+      "auc_grid": [
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ]
+      ],
+      "n_grid": [
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ]
+      ],
+      "p_grid": [
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ]
+      ],
+      "auc_p_grid": [
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ]
+      ],
+      "auc_n_high_grid": [
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ]
+      ],
+      "auc_n_low_grid": [
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ]
+      ],
+      "device_spectrum_total_grid": [
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ]
+      ],
+      "n_pain_reports": 12,
+      "n_pain_reports_from_device_spectrum": 3,
+      "best_correlation_rows": [
+        {
+          "band_center_hz": 10.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 15.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 20.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        }
+      ],
+      "best_auc_rows": [
+        {
+          "band_center_hz": 10.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 15.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 20.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        }
+      ],
+      "notes": [
+        "Synthetic example: the circled cell in each column is selected from nine lengths.",
+        "AUC 0.5 is chance.",
+        "Signs retain their original direction."
+      ],
+      "clinic_sheet_ratings": {
+        "included": false,
+        "n_added": 0
+      }
+    },
+    "ONE_THREE_LEFT": {
+      "display_hemisphere": "Left",
+      "display_short": "L 1\u207b3\u207a",
+      "display_region": "Synthetic target",
+      "center_freqs_hz": [
+        10.5,
+        15.5,
+        20.5
+      ],
+      "integration_seconds_requested": [
+        1,
+        3,
+        6,
+        9,
+        15,
+        21,
+        30,
+        45,
+        60
+      ],
+      "integration_seconds_delivered": [
+        1,
+        3,
+        6,
+        9,
+        15,
+        21,
+        30,
+        45,
+        60
+      ],
+      "correlation_grid": [
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ]
+      ],
+      "auc_grid": [
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ]
+      ],
+      "n_grid": [
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ]
+      ],
+      "p_grid": [
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ]
+      ],
+      "auc_p_grid": [
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ]
+      ],
+      "auc_n_high_grid": [
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ]
+      ],
+      "auc_n_low_grid": [
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ]
+      ],
+      "device_spectrum_total_grid": [
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ]
+      ],
+      "n_pain_reports": 12,
+      "n_pain_reports_from_device_spectrum": 3,
+      "best_correlation_rows": [
+        {
+          "band_center_hz": 10.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 15.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 20.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        }
+      ],
+      "best_auc_rows": [
+        {
+          "band_center_hz": 10.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 15.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 20.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        }
+      ],
+      "notes": [
+        "Synthetic example: the circled cell in each column is selected from nine lengths.",
+        "AUC 0.5 is chance.",
+        "Signs retain their original direction."
+      ],
+      "clinic_sheet_ratings": {
+        "included": false,
+        "n_added": 0
+      }
+    },
+    "ONE_THREE_RIGHT": {
+      "display_hemisphere": "Right",
+      "display_short": "R 1\u207b3\u207a",
+      "display_region": "Synthetic target",
+      "center_freqs_hz": [
+        10.5,
+        15.5,
+        20.5
+      ],
+      "integration_seconds_requested": [
+        1,
+        3,
+        6,
+        9,
+        15,
+        21,
+        30,
+        45,
+        60
+      ],
+      "integration_seconds_delivered": [
+        1,
+        3,
+        6,
+        9,
+        15,
+        21,
+        30,
+        45,
+        60
+      ],
+      "correlation_grid": [
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ]
+      ],
+      "auc_grid": [
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ]
+      ],
+      "n_grid": [
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ]
+      ],
+      "p_grid": [
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ]
+      ],
+      "auc_p_grid": [
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ]
+      ],
+      "auc_n_high_grid": [
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ]
+      ],
+      "auc_n_low_grid": [
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ]
+      ],
+      "device_spectrum_total_grid": [
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ]
+      ],
+      "n_pain_reports": 12,
+      "n_pain_reports_from_device_spectrum": 3,
+      "best_correlation_rows": [
+        {
+          "band_center_hz": 10.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 15.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 20.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        }
+      ],
+      "best_auc_rows": [
+        {
+          "band_center_hz": 10.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 15.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 20.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        }
+      ],
+      "notes": [
+        "Synthetic example: the circled cell in each column is selected from nine lengths.",
+        "AUC 0.5 is chance.",
+        "Signs retain their original direction."
+      ],
+      "clinic_sheet_ratings": {
+        "included": false,
+        "n_added": 0
+      }
+    },
+    "ZERO_THREE_LEFT": {
+      "display_hemisphere": "Left",
+      "display_short": "L 0\u207b3\u207a",
+      "display_region": "Synthetic target",
+      "center_freqs_hz": [
+        10.5,
+        15.5,
+        20.5
+      ],
+      "integration_seconds_requested": [
+        1,
+        3,
+        6,
+        9,
+        15,
+        21,
+        30,
+        45,
+        60
+      ],
+      "integration_seconds_delivered": [
+        1,
+        3,
+        6,
+        9,
+        15,
+        21,
+        30,
+        45,
+        60
+      ],
+      "correlation_grid": [
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ]
+      ],
+      "auc_grid": [
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ]
+      ],
+      "n_grid": [
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ]
+      ],
+      "p_grid": [
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ]
+      ],
+      "auc_p_grid": [
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ]
+      ],
+      "auc_n_high_grid": [
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ]
+      ],
+      "auc_n_low_grid": [
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ]
+      ],
+      "device_spectrum_total_grid": [
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ]
+      ],
+      "n_pain_reports": 12,
+      "n_pain_reports_from_device_spectrum": 3,
+      "best_correlation_rows": [
+        {
+          "band_center_hz": 10.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 15.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 20.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        }
+      ],
+      "best_auc_rows": [
+        {
+          "band_center_hz": 10.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 15.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 20.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        }
+      ],
+      "notes": [
+        "Synthetic example: the circled cell in each column is selected from nine lengths.",
+        "AUC 0.5 is chance.",
+        "Signs retain their original direction."
+      ],
+      "clinic_sheet_ratings": {
+        "included": false,
+        "n_added": 0
+      }
+    },
+    "ZERO_TWO_LEFT": {
+      "display_hemisphere": "Left",
+      "display_short": "L 0\u207b2\u207a",
+      "display_region": "Synthetic target",
+      "center_freqs_hz": [
+        10.5,
+        15.5,
+        20.5
+      ],
+      "integration_seconds_requested": [
+        1,
+        3,
+        6,
+        9,
+        15,
+        21,
+        30,
+        45,
+        60
+      ],
+      "integration_seconds_delivered": [
+        1,
+        3,
+        6,
+        9,
+        15,
+        21,
+        30,
+        45,
+        60
+      ],
+      "correlation_grid": [
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ]
+      ],
+      "auc_grid": [
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ]
+      ],
+      "n_grid": [
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ]
+      ],
+      "p_grid": [
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ]
+      ],
+      "auc_p_grid": [
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ]
+      ],
+      "auc_n_high_grid": [
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ]
+      ],
+      "auc_n_low_grid": [
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ]
+      ],
+      "device_spectrum_total_grid": [
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ]
+      ],
+      "n_pain_reports": 12,
+      "n_pain_reports_from_device_spectrum": 3,
+      "best_correlation_rows": [
+        {
+          "band_center_hz": 10.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 15.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 20.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        }
+      ],
+      "best_auc_rows": [
+        {
+          "band_center_hz": 10.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 15.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 20.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        }
+      ],
+      "notes": [
+        "Synthetic example: the circled cell in each column is selected from nine lengths.",
+        "AUC 0.5 is chance.",
+        "Signs retain their original direction."
+      ],
+      "clinic_sheet_ratings": {
+        "included": false,
+        "n_added": 0
+      }
+    },
+    "ZERO_TWO_RIGHT": {
+      "display_hemisphere": "Right",
+      "display_short": "R 0\u207b2\u207a",
+      "display_region": "Synthetic target",
+      "center_freqs_hz": [
+        10.5,
+        15.5,
+        20.5
+      ],
+      "integration_seconds_requested": [
+        1,
+        3,
+        6,
+        9,
+        15,
+        21,
+        30,
+        45,
+        60
+      ],
+      "integration_seconds_delivered": [
+        1,
+        3,
+        6,
+        9,
+        15,
+        21,
+        30,
+        45,
+        60
+      ],
+      "correlation_grid": [
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ],
+        [
+          0.4,
+          0.4,
+          0.4
+        ]
+      ],
+      "auc_grid": [
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.75,
+          0.75
+        ]
+      ],
+      "n_grid": [
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ]
+      ],
+      "p_grid": [
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ],
+        [
+          0.02,
+          0.02,
+          0.02
+        ]
+      ],
+      "auc_p_grid": [
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ],
+        [
+          0.03,
+          0.03,
+          0.03
+        ]
+      ],
+      "auc_n_high_grid": [
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ]
+      ],
+      "auc_n_low_grid": [
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ],
+        [
+          4,
+          4,
+          4
+        ]
+      ],
+      "device_spectrum_total_grid": [
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ],
+        [
+          12,
+          12,
+          12
+        ]
+      ],
+      "n_pain_reports": 12,
+      "n_pain_reports_from_device_spectrum": 3,
+      "best_correlation_rows": [
+        {
+          "band_center_hz": 10.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 15.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 20.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        }
+      ],
+      "best_auc_rows": [
+        {
+          "band_center_hz": 10.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 15.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        },
+        {
+          "band_center_hz": 20.5,
+          "integration_seconds_delivered": 3,
+          "pearson_r": 0.4,
+          "pearson_r_low": 0.1,
+          "pearson_r_high": 0.7,
+          "auc": 0.75,
+          "auc_low": 0.6,
+          "auc_high": 0.9,
+          "family_wise_q_8_to_30hz": 0.03,
+          "n_pain_reports": 12,
+          "n_pain_reports_effective": 10,
+          "selection_corrected_p": 0.02,
+          "chosen_as_best_of_n_windows": 9
+        }
+      ],
+      "notes": [
+        "Synthetic example: the circled cell in each column is selected from nine lengths.",
+        "AUC 0.5 is chance.",
+        "Signs retain their original direction."
+      ],
+      "clinic_sheet_ratings": {
+        "included": false,
+        "n_added": 0
+      }
+    }
+  },
+  "device_timing_ranges": {
+    "averaging_s": [
+      0,
+      30
+    ],
+    "onset_dual_s": [
+      0,
+      30
+    ]
+  },
+  "settings_applied": {
+    "match_tolerance_min": 60
+  }
+}

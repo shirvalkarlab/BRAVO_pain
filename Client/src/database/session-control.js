@@ -11,6 +11,7 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
+import { retryOnGatewayError } from "./retryOnGatewayError";
 import axios from "axios";
 
 import { ERRORCODE } from "./api-codes";
@@ -201,14 +202,16 @@ export const SessionController = (function () {
       csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
     }
     
-    return axios.post(server + url, form, {
+    // A server-picker change while waiting must not move the retry to a new host.
+    const requestUrl = server + url;
+    return retryOnGatewayError(url, () => axios.post(requestUrl, form, {
       timeout: timeout,
       responseType: responseType,
       headers: {
         ...config,
         "X-CSRFToken": csrftoken
       }
-    });
+    }), 1500, form);
   };
 
   const displayError = (error, setAlert, redirect) => {
@@ -290,9 +293,11 @@ export const SessionController = (function () {
     }
   };
 
+  // The server keeps only these (WebSession.py `defaultSessionConfigs`); posting any other key did
+  // nothing there but cost a request, 17-20 on every first load (page review 2026-10-02, 4.7).
+  const SERVER_SESSION_KEYS = ["language", "miniSidenav", "darkMode"];
   const setSession = (type, value, update) => {
-    // The server only persists these preferences. Layout/report state is local.
-    if (update && ["language", "miniSidenav", "darkMode"].includes(type) && session[type] !== value) {
+    if (update && SERVER_SESSION_KEYS.includes(type)) {
       query("/api/updateSessions", {[type]: value}).catch((error) => console.log(error));
     }
     session[type] = value;

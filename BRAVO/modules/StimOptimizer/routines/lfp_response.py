@@ -30,8 +30,8 @@ one, which is why both a contrast and a separation measure are reported.
 
 Power is computed in the DEVICE's units for the capture contrast — the linear sum of squared
 magnitude over the band (manual p. 39), not log and not mean — because the threshold has to be
-expressed in those units. Inference is additionally run on the log scale, where a multiplicative
-quantity spanning orders of magnitude is better behaved.
+expressed in those units. Inference runs on those same units: the era-blocked slope is in device
+units per mA (decision 202, 2026-09-19; until then it was fitted on the logarithm).
 
 THE TIME CONFOUND IS NOT OPTIONAL HERE
 --------------------------------------
@@ -59,15 +59,16 @@ MIN_CAPTURE_SEPARATION_D = 0.5
 #: Minimum rows per capture arm before an estimate is reported at all.
 MIN_ROWS_PER_ARM = 8
 
-# Participant-specific provenance and examples are maintained outside source control.
+# Build the regression design once per cell, not per band. The amplitude, era and
+# cluster labels are shared across the cell's bands. `_ols_fit` gives statsmodels
+# the same power frame and patsy right-hand design, including missing-value row drops,
+# as the formula interface. Neither frame is mutated. USE_DESIGN_CACHE=False restores
+# the formula path for value-by-value equivalence tests.
+
+
 USE_DESIGN_CACHE = True
 _DESIGN_CACHE_MAX = 64
 _DESIGN_CACHE: dict = {}
-
-
-
-# Aditya canonical compatibility imports/constants.
-
 
 
 def _design_key(rhs, df):
@@ -109,11 +110,11 @@ class ResponseResult:
     derived_threshold: float = float("nan")
     captures_inverted: bool | None = None
     separation_d: float = float("nan")        # device units — the scale the device thresholds in
-    #: The same quantity computed on the logarithm of power. This is what `separation_d` used to
-    #: hold before 2026-09-06. It is kept so the two scales can be compared on any record and so
-    #: the correction is auditable; nothing decides anything on it.
-    separation_d_on_log: float = float("nan")
-    slope_log_per_mA: float = float("nan")
+    #: The era-blocked slope of band power on current, in DEVICE UNITS PER mA. Until 2026-09-19
+    #: (decision 202) it was fitted on the logarithm of power, beside a log-scale copy of the
+    #: separation kept "for comparison"; the PI's rule is that log power enters no calculation, so
+    #: both are gone and every number here is on the scale the device thresholds in.
+    slope_per_mA: float = float("nan")
     slope_ci: tuple = (float("nan"), float("nan"))
     slope_p: float = float("nan")
     slope_unadjusted: float = float("nan")
@@ -127,9 +128,8 @@ class ResponseResult:
         return (f"{verdict} — {self.reason} | captures {self.power_low:.4g} -> {self.power_high:.4g} "
                 f"device units at {self.amp_low_mA:.1f} -> {self.amp_high_mA:.1f} mA, "
                 f"the two readings are {self.separation_d:.2f} scatter-widths apart in device "
-                f"units ({self.separation_d_on_log:.2f} if measured on the logarithm), "
-                f"era-adjusted log slope "
-                f"{self.slope_log_per_mA:+.4f}/mA (p={self.slope_p:.4g})")
+                f"units, era-adjusted slope "
+                f"{self.slope_per_mA:+.4g} device units per mA (p={self.slope_p:.4g})")
 
 
 def device_band_power(psd_magnitude, freqs, center_hz, band_width_hz):
@@ -182,7 +182,7 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
     notes = []
     if (~np.isfinite(p)).any() or (p <= 0).any():
         notes.append(f"{int((~ok).sum())} rows dropped: non-finite or non-positive power "
-                     "(log-scale inference needs strictly positive power)")
+                     "(a zero device reading is a sentinel, not a measurement)")
     if ok.sum() < 2 * MIN_ROWS_PER_ARM:
         return ResponseResult(None, f"only {int(ok.sum())} usable rows; need at least "
                                     f"{2 * MIN_ROWS_PER_ARM}", notes=notes)
@@ -218,11 +218,9 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
     # The device derives its threshold from the two captures, ordered lower-amplitude first.
     thr = 0.75 * (P_hi - P_lo) + P_lo
 
-    lg = np.log(p)
-
     # HOW FAR APART THE TWO POWER MEASUREMENTS ARE, IN DEVICE UNITS. Corrected 2026-09-06 after the
     # PI asked which units this used and suspected an error. He was right: until today this number
-    # was computed on np.log(p) while everything around it was in device units, and the two are not
+    # was computed on the logarithm of power while everything around it was in device units, and the two are not
     # the same scale.
     #
     # WHY DEVICE UNITS ARE THE RIGHT SCALE HERE. The device puts its switching value BETWEEN the two
@@ -239,8 +237,8 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
     # higher-power group than a log-scale one would be. That is a real statistical cost and it is
     # why the logarithm was used originally. It does not change the decision: the quantity this test
     # is meant to protect is the placement of a switching value in device units, so device units are
-    # what it must be measured in. The log-scale number is kept alongside as
-    # `separation_d_on_log` so the two can always be compared and so the change is auditable.
+    # what it must be measured in. A log-scale copy was kept beside it "for comparison" until
+    # 2026-09-19; the PI's rule (decision 202) is that log power enters no calculation, so it is gone.
     def _standardised_gap(v_lo, v_hi):
         pooled_sd = np.sqrt(((v_lo.size - 1) * v_lo.var(ddof=1)
                              + (v_hi.size - 1) * v_hi.var(ddof=1))
@@ -250,7 +248,6 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
         return float(abs(v_lo.mean() - v_hi.mean()) / pooled_sd)
 
     sep_d = _standardised_gap(p[m_lo], p[m_hi])                 # device units — the one that counts
-    sep_d_log = _standardised_gap(lg[m_lo], lg[m_hi])           # kept only for comparison
 
     expected_lower_at_high = (mode_requires == "suppression")
     observed_lower_at_high = P_hi < P_lo
@@ -259,14 +256,16 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
     # the derived threshold would sit outside the range the signal moves through.
     inverted = not direction_ok
 
-    # --- era-blocked, cluster-robust slope on the log scale -----------------------------------
+    # --- era-blocked, cluster-robust slope, in device units per mA -----------------------------
+    # Fitted on the logarithm of power until 2026-09-19 (decision 202); now on the device's own
+    # units, so the slope is the number of device units the band moves per milliamp, era blocked.
     slope = ci = pval = np.nan
     slope_unadj = np.nan
     n_eras = 0
     try:
         import statsmodels.formula.api as smf
-        df = pd.DataFrame({"logp": lg, "amp": a})
-        formula = "logp ~ amp"
+        df = pd.DataFrame({"power": p, "amp": a})
+        formula = "power ~ amp"
         if era_v is not None and pd.Series(era_v).nunique() > 1:
             df["era"] = pd.Series(era_v).astype(str).values
             n_eras = int(df["era"].nunique())
@@ -276,10 +275,10 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
             df["clus"] = pd.Series(clus).values
             fit_kw = dict(cov_type="cluster", cov_kwds={"groups": df["clus"]})
         if USE_DESIGN_CACHE:
-            slope_unadj = float(_ols_fit("logp ~ amp", df).params["amp"])
+            slope_unadj = float(_ols_fit("power ~ amp", df).params["amp"])
             res = _ols_fit(formula, df, **fit_kw)
         else:
-            slope_unadj = float(smf.ols("logp ~ amp", data=df).fit().params["amp"])
+            slope_unadj = float(smf.ols("power ~ amp", data=df).fit().params["amp"])
             res = smf.ols(formula, data=df).fit(**fit_kw)
         slope = float(res.params["amp"])
         lo_ci, hi_ci = res.conf_int().loc["amp"]
@@ -317,8 +316,7 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
                           amp_low_mA=lo_a, amp_high_mA=hi_a,
                           power_low=P_lo, power_high=P_hi, derived_threshold=float(thr),
                           captures_inverted=inverted, separation_d=sep_d,
-                          separation_d_on_log=sep_d_log,
-                          slope_log_per_mA=slope, slope_ci=ci, slope_p=pval,
+                          slope_per_mA=slope, slope_ci=ci, slope_p=pval,
                           slope_unadjusted=slope_unadj, n_eras=n_eras, notes=notes)
 
 
@@ -327,7 +325,7 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
 # =================================================================================================
 # The open question recorded in MEGA_HANDOFF and the session handoff was whether
 # MIN_CAPTURE_SEPARATION_D = 0.5 is the right floor once the five-era window narrows the capture
-# contrast from 2.9 mA to 1.0 mA, since over 1 mA a slope of -0.13 log per mA cannot produce a large
+# contrast from 2.9 mA to 1.0 mA, since over 1 mA a small slope (the example then was -0.13 per mA on the log scale in use at the time) cannot produce a large
 # standardised separation however real it is. The tempting fix is to make the floor scale with the
 # span so a narrow ladder is not penalised.
 #
@@ -347,126 +345,3 @@ def assess_response(power, amplitude_mA, *, era=None, cluster=None, mode_require
 # `within_arm_sd_from_result`, `span_needed_for_separation`). They were reached by nothing in the
 # running platform and were deleted on the PI's decision of 2026-09-12 (review S14); the reasoning
 # above about the floor stands on its own and is why the floor still does not scale with the span.
-
-
-# Retained active Aditya interfaces.
-def expected_separation_d(slope_log_per_mA, amp_span_mA, within_arm_sd):
-    """The standardised separation a given slope implies over a given amplitude span.
-
-    Under the same model the slope is fitted from -- power linear in amplitude with within-arm
-    scatter ``within_arm_sd`` -- the two capture means differ by ``slope * span``, so the
-    standardised separation is ``|slope| * span / sd``. This is the quantity the fixed floor is
-    implicitly compared against, made explicit.
-    """
-    s, span, sd = float(slope_log_per_mA), float(amp_span_mA), float(within_arm_sd)
-    if not np.isfinite(s) or not np.isfinite(span) or not np.isfinite(sd) or sd <= 0:
-        return float("nan")
-    return abs(s) * abs(span) / sd
-
-
-def within_arm_sd_from_result(res):
-    """Recover the pooled within-arm scatter implied by a ``ResponseResult``.
-
-    ``separation_d = (P_high - P_low) / sd`` by construction, so ``sd`` follows from the two
-    reported capture values and the reported separation. Recovered rather than re-derived from the
-    raw data so it cannot disagree with the separation the gate actually used.
-    """
-    d = getattr(res, "separation_d", float("nan"))
-    lo, hi = getattr(res, "power_low", float("nan")), getattr(res, "power_high", float("nan"))
-    if not np.isfinite(d) or d == 0 or not np.isfinite(lo) or not np.isfinite(hi):
-        return float("nan")
-    return abs(float(hi) - float(lo)) / abs(float(d))
-
-
-def span_needed_for_separation(res, floor=None, amp_ceiling_mA=None):
-    """What amplitude span this cell's own slope would need to clear the separation floor.
-
-    Returns a dict distinguishing the two refusals the screen currently conflates. ``verdict`` is:
-
-      * ``"clears"``            -- the observed separation already meets the floor;
-      * ``"widen_the_ladder"``  -- the slope is estimable and non-zero, so a wider span would
-                                   clear the floor, and ``span_needed_mA`` says how wide;
-      * ``"slope_not_estimable"`` -- no slope, so nothing can be said about what would help;
-      * ``"slope_indistinguishable_from_zero"`` -- the slope is present but so small that the span
-                                   required is beyond any amplitude this device will deliver, which
-                                   is the honest way to say "this band does not respond" rather than
-                                   quoting an absurd number.
-
-    The device's own hard amplitude limit bounds what "wider" can mean, so a required span larger
-    than that is reported as unreachable rather than as an instruction.
-    """
-    fl = float(MIN_CAPTURE_SEPARATION_D if floor is None else floor)
-    d = getattr(res, "separation_d", float("nan"))
-    slope = getattr(res, "slope_log_per_mA", float("nan"))
-    lo_a, hi_a = getattr(res, "amp_low_mA", float("nan")), getattr(res, "amp_high_mA", float("nan"))
-    span = abs(float(hi_a) - float(lo_a)) if np.isfinite(hi_a) and np.isfinite(lo_a) else float("nan")
-    sd = within_arm_sd_from_result(res)
-    out = {"floor": fl, "observed_d": (float(d) if np.isfinite(d) else None),
-           "observed_span_mA": (span if np.isfinite(span) else None),
-           "within_arm_sd": (sd if np.isfinite(sd) else None),
-           "slope_log_per_mA": (float(slope) if np.isfinite(slope) else None),
-           "expected_d_at_observed_span": None, "span_needed_mA": None}
-    if np.isfinite(d) and d >= fl:
-        out["verdict"] = "clears"
-        return out
-    if not np.isfinite(slope) or not np.isfinite(sd) or sd <= 0:
-        out["verdict"] = "slope_not_estimable"
-        out["note"] = ("no usable slope or within-arm scatter, so nothing can be said about whether "
-                       "a wider ladder would help")
-        return out
-    out["expected_d_at_observed_span"] = expected_separation_d(slope, span, sd)
-    if abs(slope) < 1e-12:
-        out["verdict"] = "slope_indistinguishable_from_zero"
-        return out
-    need = fl * sd / abs(slope)
-    out["span_needed_mA"] = float(need)
-    # The ceiling is what the device will actually deliver; a span beyond it is not an instruction.
-    #
-    # TAKEN AS A PARAMETER WITH AN EXPLICIT DEFAULT, not probed from globals(). The first version of
-    # this line read `float(AMP_HARD_LIMIT_MA) if "AMP_HARD_LIMIT_MA" in globals() else inf`, and
-    # that constant lives in `objective`, not here -- so the probe always missed, the ceiling was
-    # always infinity, and the "span unreachable" branch could never fire. The failure was silent
-    # and would have reported a 40 mA ladder as a protocol instruction. Imported inside the
-    # function because `objective` is a heavier module and a top-level import would make every
-    # importer of the response test pay for it.
-    if amp_ceiling_mA is None:
-        try:
-            from .objective import AMP_HARD_LIMIT_MA as _cap
-            ceiling = float(_cap)
-        except Exception:                                  # pragma: no cover - defensive
-            raise RuntimeError(
-                "cannot resolve the device amplitude ceiling from objective.AMP_HARD_LIMIT_MA; "
-                "pass amp_ceiling_mA explicitly rather than letting it default to infinity, which "
-                "would report an unreachable ladder as a protocol instruction")
-    else:
-        ceiling = float(amp_ceiling_mA)
-    if need > ceiling:
-        out["verdict"] = "slope_indistinguishable_from_zero"
-        out["note"] = (f"clearing d={fl:.2f} at this slope would need a {need:.1f} mA span, beyond "
-                       f"the {ceiling:.1f} mA the device delivers, so this is a non-responding band "
-                       f"rather than a narrow ladder")
-    elif np.isfinite(span) and need <= span:
-        # THE INCOHERENT CASE, and it is diagnostic rather than a nuisance. If the span already
-        # used exceeds what the slope says is needed, then the slope predicts MORE separation than
-        # the arms actually show, so "widen the ladder" would be nonsense -- the ladder is already
-        # wide enough on the slope's own account. Found on real data 2026-09-05: one band came back
-        # needing 1.78 mA against 2.0 mA used, which is what exposed the missing branch.
-        #
-        # The usual cause is that the two quantities are not estimated on the same footing. The
-        # slope is ERA-BLOCKED while the capture arms are RAW group means, so when era adjustment is
-        # doing most of the work the adjusted slope can imply a contrast the unadjusted arms do not
-        # contain. That is the same mechanism behind the ONE_THREE_LEFT sign flip, and it means the
-        # amplitude contrast is not what is carrying the apparent relationship.
-        out["verdict"] = "arms_inconsistent_with_slope"
-        out["note"] = (f"the era-blocked slope implies d={out['expected_d_at_observed_span']:.2f} "
-                       f"over the {span:.1f} mA already used -- above the {fl:.2f} floor -- yet the "
-                       f"observed separation is only {float(d):.2f}. Widening the ladder is not the "
-                       f"remedy: the adjusted slope and the raw capture arms disagree, which "
-                       f"indicates the era adjustment rather than the amplitude contrast is "
-                       f"carrying the relationship.")
-    else:
-        out["verdict"] = "widen_the_ladder"
-        out["note"] = (f"the slope is real enough that a {need:.1f} mA ladder would clear d={fl:.2f}, "
-                       f"against the {span:.1f} mA actually used. This is a PROTOCOL shortfall, not "
-                       f"evidence that the band does not respond.")
-    return out

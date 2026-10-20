@@ -11,13 +11,62 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import { reportDisplayTraces, rawTraceName } from "graphing-utility/participantTraceDisplay";
-import { currentTargetText } from "utils/participantTargets";
 import Plotly from 'plotly.js-dist';
 import { zhCN } from "assets/plotly-locales/zh-cn";
 
-// One observer per graph element, even when a component recreates its manager.
-const plotResizeStates = new WeakMap();
+// The buttons every figure drawn through the render manager adds to Plotly's mode bar.
+export const MODEBAR_EXTRA_BUTTONS = [
+  "select2d",
+  {
+    name: 'Download Vector File',
+    icon: {
+      width: 857.1,
+      height: 1000,
+      path: 'm214-7h429v214h-429v-214z m500 0h72v500q0 8-6 21t-11 20l-157 156q-5 6-19 12t-22 5v-232q0-22-15-38t-38-16h-322q-22 0-37 16t-16 38v232h-72v-714h72v232q0 22 16 38t37 16h465q22 0 38-16t15-38v-232z m-214 518v178q0 8-5 13t-13 5h-107q-7 0-13-5t-5-13v-178q0-8 5-13t13-5h107q7 0 13 5t5 13z m357-18v-518q0-22-15-38t-38-16h-750q-23 0-38 16t-16 38v750q0 22 16 38t38 16h517q23 0 50-12t42-26l156-157q16-15 27-42t11-49z',
+      transform: 'matrix(1 0 0 -1 0 850)'
+    },
+    click: function(gd) {
+      const elementStyle = window.getComputedStyle(gd);
+      Plotly.toImage(gd, {
+        format:'svg',
+        width: elementStyle.width.replace("px",""),
+        height: elementStyle.height.replace("px","")
+      }).then((url) => {
+        var downloader = document.createElement('a');
+        downloader.href = url;
+        downloader.target = '_blank';
+        downloader.download = gd.id + '.svg';
+        downloader.click();
+      });
+    }
+  },
+  {
+    name: 'Download Raw Series',
+    icon: {
+      // A 24 x 24 icon. Plotly builds the viewBox from width and height; without them the
+      // browser logged "viewBox: Expected number" once per figure (2023-09-07 to 2026-09-21).
+      width: 24,
+      height: 24,
+      path: 'M12 3C12.5523 3 13 3.44772 13 4V17.5858L18.2929 12.2929C18.6834 11.9024 19.3166 11.9024 19.7071 12.2929C20.0976 12.6834 20.0976 13.3166 19.7071 13.7071L12.7071 20.7071C12.3166 21.0976 11.6834 21.0976 11.2929 20.7071L4.29289 13.7071C3.90237 13.3166 3.90237 12.6834 4.29289 12.2929C4.68342 11.9024 5.31658 11.9024 5.70711 12.2929L11 17.5858V4C11 3.44772 11.4477 3 12 3Z',
+      transform: 'scale(0.7) translate(0, 0)'
+    },click: function(gd) {
+      var csvData = "x, y, name\n";
+      for (let i in gd.data) {
+        if (["scatter","box"].includes(gd.data[i].type)) {
+          for (let j in gd.data[i].x) {
+            csvData += gd.data[i].x[j] + "," + gd.data[i].y[j] + "," + (gd.data[i].name || " ") + "\n";
+          }
+        }
+      }
+      
+      var downloader = document.createElement('a');
+      downloader.href = 'data:text/json;charset=utf-8,' + encodeURI(csvData);
+      downloader.target = '_blank';
+      downloader.download = gd.id + ".csv";
+      downloader.click();
+    }
+  },
+];
 
 const defaultLineOptions = {
   type: "scattergl",
@@ -80,10 +129,6 @@ const defaultHeatmapOptions = {
 }
 
 const defaultLayoutOptions = {
-  font: {family: "Roboto, sans-serif", size: 14, color: "#344767"},
-  paper_bgcolor: "transparent",
-  plot_bgcolor: "transparent",
-  hoverlabel: {font: {family: "Roboto, sans-serif", size: 14}},
   title: {
     text: ""
   },
@@ -99,11 +144,10 @@ const defaultLayoutOptions = {
   yaxis: {
     type: "linear",
     showgrid: true,
-    gridcolor: "#edf0f4",
+    gridcolor: "#DDDDDD",
     showline: true,
-    linecolor: "#A7B4C2",
+    linecolor: "#000000",
     showticklabels: true,
-    automargin: true,
 
     ticks: "outside",
     fixedrange: false,
@@ -112,11 +156,10 @@ const defaultLayoutOptions = {
   },
   xaxis: {
     showgrid: true,
-    gridcolor: "#edf0f4",
+    gridcolor: "#DDDDDD",
     showline: true,
-    linecolor: "#A7B4C2",
+    linecolor: "#000000",
     showticklabels: true,
-    automargin: true,
 
     ticks: "outside",
     fixedrange: false,
@@ -981,7 +1024,7 @@ class PlotlyRenderManager {
    * 
    */
   setTitle(title) {
-    this.layout.title.text = currentTargetText(title);
+    this.layout.title.text = title;
   }
 
   /**
@@ -998,7 +1041,7 @@ class PlotlyRenderManager {
       const xLocation = (ax.xdomain[0] + ax.xdomain[1]) * 0.5;
       const yLocation = ax.ydomain[1];
       const annotation = {
-        text: currentTargetText(subtitle), 
+        text: subtitle, 
         font: {size: 20}, 
         showarrow: false, 
         x: xLocation, 
@@ -1315,74 +1358,11 @@ class PlotlyRenderManager {
         format: 'png', // one of png, svg, jpeg, webp
         scale: 1
       },
-      modeBarButtonsToAdd: [
-        "select2d",
-        {
-          name: 'Download Vector File',
-          icon: {
-            width: 857.1,
-            height: 1000,
-            path: 'm214-7h429v214h-429v-214z m500 0h72v500q0 8-6 21t-11 20l-157 156q-5 6-19 12t-22 5v-232q0-22-15-38t-38-16h-322q-22 0-37 16t-16 38v232h-72v-714h72v232q0 22 16 38t37 16h465q22 0 38-16t15-38v-232z m-214 518v178q0 8-5 13t-13 5h-107q-7 0-13-5t-5-13v-178q0-8 5-13t13-5h107q7 0 13 5t5 13z m357-18v-518q0-22-15-38t-38-16h-750q-23 0-38 16t-16 38v750q0 22 16 38t38 16h517q23 0 50-12t42-26l156-157q16-15 27-42t11-49z',
-            transform: 'matrix(1 0 0 -1 0 850)'
-          },
-          click: function(gd) {
-            const elementStyle = window.getComputedStyle(gd);
-            Plotly.toImage(gd, {
-              format:'svg',
-              width: elementStyle.width.replace("px",""),
-              height: elementStyle.height.replace("px","")
-            }).then((url) => {
-              var downloader = document.createElement('a');
-              downloader.href = url;
-              downloader.target = '_blank';
-              downloader.download = gd.id + '.svg';
-              downloader.click();
-            });
-          }
-        },
-        {
-          name: 'Download Raw Series',
-          icon: {
-            path: 'M12 3C12.5523 3 13 3.44772 13 4V17.5858L18.2929 12.2929C18.6834 11.9024 19.3166 11.9024 19.7071 12.2929C20.0976 12.6834 20.0976 13.3166 19.7071 13.7071L12.7071 20.7071C12.3166 21.0976 11.6834 21.0976 11.2929 20.7071L4.29289 13.7071C3.90237 13.3166 3.90237 12.6834 4.29289 12.2929C4.68342 11.9024 5.31658 11.9024 5.70711 12.2929L11 17.5858V4C11 3.44772 11.4477 3 12 3Z',
-            transform: 'scale(0.7) translate(0, 0)'
-          },click: function(gd) {
-            var csvData = "x, y, name\n";
-            for (let i in gd.data) {
-              if (["scatter","scattergl","box"].includes(gd.data[i].type)) {
-                for (let j in gd.data[i].x) {
-                  if (gd.data[i].x[j] === null && gd.data[i].y[j] === null) continue;
-                  csvData += gd.data[i].x[j] + "," + gd.data[i].y[j] + "," + (rawTraceName(gd.data[i]) || " ") + "\n";
-                }
-              }
-            }
-            
-            var downloader = document.createElement('a');
-            downloader.href = 'data:text/json;charset=utf-8,' + encodeURI(csvData);
-            downloader.target = '_blank';
-            downloader.download = gd.id + ".csv";
-            downloader.click();
-          }
-        },
-      ],
+      modeBarButtonsToAdd: MODEBAR_EXTRA_BUTTONS,
     }
 
     const ref = document.getElementById(this.divName);
     if (ref) {
-      if (typeof ResizeObserver !== "undefined" && !plotResizeStates.has(ref)) {
-        const state = {observer: null, frame: null, resizing: false};
-        state.observer = new ResizeObserver(() => {
-          cancelAnimationFrame(state.frame);
-          state.frame = requestAnimationFrame(() => {
-            state.frame = null;
-            if (!ref.isConnected) {
-              state.observer.disconnect();
-              plotResizeStates.delete(ref);
-            } else this.refresh();
-          });
-        });
-        plotResizeStates.set(ref, state);
-        state.observer.observe(ref);
-      }
       this.onClick = async (evt) => {
         const bb = evt.target.getBoundingClientRect();
         let gca = this.ax[0];
@@ -1405,9 +1385,7 @@ class PlotlyRenderManager {
       }
 
       if (this.fresh) {
-        Plotly.newPlot(this.divName, reportDisplayTraces(this.traces), this.layout, config).then(() => {
-          if (document.getElementById(this.divName) !== ref || !ref._fullLayout) return;
-          this.refresh();
+        Plotly.newPlot(this.divName, this.traces, this.layout, config).then(() => {
           ref.on("plotly_relayout", (evt) => {
             const event = new CustomEvent("PlotlyRelayout", {detail: { 
               ...evt, 
@@ -1418,9 +1396,7 @@ class PlotlyRenderManager {
         });
         this.fresh = false;
       } else {
-        Promise.resolve(Plotly.react(this.divName, reportDisplayTraces(this.traces), this.layout, config)).then(() => {
-          if (document.getElementById(this.divName) === ref) this.refresh();
-        });
+        Plotly.react(this.divName, this.traces, this.layout, config);
       }
     }
   }
@@ -1447,13 +1423,6 @@ class PlotlyRenderManager {
    * Call to clear figure
    */
   purge() {
-    const element = document.getElementById(this.divName);
-    const state = element && plotResizeStates.get(element);
-    if (state) {
-      state.observer.disconnect();
-      cancelAnimationFrame(state.frame);
-      plotResizeStates.delete(element);
-    }
     Plotly.purge(this.divName);
     this.fresh = true;
   }
@@ -1463,20 +1432,7 @@ class PlotlyRenderManager {
    */
   refresh() {
     try {
-      const element = document.getElementById(this.divName);
-      if (!element || !element._fullLayout || element.clientWidth <= 0 || element.clientHeight <= 0) return;
-      const width = element.clientWidth, height = element.clientHeight;
-      if (Math.abs(element._fullLayout.width - width) <= 1 && Math.abs(element._fullLayout.height - height) <= 1) return;
-      const state = plotResizeStates.get(element);
-      if (state && state.resizing) return;
-      if (state) state.resizing = true;
-      return Promise.resolve().then(() => Plotly.Plots.resize(element)).catch(() => {}).finally(() => {
-        if (state) state.resizing = false;
-        // A second resize is needed only if the container moved again while the
-        // first one was pending. Equal dimensions cannot trigger a redraw loop.
-        if (document.getElementById(this.divName) === element &&
-            (element.clientWidth !== width || element.clientHeight !== height)) this.refresh();
-      });
+      Plotly.relayout(this.divName, {});
     } catch (error) {
       return;
     }

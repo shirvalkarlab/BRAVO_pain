@@ -48,10 +48,19 @@ Settings screen. The one home of these numbers is ``percept_adaptive.DOCUMENTED_
 field below says which situation it is in, because a recommendation that cannot be entered is
 worse than no recommendation: it wastes a programming visit.
 
+WHERE THE TIMING VALUES COME FROM (2026-09-13). When the participant's own record has been
+measured (``timing_recommendation.for_participant``, decision 148), the onset, averaging,
+transition, blanking and startup-delay rows carry those values with their reason and confidence.
+Otherwise the onset is the biomarker's integration window inside the documented range and the
+rest are the manufacturer's defaults, and each row says so. Every row also carries what the device
+is RUNNING on that side today (``programmed``), read from the newest session report's active
+sensing group, so the clinician sees the recommendation against the current programming.
+
 There is NO published resolution or step grid for these fields. An earlier reading of the parameter
 table mistook its Single Threshold column for a step size, which would have meant quantising every
 recommendation onto a grid; the table's four columns are Parameter, Dual, Single and Single Inverse,
-so no such grid exists in the supplied documents and nothing here rounds to one."""
+so no such grid exists in the supplied documents and nothing here rounds to one.
+"""
 from __future__ import annotations
 
 import math
@@ -60,9 +69,11 @@ from dataclasses import dataclass, field
 import numpy as np
 
 try:                                                    # pragma: no cover - import shim
-    from modules.StimOptimizer.routines import percept_adaptive as PA
+    from StimOptimizer.routines import percept_adaptive as PA
 except Exception:                                       # pragma: no cover
     PA = None
+
+from . import safe_current as _SAFE
 
 
 #: Onset duration range in SINGLE threshold mode: 0-30 s (FDA Table 2). Read from the one home in
@@ -93,11 +104,6 @@ MAX_PLAUSIBLE_DT_S = 3600.0
 COVERAGE_IS_CONTINUOUS = 0.5
 
 
-
-# Aditya canonical compatibility imports/constants.
-
-
-
 def onset_windows(onset_ms, averaging_ms):
     """How many controller steps an excursion must persist for, and whether that filters anything.
 
@@ -110,13 +116,21 @@ def onset_windows(onset_ms, averaging_ms):
     window, and whatever protection the configuration has must come from the threshold separation
     instead.
 
+    That is not a hypothetical. The manufacturer's own defaults pair a 1200 ms onset with a
+    1200 ms averaging duration, which is exactly one window, and the ADAPT-PD trial's onset
+    settings (1.2 to 2 s) are all one window against a 4096 ms averaging duration. The documented
+    range (0-6 min in Dual mode, FDA Table 2; corrected 2026-09-13, the earlier text here took the
+    trial's 2 s as the ceiling) leaves room: an onset of at least twice the averaging duration is
+    two windows and does filter.
+
     WHAT IS NOT ESTABLISHED, and why this returns a caveat rather than a verdict. No supplied
     Medtronic document states whether the device counts the onset duration in averaging windows or
     in FFT updates, which arrive far more often (5 Hz in dual mode, so every 200 ms). If it counts
     FFT updates then a 2 s onset spans ten of them and does filter, even under a long averaging
     window. The reading used here — that the controller steps once per averaging window — is the
     one the defaults support, since the default onset and the default averaging duration are the
-    same 1200 ms, which would be a strange coincidence otherwise. It is a reading, not a citation."""
+    same 1200 ms, which would be a strange coincidence otherwise. It is a reading, not a citation.
+    """
     a = float(averaging_ms) / 1000.0
     if not (a > 0):
         raise ValueError(f"averaging duration must be positive, got {averaging_ms!r}")
@@ -187,6 +201,9 @@ class Field_:
     #: picked -- a range, not a single recommended number with an implied margin of error. Same
     #: always-visible placement as the three notes above.
     robustness_note: str | None = None
+    #: Explain when the participant-bound safe ceiling lowers a recommended current
+    #: (decision 306), keeping its measured value distinct; None when no cap was applied.
+    ceiling_note: str | None = None
 
     #: WHY `status` ALONE IS NOT ENOUGH, and why two axes are derived from it below.
     #:
@@ -213,7 +230,7 @@ class Field_:
             return "none"
         if self.status == "device_default":
             return "manufacturer"
-        if self.status == "read_off_programmer":
+        if self.status in ("read_off_programmer", "your_program"):
             return "clinician"
         if self.status == "device_computed":
             # Neither "participant" nor "manufacturer" is right here. The number is produced by the
@@ -339,6 +356,7 @@ class Prescription:
                  "why": f.why, "programmed": f.programmed, "confidence": f.confidence,
                  "design_rule_note": f.design_rule_note, "occupancy_note": f.occupancy_note,
                  "startup_bias_note": f.startup_bias_note, "robustness_note": f.robustness_note,
+                 "ceiling_note": f.ceiling_note,
                  # The two provenance axes, so the interface never has to re-derive them from the
                  # status string and cannot disagree with this module about what a status means.
                  "origin": f.origin, "confirm": f.confirm,
@@ -474,7 +492,7 @@ def prescribe_all_modes(**kw):
 
 def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_series=None,
               t_s=None, dt_s=None, replay_result=None, measured_latency_s=None,
-              record_timing=None, programmed_timing=None):
+              record_timing=None, programmed_timing=None, participant_uid=None, hemisphere=None):
     """Assemble the full programmable prescription for one candidate, in one threshold mode.
 
     ``mode`` decides which fields exist; see the module docstring. ``threshold_plan`` supplies the
@@ -498,10 +516,26 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
                   f"programmable and the field list is deliberately empty rather than filled with "
                   f"values that cannot be entered."))
 
+    # This is an analysis table, but every proposed current still requires the
+    # current participant's clinical ceiling. A copied numeric plan is insufficient.
+    tp_lim = _SAFE.ensure_applied(threshold_plan, participant_uid=participant_uid, side=hemisphere)
+    if tp_lim is None:
+        raise _SAFE.ClinicalConfigurationUnavailable(
+            "clinical configuration unavailable: no participant-bound threshold plan")
+
     is_dual = (mode == PA.DUAL)
     T = timing or {}
     cand = candidate or {}
-    R = record_timing or {}
+    from . import timing_recommendation
+    configured_timing = timing_recommendation.for_participant(tp_lim.safety_participant_uid)
+    R = configured_timing if record_timing is None else record_timing
+    if not isinstance(R, dict) or set(R) != set(timing_recommendation.TIMING_FIELDS):
+        raise _SAFE.ClinicalConfigurationUnavailable("Participant-bound timing evidence is incomplete.")
+    if any(not isinstance(entry, dict)
+           or entry.get("participant_uid") != tp_lim.safety_participant_uid
+           or entry.get("config_digest") != tp_lim.safety_config_digest for entry in R.values()):
+        raise _SAFE.ClinicalConfigurationUnavailable(
+            "Timing evidence belongs to another participant or an outdated clinical configuration.")
     P = programmed_timing or {}
     F, unknowns = [], []
 
@@ -527,6 +561,23 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
                     default=PA.DUAL,
                     why="Recommended from the biomarker's own timescale, not hardcoded; see "
                         "percept_adaptive.recommend_threshold_mode."))
+
+    # --- the user's stimulation program (decision 467) -------------------------------------------
+    # Only when the Closed-Loop page's "Stimulation program" card was edited; the stimulated side's.
+    _sp_all = cand.get("stim_program") or {}
+    _sp_side = str(cand.get("actuated_hemisphere") or "").capitalize()
+    _sp = _sp_all.get(_sp_side) or {}
+    if _sp:
+        try:
+            from ClosedLoopDeployment import stim_program as _SPm
+        except ImportError:                              # pragma: no cover - host spelling
+            from . import stim_program as _SPm
+        F.append(Field_("Stimulation contacts", _SPm.contacts_text(_sp.get("contacts") or {}) or None,
+                        "", "your_program", why=f"From your stimulation program ({_sp_side} side)."))
+        F.append(Field_("Rate", _sp_all.get("rate_hz"), "Hz", "your_program",
+                        why="From your stimulation program; one rate for both sides."))
+        F.append(Field_("Pulse width", _sp.get("pw_us"), "us", "your_program",
+                        why=f"From your stimulation program ({_sp_side} side)."))
 
     # --- thresholds: the field set differs by mode -----------------------------------------------
     tp = threshold_plan
@@ -708,25 +759,61 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
                     "the recommendation is derived, not confirmed enterable")
 
     # --- amplitude limits -----------------------------------------------------------------------
-    a_lo = getattr(tp, "capture_amp_low", None)
-    a_hi = getattr(tp, "capture_amp_high", None)
+    # Every current on this card is at or below the participant's PI-stated safe ceiling for the
+    # stimulated side (decision 306): the limits are the capture currents CAPPED by
+    # `safe_current.apply_to_plan` (the pipeline applies it; a plan that never met a ceiling is held
+    # to its exact participant and side; missing clinical configuration withholds the table).
+    a_lo, a_hi = tp_lim.amplitude_limits() if tp_lim is not None else (None, None)
     lim_src = f"documented range {PA.RANGE_SOURCE_FDA}"
-    F.append(Field_("Adaptive amplitude limit, lower", a_lo, "mA", "derived",
+    # The user's program sets the limits when it states them (decision 467), still held to the safe
+    # ceiling; the rows then say which capture currents the thresholds came from (D28 links them).
+    lim_why_lo = ("Inherits the lower capture amplitude (D28), which makes the choice of "
+                  "capture amplitudes a therapeutic decision and not only a measurement "
+                  "one. Must be above zero (D07).")
+    lim_why_hi = "Inherits the upper capture amplitude (D28)."
+    lim_status_lo = lim_status_hi = "derived"
+    lim_note_lo = getattr(tp_lim, "amp_limit_low_note", None)
+    lim_note_hi = getattr(tp_lim, "amp_limit_high_note", None)
+    for _which in ("lower", "upper"):
+        _v = _sp.get(f"{_which}_limit_mA") if _sp else None
+        if _v is None:
+            continue
+        _cap_note = None
+        if tp_lim is not None and getattr(tp_lim, "safety_ceiling_mA", None) is not None:
+            _v, _cap_note = _SAFE.cap(_v, tp_lim.safety_ceiling_mA, tp_lim.safety_ceiling_provenance,
+                                      was=f"your program's {_which} limit")
+        _cap_at = a_lo if _which == "lower" else a_hi
+        _why = ("From your stimulation program. "
+                + (f"The thresholds were placed from the capture at {_cap_at:g} mA (D28)."
+                   if _cap_at is not None else "No capture current is on record for this band."))
+        if _which == "lower":
+            a_lo, lim_why_lo, lim_status_lo, lim_note_lo = _v, _why, "your_program", _cap_note
+        else:
+            a_hi, lim_why_hi, lim_status_hi, lim_note_hi = _v, _why, "your_program", _cap_note
+    F.append(Field_("Adaptive amplitude limit, lower", a_lo, "mA", lim_status_lo,
                     range_=PA.ADAPTIVE_AMP_LIMIT_RANGE_MA, range_source=lim_src,
                     programmed=_prog("lower_limit_mA"),
-                    why="Inherits the lower capture amplitude (D28), which makes the choice of "
-                        "capture amplitudes a therapeutic decision and not only a measurement "
-                        "one. Must be above zero (D07)."))
-    F.append(Field_("Adaptive amplitude limit, upper", a_hi, "mA", "derived",
+                    ceiling_note=lim_note_lo,
+                    why=lim_why_lo))
+    F.append(Field_("Adaptive amplitude limit, upper", a_hi, "mA", lim_status_hi,
                     range_=PA.ADAPTIVE_AMP_LIMIT_RANGE_MA, range_source=lim_src,
                     programmed=_prog("upper_limit_mA"),
-                    why="Inherits the upper capture amplitude (D28)."))
-    F.append(Field_("Paused amplitude", cand.get("paused_amplitude_mA"), "mA",
-                    "derived" if cand.get("paused_amplitude_mA") else "read_off_programmer",
+                    ceiling_note=lim_note_hi,
+                    why=lim_why_hi))
+    paused = cand.get("paused_amplitude_mA")
+    paused_note = None
+    if paused is not None and tp_lim is not None:
+        paused, paused_note = _SAFE.cap(paused, tp_lim.safety_ceiling_mA,
+                                        tp_lim.safety_ceiling_provenance,
+                                        was="the stated paused amplitude")
+    F.append(Field_("Paused amplitude", paused, "mA",
+                    ("your_program" if _sp.get("amp_mA") is not None else "derived") if paused
+                    else "read_off_programmer",
                     # The general amplitude envelope (C7 of the 2026-09-15 review, decision 200):
                     # every other current row printed its range and this one printed none.
                     range_=PA.ADAPTIVE_AMP_LIMIT_RANGE_MA, range_source=lim_src,
                     programmed=_prog("suspend_amplitude_mA"),
+                    ceiling_note=paused_note,
                     why="The amplitude delivered when the patient pauses Adaptive (D34). Not "
                         "derivable from the record; a clinical choice."))
 
@@ -1209,7 +1296,14 @@ def duty_cycle(power_series, *, upper, lower, t_s=None, dt_s=None, averaging_ms=
         d.stim_frac_at_lower = getattr(r, "frac_time_at_lower", None)
         if None not in (d.stim_frac_at_upper, d.stim_frac_at_lower):
             d.stim_frac_mid = float(max(0.0, 1.0 - d.stim_frac_at_upper - d.stim_frac_at_lower))
-        # Participant-specific provenance and examples are maintained outside source control.
+        # `amplitude_mA`, NOT `state`. Fixed 2026-09-05. This block read `r.state`, which
+        # ReplayResult documents and populates as the CONTROL STATE — a list of the strings
+        # "below", "between" and "above" — while the amplitude trajectory lives in
+        # `amplitude_mA`. The consequence was not a wrong number but a crash:
+        # `np.asarray(state, float)` raises `ValueError: could not convert string to float:
+        # 'below'`, so any configuration whose replay returned a full trajectory took down the
+    # whole prescription. Fragmented records can take the aggregate path with `state=None`,
+    # masking the error and leaving amplitude summary fields unavailable instead of raising.
         amp = getattr(r, "amplitude_mA", None)
         d.max_time_at_upper_limit_s = getattr(r, "longest_run_at_upper_s", None)
         d.max_time_at_lower_limit_s = getattr(r, "longest_run_at_lower_s", None)
@@ -1235,6 +1329,3 @@ def duty_cycle(power_series, *, upper, lower, t_s=None, dt_s=None, averaging_ms=
     d.predicted_failure_mode = _failure_mode(
         d.lfp_frac_above, d.lfp_frac_below, d.stim_frac_at_upper, d.stim_frac_at_lower)
     return d
-
-
-# Retained active Aditya interfaces.

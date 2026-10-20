@@ -10,7 +10,7 @@ mid-build cannot wedge the participant. A waiter that runs out of patience (`wai
 TO BUILDING rather than failing the page. Redis being unreachable, or the client library absent,
 DEGRADES TO TODAY'S BEHAVIOUR: build, with no error.
 
-Redis 5 here, so every client is constructed with protocol version 2 (`CLAUDE.md` section 3).
+Redis 5 here, so every client is constructed with protocol version 2 (`CLAUDE.md` §2).
 """
 import contextlib
 import logging
@@ -29,14 +29,6 @@ EVENTS = {"builder": 0, "served": 0, "fallback_timeout": 0, "fallback_no_redis":
 _EVENTS_LOCK = threading.Lock()
 
 _RELEASE = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
-
-
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
 
 
 def _bump(name):
@@ -109,29 +101,23 @@ def build_lock(name, *, ttl_s=180.0, wait_s=120.0, poll_s=0.5, ready=None):
     while True:
         waited = time.monotonic() - t0
         try:
-            served = ready is not None and ready()
-            acquired = False if served else bool(client.set(name, token, nx=True, ex=int(max(1, round(ttl_s)))))
-        except Exception as exc:
-            _bump("fallback_no_redis")
-            outcome = Outcome("fallback", "redis failed while waiting: %r" % (exc,), waited)
-        else:
-            outcome = None
-        if outcome is not None:
-            yield outcome
-            return
-        if served:
-            _bump("served")
-            yield Outcome("served", "built by another worker", waited)
-            return
-        if acquired:
-            _bump("builder")
-            try:
-                yield Outcome("builder", "lock acquired after waiting", waited)
-            finally:
+            if ready is not None and ready():
+                _bump("served")
+                yield Outcome("served", "built by another worker", waited)
+                return
+            if client.set(name, token, nx=True, ex=int(max(1, round(ttl_s)))):
+                _bump("builder")
                 try:
-                    client.eval(_RELEASE, 1, name, token)
-                except Exception:
-                    pass
+                    yield Outcome("builder", "lock acquired after waiting", waited)
+                finally:
+                    try:
+                        client.eval(_RELEASE, 1, name, token)
+                    except Exception:                           # noqa: BLE001
+                        pass
+                return
+        except Exception as exc:                                # noqa: BLE001
+            _bump("fallback_no_redis")
+            yield Outcome("fallback", "redis failed while waiting: %r" % (exc,), waited)
             return
         if waited >= wait_s:
             _bump("fallback_timeout")
@@ -145,6 +131,3 @@ def build_lock(name, *, ttl_s=180.0, wait_s=120.0, poll_s=0.5, ready=None):
 def stats():
     with _EVENTS_LOCK:
         return dict(EVENTS)
-
-
-# Retained active Aditya interfaces.

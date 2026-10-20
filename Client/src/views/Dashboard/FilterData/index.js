@@ -1,4 +1,3 @@
-import { displayTarget, isRCS08Participant } from "utils/participantTargets";
 import { useEffect, useMemo, useState, useCallback, memo } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -209,7 +208,7 @@ const ExpandableRow = memo(function ExpandableRow({ row, navigate }) {
                   <MDBox display="flex" gap={2} flexWrap="wrap" mb={1}>
                     {row.DBSDevices[0].Electrodes.map((e) => (
                       <MDTypography key={e.Id} variant="caption" color="text">
-                        <strong>{displayTarget(row, e.Hemisphere || e.Target, e.Hemisphere)}</strong>{isRCS08Participant(row) ? "" : ` · ${e.Target}`} · {e.Type}
+                        <strong>{e.Hemisphere}</strong> · {e.Target} · {e.Type}
                       </MDTypography>
                     ))}
                   </MDBox>

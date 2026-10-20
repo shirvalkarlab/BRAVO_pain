@@ -35,7 +35,7 @@ import { FixedSizeList } from 'react-window';
 
 import { createFilterOptions } from "@mui/material/Autocomplete";
 
-import EditIcon from "@mui/icons-material/Edit";
+import { Edit as EditIcon } from "@mui/icons-material"
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";

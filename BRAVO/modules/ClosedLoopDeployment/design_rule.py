@@ -71,11 +71,11 @@ _log = logging.getLogger(__name__)
 try:
     from modules.DecodeCommon import device_ranges as _DR
 except ImportError:                                              # pragma: no cover
-    from modules.DecodeCommon import device_ranges as _DR
+    from DecodeCommon import device_ranges as _DR
 
 KIND = "closed_loop_design_rule"
 #: Bumped whenever a change here would change an already-stored table's numbers.
-RULE_VERSION = "v2_onset_grid_capped_at_the_tablets_30s"
+RULE_VERSION = "v2_onset_grid_capped_at_the_tablets_30s_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 LOG2PI = float(np.log(2.0 * np.pi))
 
@@ -120,13 +120,6 @@ MIN_READINGS_FOR_TWO_COMPONENT = 200
 # ---------------------------------------------------------------------------------------------
 # The fitted model
 # ---------------------------------------------------------------------------------------------
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
-
 @dataclass
 class FittedModel:
     """A fitted local-level model: ``kind`` is ``"1state"`` (L1, a plain local level) or
@@ -197,6 +190,19 @@ def build_panel(stretches: Sequence[Tuple[np.ndarray, np.ndarray, np.ndarray]],
 
 
 def filter_1state(Y: np.ndarray, *, phi: float, m: float, q: float, r0: float) -> Dict[str, Any]:
+    """The plain local level (see `_filter_1state_numpy`), run as a compiled loop when numba is
+    installed and as the numpy loop otherwise, with the same answer either way (SPEED-UP ITEM 6,
+    the PI, 2026-09-25, decision 269's pattern)."""
+    if COMPILED_FILTER:
+        Yc = np.ascontiguousarray(Y, dtype=float)
+        ll, n_used = _filter_1state_kernel(Yc, np.isfinite(Yc), float(phi), float(m), float(q),
+                                           float(r0), LOG2PI)
+        return {"loglik": float(ll), "n": int(n_used)}
+    return _filter_1state_numpy(Y, phi=phi, m=m, q=q, r0=r0)
+
+
+def _filter_1state_numpy(Y: np.ndarray, *, phi: float, m: float, q: float,
+                         r0: float) -> Dict[str, Any]:
     """The plain local level: ``level_t = m + phi*(level_{t-1} - m) + w`` (w ~ N(0, q)),
     ``y_t = level_t + e`` (e ~ N(0, r0)). Started at the first reading of every row; the
     log-likelihood is summed from the second reading of every row onward, matching the contest's
@@ -223,6 +229,311 @@ def filter_1state(Y: np.ndarray, *, phi: float, m: float, q: float, r0: float) -
 
 def filter_2comp(Y: np.ndarray, *, phi_s: float, phi_f: float, q_s: float, q_f: float, m: float,
                  r0: float) -> Dict[str, Any]:
+    """The two-component filter (see `_filter_2comp_numpy`), run as a compiled loop when numba is
+    installed and as the numpy loop otherwise, with the same answer either way (decision 269). The
+    compiled loop skips each stretch's padding (2026-10-02, see `_prepare_2comp_panel`)."""
+    if COMPILED_FILTER:
+        return _filter_2comp_prepared(_prepare_2comp_panel(Y), phi_s=phi_s, phi_f=phi_f, q_s=q_s,
+                                      q_f=q_f, m=m, r0=r0)
+    return _filter_2comp_numpy(Y, phi_s=phi_s, phi_f=phi_f, q_s=q_s, q_f=q_f, m=m, r0=r0)
+
+
+def _prepare_2comp_panel(Y: np.ndarray) -> Dict[str, Any]:
+    """What the compiled two-component filter needs from the panel that no fitted number changes,
+    worked out once per fit instead of once per likelihood call (2026-10-02).
+
+    The panel holds every stretch of recording as one row, padded with missing readings to the
+    length of the longest. After a stretch's last reading its likelihood terms are exact zeros
+    and nothing it carries forward is read again, so the filter can stop visiting it there.
+    This lists, for each
+    step, how many stretches still have a reading at or after it (``n_active``), with the stretches
+    kept in the order they finish (``pos``, longest-running first, ties in panel order), so the
+    stretches still running at step ``t`` are always the first ``n_active[t]``. ``Yp``/``okp`` are
+    the panel and its has-a-reading mask in that order, one step per row. ``n`` is the count of
+    readings after the first column, which is what the filter's count always was.
+    """
+    Yc = np.ascontiguousarray(Y, dtype=float)
+    ok = np.isfinite(Yc)
+    s, l = Yc.shape
+    has = ok[:, 1:]
+    if l > 1:
+        last = np.where(has.any(axis=1), (l - 1) - np.argmax(has[:, ::-1], axis=1), 0)
+    else:
+        last = np.zeros(s, dtype=np.int64)
+    last = np.asarray(last, dtype=np.int64)
+    pos = np.argsort(-last, kind="stable").astype(np.int64)
+    n_active = np.cumsum(np.bincount(last, minlength=l)[::-1])[::-1].astype(np.int64)
+    return {"Yp": np.ascontiguousarray(Yc[pos].T), "okp": np.ascontiguousarray(ok[pos].T),
+            "pos": pos, "n_active": n_active, "n": int(has.sum())}
+
+
+def _filter_2comp_prepared(prep: Dict[str, Any], *, phi_s: float, phi_f: float, q_s: float,
+                           q_f: float, m: float, r0: float) -> Dict[str, Any]:
+    """The compiled two-component filter on a panel `_prepare_2comp_panel` already prepared; the
+    starting variances are worked out exactly as `filter_2comp` always worked them out."""
+    vs = q_s / max(1e-12, 1.0 - phi_s * phi_s)
+    vf = q_f / max(1e-12, 1.0 - phi_f * phi_f)
+    ll = _filter_2comp_active_kernel(prep["Yp"], prep["okp"], prep["pos"], prep["n_active"],
+                                     float(phi_s), float(phi_f), float(q_s), float(q_f), float(m),
+                                     float(r0), float(vs), float(vf), LOG2PI)
+    return {"loglik": float(ll), "n": prep["n"]}
+
+
+def _two_component_runner(Y: np.ndarray):
+    """`filter_2comp` with its panel fixed, for one fit's many likelihood calls: compiled, the panel
+    is prepared once here; without numba, the numpy loop as before. If preparing fails, every call
+    goes through `filter_2comp`, so the fit meets the failure inside its objective as it always did."""
+    if COMPILED_FILTER:
+        try:
+            prep = _prepare_2comp_panel(Y)
+        except Exception:                              # noqa: BLE001
+            return lambda **kw: filter_2comp(Y, **kw)
+        return lambda **kw: _filter_2comp_prepared(prep, **kw)
+    return lambda **kw: filter_2comp(Y, **kw)
+
+
+# SPEED-UP ITEM 3 (the PI, 2026-09-25: "add numba and do option 1"). The numpy loop below does about
+# 30 small array operations per time step; compiling avoids their repeated call overhead.
+# The compiled loop performs the SAME operations on each stretch in the SAME order:
+#   * add, subtract, multiply and divide are exactly rounded, whichever code runs them;
+#   * the log is the same library function numpy calls here (checked on 2,000 arrays, 0 differing);
+#   * each step's terms are summed in numpy's own order -- pairwise over the whole row, 8 running sums
+#     for a block of up to 128, halves split at a multiple of 8 above that (checked against np.sum
+#     on 3,000 arrays, 0 differing); a plain left-to-right sum would NOT match.
+# SPEED-UP ITEM 6 (the PI, 2026-09-25; `artifacts/research_2026-09-25_options/06_remaining_speed_ups.md`
+# proposal 6): `filter_1state`, the plain local level L1 fallback, gets the same treatment in
+# `_filter_1state_kernel`, reusing `_pairwise_sum` for its per-step sum over stretches;
+# instead of two.
+# `tests/test_design_rule_compiled_filter.py` holds the two loops equal for both filters. COMPILED_FILTER
+# False forces the numpy loop (the proof compares the two). ON-DISK CACHE since 2026-10-02 (the PI:
+# "fix that problem where the design rule shouldn't call itself"). Until then the summation called
+# itself, and a cached function that calls itself crashed the process when loaded under the server's
+# libraries (decision 269, measured 2026-09-25: segmentation fault from the cache, none when compiled
+# in the process), so each web worker compiled these loops on its first fit (2.3 s on Jetstream2).
+# `_pairwise_sum` now walks the same pairwise tree with an explicit stack, adding the same numbers in
+# the same order; `tests/test_design_rule_disk_cache.py` holds it to np.sum and to the old recursive
+# sum bit for bit, and a second process loading the filters from the cache to the same answers.
+try:
+    import math as _math
+    from numba import njit as _njit
+    # numba logs its own type checking at DEBUG, and the server logs at DEBUG: the first fit in each
+    # worker wrote 38,760 lines of it (measured 2026-09-25). Its warnings and errors still show.
+    logging.getLogger("numba").setLevel(logging.WARNING)
+
+    @_njit(cache=True)
+    def _pairwise_sum(a, lo, n):                      # numpy's DOUBLE_pairwise_sum, stride 1
+        # numpy's tree: below 8 numbers a plain sum; up to 128, eight running sums; above 128, the
+        # left half (its size rounded down to a multiple of 8) plus the right half. The halves are
+        # walked with an explicit stack instead of the function calling itself (see above): a frame
+        # is visited first to go left, then with the left half's sum to go right, then with the
+        # right half's sum to add the two, so every addition happens as the recursion made it.
+        st_lo = np.empty(64, np.int64)
+        st_n = np.empty(64, np.int64)
+        st_step = np.zeros(64, np.int64)
+        st_left = np.zeros(64)
+        top = 1
+        st_lo[0] = lo
+        st_n[0] = n
+        st_step[0] = 0
+        ret = 0.0
+        while top > 0:
+            f = top - 1
+            b_lo = st_lo[f]
+            b_n = st_n[f]
+            if b_n < 8:
+                res = 0.0
+                for i in range(b_n):
+                    res += a[b_lo + i]
+                ret = res
+                top -= 1
+            elif b_n <= 128:
+                r0 = a[b_lo]; r1 = a[b_lo + 1]; r2 = a[b_lo + 2]; r3 = a[b_lo + 3]
+                r4 = a[b_lo + 4]; r5 = a[b_lo + 5]; r6 = a[b_lo + 6]; r7 = a[b_lo + 7]
+                i = 8
+                while i < b_n - (b_n % 8):
+                    r0 += a[b_lo + i]; r1 += a[b_lo + i + 1]; r2 += a[b_lo + i + 2]; r3 += a[b_lo + i + 3]
+                    r4 += a[b_lo + i + 4]; r5 += a[b_lo + i + 5]; r6 += a[b_lo + i + 6]; r7 += a[b_lo + i + 7]
+                    i += 8
+                res = ((r0 + r1) + (r2 + r3)) + ((r4 + r5) + (r6 + r7))
+                while i < b_n:
+                    res += a[b_lo + i]
+                    i += 1
+                ret = res
+                top -= 1
+            else:
+                n2 = b_n // 2
+                n2 -= n2 % 8
+                if st_step[f] == 0:                   # go left
+                    st_step[f] = 1
+                    st_lo[top] = b_lo; st_n[top] = n2; st_step[top] = 0
+                    top += 1
+                elif st_step[f] == 1:                 # left done (in ret): keep it, go right
+                    st_left[f] = ret
+                    st_step[f] = 2
+                    st_lo[top] = b_lo + n2; st_n[top] = b_n - n2; st_step[top] = 0
+                    top += 1
+                else:                                 # right done (in ret): left + right
+                    ret = st_left[f] + ret
+                    top -= 1
+        return ret
+
+    @_njit(cache=True)
+    def _filter_2comp_kernel(Y, ok, phi_s, phi_f, q_s, q_f, m, r0, vs, vf, log2pi):
+        s, l = Y.shape
+        xs = np.zeros(s); xf = np.zeros(s)
+        p11 = np.empty(s); p22 = np.empty(s); p12 = np.zeros(s)
+        for i in range(s):
+            p11[i] = vs
+            p22[i] = vf
+        for i in range(s):                               # step 0, unmasked, as the numpy loop
+            f0 = p11[i] + 2.0 * p12[i] + p22[i] + r0
+            v0 = Y[i, 0] - m
+            k1 = (p11[i] + p12[i]) / f0
+            k2 = (p12[i] + p22[i]) / f0
+            xs[i] = xs[i] + k1 * v0
+            xf[i] = xf[i] + k2 * v0
+            a1 = p11[i] + p12[i]
+            a2 = p12[i] + p22[i]
+            p11[i] = p11[i] - k1 * a1
+            p12[i] = p12[i] - k1 * a2
+            p22[i] = p22[i] - k2 * a2
+        ps2 = phi_s * phi_s
+        psf = phi_s * phi_f
+        pf2 = phi_f * phi_f
+        term = np.empty(s)
+        ll = 0.0
+        n_used = 0
+        for t in range(1, l):
+            for i in range(s):
+                xsp = phi_s * xs[i]
+                xfp = phi_f * xf[i]
+                p11p = ps2 * p11[i] + q_s
+                p12p = psf * p12[i]
+                p22p = pf2 * p22[i] + q_f
+                xp = m + xsp + xfp
+                f = p11p + 2.0 * p12p + p22p + r0
+                mt = ok[i, t]
+                v = (Y[i, t] - xp) if mt else 0.0
+                term[i] = (-0.5 * (log2pi + _math.log(f) + v * v / f)) if mt else 0.0
+                if mt:
+                    n_used += 1
+                a1 = p11p + p12p
+                a2 = p12p + p22p
+                k1 = (a1 / f) if mt else 0.0
+                k2 = (a2 / f) if mt else 0.0
+                xs[i] = xsp + k1 * v
+                xf[i] = xfp + k2 * v
+                p11[i] = p11p - k1 * a1
+                p12[i] = p12p - k1 * a2
+                p22[i] = p22p - k2 * a2
+            ll += _pairwise_sum(term, 0, s)
+        return ll, n_used
+
+    # PADDING SKIPPED (2026-10-02, the PI: faster requests on the Jetstream2 BRAVO, every number
+    # unchanged). `_filter_2comp_kernel` above did the arithmetic for every cell of the padded panel,
+    # including cells after the last reading. This loop does the SAME operations, in the same
+    # order, on each stretch up to its last reading and
+    # stops there: after it, the old loop's term for that stretch was always the exact zero it now
+    # leaves in its place, and the state it went on updating was never read again. The step's sum
+    # still runs over the whole row, finished stretches' zeros included, by the same `_pairwise_sum`,
+    # so it adds the same numbers in the same order. The stretches are held in the order they finish
+    # (`_prepare_2comp_panel`), so those still running at a step are a prefix of the arrays; each
+    # term is written at its stretch's place in the panel's own order. `_filter_2comp_kernel` is
+    # kept as the bit-for-bit reference in `tests/test_design_rule_active_filter.py`;
+    # nothing else calls it. Splitting stretches across threads was tried (numba prange): no
+    # faster than this at 16 threads, slower at 64, and it would start a thread pool in every
+    # web worker.
+    @_njit(cache=True)
+    def _filter_2comp_active_kernel(Yp, okp, pos, n_active, phi_s, phi_f, q_s, q_f, m, r0, vs, vf,
+                                    log2pi):
+        l, s = Yp.shape
+        xs = np.zeros(s); xf = np.zeros(s)
+        p11 = np.empty(s); p22 = np.empty(s); p12 = np.zeros(s)
+        for j in range(s):
+            p11[j] = vs
+            p22[j] = vf
+        for j in range(s):                               # step 0, unmasked, as the numpy loop
+            f0 = p11[j] + 2.0 * p12[j] + p22[j] + r0
+            v0 = Yp[0, j] - m
+            k1 = (p11[j] + p12[j]) / f0
+            k2 = (p12[j] + p22[j]) / f0
+            xs[j] = xs[j] + k1 * v0
+            xf[j] = xf[j] + k2 * v0
+            a1 = p11[j] + p12[j]
+            a2 = p12[j] + p22[j]
+            p11[j] = p11[j] - k1 * a1
+            p12[j] = p12[j] - k1 * a2
+            p22[j] = p22[j] - k2 * a2
+        ps2 = phi_s * phi_s
+        psf = phi_s * phi_f
+        pf2 = phi_f * phi_f
+        term = np.zeros(s)                               # indexed by place in the panel's order
+        ll = 0.0
+        for t in range(1, l):
+            na = n_active[t]
+            for j in range(na, n_active[t - 1]):         # finished at t - 1: an exact zero from now on
+                term[pos[j]] = 0.0
+            for j in range(na):
+                xsp = phi_s * xs[j]
+                xfp = phi_f * xf[j]
+                p11p = ps2 * p11[j] + q_s
+                p12p = psf * p12[j]
+                p22p = pf2 * p22[j] + q_f
+                xp = m + xsp + xfp
+                f = p11p + 2.0 * p12p + p22p + r0
+                mt = okp[t, j]
+                v = (Yp[t, j] - xp) if mt else 0.0
+                term[pos[j]] = (-0.5 * (log2pi + _math.log(f) + v * v / f)) if mt else 0.0
+                a1 = p11p + p12p
+                a2 = p12p + p22p
+                k1 = (a1 / f) if mt else 0.0
+                k2 = (a2 / f) if mt else 0.0
+                xs[j] = xsp + k1 * v
+                xf[j] = xfp + k2 * v
+                p11[j] = p11p - k1 * a1
+                p12[j] = p12p - k1 * a2
+                p22[j] = p22p - k2 * a2
+            ll += _pairwise_sum(term, 0, s)
+        return ll
+
+    @_njit(cache=True)
+    def _filter_1state_kernel(Y, ok, phi, m, q, r0, log2pi):
+        # SPEED-UP ITEM 6 (the PI, 2026-09-25). The same pattern as `_filter_2comp_kernel` above,
+        # one state per stretch instead of two: started at the raw first reading of every row
+        # (even where it is NaN, exactly as the numpy loop's `Y[:, 0].copy()`), the per-step sum
+        # over stretches taken by the same `_pairwise_sum` in the same order.
+        s, l = Y.shape
+        x = np.empty(s)
+        for i in range(s):
+            x[i] = Y[i, 0]
+        p = np.full(s, r0)
+        phi2 = phi * phi
+        term = np.empty(s)
+        ll = 0.0
+        n_used = 0
+        for t in range(1, l):
+            for i in range(s):
+                xp = m + phi * (x[i] - m)
+                pp = phi2 * p[i] + q
+                f = pp + r0
+                mt = ok[i, t]
+                v = (Y[i, t] - xp) if mt else 0.0
+                term[i] = (-0.5 * (log2pi + _math.log(f) + v * v / f)) if mt else 0.0
+                if mt:
+                    n_used += 1
+                k = (pp / f) if mt else 0.0
+                x[i] = xp + k * v
+                p[i] = ((1.0 - k) * pp) if mt else pp
+            ll += _pairwise_sum(term, 0, s)
+        return ll, n_used
+
+    COMPILED_FILTER = True
+except Exception:                                        # noqa: BLE001 -- no numba: the numpy loop
+    COMPILED_FILTER = False
+
+
+def _filter_2comp_numpy(Y: np.ndarray, *, phi_s: float, phi_f: float, q_s: float, q_f: float, m: float,
+                        r0: float) -> Dict[str, Any]:
     """A slow component plus a faster, decaying component plus measurement wobble:
     ``y_t = m + slow_t + fast_t + e_t``. Covariance carried as three scalars, vectorised over
     stretches -- the contest's own `filter_2comp`, with the amplitude- and level-dependent
@@ -330,6 +641,7 @@ def fit_two_component(Y: np.ndarray, *, maxfev: int = DEFAULT_MAXFEV_L4,
     measurement wobble ``r0``. The contest's own starting point (`k1_models.py`, ``L4_two_component``)."""
     sc = _scales(Y)
     mbar, var_rob = sc["mbar"], sc["var_rob"]
+    run = _two_component_runner(Y)                     # the panel prepared once for every call below
 
     def unpack(u):
         return (_sig(u[0]), _sig(u[1]), float(np.exp(u[2])), float(np.exp(u[3])),
@@ -344,7 +656,7 @@ def fit_two_component(Y: np.ndarray, *, maxfev: int = DEFAULT_MAXFEV_L4,
         if phi_f >= phi_s:                             # keeps "slow" and "fast" from swapping
             return 1e12
         try:
-            v = -filter_2comp(Y, phi_s=phi_s, phi_f=phi_f, q_s=q_s, q_f=q_f, m=m, r0=r0)["loglik"]
+            v = -run(phi_s=phi_s, phi_f=phi_f, q_s=q_s, q_f=q_f, m=m, r0=r0)["loglik"]
         except Exception:                              # noqa: BLE001
             return 1e12
         return v if np.isfinite(v) else 1e12
@@ -507,7 +819,7 @@ def false_crossing_rate(model: FittedModel, *, averaging_s: float, onset_s: floa
     return out
 
 
-def min_separation_for_rate(model: FittedModel, *, averaging_s: float, onset_s: float,
+def _min_separation_for_rate_loop(model: FittedModel, *, averaging_s: float, onset_s: float,
                             level: float, rng: np.random.Generator, dt_s: float,
                             target_per_hour: float = TARGET_CROSSINGS_PER_HOUR,
                             hours: float = DEFAULT_SIM_HOURS,
@@ -522,6 +834,61 @@ def min_separation_for_rate(model: FittedModel, *, averaging_s: float, onset_s: 
                                 separation=float(sep), hours=hours, level=level, rng=rng,
                                 dt_s=dt_s)
         sweep.append({"separation": float(sep), "total_per_hour": float(r["total_per_hour"])})
+    ok = [row["separation"] for row in sweep if row["total_per_hour"] <= target_per_hour]
+    return (min(ok) if ok else None), sweep
+
+
+def min_separation_for_rate(model: FittedModel, *, averaging_s: float, onset_s: float,
+                            level: float, rng: np.random.Generator, dt_s: float,
+                            target_per_hour: float = TARGET_CROSSINGS_PER_HOUR,
+                            hours: float = DEFAULT_SIM_HOURS,
+                            separations: Sequence[float] = SEPARATION_GRID
+                            ) -> Tuple[Optional[float], List[Dict[str, float]]]:
+    """`_min_separation_for_rate_loop`'s answer, vectorised across the separations (decision 421).
+
+    The loop draws, for each separation in turn, ``n`` measurement-noise values and then (for the
+    two-component model) ``n`` fast-component values. The same draws, in the same order, are taken
+    here in ONE call of the same generator -- a normal draw is a scaled standard-normal draw, value
+    for value -- and every separation is then judged at once: the fast component filtered row by
+    row (`lfilter` along the last axis), the window averages and the confirmed-run counts done for
+    all rows together. The answers and the generator's position afterwards are bit for bit the
+    loop's (`tests/test_design_rule_once_and_vectorised.py`)."""
+    seps = [float(x) for x in separations]
+    k = len(seps)
+    n_steps = int(round(hours * 3600.0 / dt_s))
+    if k == 0 or n_steps <= 0:
+        return _min_separation_for_rate_loop(model, averaging_s=averaging_s, onset_s=onset_s,
+                                             level=level, rng=rng, dt_s=dt_s,
+                                             target_per_hour=target_per_hour, hours=hours,
+                                             separations=separations)
+    two = model.kind == "2comp"
+    z = rng.standard_normal((k, 2 if two else 1, n_steps))
+    e = np.sqrt(max(float(model.r0), 0.0)) * z[:, 0, :]
+    if two:
+        from scipy.signal import lfilter
+        w = np.sqrt(max(model.q_f, 0.0)) * z[:, 1, :]
+        fast = lfilter([1.0], [1.0, -model.phi_f], w, axis=1)
+    else:
+        fast = np.zeros((k, n_steps))
+    y = level + fast + e
+    n_per = max(1, int(round(averaging_s / dt_s)))
+    n_win = n_steps // n_per
+    sweep = []
+    if n_win == 0:
+        sweep = [{"separation": sp, "total_per_hour": 0.0} for sp in seps]
+    else:
+        zw = y[:, :n_win * n_per].reshape(k, n_win, n_per).mean(axis=2)
+        n_on = max(1, int(np.ceil(onset_s / (n_per * dt_s))))
+        sep_col = np.asarray(seps)[:, None]
+        tot = np.zeros(k)
+        for b in ((zw > level + sep_col), (zw < level - sep_col)):
+            pad = np.zeros((k, 1), dtype=np.int8)
+            d = np.diff(np.concatenate((pad, b.astype(np.int8), pad), axis=1), axis=1)
+            for i in range(k):
+                starts = np.flatnonzero(d[i] == 1)
+                ends = np.flatnonzero(d[i] == -1)
+                tot[i] += float(np.sum((ends - starts) >= n_on)) / hours
+        sweep = [{"separation": sp, "total_per_hour": float(tot[i])} for i, sp in enumerate(seps)]
     ok = [row["separation"] for row in sweep if row["total_per_hour"] <= target_per_hour]
     return (min(ok) if ok else None), sweep
 
@@ -609,6 +976,29 @@ def analytic_min_separation(sigma: float, readings_per_hour: float,
 # ---------------------------------------------------------------------------------------------
 # The one entry point a caller needs: fit on a participant's own series, build the table
 # ---------------------------------------------------------------------------------------------
+#: THE FITTED NOISE MODEL, KEPT PER SERIES (decision 420). One report fitted the same model to the
+#: same series twice (the record pair's design rule and the band's own onset, decision 417), about
+#: 3 s each plus the Riccati step. Keyed on the exact bytes of the series as fitted and on the fit
+#: settings, so any other series, or other settings, is fitted afresh. Bounded; per process.
+_FIT_MEMO: Dict[Any, Any] = {}
+_FIT_MEMO_MAX = 8
+
+
+def clear_fit_memo():
+    _FIT_MEMO.clear()
+
+
+def _fit_key(stretches, prefer, maxfev_l1, maxfev_l4, restarts):
+    import hashlib
+    h = hashlib.blake2b(digest_size=20)
+    for st in stretches:
+        for arr in st:
+            a = np.ascontiguousarray(np.asarray(arr, dtype=float))
+            h.update(str(a.shape).encode())
+            h.update(a.tobytes())
+    return (h.hexdigest(), str(prefer), int(maxfev_l1), int(maxfev_l4), int(restarts))
+
+
 def design_rule_for_series(t, power, amp_obs, *, upper: float, lower: float,
                            prefer: str = "2comp", maxfev_l1: int = DEFAULT_MAXFEV_L1,
                            maxfev_l4: int = DEFAULT_MAXFEV_L4, restarts: int = DEFAULT_RESTARTS,
@@ -656,15 +1046,25 @@ def design_rule_for_series(t, power, amp_obs, *, upper: float, lower: float,
         return {"refused": True, "reason": "the time base has no positive interval"}
     dt_s = float(np.median(pos))
     stretches, n_empty, n_merged, _bounds = _sim.regrid_stretches(t, p, a, dt_s)
-    try:
-        model, chosen = fit_design_model(stretches, prefer=prefer, maxfev_l1=maxfev_l1,
-                                         maxfev_l4=maxfev_l4, restarts=restarts)
-    except ValueError as ex:
-        return {"refused": True, "reason": str(ex)}
+    key = _fit_key(stretches, prefer, maxfev_l1, maxfev_l4, restarts)
+    kept = _FIT_MEMO.get(key)
+    if kept is None:
+        try:
+            model, chosen = fit_design_model(stretches, prefer=prefer, maxfev_l1=maxfev_l1,
+                                             maxfev_l4=maxfev_l4, restarts=restarts)
+        except ValueError as ex:
+            return {"refused": True, "reason": str(ex)}
+        a_m, c_m, q_m, r_m = state_space_matrices(model)
+        ss = riccati_steady_state(a_m, c_m, q_m, r_m)
+        cross = ctrlsys_cross_check(a_m, c_m, q_m, r_m)
+        kept = (model, chosen, ss, cross)
+        if len(_FIT_MEMO) >= _FIT_MEMO_MAX:
+            _FIT_MEMO.pop(next(iter(_FIT_MEMO)))
+        _FIT_MEMO[key] = kept
+    model, chosen, ss, cross = kept
+    import copy as _copy
+    cross = _copy.deepcopy(cross)
     level = 0.5 * (float(upper) + float(lower))
-    a_m, c_m, q_m, r_m = state_space_matrices(model)
-    ss = riccati_steady_state(a_m, c_m, q_m, r_m)
-    cross = ctrlsys_cross_check(a_m, c_m, q_m, r_m)
     table = separation_table(model, level=level, averaging_grid=averaging_grid,
                              onset_grid=onset_grid, separations=separations, hours=hours,
                              seed=seed, dt_s=dt_s)
@@ -680,6 +1080,3 @@ def design_rule_for_series(t, power, amp_obs, *, upper: float, lower: float,
         "ctrlsys_cross_check": cross,
         "table": table,
     }
-
-
-# Retained active Aditya interfaces.

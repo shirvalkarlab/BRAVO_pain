@@ -69,3 +69,14 @@ test('program identifiers are escaped and arbitrary source text is not inserted 
   expect(svg).not.toContain('<img>');
   expect(svg).not.toContain('<script>');
 });
+
+
+test('explicit source geometry is per lead and never inferred for the other side',()=>{
+ const programs=[{id:'left:1',side:'left',rows:{'Stimulation contacts':'1a- C+'}},
+  {id:'right:1',side:'right',rows:{'Stimulation contacts':'9b- C+'}}];
+ const result=contactConfiguration(programs,{left:'sensight',right:'unknown'});
+ expect(result.leads.map(lead=>lead.knownGeometry)).toEqual([true,false]);
+ expect(result.key).not.toBe(contactConfiguration(programs,{left:'unknown',right:'unknown'}).key);
+ const svg=decodeURIComponent(configurationSvg(result,1));
+ expect(svg).toContain('1a−');expect(svg).toContain('Geometry');expect(svg).not.toContain('9b−');
+});

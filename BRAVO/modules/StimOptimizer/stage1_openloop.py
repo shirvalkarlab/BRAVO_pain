@@ -32,6 +32,12 @@ the other is probed. Fitting a pain response to one side's current while ignorin
 side's current was doing at the same moment is a real confound, not a simplification: it can credit a
 change in pain to the wrong stimulator.
 
+The source instruction is to model both sides jointly. Each eligible epoch must
+carry both current values, including valid zeros. Discarding one side's zero-current
+rows would discard information that a joint fit uses to distinguish the side effects.
+This implementation preserves that source method without claiming every epoch has
+both sides delivering nonzero current.
+
 WHAT STAGE 1 NOW SEARCHES
 --------------------------
 Rate x amplitude-Left x amplitude-Right, in ONE three-dimensional surface
@@ -81,19 +87,30 @@ per hemisphere. Everything else about the envelope — a non-empty scientific or
 lifts it, an override asked for with no reason is reported as ignored, what was excluded and why is
 never hidden — is unchanged.
 
+TERMINAL OUTPUT
+FrozenConfiguration retains a tuple of two HemisphereSetting objects. Both come
+from the same joint decision, so rate_hz, rate_resolved, gain and sd_of_difference
+are identical across sides. Pulse width and amp_star_mA remain side-specific,
+because they are independently programmable.
+
 Resolution uses the same criterion as before: a candidate counts as resolved only when it beats the
 comparison cell by more than the standard deviation OF THE DIFFERENCE, with both posterior standard
 deviations propagated (``routines.resolution``). ``None`` still means the question could not be put
 to the data (typically a stratum that never delivered the incumbent's rate), which blocks the gate
-but is not the same statement as a measured "no"."""
+but is not the same statement as a measured "no".
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import re
 
 import numpy as np
 import pandas as pd
 
 from .routines.resolution import RESOLUTION_K as _RES_K
+from .routines.resolution import exposure as _resolution_exposure
+from .routines.resolution import is_resolved as _RES_is_resolved
+from .routines.resolution import sd_of_difference as _RES_sd_of_difference
 from .routines import acquisition as ACQ
 from .routines import adaptive_envelope as ENV
 from .routines import objective as OBJ
@@ -101,11 +118,48 @@ from .routines import plots as PLT
 from .routines import surrogate as SUR
 from . import safety_ceiling as SC
 
+try:
+    from modules.DecodeCommon import sensing_rule as _SR
+except ImportError:                                  # the host runner's spelling
+    from DecodeCommon import sensing_rule as _SR
+
 #: Minimum epochs in a JOINT (pulse-width-Left, pulse-width-Right) stratum before a surface is
 #: fitted for it. The same floor the module has always used for a pulse-width stratum, now applied
 #: to a pulse-width PAIR: a stratum is not held to a laxer standard than before, and it is not made
 #: harder to clear either, since the joint stratum pools what used to be split across two arms.
 PW_STRATUM_MIN_EPOCHS = 8
+
+# LEFT CONTACT IS PART OF EACH GROUP LABEL (decision, 2026-10-01).
+# Keep contact groups separate. At 0 mA the Left contact cannot change delivered current,
+# so LEFT_OFF rows join every Left contact group at their pulse widths under the source
+# rule. Missing contacts preserve the pulse-width-only grouping. Right contact is not
+# a grouping dimension in this source method; this is a retained modeling limitation.
+
+
+LEFT_OFF = "off (Left 0 mA)"
+
+
+def left_contact_label(cathode, amp_left_mA=None):
+    """The Left contact a stretch was stimulating on, in the clinic sheet's notation ("L C+2-"),
+    from either the device's cathode ("2a-2b-2c") or a clinic row's contact text ("L C+2- / R
+    C+1-2-"); LEFT_OFF when Left was at 0 mA; None when no contact is recorded."""
+    try:
+        a = float(amp_left_mA) if amp_left_mA is not None else None
+    except (TypeError, ValueError):
+        a = None
+    if a is not None and np.isfinite(a) and a <= 0.0:
+        return LEFT_OFF
+    if cathode is None or (isinstance(cathode, float) and not np.isfinite(cathode)):
+        return None
+    text = str(cathode).strip()
+    if not text or text.lower() in ("none", "nan"):
+        return None
+    if text.startswith("L ") and "/" not in text:   # already a label ("L C+2-", "L 1+2-")
+        return text
+    if re.fullmatch(r"[0-3][a-c]?(-[0-3][a-c]?)*-?", text, flags=re.IGNORECASE):
+        return _SR.contacts_short(text, "Left")      # the device's cathode, "2a-2b-2c"
+    return _SR.left_contact_from_clinic_text(text)   # a clinic sheet's own text
+
 
 #: Multiplier on the standard deviation of the difference in the resolution criterion. Unchanged;
 #: re-exported from routines.resolution, the single definition, so existing importers of
@@ -169,26 +223,6 @@ JOINT_FIXED_LENGTH_SCALE = (PLT.FIXED_LENGTH_SCALE[0], None, None)
 # ---------------------------------------------------------------------------------------------
 # The frozen configuration
 # ---------------------------------------------------------------------------------------------
-
-# Aditya canonical compatibility imports/constants.
-from dataclasses import dataclass, field, replace
-
-import numpy as np
-
-import pandas as pd
-
-from .routines.resolution import RESOLUTION_K as _RES_K
-
-from .routines import acquisition as ACQ
-
-from .routines import objective as OBJ
-
-from .routines import plots as PLT
-
-from .routines import surrogate as SUR
-
-from .routines import validation as VAL
-
 @dataclass(frozen=True)
 class HemisphereSetting:
     """The rate and pulse width Stage 1 hands on for one hemisphere, and the evidence for them.
@@ -274,6 +308,9 @@ class FrozenConfiguration:
     #: (``pw_us_<side>``), or from the fallback column named in the audit when the side's own is
     #: absent. ``None`` for a side whose pulse width is not recorded on the incumbent epoch.
     incumbent_pw_us_by_side: dict = field(default_factory=dict)
+    #: The Left contact in force (step A, 2026-10-01): the incumbent stretch's programmed Left
+    #: contact, read even when its Left current is 0 mA. None when the record has no contacts.
+    incumbent_left_contact: str | None = None
 
     def setting(self, hemisphere: str) -> HemisphereSetting:
         for s in self.settings:
@@ -414,6 +451,9 @@ class JointStratum:
     #: JOINT" section's sibling, the per-rate honesty check, for why this exists alongside the
     #: 3-input surface rather than instead of it.
     rate_strata: dict = field(default_factory=dict)
+    #: The Left contact this group was fitted on (step A, 2026-10-01); None when the record
+    #: carries no contacts.
+    left_contact: str | None = None
 
     @property
     def optimum_moved_by_envelope(self) -> bool:
@@ -425,25 +465,44 @@ class JointStratum:
         return float(self.incumbent_mu) - float(self.mu_star)
 
     def sd_of_difference(self) -> float:
-        return float(np.sqrt(float(self.sd_star) ** 2 + float(self.incumbent_sd) ** 2))
+        """Propagated standard deviation of (optimum - incumbent). Delegates to the one shared
+        definition, ``routines.resolution.sd_of_difference`` (2026-09-25): this dataclass used to
+        carry its own copy of the arithmetic, which is exactly the multi-copy drift
+        ``routines/resolution.py`` was built on 2026-09-04 to rule out (see that module's
+        docstring). The covariance term between the two predicted cells is still not carried; see
+        that module's "THE COVARIANCE TERM IS DELIBERATELY OMITTED" section for why that is the
+        conservative direction, not an oversight."""
+        return _RES_sd_of_difference(self.sd_star, self.incumbent_sd)
 
     def resolves_its_optimum(self, k: float = RESOLUTION_K) -> bool | None:
         """Does this stratum's optimum beat the setting in force by more than the uncertainty in
-        that difference? ``None`` means the question cannot be put to this stratum.
+        that difference? Delegates to ``routines.resolution.is_resolved`` (2026-09-25), the same
+        shared rule ``pipeline.py`` and ``bravo_service.py`` already call, so all four call sites
+        move together if the rule is ever tightened (see that module's docstring history).
 
-        Identical reasoning to the module's pre-joint criterion: ``J`` is zero at the incumbent by
-        construction, so a stratum that never delivered the incumbent's RATE has no data anywhere
-        near that cell and its posterior there is an extrapolation across the PINNED frequency
-        length scale, not a measurement. Support is required on the rate axis specifically for
-        that reason; the two amplitude length scales are fitted, so extrapolating across current is
-        not treated the same way.
+        Two DIFFERENT reasons this returns ``None`` ("not assessed", never collapsed into a
+        measured "no"):
+
+        (1) ``incumbent_rate_supported`` is ``False``: ``J`` is zero at the incumbent by
+            construction, so a stratum that never delivered the incumbent's RATE has no data
+            anywhere near that cell and its posterior there is an extrapolation across the PINNED
+            frequency length scale, not a measurement. Support is required on the rate axis
+            specifically for that reason; the two amplitude length scales are fitted, so
+            extrapolating across current is not treated the same way. Checked here, before the
+            shared rule, because it is business logic the shared, dependency-free leaf module has
+            no way to know.
+        (2) the propagated standard deviation of the difference is itself zero or not finite (a
+            degenerate posterior): ``routines.resolution.is_resolved`` returns ``None`` for this
+            too, since the comparison could not be FORMED at all -- a fit that needs repairing, not
+            a measured "no" that more exposure could change. Before 2026-09-25 this dataclass's own
+            copy of the arithmetic collapsed that case into ``False``, contradicting the shared
+            module's own documented three-state contract; ``test_stage1.py`` pinned the
+            contradiction (a stratum with zero candidate AND zero incumbent SD read ``False``) and
+            is corrected alongside this fix.
         """
         if not self.incumbent_rate_supported:
             return None
-        sd_diff = self.sd_of_difference()
-        if not np.isfinite(sd_diff) or sd_diff <= 0:
-            return False
-        return bool(self.gain_over_incumbent() > float(k) * sd_diff)
+        return _RES_is_resolved(self.gain_over_incumbent(), self.sd_star, self.incumbent_sd, k)
 
 
 @dataclass
@@ -451,8 +510,14 @@ class RateStratum:
     """One (amplitude-Left, amplitude-Right) surface, fitted at a SINGLE stimulation rate inside
     one (pulse-width-Left, pulse-width-Right) stratum (2026-09-14).
 
+    The pooled JointStratum remains available for rate and pulse-width selection.
+    A current recommendation is instead fit within one rate: otherwise a poorly sampled
+    rate could borrow apparent precision through the pooled rate axis. This class fits
+    only amplitude at that rate and reports its evidence separately from the pooled surface.
+
     ``fitted`` is ``False`` when there were not enough epochs at this rate to fit anything; every
-    other numeric field is then meaningless and ``reason`` says why."""
+    other numeric field is then meaningless and ``reason`` says why.
+    """
 
     pw_us_left: float
     pw_us_right: float
@@ -473,6 +538,226 @@ class RateStratum:
     coverage: dict = field(default_factory=dict)
     resolution: dict = field(default_factory=dict)
     meta: dict = field(default_factory=dict)
+    left_contact: str | None = None
+
+
+#: The consequence of the pre-registered calibration check, as the PI ruled it on 2026-09-22
+#: (ruling 6 of decision 233): a WARNING. `OBJECTIVE_SPEC.md` §6 pre-registered "any single failure
+#: -> surrogate may not select settings"; that consequence is NOT adopted. The check is computed
+#: where the surface is fitted, travels with the stratum, and refuses nothing.
+CALIBRATION_CONSEQUENCE = ("a warning, never blocking (the PI, 2026-09-22): a failed check refuses "
+                           "nothing and changes no recommendation; it says the surface has not been "
+                           "shown to predict a stretch of time it did not see")
+
+
+def _fold_labels_by_time(sub, *, n_blocks=3):
+    """Block-of-time labels for the leave-one-block-out fold: the epochs in time order, cut into
+    `n_blocks` contiguous blocks. Time is used HERE only to hold a stretch out and predict it, which
+    is a check on the fit; nothing about time enters the model (decisions 193-196)."""
+    n = len(sub)
+    if n < 2:
+        return np.zeros(n, dtype=int)
+    order = np.argsort(pd.to_datetime(sub["t0"]).to_numpy()) if "t0" in sub.columns else np.arange(n)
+    lab = np.zeros(n, dtype=int)
+    edges = np.array_split(order, max(1, int(n_blocks)))
+    for i, idx in enumerate(edges):
+        lab[idx] = i
+    return lab
+
+
+def _one_calibration_fold(gp, y, v, groups, *, name, pred=None):
+    """One fold structure's answer: does the surface beat a precision-weighted mean of the training
+    fold, and do its intervals cover what they claim? ``None`` where a fold cannot be trained on --
+    which is an answer, and not the same answer as a failure. ``pred`` is the fold's held-out
+    ``(mu, sd)`` when the caller already has them (the diagnosis shares them; 2026-09-23)."""
+    out = {"n_predicted": 0, "n_folds": int(np.unique(groups).size), "mae_gp": None,
+           "mae_baseline": None, "mae_ratio": None, "coverage95": None, "reason": None}
+    if np.unique(groups).size < 2:
+        out["reason"] = (f"not computable: the {name} fold has only one group, so there is nothing "
+                         f"to hold out")
+        return out, None
+    mu, sd = pred if pred is not None else gp.loo_predict(groups=groups)
+    ok = np.isfinite(mu)
+    out["n_predicted"] = int(ok.sum())
+    if out["n_predicted"] < 3:
+        out["reason"] = (f"not computable: only {out['n_predicted']} of {len(y)} epochs could be "
+                         f"predicted from the other {name} folds (a fold needs three to train on)")
+        return out, None
+    base = []
+    for g in np.unique(groups):
+        te, tr = groups == g, groups != g
+        w = 1.0 / np.maximum(v[tr], 1e-12)
+        base.append(np.full(int(te.sum()), float(np.sum(w * y[tr]) / np.sum(w))))
+    base = np.concatenate([b for b in base])
+    order = np.concatenate([np.flatnonzero(groups == g) for g in np.unique(groups)])
+    base_full = np.full(len(y), np.nan)
+    base_full[order] = base
+    mae_gp = float(np.mean(np.abs(mu[ok] - y[ok])))
+    mae_base = float(np.mean(np.abs(base_full[ok] - y[ok])))
+    tot = np.sqrt(np.maximum(sd[ok] ** 2 + v[ok], 1e-12))
+    out.update(mae_gp=mae_gp, mae_baseline=mae_base,
+               mae_ratio=(mae_gp / mae_base if mae_base > 0 else None),
+               coverage95=float(np.mean(np.abs(mu[ok] - y[ok]) <= 1.96 * tot)))
+    return out, out["mae_ratio"]
+
+
+#: The diagnosis's two cut-offs, stated rather than tuned: the calibration check's own coverage
+#: floor, and "more than half of the miss is shared by whole blocks" for movement between them.
+DIAGNOSIS_BETWEEN_SHARE_MIN = 0.5
+DIAGNOSIS_P_MAX = 0.05
+
+
+#: What "one setting" is for :func:`_reference_setting`. On a per-pairing map the rate and both pulse
+#: widths are fixed, so the two currents name the setting; a map pooled across pulse widths passes
+#: the pulse-width columns too (2026-09-25), so one current pair delivered at two pairings is two
+#: settings and never run together.
+REFERENCE_SETTING_COLS = ("amp_mA_Left", "amp_mA_Right")
+
+
+def _reference_setting(sub, blocks, *, setting_cols=REFERENCE_SETTING_COLS):
+    """Pain at the setting delivered most often in this stratum, per block of time, and whether it
+    moved between blocks beyond the ratings' own noise (a precision-weighted heterogeneity test).
+    No model choice can explain a movement here away: the setting did not change. ``setting_cols``
+    names what one setting is (:data:`REFERENCE_SETTING_COLS`)."""
+    from scipy import stats as _st
+    cols = list(setting_cols)
+    d = pd.DataFrame(sub).reset_index(drop=True)
+    if d.empty or not {*cols, "J", "obs_var"}.issubset(d.columns):
+        return {"setting": None, "moved": None, "p": None, "by_block": [],
+                "reason": "no per-epoch pain values to compare"}
+    key = list(zip(*(d[c].astype(float).round(3) for c in cols)))
+    counts = pd.Series(key).value_counts()
+    top = counts.index[0]
+    at = np.array([k == top for k in key])
+    rows = []
+    for b in np.unique(blocks):
+        m = at & (np.asarray(blocks) == b)
+        if not m.any():
+            continue
+        w = 1.0 / np.maximum(d.loc[m, "obs_var"].to_numpy(float), 1e-12)
+        mean = float(np.sum(w * d.loc[m, "J"].to_numpy(float)) / np.sum(w))
+        rows.append({"block": int(b), "n_epochs": int(m.sum()), "mean_pain": mean,
+                     "se": float(1.0 / np.sqrt(np.sum(w))), "_w": float(np.sum(w))})
+    out = {"setting": {c: float(v) for c, v in zip(cols, top)},
+           "n_epochs": int(at.sum()), "by_block": [{k: v for k, v in r.items() if k != "_w"} for r in rows]}
+    if len(rows) < 2:
+        out.update(moved=None, p=None,
+                   reason="the setting delivered most often appears in fewer than two blocks of time")
+        return out
+    W = np.array([r["_w"] for r in rows]); M = np.array([r["mean_pain"] for r in rows])
+    grand = float(np.sum(W * M) / np.sum(W))
+    q = float(np.sum(W * (M - grand) ** 2))
+    p = float(_st.chi2.sf(q, len(rows) - 1))
+    out.update(moved=bool(p < DIAGNOSIS_P_MAX), p=p, q=q, reason=None)
+    return out
+
+
+def calibration_diagnosis(gp, sub, *, pred=None, coverage_min=0.85, mae_ratio_max=0.90,
+                          setting_cols=REFERENCE_SETTING_COLS):
+    """WHY a surface fails its calibration check (panel C item 3), on the leave-one-block-out fold.
+
+    Each held-out error in units of the model's own stated uncertainty, z = (observed - predicted) /
+    sqrt(predicted variance + rating noise), is split into the part its whole block shares (sum over
+    blocks of n x mean z squared) and the rest. Named, in this order:
+
+    * intervals that cover (coverage at or above the check's floor): "calibrated" when the surface
+      also beats the training-fold mean, else "honest but uninformative: thin data" -- the case a
+      boundary-avoiding kernel could help;
+    * intervals that miss, mostly by whole blocks (more than half of the sum of z squared shared by
+      blocks, and the shared part beyond chance): "moves between blocks of time" -- no kernel helps,
+      the surface itself changed (decisions 193-196 decline to model time; this names it, it does
+      not model it);
+    * intervals that miss within blocks: "too confident within blocks: the shape or the noise model".
+
+    Beside it, ``reference_setting``: did pain at the setting delivered most often move between the
+    blocks? A warning like the check itself; it refuses nothing. ``setting_cols`` says what one
+    setting is on this map (:data:`REFERENCE_SETTING_COLS`).
+    """
+    from scipy import stats as _st
+    y = np.asarray(gp.y_, float)
+    v = np.asarray(gp.y_var_, float)
+    blocks = _fold_labels_by_time(sub)
+    out = {"verdict": None, "reason": None, "n_blocks": int(np.unique(blocks).size),
+           "coverage95": None, "mae_ratio": None, "between_block_share": None,
+           "between_block_p": None, "mean_z_by_block": [], "median_sd_over_spread": None,
+           "reference_setting": _reference_setting(sub, blocks, setting_cols=setting_cols),
+           "blocking": False}
+    if np.unique(blocks).size < 2:
+        out["reason"] = "not computable: fewer than two blocks of time to hold out"
+        return out
+    mu, sd = pred if pred is not None else gp.loo_predict(groups=blocks)
+    ok = np.isfinite(mu) & np.isfinite(sd)
+    if np.unique(blocks[ok]).size < 2 or ok.sum() < 3:
+        out["reason"] = "not computable: fewer than two blocks of time could be predicted"
+        return out
+    fold, ratio = _one_calibration_fold(gp, y, v, blocks, name="leave-one-block-out", pred=(mu, sd))
+    z = (y[ok] - mu[ok]) / np.sqrt(np.maximum(sd[ok] ** 2 + v[ok], 1e-12))
+    bk = blocks[ok]
+    means = [(int(b), int((bk == b).sum()), float(np.mean(z[bk == b]))) for b in np.unique(bk)]
+    between = float(sum(n * m * m for _b, n, m in means))
+    total = float(np.sum(z ** 2))
+    share = between / total if total > 0 else 0.0
+    p_between = float(_st.chi2.sf(between, len(means)))
+    spread = float(np.std(y[ok]))
+    out.update(coverage95=fold["coverage95"], mae_ratio=ratio, between_block_share=share,
+               between_block_p=p_between,
+               mean_z_by_block=[{"block": b, "n": n, "mean_z": m} for b, n, m in means],
+               median_sd_over_spread=(float(np.median(sd[ok])) / spread if spread > 0 else None))
+    if fold["coverage95"] is not None and fold["coverage95"] >= coverage_min:
+        out["verdict"] = ("calibrated" if ratio is not None and ratio <= mae_ratio_max
+                          else "honest but uninformative: thin data")
+    elif share > DIAGNOSIS_BETWEEN_SHARE_MIN and p_between < DIAGNOSIS_P_MAX:
+        out["verdict"] = "moves between blocks of time"
+    else:
+        out["verdict"] = "too confident within blocks: the shape or the noise model"
+    return out
+
+
+def stratum_calibration(gp, sub, *, mae_ratio_max=0.90, coverage_min=0.85, coverage_max=1.00,
+                        setting_cols=REFERENCE_SETTING_COLS):
+    """The three pre-registered criteria of `OBJECTIVE_SPEC.md` §6, on ONE fitted surface.
+
+    Returns the two folds' numbers, each criterion as True, False or **None for "not computable"**,
+    and the consequence in words. It decides nothing: see :data:`CALIBRATION_CONSEQUENCE`.
+
+    Each fold refits the surface on its training rows (`ObjectiveGP.loo_predict`); the folds are
+    refitted in worker processes, bit for bit the serial answer (2026-09-25), which is what lets
+    the leave-one-epoch-out fold run on the largest pooled maps too.
+    """
+    y = np.asarray(gp.y_, float)
+    v = np.asarray(gp.y_var_, float)
+    _blocks = _fold_labels_by_time(sub)
+    _two_blocks = np.unique(_blocks).size >= 2
+    # Both folds' held-out predictions in ONE dispatch to the worker processes (2026-09-25); the
+    # block fold's are shared with the diagnosis below, so no surface is refitted twice. A stand-in
+    # surface with only `loo_predict` (the tests' fakes) is asked fold by fold, as before.
+    _many = getattr(gp, "loo_predict_many", None)
+    if _many is not None:
+        _preds = _many([np.arange(len(y))] + ([_blocks] if _two_blocks else []))
+        _epoch_pred, _pred = _preds[0], (_preds[1] if _two_blocks else None)
+    else:
+        _epoch_pred = None
+        _pred = gp.loo_predict(groups=_blocks) if _two_blocks else None
+    loeo, r1 = _one_calibration_fold(gp, y, v, np.arange(len(y)), name="leave-one-epoch-out",
+                                     pred=_epoch_pred)
+    loera, r2 = _one_calibration_fold(gp, y, v, _blocks, name="leave-one-block-out", pred=_pred)
+    def _skill(r):
+        return None if r is None else bool(r <= mae_ratio_max)
+    cov = [c["coverage95"] for c in (loeo, loera) if c["coverage95"] is not None]
+    c3 = (None if not cov else bool(all(coverage_min <= x <= coverage_max for x in cov)))
+    checks = {"C1_loeo_skill": _skill(r1), "C2_loera_skill": _skill(r2), "C3_calibration": c3}
+    decided = [v2 for v2 in checks.values() if v2 is not None]
+    return {"checks": checks, "summary": {"loeo": loeo, "loera": loera},
+            "passes": (bool(all(decided)) if decided else None),
+            "n_not_computable": int(sum(1 for v2 in checks.values() if v2 is None)),
+            "criterion": {"mae_ratio_max": float(mae_ratio_max),
+                          "coverage_min": float(coverage_min), "coverage_max": float(coverage_max),
+                          "baseline": "a precision-weighted mean of the training fold"},
+            "blocking": False, "consequence": CALIBRATION_CONSEQUENCE,
+            # WHY it fails, when it does (panel C item 3; 2026-09-23): see `calibration_diagnosis`.
+            "diagnosis": calibration_diagnosis(gp, sub, pred=_pred, coverage_min=coverage_min,
+                                               mae_ratio_max=mae_ratio_max,
+                                               setting_cols=setting_cols)}
 
 
 def current_coverage(sub, *, min_pairs=CURRENT_COVERAGE_MIN_PAIRS,
@@ -493,7 +778,7 @@ def current_coverage(sub, *, min_pairs=CURRENT_COVERAGE_MIN_PAIRS,
     (``days_known`` False): a yes must not be built from near-duplicate ratings.
     """
     d = pd.DataFrame(sub)
-    blank = dict(n_pairs=0, n_pairs_required=int(min_pairs),
+    blank = dict(pairs=[], n_pairs=0, n_pairs_required=int(min_pairs),
                  reports_per_pair_required=float(min_reports_per_pair),
                  days_per_pair_required=int(min_days_per_pair), days_known=False,
                  min_days_over_pairs=None, n_pairs_enough_reports=0,
@@ -508,7 +793,11 @@ def current_coverage(sub, *, min_pairs=CURRENT_COVERAGE_MIN_PAIRS,
     d = d.assign(amp_mA_Left=pd.to_numeric(d["amp_mA_Left"], errors="coerce").round(3),
                  amp_mA_Right=pd.to_numeric(d["amp_mA_Right"], errors="coerce").round(3),
                  n=pd.to_numeric(d["n"], errors="coerce").fillna(0.0),
-                 _days=[tuple(v) if isinstance(v, (list, tuple, set, frozenset)) else () for v in obs],
+                 # np.ndarray too: a matched table read back from the store (Parquet) carries each
+                 # epoch's days as an array; missing it counted a served table's days as a SUM of
+                 # per-epoch counts or as none (found 2026-09-24, decision 260).
+                 _days=[tuple(v) if isinstance(v, (list, tuple, set, frozenset, np.ndarray)) else ()
+                        for v in obs],
                  _planned=planned.fillna(0.0))
 
     def _n_days(g):
@@ -528,6 +817,21 @@ def current_coverage(sub, *, min_pairs=CURRENT_COVERAGE_MIN_PAIRS,
     enough_reports = g.loc[g["n"] >= float(min_reports_per_pair)]
     qual = enough_reports.loc[enough_reports["days"] >= float(min_days_per_pair)] if days_known \
         else enough_reports.iloc[0:0]
+    # THE PAIR TABLE, kept rather than thrown away (the PI, 2026-09-22, ruling 5). Saying "coverage
+    # fails" without saying which pairs are short, and short of WHAT, leaves a clinician to guess
+    # what a visit should deliver; a pair short of ratings and a pair short of days need different
+    # things from that visit.
+    pairs = []
+    for _, row in g.sort_values(["amp_mA_Left", "amp_mA_Right"]).iterrows():
+        short = []
+        if float(row["n"]) < float(min_reports_per_pair):
+            short.append("ratings")
+        if not days_known or float(row["days"]) < float(min_days_per_pair):
+            short.append("days")
+        pairs.append({"amp_mA_Left": float(row["amp_mA_Left"]),
+                      "amp_mA_Right": float(row["amp_mA_Right"]),
+                      "n_reports": float(row["n"]), "n_days": (float(row["days"]) if days_known else None),
+                      "qualifies": not short, "short_of": short})
     n_pairs = int(len(qual))
     span_left = float(qual["amp_mA_Left"].max() - qual["amp_mA_Left"].min()) if n_pairs else 0.0
     span_right = float(qual["amp_mA_Right"].max() - qual["amp_mA_Right"].min()) if n_pairs else 0.0
@@ -540,7 +844,161 @@ def current_coverage(sub, *, min_pairs=CURRENT_COVERAGE_MIN_PAIRS,
                                      (int(enough_reports["days"].min()) if len(enough_reports) and days_known else None)),
                 n_pairs_enough_reports=int(len(enough_reports)),
                 span_left_mA=span_left, span_right_mA=span_right,
-                span_required_mA=float(min_span_mA), passes=passes)
+                span_required_mA=float(min_span_mA), passes=passes, pairs=pairs)
+
+
+def coverage_gap(coverage, *, ceiling_mA=None, held_right_mA=None, step_mA=0.5,
+                 stepped_side="Left") -> dict:
+    """Which (left, right) current pairs a visit would have to deliver for coverage to pass.
+
+    The coverage check counts distinct current pairs that each carry enough ratings on enough
+    separate days, and refuses a milliamp number until there are enough of them spanning enough
+    milliamps ON BOTH SIDES (decisions 158, 184). This turns that refusal into an instruction: how
+    many pairs are missing, which ones to run, and what each needs from the visit.
+
+    **A one-sided ladder cannot close this gap by itself.** Stepping one current with the other held
+    leaves the held side's span at zero, and the rule asks for a range on both, which is what the
+    joint corners of the session plan exist for (decision 160). So when the other side has not
+    moved, some of the pairs named here move it, and the sentence says why.
+    """
+    cov = dict(coverage or {})
+    pairs = list(cov.get("pairs") or [])
+    have = {(round(float(p["amp_mA_Left"]), 3), round(float(p["amp_mA_Right"]), 3)) for p in pairs}
+    qualifying = [p for p in pairs if p.get("qualifies")]
+    need = max(0, int(cov.get("n_pairs_required", 0)) - int(cov.get("n_pairs", 0)))
+    span_needed = float(cov.get("span_required_mA", 1.0))
+    # Read both sides' ceilings from the participant-scoped safety module (decision 308).
+    ceil = SC.ceiling_mA_by_side(ceiling_mA)
+    other_side = "Right" if str(stepped_side) == "Left" else "Left"
+    top = float(ceil[str(stepped_side)])
+    top_other = float(ceil[other_side])
+    held = (float(held_right_mA) if held_right_mA is not None
+            else (float(qualifying[0]["amp_mA_Right"]) if qualifying else 0.0))
+    # A held current above the held side's ceiling is held AT the ceiling, as the session plan's
+    # ladders hold it (decision 308), and said so; otherwise every pair on the stepped side would
+    # be dropped for a fact about the other side.
+    _held_d = SC.held_at_or_below_ceiling(held, top_other, side=other_side)
+    held = float(_held_d["current_mA"])
+    span_stepped = float(cov.get("span_left_mA", 0.0) if stepped_side == "Left"
+                         else cov.get("span_right_mA", 0.0))
+    span_other = float(cov.get("span_right_mA", 0.0) if stepped_side == "Left"
+                       else cov.get("span_left_mA", 0.0))
+    out = {"n_pairs_missing": need, "pairs_to_add": [], "ceiling_mA": ceil,
+           "held_side_mA": held, "stepped_side": str(stepped_side),
+           "span_short_on": [s for s, v in ((str(stepped_side), span_stepped), (other_side, span_other))
+                             if v < span_needed],
+           "what_each_pair_needs": (f"at least {cov.get('reports_per_pair_required', 5):g} ratings "
+                                    f"at that setting, on at least "
+                                    f"{cov.get('days_per_pair_required', 2):g} different days"),
+           "why": ""}
+    if _held_d["above_ceiling"]:
+        out["held_side_note"] = _held_d["note"].replace("for this ladder", "for these pairs")
+    if need == 0 and not out["span_short_on"]:
+        out["why"] = ("this stratum already has the pairs the rule asks for, spanning enough current "
+                      "on both sides; nothing is missing from its coverage")
+        out["pairs_to_top_up"] = []
+        out["cheapest_way"] = "nothing: this stratum's coverage already passes"
+        return out
+
+    def _grid(hi):
+        return [round(x, 3) for x in np.arange(0.0, float(hi) + 1e-9, float(step_mA))]
+
+    # FIRST, THE CHEAPEST THING A VISIT CAN DO: top up a pair the record already has. On the real
+    # record most settings were delivered once, so the sixth qualifying pair is far more likely to
+    # come from repeating a near-miss than from a setting nobody has tried -- and the two ask
+    # different things of a visit (more ratings at that setting, or that setting on another day).
+    top_ups = []
+    for pr in pairs:
+        if pr.get("qualifies"):
+            continue
+        need_r = max(0.0, float(cov.get("reports_per_pair_required", 5)) - float(pr.get("n_reports") or 0))
+        days = pr.get("n_days")
+        need_d = (max(0.0, float(cov.get("days_per_pair_required", 2)) - float(days))
+                  if days is not None else None)
+        if (pr.get("amp_mA_Left") > float(ceil["Left"]) + 1e-9
+                or pr.get("amp_mA_Right") > float(ceil["Right"]) + 1e-9):
+            continue
+        top_ups.append({"amp_mA_Left": float(pr["amp_mA_Left"]), "amp_mA_Right": float(pr["amp_mA_Right"]),
+                        "n_reports": float(pr.get("n_reports") or 0), "n_days": days,
+                        "needs_more_ratings": need_r, "needs_more_days": need_d,
+                        "effort": (need_r or 0) + 2.0 * (need_d or 0)})
+    top_ups.sort(key=lambda d: (d["effort"], -d["n_reports"]))
+    out["pairs_to_top_up"] = top_ups[:max(need, 0) + 2]
+
+    proposals = []
+    # Then, pairs that widen the side being stepped, with the other side where it is held.
+    lo_have = min((x for x, _ in have), default=None) if stepped_side == "Left" else \
+              min((y for _, y in have), default=None)
+    cands = [x for x in _grid(top)
+             if ((round(x, 3), round(held, 3)) if stepped_side == "Left"
+                 else (round(held, 3), round(x, 3))) not in have]
+    if lo_have is not None:
+        cands.sort(key=lambda x: (-abs(x - lo_have), x))
+    for x in cands:
+        proposals.append((x, held) if stepped_side == "Left" else (held, x))
+
+    # Then, when the OTHER side has not moved far enough, pairs that move it -- the joint corners.
+    if span_other < span_needed:
+        alt = round(min(top_other, held + span_needed), 3)
+        if abs(alt - held) < span_needed - 1e-9:
+            alt = round(max(0.0, held - span_needed), 3)
+        corner_x = sorted({x for x, _ in have} if stepped_side == "Left" else {y for _, y in have})
+        corner_x = corner_x[:2] or [0.0, min(top, span_needed)]
+        for x in corner_x:
+            pair = (x, alt) if stepped_side == "Left" else (alt, x)
+            if pair not in have:
+                proposals.insert(0, pair)                # first: without them nothing can pass
+
+    seen, picked = set(), []
+    for pair in proposals:
+        key = (round(pair[0], 3), round(pair[1], 3))
+        if key in seen or key in have:
+            continue
+        if key[0] > float(ceil["Left"]) + 1e-9 or key[1] > float(ceil["Right"]) + 1e-9:
+            continue
+        seen.add(key)
+        picked.append(key)
+        if len(picked) >= max(need, 0) + (2 if span_other < span_needed else 0):
+            break
+    out["pairs_to_add"] = [{"amp_mA_Left": a, "amp_mA_Right": b} for a, b in sorted(picked)]
+
+    # How the gap can actually be closed, cheapest first, said as one instruction.
+    ready = out.get("pairs_to_top_up") or []
+    if need and ready:
+        out["cheapest_way"] = (
+            "repeat " + ", ".join(
+                f"L{d['amp_mA_Left']:g}/R{d['amp_mA_Right']:g} ("
+                + " and ".join(filter(None, [
+                    f"{d['needs_more_ratings']:.0f} more rating{'s' if d['needs_more_ratings'] != 1 else ''}"
+                    if d["needs_more_ratings"] else None,
+                    f"on {d['needs_more_days']:.0f} more day{'s' if d['needs_more_days'] != 1 else ''}"
+                    if d["needs_more_days"] else None])) + ")"
+                for d in ready[:max(need, 1)])
+            + " -- settings the record already has, which need topping up rather than a new pair")
+    elif need:
+        out["cheapest_way"] = ("no setting already on the record is close enough to top up; the pairs "
+                               "above are new settings")
+    else:
+        out["cheapest_way"] = "nothing: this stratum's coverage already passes"
+
+    bits = []
+    if need:
+        bits.append(f"{need} more current pair{'s' if need != 1 else ''} carrying enough ratings on "
+                    f"enough days")
+    if span_other < span_needed:
+        bits.append(f"a range of at least {span_needed:g} mA on the {other_side} side too, which a "
+                    f"ladder that holds it still cannot give -- the pairs above that move it are the "
+                    f"joint corners")
+    if span_stepped < span_needed:
+        bits.append(f"a range of at least {span_needed:g} mA on the {stepped_side} side")
+    out["why"] = "this stratum needs " + "; and ".join(bits) if bits else ""
+    if len(out["pairs_to_add"]) < need and not (out.get("pairs_to_top_up") or []):
+        out["why"] += (f". Only {len(out['pairs_to_add'])} of them are available under the ceiling "
+                       f"({top:g} mA on the {stepped_side} side), so one visit cannot close the gap")
+    elif len(out["pairs_to_add"]) < need:
+        out["why"] += (f". Every new pair at the held current is already on the record, so the gap "
+                       f"closes by topping those up rather than by a setting nobody has tried")
+    return out
 
 
 def _rate_stratum_resolution(rs: "RateStratum", joint_stratum: JointStratum, *,
@@ -556,6 +1014,13 @@ def _rate_stratum_resolution(rs: "RateStratum", joint_stratum: JointStratum, *,
     this rate's own, never-borrowed ``mu_star``/``sd_star``. That is the fix: the question of
     whether a comparison against the incumbent is even meaningful stays where it always was; the
     number being compared is no longer allowed to be drawn from other rates.
+
+    The gain check itself is ``routines.resolution.sd_of_difference``/``is_resolved`` (2026-09-25),
+    the same shared rule :meth:`JointStratum.resolves_its_optimum` calls -- this function used to
+    carry its own hand-written copy of the arithmetic, which both duplicated the shared module and
+    silently collapsed a degenerate (zero or non-finite) standard deviation of the difference into
+    ``False`` rather than the shared module's ``None`` ("not assessed"); see that module's
+    docstring and ``is_resolved``'s own docstring for why the three states are not interchangeable.
     """
     if rs.safe is not None and np.asarray(rs.safe).any():
         mu_safe = np.asarray(rs.mu)[np.asarray(rs.safe)]
@@ -572,8 +1037,8 @@ def _rate_stratum_resolution(rs: "RateStratum", joint_stratum: JointStratum, *,
         gain = dict(gain=float("nan"), sd_diff=float("nan"), passes=None)
     else:
         g = float(joint_stratum.incumbent_mu) - float(rs.mu_star)
-        sdd = float(np.sqrt(float(rs.sd_star) ** 2 + float(joint_stratum.incumbent_sd) ** 2))
-        g_passes = bool(np.isfinite(sdd) and sdd > 0 and g > float(resolution_k) * sdd)
+        sdd = _RES_sd_of_difference(rs.sd_star, joint_stratum.incumbent_sd)
+        g_passes = _RES_is_resolved(g, rs.sd_star, joint_stratum.incumbent_sd, resolution_k)
         gain = dict(gain=g, sd_diff=sdd, passes=g_passes)
 
     coverage = dict(rs.coverage or {})
@@ -586,9 +1051,17 @@ def _rate_stratum_resolution(rs: "RateStratum", joint_stratum: JointStratum, *,
         else:
             reasons.append(f"the fitted surface varies by {rng:.3f} across the whole grid against "
                            f"a typical uncertainty of {med_sd:.3f}")
-    if gain["passes"] is None:
-        reasons.append("this pulse-width pair never ran the setting currently in force, so there "
-                       "is nothing to compare a gain against")
+    if gain["passes"] is None and not joint_stratum.incumbent_rate_supported:
+        if (rs.meta or {}).get("pooled_pulse_widths"):
+            reasons.append(f"{rs.rate_hz:g} Hz is not the rate in force, so the surface pooled "
+                           "over pulse widths has nothing to compare a gain against")
+        else:
+            reasons.append("this pulse-width pair never ran the setting currently in force, so there "
+                           "is nothing to compare a gain against")
+    elif gain["passes"] is None:
+        reasons.append("the standard deviation of the difference against the setting in force is "
+                       "zero or not finite, so no gain could be compared at all -- the fit needs "
+                       "repair here, not more exposure")
     elif not gain["passes"]:
         reasons.append(f"the best cell's predicted improvement, {gain['gain']:+.3f}, does not "
                        f"clear the uncertainty in that difference, {gain['sd_diff']:.3f}")
@@ -619,8 +1092,23 @@ def _observed_inputs(sub, grid):
     return sub[["freq_hz", "amp_mA_Left", "amp_mA_Right"]].to_numpy(float)
 
 
+def _safe_cells(gx, sgp_left, sgp_right, *, beta, ceiling_mA=None) -> np.ndarray:
+    """The joint safe set on a grid whose columns 1 and 2 are the left and right currents: safe on
+    each side's own safety model AND at or below each side's stated ceiling.
+
+    The ceiling term is the hard bound (decision 308). Seeding the safety model at the
+    ceiling provides only a soft constraint and historical tolerated anchors may lie
+    above the current ceiling. Therefore every optimum and batch from this set is
+    capped explicitly. ceiling_mA accepts side:(mA, provenance) or side:mA; None uses
+    the module grid's hard upper limit."""
+    safe = (np.asarray(sgp_left.safe_mask(X=gx[:, [0, 1]], beta=beta), bool)
+            & np.asarray(sgp_right.safe_mask(X=gx[:, [0, 2]], beta=beta), bool))
+    return safe & SC.within_ceiling_mask(gx[:, 1], gx[:, 2], ceiling_mA)
+
+
 def _fit_rate_stratum(pwl, pwr, rate, sub, *, amp_grid, sgp_left, sgp_right,
-                      fixed_length_scale, beta) -> RateStratum:
+                      fixed_length_scale, beta, calibration_check=True,
+                      ceiling_mA=None) -> RateStratum:
     """Fit ONE (amplitude-Left, amplitude-Right) surface at a single rate. ``sub`` is already
     restricted to this (pulse-width pair, rate); the caller has already checked it clears
     ``RATE_STRATUM_MIN_EPOCHS``. ``sgp_left``/``sgp_right`` are the SAME shared, per-side safety
@@ -632,8 +1120,7 @@ def _fit_rate_stratum(pwl, pwr, rate, sub, *, amp_grid, sgp_left, sgp_right,
         Xobs, sub["J"].to_numpy(float), sub["obs_var"].to_numpy(float))
     mu, sd = gp.predict_grid()
     gx = grid.grid_X()
-    safe = (np.asarray(sgp_left.safe_mask(X=gx[:, [0, 1]], beta=beta), bool)
-            & np.asarray(sgp_right.safe_mask(X=gx[:, [0, 2]], beta=beta), bool))
+    safe = _safe_cells(gx, sgp_left, sgp_right, beta=beta, ceiling_mA=ceiling_mA)
     n_reports = np.zeros(len(grid))
     np.add.at(n_reports, grid.index_of(Xobs), sub["n"].to_numpy(float))
     i_star = int(np.argmin(np.where(safe, mu, np.inf)))
@@ -655,7 +1142,96 @@ def _fit_rate_stratum(pwl, pwr, rate, sub, *, amp_grid, sgp_left, sgp_right,
         x_star=(float(gx[i_star, 1]), float(gx[i_star, 2])),
         mu_star=float(mu[i_star]), sd_star=float(sd[i_star]),
         n_reports_total=float(sub["n"].sum()), coverage=coverage,
-        meta=dict(kernel=gp.hyperparameters["kernel"], n_safe=int(safe.sum()), points=points))
+        meta=dict(kernel=gp.hyperparameters["kernel"], n_safe=int(safe.sum()), points=points,
+                  current_effect_at_minimum=gp.hyperparameters["current_effect_at_minimum"],
+                  # The pre-registered check, computed where the surface is fitted and carried with
+                  # it. A warning; it refuses nothing (the PI, 2026-09-22).
+                  **({"calibration": stratum_calibration(gp, sub)} if calibration_check else {})))
+
+
+@dataclass
+class _PooledIncumbent:
+    """What the per-rate POOLED surface says at the setting in force, for the gain check of
+    :func:`_rate_stratum_resolution`: the pooled model predicts the incumbent cell itself (at the
+    pairing in force), but only when this rate IS the rate in force -- a pooled fit at another
+    rate has nothing to compare a gain against, and says so."""
+    incumbent_mu: float = float("nan")
+    incumbent_sd: float = float("nan")
+    incumbent_rate_supported: bool = False
+
+
+def _fit_pooled_rate_stratum(rate, sub, *, pwl_col, pwr_col, pw_in_force, amp_grid, sgp_left,
+                             sgp_right, fixed_length_scale, beta,
+                             calibration_check=True, ceiling_mA=None) -> RateStratum:
+    """Fit ONE (amplitude-Left, amplitude-Right) surface at a single rate over EVERY pulse-width
+    pairing the record delivered at that rate, with the two pulse widths as two more inputs, and
+    read it at the pairing in force (decision 189's option A; the PI, 2026-09-21). ``sub`` is
+    every feasible epoch at this rate, whatever its pairing; the caller has checked it clears
+    ``RATE_STRATUM_MIN_EPOCHS``. The safety models are the same shared per-side ones.
+
+    ``calibration_check`` (2026-09-25, the PI's "deal with the Q4 edge cases"): the SAME
+    pre-registered check and block-of-time diagnosis the per-pairing maps carry
+    (:func:`stratum_calibration`), run on this pooled map where it is fitted, so a current read
+    from it can be marked like any other. "The setting delivered most often" is a whole setting
+    here, pulse widths included. Both folds are computed, the leave-one-epoch-out one included
+    (left out at first for its cost; its folds now run in worker processes, 2026-09-25); the mark
+    reads the block-of-time diagnosis. A warning; it refuses nothing and moves no value."""
+    pwl_at, pwr_at = float(pw_in_force[0]), float(pw_in_force[1])
+    grid = SUR.PooledPulseWidthGrid(
+        rate, amp_grid, amp_grid,
+        pw_left_levels=sub[pwl_col].astype(float).unique(),
+        pw_right_levels=sub[pwr_col].astype(float).unique(),
+        pw_left_at=pwl_at, pw_right_at=pwr_at)
+    Xobs = sub[["freq_hz", "amp_mA_Left", "amp_mA_Right", pwl_col, pwr_col]].to_numpy(float)
+    # the rate axis keeps its pin; the two currents and the two pulse widths are fitted
+    fls = None
+    if fixed_length_scale is not None:
+        spec = list(np.atleast_1d(np.asarray(fixed_length_scale, dtype=object)))
+        fls = (spec[0] if len(spec) else None, None, None, None, None)
+    gp = SUR.ObjectiveGP(grid, fixed_length_scale=fls, random_state=0).fit(
+        Xobs, sub["J"].to_numpy(float), sub["obs_var"].to_numpy(float))
+    mu, sd = gp.predict_grid()
+    gx = grid.grid_X()
+    safe = _safe_cells(gx, sgp_left, sgp_right, beta=beta, ceiling_mA=ceiling_mA)
+    n_reports = np.zeros(len(grid))
+    np.add.at(n_reports, grid.index_of(Xobs), sub["n"].to_numpy(float))
+    i_star = int(np.argmin(np.where(safe, mu, np.inf)))
+    coverage = current_coverage(sub)           # pairs counted across every pairing (decision 189)
+    points = [dict(amp_left_mA=float(r["amp_mA_Left"]), amp_right_mA=float(r["amp_mA_Right"]),
+                   n_reports=float(r["n"]), J=float(r["J"]), epoch=float(r["epoch"]),
+                   pw_us_left=float(r[pwl_col]), pw_us_right=float(r[pwr_col]))
+              for _, r in sub.iterrows()]
+    pairings = [dict(pw_us_left=float(pl), pw_us_right=float(pr), n_epochs=int(len(g)),
+                     n_reports=float(g["n"].sum()))
+                for (pl, pr), g in sub.groupby([sub[pwl_col].astype(float), sub[pwr_col].astype(float)])]
+    return RateStratum(
+        pw_us_left=pwl_at, pw_us_right=pwr_at, rate_hz=float(rate),
+        n_epochs=int(len(sub)), fitted=True, grid=grid, gp=gp,
+        mu=grid.as_surface(mu)[0], sd=grid.as_surface(sd)[0],
+        safe=grid.as_surface(safe.astype(float))[0] > 0,
+        n_reports=grid.as_surface(n_reports)[0],
+        x_star=(float(gx[i_star, 1]), float(gx[i_star, 2])),
+        mu_star=float(mu[i_star]), sd_star=float(sd[i_star]),
+        n_reports_total=float(sub["n"].sum()), coverage=coverage,
+        meta=dict(kernel=gp.hyperparameters["kernel"], n_safe=int(safe.sum()), points=points,
+                  current_effect_at_minimum=gp.hyperparameters["current_effect_at_minimum"],
+                  pooled_pulse_widths=True, pairings=pairings, n_pairings=len(pairings),
+                  **({"calibration": stratum_calibration(
+                      gp, sub, setting_cols=("amp_mA_Left", "amp_mA_Right", pwl_col, pwr_col))}
+                     if calibration_check else {})))
+
+
+def _pooled_incumbent(rs: RateStratum, incumbent_xyz, pw_in_force) -> _PooledIncumbent:
+    """The pooled per-rate model's own prediction at the setting in force, when this rate is the
+    rate in force; otherwise not supported."""
+    inc_rate, inc_al, inc_ar = incumbent_xyz
+    if abs(float(rs.rate_hz) - float(inc_rate)) > 1e-6 or rs.gp is None:
+        return _PooledIncumbent()
+    X = np.array([[float(inc_rate), float(inc_al), float(inc_ar),
+                   float(pw_in_force[0]), float(pw_in_force[1])]])
+    m, s = rs.gp.predict(X)
+    return _PooledIncumbent(incumbent_mu=float(np.ravel(m)[0]), incumbent_sd=float(np.ravel(s)[0]),
+                            incumbent_rate_supported=True)
 
 
 def _pooled_slice_at_rate(sl: JointStratum, rate_hz: float) -> dict:
@@ -677,7 +1253,8 @@ def _pooled_slice_at_rate(sl: JointStratum, rate_hz: float) -> dict:
 
 
 def _fit_joint_stratum(pwl, pwr, sub, *, grid, sgp_left, sgp_right, incumbent_xyz,
-                       fixed_length_scale, kappa, q, eta, beta, constraint=None) -> JointStratum:
+                       fixed_length_scale, kappa, q, eta, beta, constraint=None,
+                       ceiling_mA=None) -> JointStratum:
     """Fit the joint 3-D surrogate to one (pulse-width-Left, pulse-width-Right) stratum.
 
     ``sgp_left``/``sgp_right`` are the SHARED, PER-SIDE safety models, each fitted once on the
@@ -699,9 +1276,7 @@ def _fit_joint_stratum(pwl, pwr, sub, *, grid, sgp_left, sgp_right, incumbent_xy
     incumbent_mu, incumbent_sd = float(inc_mu[0]), float(inc_sd[0])
     gx = grid.grid_X()
 
-    safe_left = sgp_left.safe_mask(X=gx[:, [0, 1]], beta=beta)
-    safe_right = sgp_right.safe_mask(X=gx[:, [0, 2]], beta=beta)
-    safe = np.asarray(safe_left, bool) & np.asarray(safe_right, bool)
+    safe = _safe_cells(gx, sgp_left, sgp_right, beta=beta, ceiling_mA=ceiling_mA)
 
     constrained = bool(constraint is not None and not constraint.lifted)
     if constrained:
@@ -713,6 +1288,11 @@ def _fit_joint_stratum(pwl, pwr, sub, *, grid, sgp_left, sgp_right, incumbent_xy
     i_star = i_star_unc if envelope_empty else int(np.argmin(np.where(allowed, mu, np.inf)))
 
     queue, qmeta = ACQ.exploration_queue(mu, sd, n_reports, incumbent_mu, kappa=kappa)
+    # WHAT TO TEST NEXT never names a current above either side's safe ceiling (decision 308): the
+    # queue is built from the whole 0-5.0 mA grid and, unlike the batch and the optimum, was never
+    # filtered by anything but the adaptive envelope.
+    if queue.size:
+        queue = queue[SC.within_ceiling_mask(gx[queue, 1], gx[queue, 2], ceiling_mA)]
     if constrained and queue.size:
         queue = queue[allowed[queue]]
     stopping = ACQ.check_stopping([], mu, sd, n_reports, incumbent_mu=incumbent_mu)
@@ -744,6 +1324,7 @@ def _fit_joint_stratum(pwl, pwr, sub, *, grid, sgp_left, sgp_right, incumbent_xy
         mu_star_unconstrained=float(mu[i_star_unc]),
         envelope_empty=envelope_empty, envelope_constrained=constrained,
         meta=dict(kernel=gp.hyperparameters["kernel"],
+                  current_effect_at_minimum=gp.hyperparameters["current_effect_at_minimum"],
                   log_marginal_likelihood=gp.hyperparameters["log_marginal_likelihood"],
                   n_reports_total=float(sub["n"].sum()),
                   rates_delivered=[float(v) for v in sorted(sub["freq_hz"].unique())],
@@ -760,6 +1341,39 @@ def _fit_joint_stratum(pwl, pwr, sub, *, grid, sgp_left, sgp_right, incumbent_xy
 # ---------------------------------------------------------------------------------------------
 # The stage runner
 # ---------------------------------------------------------------------------------------------
+def _contact_groups(fit, pwl_col, pwr_col):
+    """``[((pw_left, pw_right, left_contact), rows), ...]``: one group per pulse-width pair and
+    Left contact; the pair's LEFT_OFF stretches join every contact group on that pair. A pair
+    with only LEFT_OFF stretches is one group labelled LEFT_OFF; a record without contacts gives
+    one group per pair labelled None, exactly the pre-2026-10-01 grouping."""
+    out = []
+    for (pwl, pwr), sub in fit.groupby([fit[pwl_col].astype(float), fit[pwr_col].astype(float)]):
+        labels = sub["_left_contact"]
+        off = labels == LEFT_OFF
+        active = sorted({c for c in labels[~off]}, key=lambda c: (c is None, str(c)))
+        if not active:
+            out.append(((float(pwl), float(pwr), LEFT_OFF if off.any() else None), sub))
+            continue
+        for c in active:
+            mine = labels.isna() if c is None else (labels == c)
+            out.append(((float(pwl), float(pwr), c), sub[mine | off]))
+    return out
+
+
+def _left_contact_table(fit):
+    """Stretches, reports and rating days per Left contact label, for the page (step A)."""
+    rows = []
+    for label, sub in fit.groupby(fit["_left_contact"].fillna("unrecorded")):
+        rows.append(dict(
+            left_contact=str(label), n_epochs=int(len(sub)),
+            n_reports=float(pd.to_numeric(sub.get("n"), errors="coerce").fillna(0).sum())
+            if "n" in sub.columns else None,
+            n_rating_days=float(pd.to_numeric(sub.get("n_rating_days"), errors="coerce").fillna(0).sum())
+            if "n_rating_days" in sub.columns else None,
+            shared_into_every_contact=bool(label == LEFT_OFF)))
+    return sorted(rows, key=lambda r: -r["n_epochs"])
+
+
 @dataclass
 class Stage1Result:
     """Everything Stage 1 produced, plus the frozen configuration it hands to the gate."""
@@ -776,6 +1390,12 @@ class Stage1Result:
     #: ``JointStratum.rate_strata`` and ``_pooled_slice_at_rate``. Empty when nothing was fitted
     #: at all.
     rate_summary: pd.DataFrame = field(default_factory=pd.DataFrame)
+    #: Decision 189's option A (the PI, 2026-09-21): one surface per rate pooled over every
+    #: pulse-width pairing, read at the pairing in force -- ``{rate_hz: RateStratum}`` and one row
+    #: per rate in the same shape as ``rate_summary`` plus the pooling columns. Empty when pooling
+    #: was off or could not run (``audit["pulse_width_pooling"]`` says why).
+    pooled_rate_strata: dict = field(default_factory=dict)
+    pooled_rate_summary: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def slices_for(self, hemisphere: str) -> list:
         """Every fitted joint stratum. Kept for callers written against the pre-joint API: since
@@ -784,18 +1404,80 @@ class Stage1Result:
         return list(self.slices.values())
 
 
+def _fit_contact_group(pwl, pwr, contact, sub, *, grid, sgp_left, sgp_right, incumbent_xyz,
+                       fixed_length_scale, kappa, q, eta, beta, constraint, ceiling_mA, amp_grid,
+                       calibration_check, resolution_k):
+    """One (Left pulse width, Right pulse width, Left contact) group's fits: its 3-D surface, then
+    one (amp_Left, amp_Right) surface per rate it delivered. Returns ``(JointStratum, None)``, or
+    ``(None, reason)`` when the 3-D surface cannot be fitted (the reason is the exception's own
+    text, recorded by the caller as the group's skip reason).
+
+    A function of its arguments only (speed-up item B1, 2026-10-01), so the groups can be fitted in
+    worker processes; the caller keeps the group-size check, the counts and the summary rows.
+    """
+    try:
+        sl = _fit_joint_stratum(pwl, pwr, sub, grid=grid, sgp_left=sgp_left,
+                                sgp_right=sgp_right, incumbent_xyz=incumbent_xyz,
+                                fixed_length_scale=fixed_length_scale, kappa=kappa, q=q,
+                                eta=eta, beta=beta, constraint=constraint,
+                                ceiling_mA=ceiling_mA)
+    except (ValueError, RuntimeError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+    sl.left_contact = contact
+    # --- PER-RATE 2-input surfaces (2026-09-14): the honest current-recommendation engine.
+    # Every rate this stratum actually delivered gets its own (amp_Left, amp_Right) fit when
+    # it clears RATE_STRATUM_MIN_EPOCHS; a thinner rate is recorded as not fitted, never
+    # silently pooled into a neighbour, exactly the discipline the pulse-width strata
+    # themselves already use.
+    rate_strata = {}
+    for rate, subr in sub.groupby("freq_hz"):
+        rate = float(rate)
+        n_r = int(len(subr))
+        if n_r < int(RATE_STRATUM_MIN_EPOCHS):
+            rate_strata[rate] = RateStratum(
+                pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=rate,
+                n_epochs=n_r, fitted=False,
+                reason=(f"{n_r} stretches of unchanged settings, below the minimum of "
+                        f"{int(RATE_STRATUM_MIN_EPOCHS)}"))
+            continue
+        try:
+            rs = _fit_rate_stratum(pwl, pwr, rate, subr, amp_grid=amp_grid,
+                                   sgp_left=sgp_left, sgp_right=sgp_right,
+                                   fixed_length_scale=fixed_length_scale, beta=beta,
+                                   calibration_check=bool(calibration_check),
+                                   ceiling_mA=ceiling_mA)
+        except (ValueError, RuntimeError) as exc:
+            rate_strata[rate] = RateStratum(
+                pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=rate,
+                n_epochs=n_r, fitted=False, reason=f"{type(exc).__name__}: {exc}")
+            continue
+        rs.resolution = _rate_stratum_resolution(rs, sl, resolution_k=resolution_k)
+        rate_strata[rate] = rs
+    for _rs in rate_strata.values():
+        _rs.left_contact = contact
+    sl.rate_strata = rate_strata
+    return sl, None
+
+
 def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_leg",
               pw_col=None, freq_grid=PLT.FREQ_GRID, amp_grid=JOINT_AMP_GRID,
               fixed_length_scale=JOINT_FIXED_LENGTH_SCALE, beta=PLT.BETA, kappa=PLT.KAPPA,
               min_tolerated_h=MIN_TOLERATED_H,
               min_stratum_epochs=PW_STRATUM_MIN_EPOCHS, q=4, eta=1.0,
               incumbent_epoch=None, data_horizon=PLT.DATA_HORIZON, washin_min=PLT.WASHIN_MIN,
-              resolution_k=RESOLUTION_K,
+              resolution_k=RESOLUTION_K, calibration_check=True,
               explore_outside_reason=None, explore_outside_by=None,
               explore_outside_requested=None,
               adaptive_min_rate_hz=ENV.MIN_RATE_HZ,
-              safety_ceiling_by_hemisphere=None, pooled_var_override=None) -> Stage1Result:
+              safety_ceiling_by_hemisphere=None, pooled_var_override=None,
+              pool_pulse_widths=True, participant_uid=None) -> Stage1Result:
     """Run the open-loop search JOINTLY over both stimulators and freeze one configuration.
+
+    NO TIME TERM, on the PI's ruling (decision 196, 2026-09-17): this participant has had the
+    disease for more than three years, so any drift in the rating is an effect of the stimulation
+    settings and not of the disease -- time is not a confound to model or remove, anywhere. The
+    age penalty (removed, decision 194) and the fitted time input (built and removed the same day,
+    decisions 194-196) are both gone; the surface is the record's own answer.
 
     Parameters
     ----------
@@ -831,6 +1513,12 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
         ``{hemisphere: (ceiling_mA, provenance)}`` from ``safety_ceiling.ceilings_by_hemisphere``:
         the current above which each side is not acceptable, stated by the PI, the severity-3 seed
         of that side's OWN safety model (still fitted per side; see the module docstring).
+    pool_pulse_widths
+        Also fit, beside the per-pairing strata, ONE surface per rate over every pulse-width
+        pairing with the two pulse widths as inputs, read at the pairing in force (decision 189's
+        option A; the PI, 2026-09-21). Reported under ``.pooled_rate_strata`` /
+        ``.pooled_rate_summary``; nothing above changes. The page draws the separate fit by
+        default and the pooled one on a toggle.
     pooled_var_override
         Passed straight to ``objective.build_objective``; see its own docstring. ``None`` (the
         default) is the original behaviour. Exists for a thin, independent design matrix (e.g. the
@@ -845,10 +1533,8 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
         ``.slices`` holds one :class:`JointStratum` per fitted (pulse-width-Left,
         pulse-width-Right) pair; ``.summary`` is one row per (hemisphere, joint stratum) — two rows
         per fitted stratum, the per-side VIEW of one joint result, kept in that shape so existing
-        readers of the strata table need no change."""
-    for hemisphere in hemispheres:
-        if hemisphere not in ("Left", "Right"):
-            raise KeyError(f"unsupported hemisphere {hemisphere!r}; no amp_mA_{hemisphere} column")
+        readers of the strata table need no change.
+    """
     es = pd.read_csv(design_csv) if not isinstance(design_csv, pd.DataFrame) else design_csv.copy()
     if incumbent_epoch is None:
         if "t0" not in es.columns:
@@ -912,7 +1598,11 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
         sgp_by_side[hemi] = sgp
         safety_meta_by_side[hemi] = seed_meta
 
-    # Participant-specific provenance and examples are maintained outside source control.
+    # Zero current is a valid point on each axis of the joint fit. Retain feasible epochs
+    # with one or both currents at zero so asymmetric dosing can distinguish the two
+    # currents' effects.
+
+
     fit = D.loc[D["feasible"]].copy()
     # An explicitly-named pw_col that is not on this matrix at all (a caller asking about a
     # column that does not exist, as opposed to the None-default fallback above) means nothing
@@ -921,6 +1611,18 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
     fit = fit.dropna(subset=["freq_hz", "amp_mA_Left", "amp_mA_Right", *pw_cols_present])
     if pwl_col not in fit.columns or pwr_col not in fit.columns:
         fit = fit.iloc[0:0]
+
+    # --- THE LEFT CONTACT OF EVERY STRETCH (step A, 2026-10-01; see LEFT_OFF) ----------------
+    has_contacts = "cathode_Left" in D.columns
+    if has_contacts:
+        fit["_left_contact"] = [left_contact_label(c, a) for c, a
+                                in zip(fit["cathode_Left"], fit["amp_mA_Left"])]
+        inc_left_contact = left_contact_label(inc_row.get("cathode_Left"), inc_row["amp_mA_Left"])
+        if inc_left_contact == LEFT_OFF:              # off today: the contact still programmed
+            inc_left_contact = left_contact_label(inc_row.get("cathode_Left"), None)
+    else:
+        fit["_left_contact"] = None
+        inc_left_contact = None
 
     h_audit = {}
     for hemi, col in (("Left", pwl_col), ("Right", pwr_col)):
@@ -938,60 +1640,36 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
     if len(fit):
         audit["design"] = pulse_width_pair_design_audit(fit, pwl_col=pwl_col, pwr_col=pwr_col,
                                                         min_epochs=min_stratum_epochs)
+    audit["incumbent_left_contact"] = inc_left_contact
+    audit["left_contacts"] = _left_contact_table(fit) if has_contacts else []
 
     # --- fit one 3-D surface per adequately-sampled joint pulse-width pair ------------------------
     slices, rows, skipped = {}, [], {}
-    if len(fit):
-        groups = [((float(pwl), float(pwr)), sub) for (pwl, pwr), sub
-                 in fit.groupby([fit[pwl_col].astype(float), fit[pwr_col].astype(float)])]
-    else:
-        groups = []
-    for (pwl, pwr), sub in groups:
-        key = (pwl, pwr)
+    groups = _contact_groups(fit, pwl_col, pwr_col) if len(fit) else []
+    fitted_epochs = set()
+    for (pwl, pwr, contact), sub in groups:
+        key = (pwl, pwr, contact)
+        skip_key = f"pwL{pwl:g}_pwR{pwr:g}" + (f"_{contact}" if contact is not None else "")
+        where = f"(Left {pwl:g} us, Right {pwr:g} us" + (f", Left contact {contact})" if contact is not None else ")")
         if len(sub) < int(min_stratum_epochs):
-            skipped[f"pwL{pwl:g}_pwR{pwr:g}"] = (
-                f"{len(sub)} fitted epochs at (Left {pwl:g} us, Right {pwr:g} us), below the "
-                f"{int(min_stratum_epochs)}-epoch floor for a three-dimensional surface")
+            skipped[skip_key] = (
+                f"{len(sub)} fitted stretches of unchanged settings at {where}, below the "
+                f"minimum of {int(min_stratum_epochs)} for a three-dimensional surface")
             continue
-        try:
-            sl = _fit_joint_stratum(pwl, pwr, sub, grid=grid, sgp_left=sgp_by_side["Left"],
-                                    sgp_right=sgp_by_side["Right"], incumbent_xyz=incumbent_xyz,
-                                    fixed_length_scale=fixed_length_scale, kappa=kappa, q=q,
-                                    eta=eta, beta=beta, constraint=constraint)
-        except (ValueError, RuntimeError) as exc:
-            skipped[f"pwL{pwl:g}_pwR{pwr:g}"] = f"{type(exc).__name__}: {exc}"
+        sl, reason = _fit_contact_group(
+            pwl, pwr, contact, sub, grid=grid, sgp_left=sgp_by_side["Left"],
+            sgp_right=sgp_by_side["Right"], incumbent_xyz=incumbent_xyz,
+            fixed_length_scale=fixed_length_scale, kappa=kappa, q=q, eta=eta, beta=beta,
+            constraint=constraint, ceiling_mA=safety_ceiling_by_hemisphere, amp_grid=amp_grid,
+            calibration_check=calibration_check, resolution_k=resolution_k)
+        if sl is None:
+            skipped[skip_key] = reason
             continue
-        # --- PER-RATE 2-input surfaces (2026-09-14): the honest current-recommendation engine.
-        # Every rate this stratum actually delivered gets its own (amp_Left, amp_Right) fit when
-        # it clears RATE_STRATUM_MIN_EPOCHS; a thinner rate is recorded as not fitted, never
-        # silently pooled into a neighbour, exactly the discipline the pulse-width strata
-        # themselves already use.
-        rate_strata = {}
-        for rate, subr in sub.groupby("freq_hz"):
-            rate = float(rate)
-            n_r = int(len(subr))
-            if n_r < int(RATE_STRATUM_MIN_EPOCHS):
-                rate_strata[rate] = RateStratum(
-                    pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=rate,
-                    n_epochs=n_r, fitted=False,
-                    reason=f"{n_r} epochs, below the {int(RATE_STRATUM_MIN_EPOCHS)}-epoch floor")
-                continue
-            try:
-                rs = _fit_rate_stratum(pwl, pwr, rate, subr, amp_grid=amp_grid,
-                                       sgp_left=sgp_by_side["Left"], sgp_right=sgp_by_side["Right"],
-                                       fixed_length_scale=fixed_length_scale, beta=beta)
-            except (ValueError, RuntimeError) as exc:
-                rate_strata[rate] = RateStratum(
-                    pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=rate,
-                    n_epochs=n_r, fitted=False, reason=f"{type(exc).__name__}: {exc}")
-                continue
-            rs.resolution = _rate_stratum_resolution(rs, sl, resolution_k=resolution_k)
-            rate_strata[rate] = rs
-        sl.rate_strata = rate_strata
+        fitted_epochs.update(float(e) for e in sub["epoch"])
 
         slices[key] = sl
         rows.append(dict(
-            pw_us_left=pwl, pw_us_right=pwr, n_epochs=sl.n_epochs,
+            pw_us_left=pwl, pw_us_right=pwr, left_contact=contact, n_epochs=sl.n_epochs,
             n_reports=sl.meta["n_reports_total"],
             opt_rate_hz=sl.x_star[0], opt_amp_mA_left=sl.x_star[1], opt_amp_mA_right=sl.x_star[2],
             opt_posterior_mean=sl.mu_star, opt_posterior_sd=sl.sd_star,
@@ -1003,6 +1681,7 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
             n_safe=sl.meta["n_safe"], queue_size=sl.meta["queue_size"],
             stop=bool(sl.stopping.stop), stop_binding=sl.stopping.binding,
             kernel=sl.meta["kernel"],
+            current_effect_at_minimum=sl.meta.get("current_effect_at_minimum"),
             adaptive_envelope_applied=bool(sl.envelope_constrained),
             opt_rate_hz_unconstrained=sl.x_star_unconstrained[0],
             opt_amp_mA_left_unconstrained=sl.x_star_unconstrained[1],
@@ -1012,11 +1691,13 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
             no_safe_cell_in_envelope=bool(sl.envelope_empty),
             n_allowed=sl.meta["n_allowed"]))
 
-    audit["n_epochs_in_fitted_strata"] = int(sum(s.n_epochs for s in slices.values()))
+    # Distinct stretches: a Left-0-mA stretch fitted into two contact groups counts once.
+    audit["n_epochs_in_fitted_strata"] = int(len(fitted_epochs))
 
     settings, exclusions_by_side = _freeze_joint(
         slices, inc_rate, inc_pw_by_side, h_audit=h_audit, gx=gx, resolution_k=resolution_k,
-        constraint=constraint, min_stratum_epochs=min_stratum_epochs, hemispheres=hemispheres)
+        constraint=constraint, min_stratum_epochs=min_stratum_epochs, hemispheres=hemispheres,
+        inc_left_contact=inc_left_contact, participant_uid=participant_uid)
 
     envelope = dict(
         constrained=not constraint.lifted,
@@ -1043,7 +1724,7 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
         incumbent_epoch=float(incumbent_epoch), incumbent_rate_hz=inc_rate, incumbent_pw_us=inc_pw,
         data_horizon=str(data_horizon), washin_min=float(washin_min),
         n_epochs_total=int(len(D)), audit=audit, adaptive_envelope=envelope,
-        incumbent_pw_us_by_side=dict(inc_pw_by_side))
+        incumbent_pw_us_by_side=dict(inc_pw_by_side), incumbent_left_contact=inc_left_contact)
 
     # --- the strata table: one row per (hemisphere, joint stratum), a per-side VIEW of one joint
     # fit, so every existing reader of the "strata" table (DecisionStrip.js, ExcludedSettingsChart.js)
@@ -1058,25 +1739,157 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
             row["opt_amp_mA"] = row["opt_amp_mA_left"] if hemi == "Left" else row["opt_amp_mA_right"]
             row["opt_amp_mA_unconstrained"] = (row["opt_amp_mA_left_unconstrained"] if hemi == "Left"
                                                else row["opt_amp_mA_right_unconstrained"])
-            row["joint_stratum_key"] = f"{row['pw_us_left']:g}_{row['pw_us_right']:g}"
+            row["joint_stratum_key"] = (f"{row['pw_us_left']:g}_{row['pw_us_right']:g}"
+                                        + (f"_{row['left_contact']}" if row.get("left_contact") is not None else ""))
             summary_rows.append(row)
     summary = pd.DataFrame(summary_rows)
 
     # --- the per-rate table (2026-09-14): one row per (pulse-width pair, rate) that was even
     # attempted, fitted or not, with the pooled 3-input model's own slice at that rate alongside
     # it for reference. See ``JointStratum.rate_strata``.
+    # The safe ceiling and the setting in force, for the next-visit gap on each row.
+    _gap_kw = dict(
+        ceiling_mA=({h: float(v[0]) for h, v in (safety_ceiling_by_hemisphere or {}).items()
+                     if v and v[0] is not None} or None),
+        held_mA={"Left": inc_amp_left, "Right": inc_amp_right})
     rate_rows = []
-    for (pwl, pwr), sl in slices.items():
+    for (pwl, pwr, contact), sl in slices.items():
         for rate, rs in (sl.rate_strata or {}).items():
             pooled = _pooled_slice_at_rate(sl, rate)
-            row = dict(pw_us_left=float(pwl), pw_us_right=float(pwr), rate_hz=float(rate),
+            row = dict(pw_us_left=float(pwl), pw_us_right=float(pwr), left_contact=contact,
+                       rate_hz=float(rate),
                        fitted=bool(rs.fitted), n_epochs=int(rs.n_epochs),
                        pooled_across_rates_mu_range=pooled["mu_range"],
                        pooled_across_rates_delivered_at_this_rate=pooled["delivered_at_this_rate"],
                        pooled_across_rates_note=pooled["note"])
-            if rs.fitted:
-                res = rs.resolution or {}
-                row.update(
+            row.update(_rate_row_numbers(rs, **_gap_kw))
+            rate_rows.append(row)
+    rate_summary = pd.DataFrame(rate_rows)
+
+    # --- POOLED ACROSS PULSE WIDTHS (decision 189's option A; the PI, 2026-09-21): one surface
+    # per rate over every pairing, the two pulse widths as inputs, read at the pairing in force.
+    # Added beside the per-pairing fits above, which are untouched.
+    pooled_rate_strata, pooled_rows = {}, []
+    pw_in_force = (inc_pw_left, inc_pw_right)
+    if not pool_pulse_widths:
+        pooling_audit = dict(computed=False, default="separate", reason="pooling not requested")
+    elif inc_pw_left is None or inc_pw_right is None:
+        pooling_audit = dict(computed=False, default="separate",
+                             reason="the pulse-width pairing in force is not known, so a pooled "
+                                    "surface has no pairing to be read at")
+    elif not len(fit):
+        pooling_audit = dict(computed=False, default="separate", reason="no feasible epochs")
+    else:
+        # Pooled over pulse widths, never over Left contacts: the contact in force and the
+        # stretches with Left at 0 mA (step A, 2026-10-01).
+        fit_pool = fit
+        if has_contacts:
+            fit_pool = fit[fit["_left_contact"].isin([inc_left_contact, LEFT_OFF])]
+        for rate, subr in fit_pool.groupby("freq_hz"):
+            rate = float(rate)
+            n_r = int(len(subr))
+            if n_r < int(RATE_STRATUM_MIN_EPOCHS):
+                rs = RateStratum(pw_us_left=float(inc_pw_left), pw_us_right=float(inc_pw_right),
+                                 rate_hz=rate, n_epochs=n_r, fitted=False,
+                                 reason=f"{n_r} stretches of unchanged settings over every pulse-width "
+                                        f"pairing, below the minimum of {int(RATE_STRATUM_MIN_EPOCHS)}",
+                                 meta=dict(pooled_pulse_widths=True, pairings=[], n_pairings=int(
+                                     subr.groupby([subr[pwl_col].astype(float),
+                                                   subr[pwr_col].astype(float)]).ngroups)))
+            else:
+                try:
+                    rs = _fit_pooled_rate_stratum(
+                        rate, subr, pwl_col=pwl_col, pwr_col=pwr_col, pw_in_force=pw_in_force,
+                        amp_grid=amp_grid, sgp_left=sgp_by_side["Left"],
+                        sgp_right=sgp_by_side["Right"], fixed_length_scale=fixed_length_scale,
+                        beta=beta, calibration_check=bool(calibration_check),
+                        ceiling_mA=safety_ceiling_by_hemisphere)
+                    rs.resolution = _rate_stratum_resolution(
+                        rs, _pooled_incumbent(rs, incumbent_xyz, pw_in_force),
+                        resolution_k=resolution_k)
+                except (ValueError, RuntimeError) as exc:
+                    rs = RateStratum(pw_us_left=float(inc_pw_left), pw_us_right=float(inc_pw_right),
+                                     rate_hz=rate, n_epochs=n_r, fitted=False,
+                                     reason=f"{type(exc).__name__}: {exc}",
+                                     meta=dict(pooled_pulse_widths=True, pairings=[], n_pairings=0))
+            pooled_rate_strata[rate] = rs
+            rs.left_contact = inc_left_contact
+            row = dict(pw_us_left=float(inc_pw_left), pw_us_right=float(inc_pw_right), rate_hz=rate,
+                       left_contact=inc_left_contact,
+                       fitted=bool(rs.fitted), n_epochs=int(rs.n_epochs),
+                       pooled_pulse_widths=True,
+                       n_pairings_pooled=int((rs.meta or {}).get("n_pairings", 0)))
+            row.update(_rate_row_numbers(rs, **_gap_kw))
+            pooled_rows.append(row)
+        pooling_audit = dict(computed=True, default="separate",
+                             in_force_pairing=dict(pw_us_left=float(inc_pw_left),
+                                                   pw_us_right=float(inc_pw_right)),
+                             n_rates=len(pooled_rate_strata),
+                             n_rates_fitted=int(sum(1 for r in pooled_rate_strata.values() if r.fitted)))
+    audit["pulse_width_pooling"] = pooling_audit
+    # HOW MANY TIMES THE "PROVEN BETTER" COMPARISON RAN (panel C item 4, 2026-09-22): every fitted
+    # per-rate surface whose gain check could be formed, per-pairing and pooled alike. Visibility
+    # only -- the rule, its multiple and its verdicts are untouched.
+    _formed = 0
+    _all = [rs for sl in slices.values() for rs in (sl.rate_strata or {}).values()]
+    _all += list(pooled_rate_strata.values())
+    for _rs in _all:
+        _g = ((_rs.resolution or {}).get("gain") or {}) if _rs.fitted else {}
+        if _g.get("passes") is not None:
+            _formed += 1
+    audit["resolution_exposure"] = _resolution_exposure(_formed, k=resolution_k)
+    # THE RATE LENGTH SCALE IS AN ASSUMPTION, SAID WHERE THE RESPONSE CAN CARRY IT (panel C item 7;
+    # `OBJECTIVE_SPEC.md`, amendment of 2026-09-23). Read off the argument this run actually used.
+    _fls = list(fixed_length_scale) if fixed_length_scale is not None else [None]
+    _rate_ls = _fls[0] if _fls else None
+    audit["frequency_length_scale"] = dict(
+        value=(float(_rate_ls) if _rate_ls is not None else None),
+        pinned=_rate_ls is not None,
+        axis="stimulation rate, standardised log2 axis",
+        acts_on=("the joint (rate, left current, right current) surface of each pulse-width "
+                 "pairing; the per-rate current surfaces have no rate axis and do not use it"),
+        why=("a stated assumption, not an estimate: the profiled likelihood is bimodal, 0.219 "
+             "(rates nearly independent) against 2.562 (borrowing across every rate), the first "
+             "preferred by 2.789 nats; the short mode reflects rates being tried in different "
+             "periods, not the physiology (OBJECTIVE_SPEC.md, 2026-09-23)")
+        if _rate_ls is not None else "the rate length scale was fitted on this run, not pinned")
+    pooled_rate_summary = pd.DataFrame(pooled_rows).sort_values("rate_hz").reset_index(drop=True) \
+        if pooled_rows else pd.DataFrame()
+
+    return Stage1Result(frozen=frozen, slices=slices, summary=summary, audit=audit,
+                        D=D, skipped=skipped, rate_summary=rate_summary,
+                        pooled_rate_strata=pooled_rate_strata, pooled_rate_summary=pooled_rate_summary)
+
+
+def _next_visit_gap(coverage, *, ceiling_mA=None, held_mA=None):
+    """What a visit would have to deliver for this row's coverage to pass (decision 239), or None
+    when it already passes. Steps the left side and holds the right at its setting in force, unless
+    the left already spans enough and the right does not; the pairs that move the held side are the
+    joint corners either way."""
+    cov = dict(coverage or {})
+    if not cov or cov.get("passes"):
+        return None
+    need = float(cov.get("span_required_mA", 1.0))
+    stepped = ("Right" if float(cov.get("span_left_mA") or 0.0) >= need
+               and float(cov.get("span_right_mA") or 0.0) < need else "Left")
+    other = "Right" if stepped == "Left" else "Left"
+    held = (held_mA or {}).get(other)
+    return coverage_gap(cov, ceiling_mA=ceiling_mA,
+                        held_right_mA=(float(held) if held is not None else None),
+                        stepped_side=stepped)
+
+
+def _rate_row_numbers(rs: RateStratum, *, ceiling_mA=None, held_mA=None) -> dict:
+    """The numbers of one per-rate row of the rate table, fitted or not (shared by the separate
+    and the pooled tables so the two cannot drift).
+
+    ``coverage_gap`` (2026-09-23): when the coverage check fails, what the next visit must deliver
+    for it to pass -- the pairs to top up or add, under the safe ceiling ``ceiling_mA`` (per side),
+    with the side not being stepped held at ``held_mA`` (its setting in force). Built in decision
+    239 and reached by nothing until now."""
+    if rs.fitted:
+        res = rs.resolution or {}
+        return dict(
                     n_reports=float(rs.n_reports_total),
                     amp_mA_left=rs.x_star[0], amp_mA_right=rs.x_star[1],
                     posterior_mean=rs.mu_star, posterior_sd=rs.sd_star,
@@ -1095,25 +1908,28 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
                     # days any qualifying pair has, and how many the rule needs
                     coverage_min_days_over_pairs=res.get("coverage", {}).get("min_days_over_pairs"),
                     coverage_days_per_pair_required=res.get("coverage", {}).get("days_per_pair_required"),
+                    coverage_gap=_next_visit_gap(res.get("coverage"), ceiling_mA=ceiling_mA,
+                                                 held_mA=held_mA),
                     sentence=res.get("sentence"), reason=None)
-            else:
-                row.update(n_reports=float("nan"), amp_mA_left=float("nan"),
+    return dict(n_reports=float("nan"), amp_mA_left=float("nan"),
                           amp_mA_right=float("nan"), posterior_mean=float("nan"),
                           posterior_sd=float("nan"), resolved=False, flat_range=float("nan"),
                           flat_median_sd=float("nan"), flat_passes=None, gain=float("nan"),
                           gain_sd_of_difference=float("nan"), gain_passes=None,
                           coverage_n_pairs=0, coverage_span_left_mA=float("nan"),
                           coverage_span_right_mA=float("nan"), coverage_passes=False,
-                          sentence=None, reason=str(rs.reason))
-            rate_rows.append(row)
-    rate_summary = pd.DataFrame(rate_rows)
+                          coverage_gap=None, sentence=None, reason=str(rs.reason))
 
-    return Stage1Result(frozen=frozen, slices=slices, summary=summary, audit=audit,
-                        D=D, skipped=skipped, rate_summary=rate_summary)
+
+def _configuration_text(s) -> str:
+    """"(Left 60 us, Right 160 us, Left contact L C+1-)" -- the group's own label in words."""
+    c = getattr(s, "left_contact", None)
+    return (f"(Left {s.pw_us_left:g} us, Right {s.pw_us_right:g} us"
+            + (f", Left contact {c})" if c is not None else ")"))
 
 
 def _freeze_joint(slices: dict, inc_rate, inc_pw_by_side: dict, *, h_audit, gx, resolution_k,
-                  constraint, min_stratum_epochs, hemispheres) -> tuple:
+                  constraint, min_stratum_epochs, hemispheres, inc_left_contact=None, participant_uid=None) -> tuple:
     """Pick ONE joint stratum (rate, pulse-width-Left, pulse-width-Right, amp-Left, amp-Right) and
     state whether it is resolved. Returns ``(settings, exclusions_by_side)``.
 
@@ -1194,11 +2010,6 @@ def _freeze_joint(slices: dict, inc_rate, inc_pw_by_side: dict, *, h_audit, gx, 
             reasons=(reason_text,), detail=dict(n_slices=0))
 
     if not all_strata:
-        missing_pw = [h for h in ("Left", "Right") if inc_pw_by_side.get(h) is None]
-        if missing_pw:
-            reason = ("pulse width is NOT OBSERVED for " + ", ".join(missing_pw)
-                      + "; no joint pulse-width pair can be searched without both observed widths")
-            return [_no_setting(h, reason) for h in hemispheres], exclusions_by_side
         settings = [_no_setting(h, "no (pulse-width-Left, pulse-width-Right) pair had enough "
                                   "fitted epochs to support a joint surface, so nothing was "
                                   "searched at all; the setting in force is carried forward as a "
@@ -1310,9 +2121,17 @@ def _freeze_joint(slices: dict, inc_rate, inc_pw_by_side: dict, *, h_audit, gx, 
     incumbent_stratum = None
     if inc_pwl is not None and inc_pwr is not None:
         for s in usable:
-            if abs(s.pw_us_left - inc_pwl) < 1e-9 and abs(s.pw_us_right - inc_pwr) < 1e-9:
+            if (abs(s.pw_us_left - inc_pwl) < 1e-9 and abs(s.pw_us_right - inc_pwr) < 1e-9
+                    and getattr(s, "left_contact", None) == inc_left_contact):
                 incumbent_stratum = s
                 break
+    # THE LEFT CONTACT, SAID WHEN IT CHANGES (step A, 2026-10-01): the comparison below is
+    # between whole configurations (pulse widths and Left contact), so a move of contact is named.
+    if (inc_left_contact is not None and getattr(best, "left_contact", None) is not None
+            and best.left_contact not in (inc_left_contact, LEFT_OFF)):
+        reasons.append(
+            f"the chosen group is on Left contact {best.left_contact}; the Left contact in force is "
+            f"{inc_left_contact}, so this is a move of Left contact as well as of rate and current")
 
     if len(usable) < 2:
         pw_resolved = False
@@ -1350,9 +2169,8 @@ def _freeze_joint(slices: dict, inc_rate, inc_pw_by_side: dict, *, h_audit, gx, 
                            and pw_gain > float(resolution_k) * pw_sd_diff)
         verdict = "IS" if pw_resolved else "is NOT"
         reasons.append(
-            f"the pulse-width-pair move (Left {incumbent_stratum.pw_us_left:g}, Right "
-            f"{incumbent_stratum.pw_us_right:g}) -> (Left {best.pw_us_left:g}, Right "
-            f"{best.pw_us_right:g}) us {verdict} resolved at the chosen cell "
+            f"the move {_configuration_text(incumbent_stratum)} -> {_configuration_text(best)} "
+            f"{verdict} resolved at the chosen cell "
             f"({best.x_star[0]:g} Hz, {best.x_star[1]:.2f} / {best.x_star[2]:.2f} mA): posterior "
             f"gain {pw_gain:+.4f} NRS points against difference SD {pw_sd_diff:.4f}")
 
@@ -1416,10 +2234,12 @@ def _freeze_joint(slices: dict, inc_rate, inc_pw_by_side: dict, *, h_audit, gx, 
         detail = dict(n_slices=len(usable), best_pw_us_left=float(best.pw_us_left),
                      best_pw_us_right=float(best.pw_us_right),
                      incumbent_pw_us_left=inc_pwl, incumbent_pw_us_right=inc_pwr,
+                     left_contact=getattr(best, "left_contact", None),
+                     incumbent_left_contact=inc_left_contact,
                      adaptive_envelope=dict(env_detail),
                      current_resolution=dict(current_resolution))
         detail["adaptive_envelope"]["brainsense_pair"] = ENV.brainsense_pair_demonstrated(
-            chosen_rate, pw_this, hemi)
+            chosen_rate, pw_this, hemi, participant_uid=participant_uid)
         settings.append(HemisphereSetting(
             hemisphere=hemi, rate_hz=chosen_rate, pw_us=float(pw_this), amp_star_mA=amp_this,
             amp_delivered_min_mA=h_audit.get(hemi, {}).get("amp_delivered_min", float("nan")),
@@ -1428,446 +2248,3 @@ def _freeze_joint(slices: dict, inc_rate, inc_pw_by_side: dict, *, h_audit, gx, 
             pw_resolved=pw_resolved, gain=float(gain), sd_of_difference=float(sd_diff),
             reasons=reasons_t, detail=detail))
     return settings, exclusions_by_side
-
-
-# Retained active Aditya interfaces.
-def pulse_width_design_audit(fit: pd.DataFrame, *, pw_col="pw_us_Left",
-                             min_epochs=PW_STRATUM_MIN_EPOCHS) -> dict:
-    """How much of the rate x pulse-width plane was actually delivered?
-
-    This is pure counting, with no test statistic and no model. It exists because a frozen
-    configuration names a pulse width, and a reader is entitled to know whether that pulse width
-    could have been chosen on evidence or was simply whatever accompanied the chosen rate. The
-    decisive quantity is ``n_rates_with_two_pw_levels``: a pulse-width effect can only be separated
-    from a rate effect at a rate where more than one pulse width was delivered. If no rate carries
-    two adequately-sampled pulse-width levels, the two factors are aliased in this design and no
-    amount of modelling will unalias them.
-    """
-    tab = pd.crosstab(fit["freq_hz"].astype(float), fit[pw_col].astype(float))
-    per_rate = {float(r): int((row >= min_epochs).sum()) for r, row in tab.iterrows()}
-    per_rate_any = {float(r): int((row > 0).sum()) for r, row in tab.iterrows()}
-    counts = {float(c): int(tab[c].sum()) for c in tab.columns}
-    n_cells = int(tab.size)
-    n_delivered = int((tab.to_numpy() > 0).sum())
-    return dict(
-        crosstab=tab,
-        pw_levels=[float(c) for c in tab.columns],
-        n_pw_levels=int(tab.shape[1]),
-        epochs_per_pw=counts,
-        fittable_pw_levels=[float(c) for c, n in counts.items() if n >= int(min_epochs)],
-        n_rate_pw_cells=n_cells,
-        n_rate_pw_cells_delivered=n_delivered,
-        rate_pw_coverage=float(n_delivered) / n_cells if n_cells else float("nan"),
-        pw_levels_per_rate_any=per_rate_any,
-        pw_levels_per_rate_fittable=per_rate,
-        n_rates_with_two_pw_levels=int(sum(1 for v in per_rate_any.values() if v >= 2)),
-        n_rates_with_two_fittable_pw_levels=int(sum(1 for v in per_rate.values() if v >= 2)),
-        min_epochs=int(min_epochs),
-    )
-
-
-def pulse_width_contrast(fit: pd.DataFrame, *, pw_col="pw_us_Left", reference_pw=None,
-                         era_scheme="quarter", min_epochs=PW_STRATUM_MIN_EPOCHS) -> dict:
-    """Precision-weighted, rate-blocked and era-blocked estimate of the pulse-width effect on J.
-
-    The surrogate answers "which cell has the lowest posterior mean" but not "is pulse width doing
-    anything at all", and those are different questions. This is the second one, asked with the
-    project's standard adjustments: rate enters as a factor because rate and pulse width were moved
-    together in this record, era enters as a factor because pain ratings drift over the programme,
-    and rows are weighted by ``1/obs_var`` so a sparsely-rated epoch does not carry the same weight
-    as a densely-rated one. The weighting matches how the surrogate treats the same rows, which is
-    why weighted least squares is used rather than ordinary least squares.
-
-    The estimable-or-not check is not decoration. With rate as a factor, a pulse-width level
-    delivered at only one rate is collinear with that rate's indicator, and the design matrix loses
-    rank. Reporting a coefficient from a rank-deficient fit would be reporting an arbitrary point
-    from a flat ridge, so the function returns ``estimable=False`` and no coefficients instead.
-
-    Returns a mapping. ``estimable`` is ``False`` when the design cannot support the model at all."""
-    out = dict(estimable=False, reason="", reference_pw=reference_pw, n=int(len(fit)),
-               coefficients={}, era_scheme=str(era_scheme), n_eras=0, notes=[],
-               excluded_levels={}, min_epochs=int(min_epochs))
-    d = fit.copy()
-    d["pw"] = d[pw_col].astype(float)
-    counts = d["pw"].value_counts().to_dict()
-    thin = {float(k): int(v) for k, v in counts.items() if int(v) < int(min_epochs)}
-    if thin:
-        out["excluded_levels"] = thin
-        out["notes"].append(
-            "pulse-width levels excluded for having fewer rows than the "
-            f"{int(min_epochs)}-epoch stratum floor: "
-            + ", ".join(f"{k:g} us (n={v})" for k, v in sorted(thin.items()))
-            + ". These are the same levels the stratified surrogate comparison omits, so the two "
-              "views are fitted on the same rows")
-        d = d.loc[~d["pw"].isin(list(thin))].copy()
-        out["n"] = int(len(d))
-    d["rate"] = d["freq_hz"].astype(float)
-    levels = sorted(d["pw"].unique())
-    if len(levels) < 2:
-        out["reason"] = (f"pulse width never varied among the fitted epochs (single level "
-                         f"{levels[0]:g} us if any); the effect is unidentifiable")
-        return out
-
-    ref = float(levels[0] if reference_pw is None else reference_pw)
-    if ref not in set(levels):
-        out["reason"] = (f"reference pulse width {ref:g} us is not among the fitted levels "
-                         f"{[f'{v:g}' for v in levels]}")
-        return out
-    out["reference_pw"] = ref
-
-    try:
-        import statsmodels.formula.api as smf
-    except Exception as exc:                                       # pragma: no cover - defensive
-        out["reason"] = f"statsmodels unavailable ({type(exc).__name__}: {exc})"
-        return out
-
-    d["era"] = VAL.era_labels(d, scheme=era_scheme).astype(str).values
-    out["n_eras"] = int(pd.Series(d["era"]).nunique())
-    terms = [f"C(pw, Treatment(reference={ref}))", "C(rate)"]
-    if out["n_eras"] > 1:
-        terms.append("C(era)")
-    else:
-        out["notes"].append(
-            "era NOT blocked: the fitted epochs fall in a single calendar quarter, so the "
-            "pulse-width effect is not separated from time here")
-    amp_cols = [c for c in ("amp_mA_Left", "amp_mA_Right") if c in d.columns]
-    formula = "J ~ " + " + ".join(terms + amp_cols)
-
-    w = 1.0 / d["obs_var"].astype(float).to_numpy()
-    res = smf.wls(formula, data=d, weights=w).fit()
-    # Rank deficiency is what aliasing looks like numerically, and statsmodels will return a
-    # pseudo-inverse solution rather than complain, so the check has to be explicit: a coefficient
-    # read off a rank-deficient fit is an arbitrary point on a flat ridge.
-    #
-    # Attributing the deficiency matters as much as detecting it, because the two causes call for
-    # different responses. If the PULSE-WIDTH columns are the dependent ones, the pulse-width effect
-    # is aliased with rate and the answer is more data. If the deficiency is elsewhere — collinear
-    # amplitude columns, an era perfectly nested in a rate — the pulse-width effect might well be
-    # estimable once that other term is dealt with, and saying "pulse width is aliased" would be a
-    # false diagnosis. So the attribution is COMPUTED rather than assumed: drop the pulse-width
-    # columns and see how much rank goes with them. If they contribute fewer independent directions
-    # than they have columns, they are the dependent ones.
-    exog = np.asarray(res.model.exog, float)
-    names = list(res.model.exog_names)
-    n_par = exog.shape[1]
-    rank_full = int(np.linalg.matrix_rank(exog))
-    if rank_full < n_par:
-        pw_idx = [i for i, nm in enumerate(names) if nm.startswith("C(pw")]
-        other = [i for i in range(n_par) if i not in pw_idx]
-        rank_other = int(np.linalg.matrix_rank(exog[:, other])) if other else 0
-        pw_aliased = bool(pw_idx) and (rank_full - rank_other) < len(pw_idx)
-        out["rank"] = rank_full
-        out["n_parameters"] = n_par
-        out["pw_columns_aliased"] = pw_aliased
-        if pw_aliased:
-            out["reason"] = (
-                f"the design matrix is rank deficient ({rank_full} of {n_par} columns independent) "
-                f"and the PULSE-WIDTH columns are the dependent ones: they add only "
-                f"{rank_full - rank_other} independent direction(s) for {len(pw_idx)} column(s), so "
-                "at least one pulse-width level was delivered at a single rate and its effect is "
-                "collinear with that rate's indicator. No amount of modelling separates them; only "
-                "delivering a pulse width at a second rate does.")
-        else:
-            out["reason"] = (
-                f"the design matrix is rank deficient ({rank_full} of {n_par} columns independent), "
-                "but NOT because of pulse width — the pulse-width columns contribute their full "
-                f"{len(pw_idx)} independent direction(s). The dependency lies among the other terms "
-                f"({', '.join(nm for i, nm in enumerate(names) if i in other and nm != 'Intercept')}"
-                "), for example two perfectly correlated amplitude columns or an era nested inside "
-                "a rate. The fit is not identified as specified, so no coefficient is reported; "
-                "removing the offending term may make the pulse-width effect estimable.")
-        return out
-
-    ci = res.conf_int()
-    for name in res.params.index:
-        if not name.startswith("C(pw"):
-            continue
-        lvl = name.split("[T.")[-1].rstrip("]")
-        out["coefficients"][lvl] = dict(
-            estimate=float(res.params[name]),
-            ci=(float(ci.loc[name, 0]), float(ci.loc[name, 1])),
-            p=float(res.pvalues[name]),
-            resolved=bool(abs(float(res.params[name])) > float(res.bse[name])),
-        )
-    out.update(estimable=True, reason="fitted", formula=formula,
-               df_resid=float(res.df_resid), r2=float(res.rsquared))
-    return out
-
-
-@dataclass
-class Stage1Slice:
-    """One (rate, amplitude) surface, fitted at a single pulse-width level."""
-
-    hemisphere: str
-    pw_us: float
-    n_epochs: int
-    grid: object
-    gp: object
-    mu: np.ndarray
-    sd: np.ndarray
-    safe: np.ndarray
-    i_star: int
-    x_star: tuple
-    mu_star: float
-    sd_star: float
-    incumbent_mu: float
-    incumbent_sd: float
-    n_reports: np.ndarray
-    queue: np.ndarray
-    stopping: object
-    incumbent_rate_supported: bool = True
-    optimum_rate_supported: bool = True
-    batch: list = field(default_factory=list)
-    meta: dict = field(default_factory=dict)
-
-    def gain_over_incumbent(self) -> float:
-        """Positive means the slice optimum is better (lower J) than the setting in force."""
-        return float(self.incumbent_mu) - float(self.mu_star)
-
-    def sd_of_difference(self) -> float:
-        return float(np.sqrt(float(self.sd_star) ** 2 + float(self.incumbent_sd) ** 2))
-
-    def resolves_its_optimum(self, k: float = RESOLUTION_K) -> bool | None:
-        """Does this slice's optimum beat the setting in force by more than the uncertainty in
-        that difference? ``None`` means the question cannot be put to this slice.
-
-        Support is defined on the RATE axis specifically, and the reason is that the frequency
-        length scale is PINNED rather than fitted (``routines/surrogate._make_kernel``, pinned
-        because the marginal likelihood is essentially flat in it on this design). Borrowing across
-        rates therefore rests on a stated assumption rather than on anything the data determined,
-        and a comparison that depends entirely on that borrowing is not a measurement. Amplitude,
-        whose length scale IS fitted, is not treated this way."""
-        if not self.incumbent_rate_supported:
-            return None
-        sd_diff = self.sd_of_difference()
-        if not np.isfinite(sd_diff) or sd_diff <= 0:
-            return False
-        return bool(self.gain_over_incumbent() > float(k) * sd_diff)
-
-
-def _fit_slice(hemi, pw, sub, *, grid, sgp, safe, incumbent_xy, amp_col, fixed_length_scale,
-               kappa, q, eta) -> Stage1Slice:
-    """Fit the existing surrogate to one pulse-width stratum and derive everything downstream.
-
-    ``sgp``/``safe`` are the SHARED safety model, fitted once on the whole record. Sharing it is a
-    limitation worth stating rather than hiding: charge per pulse rises with pulse width, so at a
-    fixed amplitude a 180 us pulse delivers more charge than a 60 us pulse, and one safe set across
-    all strata is therefore OPTIMISTIC at the wider pulse widths. It is shared because the safety
-    seed is built from the programmed ``UpperLimitInMilliAmps`` anchors, which carry a frequency and
-    an amplitude and no pulse width at all, so there is nothing in the record to stratify it by.
-    """
-    Xobs = sub[["freq_hz", amp_col]].to_numpy(float)
-    gp = SUR.ObjectiveGP(grid, fixed_length_scale=fixed_length_scale, random_state=0).fit(
-        Xobs, sub["J"].to_numpy(float), sub["obs_var"].to_numpy(float))
-    mu, sd = gp.predict_grid()
-
-    n_reports = np.zeros(len(grid))
-    np.add.at(n_reports, grid.index_of(Xobs), sub["n"].to_numpy(float))
-
-    inc_mu, inc_sd = gp.predict(np.atleast_2d(incumbent_xy), return_std=True)
-    incumbent_mu, incumbent_sd = float(inc_mu[0]), float(inc_sd[0])
-    i_star = int(np.argmin(np.where(safe, mu, np.inf)))
-    gx = grid.grid_X()
-
-    queue, qmeta = ACQ.exploration_queue(mu, sd, n_reports, incumbent_mu, kappa=kappa)
-    stopping = ACQ.check_stopping([float(mu[i_star])], mu, sd, n_reports,
-                                  incumbent_mu=incumbent_mu)
-    try:
-        batch = ACQ.select_batch_within_visit(gp, grid, q=int(q), safe_mask=safe,
-                                              n_reports=n_reports, incumbent_mu=incumbent_mu,
-                                              eta=eta)
-    except ValueError as exc:
-        # An empty candidate set is a legitimate state (everything safe has been tested, or nothing
-        # is provably safe). It must be recorded, not raised past the caller as a fit failure.
-        batch = []
-        batch_note = f"no within-visit batch available: {exc}"
-    else:
-        batch_note = ""
-
-    rates = set(np.round(sub["freq_hz"].astype(float).to_numpy(), 6))
-    inc_supported = bool(round(float(incumbent_xy[0]), 6) in rates)
-    opt_supported = bool(round(float(gx[i_star, 0]), 6) in rates)
-
-    return Stage1Slice(
-        hemisphere=hemi, pw_us=float(pw), n_epochs=int(len(sub)), grid=grid, gp=gp,
-        mu=mu, sd=sd, safe=safe, i_star=i_star,
-        x_star=(float(gx[i_star, 0]), float(gx[i_star, 1])),
-        mu_star=float(mu[i_star]), sd_star=float(sd[i_star]),
-        incumbent_mu=incumbent_mu, incumbent_sd=incumbent_sd,
-        n_reports=n_reports, queue=queue, stopping=stopping, batch=batch,
-        incumbent_rate_supported=inc_supported, optimum_rate_supported=opt_supported,
-        meta=dict(kernel=gp.hyperparameters["kernel"],
-                  log_marginal_likelihood=gp.hyperparameters["log_marginal_likelihood"],
-                  n_reports_total=float(sub["n"].sum()),
-                  rates_delivered=[float(v) for v in sorted(sub["freq_hz"].unique())],
-                  amp_min=float(sub[amp_col].min()), amp_max=float(sub[amp_col].max()),
-                  n_safe=int(safe.sum()), queue_size=int(queue.size),
-                  best_optimistic_unexplored=float(qmeta.get("best_optimistic", float("nan"))),
-                  batch_note=batch_note))
-
-
-def _freeze_hemisphere(hemi, hslices, inc_rate, inc_pw, *, fit, amp_col, h_audit, grid, gx,
-                       resolution_k, pw_observed) -> HemisphereSetting:
-    """Pick the rate and pulse width for one hemisphere and state whether either is resolved.
-
-    The rate comes from the best slice's own optimum and is tested against the setting in force
-    within that slice, so both posterior means are on the same surface. The pulse width is tested
-    across slices, comparing the best slice's optimum against the posterior at THE SAME (rate,
-    amplitude) CELL in the incumbent pulse width's slice. Holding the cell fixed is what makes the
-    comparison a pulse-width contrast rather than a mixture of a pulse-width move and a rate move.
-    """
-    reasons = []
-    if not hslices:
-        return HemisphereSetting(
-            hemisphere=hemi, rate_hz=inc_rate, pw_us=inc_pw if pw_observed else None,
-            amp_star_mA=float("nan"),
-            amp_delivered_min_mA=h_audit["amp_delivered_min"],
-            amp_delivered_max_mA=h_audit["amp_delivered_max"],
-            n_epochs_fitted=int(h_audit.get("n_epochs_in_fitted_strata", 0)),
-            rate_resolved=None, pw_resolved=None,
-            reasons=("no pulse-width stratum had enough fitted epochs to support a surface, so "
-                     "neither the rate nor the pulse width was searched at all; the setting in "
-                     "force is carried forward as a default, not as a choice",),
-            detail=dict(n_slices=0))
-
-    best = min(hslices, key=lambda s: s.mu_star)
-    rate_resolved = best.resolves_its_optimum(resolution_k)
-    if rate_resolved is None:
-        reasons.append(
-            f"the rate choice is NOT ASSESSED, not refused: the chosen pulse-width stratum "
-            f"({best.pw_us:g} us) never delivered the rate in force ({inc_rate:g} Hz) — it ran "
-            f"{', '.join(f'{r:g}' for r in best.meta['rates_delivered'])} Hz — so its posterior at "
-            f"the incumbent cell ({best.incumbent_mu:+.4f}, SD {best.incumbent_sd:.4f}) is an "
-            "extrapolation across a PINNED frequency length scale, not a measurement. J is zero at "
-            "the incumbent by construction, so any gain computed against that extrapolation is an "
-            "artefact of the stratification and is discarded rather than reported")
-    elif not rate_resolved:
-        if abs(best.x_star[0] - inc_rate) < 1e-9:
-            reasons.append(
-                f"the chosen rate {best.x_star[0]:g} Hz is the rate already in force. Retaining "
-                "the setting in force is not the same as having resolved it: the gain over the "
-                "incumbent is zero by construction, so the resolution criterion cannot be met and "
-                "the rate is carried forward as an unresolved default")
-        else:
-            reasons.append(
-                f"the rate move {inc_rate:g} -> {best.x_star[0]:g} Hz is NOT resolved: the "
-                f"posterior gain over the setting in force is {best.gain_over_incumbent():+.4f} "
-                f"NRS points against a standard deviation of that difference of "
-                f"{best.sd_of_difference():.4f}, so the difference is smaller than the "
-                "uncertainty in the difference")
-    else:
-        reasons.append(
-            f"the rate move {inc_rate:g} -> {best.x_star[0]:g} Hz IS resolved: gain "
-            f"{best.gain_over_incumbent():+.4f} NRS points against difference SD "
-            f"{best.sd_of_difference():.4f}")
-
-    if not best.optimum_rate_supported:
-        reasons.append(
-            f"the chosen rate {best.x_star[0]:g} Hz was never delivered at {best.pw_us:g} us in "
-            f"this record (that stratum ran "
-            f"{', '.join(f'{r:g}' for r in best.meta['rates_delivered'])} Hz), so the proposal is "
-            "an interpolation across the PINNED frequency length scale rather than a rate the "
-            "surface has observed at this pulse width")
-    if best.x_star[1] > float(h_audit["amp_delivered_max"]) + 1e-9:
-        reasons.append(
-            f"the preferred amplitude {best.x_star[1]:.2f} mA exceeds the highest amplitude ever "
-            f"delivered on this hemisphere ({h_audit['amp_delivered_max']:.2f} mA), so it sits "
-            "outside the delivered envelope and is an extrapolation on the amplitude axis too")
-
-    # --- pulse width --------------------------------------------------------------------------
-    detail = dict(n_slices=len(hslices), best_pw_us=float(best.pw_us),
-                  pw_levels_fitted=[float(s.pw_us) for s in hslices])
-    if not pw_observed:
-        pw_resolved = None
-        pw_us = None
-        reasons.append(
-            "pulse width is NOT OBSERVED for this hemisphere in this design matrix (the matrix "
-            "carries a left-hemisphere pulse-width column only), so it can be neither searched nor "
-            "resolved here. It is reported as unknown rather than assumed equal to the other side")
-    elif len(hslices) < 2:
-        pw_resolved = False
-        pw_us = float(best.pw_us)
-        reasons.append(
-            f"only one pulse-width level ({best.pw_us:g} us) had enough fitted epochs to support a "
-            f"surface, out of {h_audit['design']['n_pw_levels']} levels delivered, so no "
-            "pulse-width comparison was possible and the pulse width is carried forward unresolved")
-    else:
-        pw_us = float(best.pw_us)
-        ref = [s for s in hslices if inc_pw is not None and abs(s.pw_us - inc_pw) < 1e-9]
-        alt = ref[0] if ref else min((s for s in hslices if s is not best),
-                                     key=lambda s: s.mu_star)
-        if alt is best:
-            pw_resolved = False
-            reasons.append(
-                f"the best slice IS the pulse width in force ({best.pw_us:g} us); there is nothing "
-                "to resolve against and it is carried forward as an unresolved default")
-        elif round(float(best.x_star[0]), 6) not in set(
-                np.round(np.asarray(alt.meta["rates_delivered"], float), 6)):
-            # The reference stratum has to be able to speak about the cell being compared. If it
-            # never delivered that rate, its posterior there is an extrapolation across the pinned
-            # frequency length scale and the "pulse-width contrast" would in fact be measuring the
-            # reference stratum's ignorance. Same failure mode as the rate comparison above.
-            pw_resolved = None
-            detail.update(pw_reference_us=float(alt.pw_us))
-            reasons.append(
-                f"the pulse-width contrast {alt.pw_us:g} -> {best.pw_us:g} us is NOT ASSESSED: the "
-                f"reference stratum ({alt.pw_us:g} us) never delivered the chosen rate "
-                f"{best.x_star[0]:g} Hz — it ran "
-                f"{', '.join(f'{r:g}' for r in alt.meta['rates_delivered'])} Hz — so a contrast at "
-                "that cell would compare a measurement against an extrapolation")
-        else:
-            # Same cell, different pulse width: an honest pulse-width contrast.
-            cell = np.atleast_2d(np.asarray(best.x_star, float))
-            a_mu, a_sd = alt.gp.predict(cell, return_std=True)
-            gain = float(a_mu[0]) - float(best.mu_star)
-            sd_diff = float(np.sqrt(float(best.sd_star) ** 2 + float(a_sd[0]) ** 2))
-            pw_resolved = bool(np.isfinite(sd_diff) and sd_diff > 0
-                               and gain > float(resolution_k) * sd_diff)
-            detail.update(pw_reference_us=float(alt.pw_us), pw_gain=gain,
-                          pw_sd_of_difference=sd_diff)
-            verdict = "IS" if pw_resolved else "is NOT"
-            reasons.append(
-                f"the pulse-width move {alt.pw_us:g} -> {best.pw_us:g} us {verdict} resolved at "
-                f"the chosen cell ({best.x_star[0]:g} Hz, {best.x_star[1]:.2f} mA): posterior gain "
-                f"{gain:+.4f} NRS points against difference SD {sd_diff:.4f}")
-        d = h_audit["design"]
-        if d["n_rates_with_two_fittable_pw_levels"] == 0:
-            reasons.append(
-                f"NOTE ON THE DESIGN: no rate in this record was delivered at two pulse-width "
-                f"levels that both clear the {d['min_epochs']}-epoch stratum floor "
-                f"({d['n_rates_with_two_pw_levels']} rates carry two levels if thin cells are "
-                f"counted, and only {d['n_rate_pw_cells_delivered']} of {d['n_rate_pw_cells']} "
-                "rate x pulse-width combinations were delivered at all). Rate and pulse width were "
-                "moved together, so a pulse-width contrast in this record is partly a rate "
-                "contrast and cannot be fully unaliased by any model")
-        c = h_audit.get("contrast", {})
-        if not c.get("estimable", False):
-            reasons.append(f"the regression check on the pulse-width effect was not estimable: "
-                           f"{c.get('reason', 'not run')}")
-        else:
-            # Two views of the same rows: the stratified surrogate and a rate-blocked, era-blocked,
-            # precision-weighted regression. When they disagree about the SIGN of the pulse-width
-            # effect, that disagreement is itself the finding, and it is a stronger argument
-            # against freezing a pulse width than either view is on its own. Reporting only the
-            # view that happens to favour the proposal is the failure mode this note prevents.
-            key = f"{best.pw_us:g}"
-            coef = c["coefficients"].get(key) or c["coefficients"].get(f"{best.pw_us:.1f}")
-            if coef is not None and float(coef["estimate"]) > 0:
-                reasons.append(
-                    f"DISAGREEMENT BETWEEN TWO VIEWS: the stratified surrogate prefers "
-                    f"{best.pw_us:g} us, but the rate-blocked, era-blocked, precision-weighted "
-                    f"regression on the same rows estimates {best.pw_us:g} us to be "
-                    f"{float(coef['estimate']):+.4f} NRS points WORSE than the reference "
-                    f"{c['reference_pw']:g} us (95% CI {coef['ci'][0]:+.4f} to "
-                    f"{coef['ci'][1]:+.4f}, p = {coef['p']:.4g}). The two methods differ in what "
-                    "they adjust for, and a pulse width the two disagree about the sign of is not "
-                    "a pulse width to freeze")
-
-    return HemisphereSetting(
-        hemisphere=hemi, rate_hz=float(best.x_star[0]), pw_us=pw_us,
-        amp_star_mA=float(best.x_star[1]),
-        amp_delivered_min_mA=h_audit["amp_delivered_min"],
-        amp_delivered_max_mA=h_audit["amp_delivered_max"],
-        n_epochs_fitted=int(best.n_epochs),
-        rate_resolved=rate_resolved, pw_resolved=pw_resolved,
-        reasons=tuple(reasons), detail=detail)

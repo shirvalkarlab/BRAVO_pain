@@ -16,6 +16,7 @@ if str(_BRAVO_ROOT) not in sys.path:
     sys.path.insert(0, str(_BRAVO_ROOT))
 
 from modules.Biomarkers.routines import availability as av
+from modules.Biomarkers.routines import analytics
 
 T0 = datetime.datetime(2025, 8, 29, 12, 0, 0).timestamp()
 
@@ -209,8 +210,7 @@ def test_lsb_series_psd_modeled_tier_from_montage_td():
     assert "ZERO_THREE_LEFT" in out
     s = out["ZERO_THREE_LEFT"]
     assert s["source"] == ["psd_modeled"] and s["modeled"] == [True]
-    assert s["method"][0].startswith("td_transform_x_k=")
-    assert "352.62" in s["method"][0]
+    assert s["method"][0] == f"td_transform_x_k={analytics.LSB_PER_UV2_TRANSFORM:.2f}"
     # the lane's modeled LSB equals the shared PRIMARY helper applied to the same TD (whole-column,
     # the display-tier extent — no PRO centering here)
     expect = analytics.td_to_lsb(sig, fs, center)
@@ -238,6 +238,124 @@ def test_lsb_series_psd_modeled_canon_name_and_device_peak():
     assert s["source"] == ["psd_modeled"] and s["center_hz"][0] == av.snap_freq(center)
 
 
+def _rich_lsb_series_fixture():
+    """A richer fixture than the four tests above, built to exercise every branch of the native
+    (Power-Domain + Chronic Timeline) tiers at once: two contacts, a sentinel and a negative
+    value, a missing-sample flag, a chronic frequency SCHEDULE change mid-run (not just a scalar
+    CenterFrequencyHz), and a montage-TD plus an event-PSD modeled point layered on top -- so the
+    scan-vs-indexed comparison below is not just proving the easy cases agree."""
+    sentinel = 2.0 ** 31 - 1
+    pd_recs = [
+        {"ChannelNames": ["ZERO_THREE_LEFT Power", "ZERO_THREE_LEFT Stimulation"],
+         "Data": np.array([[535.0, 0.0], [596.0, 0.0], [sentinel, 0.0], [-3.0, 0.0],
+                           [610.0, 1.5]]),
+         "Missing": np.array([[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]]),
+         "SamplingRate": 2, "StartTime": T0,
+         "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}},
+        {"ChannelNames": ["ZERO_THREE_RIGHT Power"], "Data": np.array([[720.0], [740.0]]),
+         "SamplingRate": 2, "StartTime": T0 + 100,
+         "Descriptor": {"Therapy": {"Right": {"SensingSetup": {"FrequencyInHertz": 13.7}}}}},
+    ]
+    chronic_recs = [
+        {"ChannelNames": ["LeftHemisphere LFP"],
+         "Time": np.array([T0 + 600, T0 + 1200, T0 + 1800]),
+         "Data": np.array([[810.0], [830.0], [850.0]]), "SamplingRate": -1,
+         # a schedule that changes mid-run: 12.7 Hz up to T0+1200, then 13.7 Hz after
+         "FreqScheduleHz": [[T0, 12.7], [T0 + 1200, 13.7]],
+         "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}},
+    ]
+    rng = np.random.default_rng(2)
+    fs, center = 250.0, 20.0
+    n = 250 * 30
+    tsec = np.arange(n) / fs
+    sig = 8.0 * np.sin(2 * np.pi * center * tsec) + rng.normal(0, 2.0, n)
+    montage_td = [{"ChannelNames": ["ZERO_THREE_LEFT"], "Data": sig.reshape(-1, 1),
+                  "SamplingRate": fs, "StartTime": T0 + 5000, "PeakFrequencyInHertz": center}]
+    event_psd = [{"channel": "ZERO_THREE_RIGHT", "t": T0 + 6000,
+                 "freq": np.linspace(1, 100, 200),
+                 "power": np.ones(200) * 5.0, "center_hz": 13.7}]
+    return chronic_recs, pd_recs, montage_td, event_psd
+
+
+def test_lsb_series_indexed_path_matches_the_reference_scan():
+    '`lsb_series` (indexed, USE_CHANNEL_INDEX default True) must equal `_lsb_series_scan` (the.'
+    chronic, pd_recs, montage_td, event_psd = _rich_lsb_series_fixture()
+    sensing_hz = {"ZERO_THREE_RIGHT": 13.7}
+
+    indexed = av.lsb_series(chronic, pd_recs, montage_td_recordings=montage_td,
+                            sensing_hz_by_channel=sensing_hz, event_psd_recordings=event_psd)
+    scanned = av._lsb_series_scan(chronic, pd_recs, montage_td_recordings=montage_td,
+                                  sensing_hz_by_channel=sensing_hz, event_psd_recordings=event_psd)
+
+    assert set(indexed.keys()) == set(scanned.keys()), (
+        f"channel sets differ: indexed={set(indexed)} scanned={set(scanned)}")
+    total_samples = 0
+    for ch in scanned:
+        si, ss = indexed[ch], scanned[ch]
+        assert len(si["t"]) == len(ss["t"]), f"{ch}: sample count differs"
+        tup_i = sorted(zip(si["t"], si["y"], si["center_hz"], si["source"]))
+        tup_s = sorted(zip(ss["t"], ss["y"], ss["center_hz"], ss["source"]))
+        assert tup_i == tup_s, f"{ch}: samples differ\nindexed={tup_i}\nscanned={tup_s}"
+        total_samples += len(ss["t"])
+    assert total_samples > 0, "fixture produced no samples on either path -- test proves nothing"
+    print(f"OK the indexed lsb_series matches the reference scan on {total_samples} samples "
+          f"across {len(scanned)} channels, native and modeled tiers together")
+
+
+def test_lsb_series_indexed_path_matches_scan_on_the_four_existing_fixtures():
+    """The same equality check, run against each of the four simpler fixtures the existing tests
+    above already construct -- so the easy cases are pinned by this same discipline, not only the
+    rich one above."""
+    cases = [
+        ([], [{"ChannelNames": ["ZERO_THREE_LEFT Power", "ZERO_THREE_LEFT Stimulation"],
+              "Data": np.array([[535.0, 0.0], [596.0, 0.0], [2.0 ** 31 - 1, 0.0], [-3.0, 0.0],
+                                [610.0, 1.5]]),
+              "SamplingRate": 2, "StartTime": T0,
+              "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}}],
+         {}, {}),
+        ([{"ChannelNames": ["LeftHemisphere LFP", "LeftHemisphere Amplitude"],
+          "Time": np.array([T0 + 600, T0 + 1200]),
+          "Data": np.column_stack([[810.0, 830.0], [1.5, 1.5]]), "SamplingRate": -1,
+          "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}}],
+         [{"ChannelNames": ["ZERO_THREE_LEFT Power"], "Data": np.array([[500.0], [520.0]]),
+          "SamplingRate": 2, "StartTime": T0,
+          "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 12.7}}}}}],
+         {}, {}),
+    ]
+    for chronic, pd_recs, mt, ep in cases:
+        indexed = av.lsb_series(chronic, pd_recs)
+        scanned = av._lsb_series_scan(chronic, pd_recs)
+        assert set(indexed.keys()) == set(scanned.keys())
+        for ch in scanned:
+            tup_i = sorted(zip(indexed[ch]["t"], indexed[ch]["y"], indexed[ch]["center_hz"],
+                               indexed[ch]["source"]))
+            tup_s = sorted(zip(scanned[ch]["t"], scanned[ch]["y"], scanned[ch]["center_hz"],
+                               scanned[ch]["source"]))
+            assert tup_i == tup_s, f"{ch}: {tup_i} != {tup_s}"
+    print("OK the indexed path matches the scan on both of the simpler existing fixtures too")
+
+
+def test_lsb_series_scan_path_when_switch_is_off():
+    """`USE_CHANNEL_INDEX = False` with no `index=` must take the reference-scan branch, not the
+    indexed one -- the same fallback contract `per_pro_lsb` already has."""
+    chronic, pd_recs, montage_td, event_psd = _rich_lsb_series_fixture()
+    orig = av.USE_CHANNEL_INDEX
+    av.USE_CHANNEL_INDEX = False
+    try:
+        off = av.lsb_series(chronic, pd_recs, montage_td_recordings=montage_td,
+                            event_psd_recordings=event_psd,
+                            sensing_hz_by_channel={"ZERO_THREE_RIGHT": 13.7})
+    finally:
+        av.USE_CHANNEL_INDEX = orig
+    ref = av._lsb_series_scan(chronic, pd_recs, montage_td_recordings=montage_td,
+                              event_psd_recordings=event_psd,
+                              sensing_hz_by_channel={"ZERO_THREE_RIGHT": 13.7})
+    assert set(off.keys()) == set(ref.keys())
+    for ch in ref:
+        assert off[ch]["y"] == ref[ch]["y"], f"{ch}: switch-off path diverged from the scan"
+    print("OK USE_CHANNEL_INDEX=False takes the reference-scan branch, matching it exactly")
+
+
 def test_lsb_overview_modeled_tier_is_separate_hollow_layer():
     """Modeled points must NOT fold into native streaming session blocks or the chronic line — they
     ride a separate 'modeled' layer (hollow markers), and a modeled outlier must not rescale the
@@ -248,7 +366,7 @@ def test_lsb_overview_modeled_tier_is_separate_hollow_layer():
         "center_hz": [12.7, 12.7, 12.7, 19.5],               # 19.5 is an exact Percept FFT bin
         "source": ["streaming", "streaming", "streaming", "psd_modeled"],
         "modeled": [False, False, False, True],
-        "method": [None, None, None, "td_transform_x_k=352.62"]}}
+        "method": [None, None, None, "td_transform_x_k=345.59"]}}
     ov = av.lsb_overview(lsb)
     d = ov["ZERO_THREE_LEFT"]
     # streaming session block holds ONLY the 3 native samples; the modeled point is excluded
@@ -256,7 +374,7 @@ def test_lsb_overview_modeled_tier_is_separate_hollow_layer():
     # modeled layer carries the one hollow point, with its (FFT-bin-snapped) center and method tag
     assert len(d["modeled"]) == 1
     assert d["modeled"][0]["y"] == 9000.0 and d["modeled"][0]["center_hz"] == 19.5
-    assert d["modeled"][0]["method"] == "td_transform_x_k=352.62"
+    assert d["modeled"][0]["method"] == "td_transform_x_k=345.59"
     # the native y-window is set by sensed samples only — the 9000 outlier does NOT widen it
     assert d["y_hi"] < 1000.0
 
@@ -314,8 +432,7 @@ def test_lsb_overview_chronic_line_carries_center_hz():
 
 
 def test_event_markers_labels_patient_events():
-    """Patient-annotated events -> one labeled marker per press with the patient's label, the peak
-    frequency, hemisphere count, and a decimated PSD for the hover-overview."""
+    'Regression for event markers labels patient events.'
     freq = np.arange(0, 100.5, 0.5)
     # two hemispheres: a clear beta peak at 13.5 Hz above the 1/f floor (snaps to the 13.7 Hz bin)
     floor = 1.0 / (freq + 1.0)
@@ -536,6 +653,50 @@ def test_modeled_lsb_at_center_pools_streaming_and_montage_td():
     assert set(np.round(both, 6)) >= set(np.round(only_montage, 6))
 
 
+def test_modeled_lsb_at_center_indexed_path_matches_the_reference_scan():
+    """`modeled_lsb_at_center`'s TD tier (indexed, via `channel_index`) must equal
+    `_modeled_lsb_at_center_scan`'s own column scan field for field -- the same equality
+    discipline as the `lsb_series` proof above, on a fixture with two TD records (one streaming-
+    shaped, one montage-shaped, at distinct times, matching the pooling test just above) plus a
+    malformed extra-column record the guard must still reject identically on both paths."""
+    fs, center = 250.0, 20.0
+    streaming = _td_rec("ZERO_THREE_RIGHT", center, fs=fs, secs=30, seed=33, start=T0)
+    montage = _td_rec("ZERO_THREE_RIGHT", center, fs=fs, secs=30, seed=44, start=T0 + 3600.0)
+    malformed = _td_rec("ZERO_THREE_RIGHT", center, fs=fs, secs=30, seed=55, start=T0 + 7200.0,
+                        names=["ZERO_THREE_RIGHT", "FOREIGN_CHANNEL"], ncols=2)
+    recs = [streaming, montage, malformed]
+
+    indexed = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", center, td_recordings=recs,
+                                       half_hz=2.5)
+    scanned = av._modeled_lsb_at_center_scan("ZERO_THREE_RIGHT", center, td_recordings=recs,
+                                             half_hz=2.5)
+    assert indexed.size == scanned.size and indexed.size > 0, (
+        f"sample counts differ or fixture produced none: indexed={indexed.size} "
+        f"scanned={scanned.size}")
+    assert np.allclose(sorted(indexed), sorted(scanned), atol=1e-9), (
+        f"indexed={sorted(indexed)}\nscanned={sorted(scanned)}")
+    print(f"OK the indexed modeled_lsb_at_center matches the reference scan on "
+          f"{indexed.size} samples")
+
+
+def test_modeled_lsb_at_center_scan_path_when_switch_is_off():
+    """`USE_CHANNEL_INDEX = False` with no `index=` must take the reference-scan branch, the same
+    fallback contract as `per_pro_lsb`/`lsb_series`."""
+    fs, center = 250.0, 20.0
+    rec = _td_rec("ZERO_THREE_RIGHT", center, fs=fs, secs=30, seed=66, start=T0)
+    orig = av.USE_CHANNEL_INDEX
+    av.USE_CHANNEL_INDEX = False
+    try:
+        off = av.modeled_lsb_at_center("ZERO_THREE_RIGHT", center, td_recordings=[rec],
+                                       half_hz=2.5)
+    finally:
+        av.USE_CHANNEL_INDEX = orig
+    ref = av._modeled_lsb_at_center_scan("ZERO_THREE_RIGHT", center, td_recordings=[rec],
+                                         half_hz=2.5)
+    assert np.allclose(sorted(off), sorted(ref), atol=1e-9)
+    print("OK USE_CHANNEL_INDEX=False takes the reference-scan branch, matching it exactly")
+
+
 # ---------------------------------------------------------------------------
 # Bug 1 regression: active-sensing event-channel resolver
 # ---------------------------------------------------------------------------
@@ -554,11 +715,23 @@ def _import_service():
     for mod in ("Server", "Server.models", "modules.Database"):
         if mod not in _sys.modules:
             _sys.modules[mod] = _mock.MagicMock()
-    # analytics and availability are real; stub pipeline/adapter/redcap
-    for mod in ("modules.Biomarkers.pipeline", "modules.Biomarkers.adapter",
-                "modules.Biomarkers.routines.redcap_client"):
+    # analytics and availability are real; stub pipeline/adapter. `redcap_client` is imported FOR
+    # REAL and explicitly (2026-09-12): it needs nothing Django provides, and until now it was
+    # stubbed only when no earlier test had imported it, so what `bravo_service` bound to depended
+    # on the order the files ran in (`test_redcap_request_scope.py` already keeps the real one).
+    # The REAL module when it can be imported (2026-10-02): a stand-in left in sys.modules was
+    # handed to every later file in the same process, so test_no_aperiodic_fit failed whenever it
+    # ran after this file without a file that imported the real pipeline in between (it read the
+    # stand-in's missing `__file__`). Seen when the container runner first split its files across
+    # 16 processes. The stand-in remains only where the real import fails.
+    import importlib as _il
+    for mod in ("modules.Biomarkers.pipeline", "modules.Biomarkers.adapter"):
         if mod not in _sys.modules:
-            _sys.modules[mod] = _mock.MagicMock()
+            try:
+                _il.import_module(mod)
+            except Exception:
+                _sys.modules[mod] = _mock.MagicMock()
+    import modules.Biomarkers.routines.redcap_client  # noqa: F401  (the real one, always)
     import modules.Biomarkers.bravo_service as _bs
     return _bs
 

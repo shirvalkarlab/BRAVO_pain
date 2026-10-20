@@ -1,31 +1,42 @@
-import BiomarkerHeatmapGrids from "./BiomarkerHeatmapGrids";
-import { currentTargetText } from "utils/participantTargets";
-import { useAnalysisQuery } from "./queryAnalysis";
 /**
-=========================================================
-* UF BRAVO Platform -- Pain Biomarkers report (Shirvalkar Lab)
-=========================================================
-* Renders the selectable-source biomarker timeline (time-domain PSD<->pain and/or the
-* power-domain ~10-min LFP threshold detector) returned by /api/queryBiomarkerAnalysis.
-*/
+ * The Biomarkers page: "Brain signal vs. pain" (Shirvalkar Lab).
+ *
+ * Laid out by the redesign of 2026-09-26 (artifacts/design_2026-09-26_minimalist_redesign/SPEC.md
+ * section 5.1): the question as the page title, the pain-score selector first ("Every chart below
+ * uses this score"), then three sections, each a question with its answer and one figure -- does
+ * band power rise or fall with pain (the heat maps), how are reports paired with recordings (the
+ * matching settings and the timing histogram), what was recorded and when (the timeline) -- and
+ * the background (the sliding correlation, the calibration in effect, the research checks) below.
+ * Colours, type and figure defaults come from the shared tokens (assets/theme/base/tokens.js).
+ */
 
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { Card, Grid, Select, MenuItem, FormControl,
-  Slider, LinearProgress, CircularProgress,
+import { Grid, Select, MenuItem, FormControl,
+  Slider, LinearProgress,
   ToggleButton, ToggleButtonGroup } from "@mui/material";
 
 import MDBox from "components/MDBox";
+import { promptSelectSx } from "views/Reports/paper/selectStyle";
 import MDTypography from "components/MDTypography";
-import MDButton from "components/MDButton";
 
 import BiomarkerTimeline from "./BiomarkerTimeline";
+import ReportSharingNote from "./ReportSharingNote";
 import BiomarkerDataTimeline from "./BiomarkerDataTimeline";
-import BiomarkerAnalytics from "./BiomarkerAnalytics";
+import BiomarkerAnalytics, { hasSlidingCorrelation } from "./BiomarkerAnalytics";
 import BinarizationPreview from "./BinarizationPreview";
-import { computeMatchedScanModel } from "./binarizationModel";
+import lastComputedLine from "./lastComputedLine";
+import MatchWindowBand, { ControlLabel } from "./MatchWindowBand";
+import Fold from "./Fold";
+// BandTimeSweepPanel (the older, non-interactive tables-and-server-figures rendering of this
+// same grid) is superseded on this page by BiomarkerHeatmapGrids below -- kept as a file rather
+// than deleted (CLAUDE.md §6 warns against deleting something that still works), but
+// no longer imported here now that the interactive version carries its job plus the drill-down.
+import BiomarkerHeatmapGrids, { RefusalReason } from "./BiomarkerHeatmapGrids";
+import { reportCoverage, computeMatchedScanModel } from "./binarizationModel";
 import { saveControls, loadControls } from "./biomarkerStateStore";
+import { MATCHING_DEFAULTS as D } from "./matchingDefaults";
 
 // TWO PANELS RELOCATED FROM THE CLOSED-LOOP DEPLOYMENT PAGE (CLD_REDESIGN_PLAN.md item 11).
 // Both answer questions about the PSD-to-device-LSB calibration, and both are read by the analyst
@@ -33,41 +44,49 @@ import { saveControls, loadControls } from "./biomarkerStateStore";
 // the clinician route. They are IMPORTED from their original location rather than copied, so there
 // remains one implementation of each and a fix applied there is a fix here. Editing those files is
 // out of scope for this page; only their placement and their framing change.
-import ConversionModelPanel from "views/Reports/ClosedLoopSim/ConversionModelPanel";
-import PsdLsbPanel from "views/Reports/ClosedLoopSim/PsdLsbPanel";
-// The committed band candidate is the only source on this page of the channel and centre frequency
-// PsdLsbPanel needs. It is written to localStorage by the commit button inside BiomarkerAnalytics.
-import { loadBandCandidate } from "views/Reports/ClosedLoopSim/bandCandidateStore";
-// Semantic colour roles, defined once in the deployment module and imported so the two pages agree.
-import PAL from "views/Reports/ClosedLoopSim/palette";
+import CalibrationInEffectPanel from "./CalibrationInEffectPanel";
+import ElectrodeIdentifierPanel from "./ElectrodeIdentifierPanel";
+// Colours, type sizes and card style: the shared tokens (the redesign of 2026-09-26).
+import { T, TYPE, LAYOUT } from "assets/theme/base/tokens";
+import PageHead from "views/Reports/paper/PageHead";
+import Section, { SectionRevealedContext } from "views/Reports/paper/Section";
+import useDocumentTitle from "views/Reports/paper/useDocumentTitle";
+import { useStudyCode } from "views/Reports/paper/studyCode";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 
 import { SessionController } from "database/session-control";
-import { MODULES } from "database/resultCache";
+import { MODULES, memoryInfo, underMemoryPressure } from "database/resultCache";
 import { useCachedResult } from "database/useCachedResult";
 import { usePlatformContext, setContextState } from "context.js";
 
 import RecomputeBar from "views/Reports/RecomputeBar";
-import { markClosedLoopFamilyStale } from "views/Reports/moduleCacheKeys";
+import CacheStatusLine from "views/Reports/CacheStatusLine";
+import { recomputeSlots, biomarkerHeatmapSlot } from "views/Reports/moduleCacheKeys";
+import { ControlAnalysesSection } from "views/Reports/ControlAnalyses/ControlAnalysesCard";
+import { PAIN_SCORE_OPTIONS } from "views/Reports/painScores";
 
 // Pain metric the LFP biomarker is computed against (sent as LabelMetric). Used until the server
-// echoes its own `available_metrics` list. The composite blends MPQ sum + left-leg VAS.
-const DEFAULT_METRIC_OPTIONS = [
-  { key: "nrs", label: "NRS (0–10)" },
-  { key: "vas", label: "Overall VAS" },
-  { key: "left_leg_vas", label: "Left Leg VAS" },
-  { key: "back_vas", label: "Back VAS" },
-  { key: "mpq_sum", label: "MPQ Sum" },
-  { key: "composite_mpq_leftleg", label: "Composite (MPQ + Left Leg VAS)" },
-];
+// echoes its own `available_metrics` list. The composite blends MPQ sum + left-leg VAS. One list
+// for this page and the Closed-Loop page's pain-score dropdown (2026-09-25 night).
+const DEFAULT_METRIC_OPTIONS = PAIN_SCORE_OPTIONS;
 
-// Participant-specific motivating examples are maintained outside source control.
+// The page's sections are the shared `paper/Section` (taste audit C6, 2026-09-26): white, a 1 px
+// hairline border, no shadow, 24 px padding; never a card inside a card. The Background heading
+// keeps this title style, and its items are plain rows under it, not cards (C12).
+const SECTION_TITLE_SX = { ...TYPE.title, color: T.ink, m: 0 };
+const NOTE_SX = { ...TYPE.body, color: T.ink3, display: "block" };
+
+// How the continuous pain score is turned into the binary high/low pain_level the detector trains
+// on (sent as LabelStrategy). "tertile" (default) splits low/high and drops the ambiguous middle —
+// "median" keeps every day at a 50/50 split; "kmeans" is the
+// legacy 2-cluster notebook labeler. The cut is computed on the DAILY PRO distribution and
+// broadcast to samples, so recording density no longer biases the split.
 const DEFAULT_STRATEGY_OPTIONS = [
-  { key: "tertile", label: "Tertile (low/high, drop middle)" },
+  { key: "tertile", label: "Lowest and highest thirds (middle left out)" },
   { key: "percentile", label: "Percentile (adjustable cuts)" },
   { key: "median", label: "Median split" },
-  { key: "kmeans", label: "KMeans (legacy)" },
+  { key: "kmeans", label: "Two clusters (older rule)" },
 ];
 
 // Debounce a fast-changing value for the EXPENSIVE live recompute. Dragging any of the matching
@@ -87,16 +106,20 @@ function useDebounced(value, delay = 250) {
   return debounced;
 }
 
+/** The browser tab says the page's question (taste audit C7, 2026-09-26). */
+export const DOCUMENT_TITLE = "Biomarkers exploration";
+
 function Biomarkers() {
-  const queryAnalysis = useAnalysisQuery();
   const navigate = useNavigate();
+  useDocumentTitle(DOCUMENT_TITLE);
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
   const { participant_uid } = useParams();
 
   // Persisted controls for THIS participant (localStorage), read once so the state defaults below
   // restore the exact panel config the user left when they navigated to the deployment view. null
-  // on first-ever visit -> the documented defaults apply. Results always come from the server.
+  // on first-ever visit -> the documented defaults apply. The heavy ~19 MB result is restored
+  // separately from the in-memory cache (see the hydration effect), never from localStorage.
   const persisted = useMemo(() => loadControls(participant_uid), [participant_uid]);
   const P = persisted || {};
 
@@ -107,55 +130,77 @@ function Biomarkers() {
   // Source tabs (time-domain / power-domain / both) removed — the analysis is always unified
   // (time-domain streaming PSD + power-domain band power together). One code path, no tab.
   const source = "both";
-  const [metric, setMetric] = useState(P.metric || "nrs");
-  const [strategy, setStrategy] = useState(P.strategy || "tertile");   // binarization labeler (default tertile)
-  const [percentileLow, setPercentileLow] = useState(P.percentileLow != null ? P.percentileLow : 33.3);   // tertile/percentile low cut
-  const [percentileHigh, setPercentileHigh] = useState(P.percentileHigh != null ? P.percentileHigh : 66.7);  // tertile/percentile high cut
-// Participant-specific motivating examples are maintained outside source control.
-  const [matchTolerance, setMatchTolerance] = useState(P.matchTolerance != null ? P.matchTolerance : 60);
+  // Every control's default comes from one block, `matchingDefaults.js`, which carries the server's
+  // own defaults (`sweep_settings.py`) and is pinned to them by a test (decision 331).
+  const [metric, setMetric] = useState(P.metric || D.metric);
+  // The status sentence and list the page head prints, read off the heat-map grid (SPEC.md
+  // section 5.1 item 1); null until the grid has arrived.
+  const [gridStatus, setGridStatus] = useState(null);
+  // The de-identified study code for the line under the title; null when the record carries none.
+  const participantCode = useStudyCode(participant_uid);
+  const [strategy, setStrategy] = useState(P.strategy || D.strategy);   // binarization labeler
+  const [percentileLow, setPercentileLow] = useState(P.percentileLow != null ? P.percentileLow : D.percentileLow);   // tertile/percentile low cut
+  const [percentileHigh, setPercentileHigh] = useState(P.percentileHigh != null ? P.percentileHigh : D.percentileHigh);  // tertile/percentile high cut
+  // PRO<->PSD match window (minutes): a streaming/PSD session is matched to the nearest pain
+  // report whose timestamp falls within ± this many minutes. Drives the matched-neural-sample
+  // counts (computed on the PSDs by the backend) and is a compute param, so changing it makes the
+  // view dirty (a recompute re-matches). Exploratory — default 15 min.
+  // The default window is 15 minutes either side since decision 331 (the PI, 2026-09-26, on the
+  // tablet-clock measurement: 60 added almost nothing real and tripled the chance matches); it was
+  // 60 from 2026-06-28. A viewer's saved 5 or 60 from before is moved to 15 once
+  // (`biomarkerStateStore.migrateControls`); after that their own choice is kept.
+  const [matchTolerance, setMatchTolerance] = useState(P.matchTolerance != null ? P.matchTolerance : D.matchTolerance);
+  // Debounced copy, declared here because the availability fetch above the scan model reads it.
+  const matchToleranceD = useDebounced(matchTolerance);
   // Per-rating CAP for the exploratory scan (replaces the old all-vs-one-per-rating toggle, which
   // it subsumes): how many PSDs a single pain rating may absorb PER CHANNEL, and the refractory gap
   // (minutes) enforced among the kept set so a streaming burst around one survey can't double-count.
   //   maxPerRating = 1  -> one PSD per rating (the old "one per rating": maximally independent)
-  //   maxPerRating > 1  -> up to N nearest-prior PSDs per rating; AUC stays rating-grouped on top.
-  // Matching is PRIOR-only (forecasting): each rating is paired with PSDs recorded BEFORE it.
-  const [maxPerRating, setMaxPerRating] = useState(P.maxPerRating != null ? P.maxPerRating : 3);
-  const [refractoryMin, setRefractoryMin] = useState(P.refractoryMin != null ? P.refractoryMin : 2);
-  // Match direction: "prior" (forecasting — PSD must precede the rating) vs "nearest" (symmetric ±
-  // tolerance; pairs the closest PSD in either time direction). Default "prior".
-  // Match direction: pro_first (default for discovery) walks PROs and claims up to max_per_rating
-  // PSDs per channel each within tolerance, maximizing PRO coverage (each PRO is an independent
-  // observation, so this is the right framing for discovery). 'nearest' is PSD-first symmetric.
-  // 'prior' is PSD-first forecasting (PSD must precede the PRO), kept for the threshold-deployment
-  // view where causal direction is the right semantics.
-  const [matchDirection, setMatchDirection] = useState(P.matchDirection || "pro_first");
+  //   maxPerRating > 1  -> up to N nearest PSDs per rating; AUC stays rating-grouped on top.
+  const [maxPerRating, setMaxPerRating] = useState(P.maxPerRating != null ? P.maxPerRating : D.maxPerRating);
+  const [refractoryMin, setRefractoryMin] = useState(P.refractoryMin != null ? P.refractoryMin : D.refractoryMin);
+  // Match direction: "nearest" (each sample pairs with the closest report, either side), "pro_first"
+  // (each report claims up to max_per_rating samples per channel within the window, either side;
+  // the minimum gap is not applied) or "prior" (a sample must precede its report, the causal
+  // reading the threshold-deployment view uses). Default "nearest" since decision 331 (was "pro_first"): either side of the report, and the one
+  // under which the minimum gap applies, so a report never keeps two overlapping pieces of one press.
+  const [matchDirection, setMatchDirection] = useState(P.matchDirection || D.matchDirection);
   // Cache-based LSB matching is now the ONLY path (PI 2026-06-28; the legacy real-time recompute is
   // retired). The spectral scan's per-rating LSB spectrum is built by matching each pain rating against
   // the pre-computed match-agnostic raw 3 s-tile LSB cache, using TWO windows:
   //   • the MAIN match-tolerance slider (matchTolerance, minutes) = eligibility radius for BOTH TD & PSD;
   //   • matchExtentSec = how many SECONDS of the nearest time-domain signal to aggregate (nearest
   //     round(matchExtentSec/3) of the 3 s tiles -> their median). PSD has no quantity cap.
-  // useLiveMatching is pinned true (kept only as the request flag the backend still echoes).
-  const [useLiveMatching] = useState(true);
-  const [matchExtentSec, setMatchExtentSec] = useState(P.matchExtentSec != null ? P.matchExtentSec : 30);
-  const [allowWindowReuse, setAllowWindowReuse] = useState(P.allowWindowReuse != null ? P.allowWindowReuse : false);
+  // `useLiveMatching` (previously pinned true with no UI control) is gone: it was a request field
+  // the backend read once and only ever echoed back, never branched on — removed rather than wired
+  // up, since there was no live behavior to give a knob to.
+  const [matchExtentSec, setMatchExtentSec] = useState(P.matchExtentSec != null ? P.matchExtentSec : D.matchExtentSec);
+  const [allowWindowReuse, setAllowWindowReuse] = useState(P.allowWindowReuse != null ? P.allowWindowReuse : D.allowWindowReuse);
+  // Decision 186: the clinic and at-home testing sheets' scores pooled into the heat maps as extra
+  // ratings. OFF by default -- those scores were taken while current was being stepped on purpose.
+  const [includeClinicSheetRatings, setIncludeClinicSheetRatings] = useState(
+    P.includeClinicSheetRatings != null ? P.includeClinicSheetRatings : D.includeClinicSheetRatings);
   // Timeline color mode: "multimodal" colors the neural lanes by sensing center frequency (the data
   // view); "binarization" recolors every modality LIVE by its high/low/excluded pain label at the
   // current match window (matched-and-included = vermillion/blue, everything else dimmed light grey),
   // so the user sees exactly which samples feed the binarized biomarker. Toggle sits on the timeline.
   const [timelineColorMode, setTimelineColorMode] = useState(P.timelineColorMode || "multimodal");
+  // Whether the research-checks fold at the foot of the page has ever been opened: the checks are
+  // asked for from then on, not on page load (speed-up item C8, 2026-10-02).
+  const [checksOpened, setChecksOpened] = useState(false);
   const slidingWindow = false;   // sliding-window analysis removed — always all-data, one threshold
   // The biomarker is EXPENSIVE (full-resolution detector over ~300k rows), so it is computed only
   // when the user clicks "Compute biomarker now" — never automatically on a settings change. This
-  // holds the snapshot of options actually computed. Restore it to identify retained results;
-  // the server validates access/data identity before reuse. Missing results require a fresh click.
-  const [requestParams, setRequestParams] = useState(
-    (persisted && persisted.requestParams) || null);
+  // holds the snapshot of options actually computed; the fetch effect runs only when it changes.
+  // Restore the last-computed requestParams so a return visit isn't "dirty" and the results show
+  // without re-clicking Compute. If the in-memory heavy cache is fresh we already seeded `data`, so
+  // the fetch effect short-circuits (cache hit); otherwise this drives the auto-recompute.
+  const [requestParams, setRequestParams] = useState(() => (persisted && persisted.requestParams) || null);
   // There is no `computing` state either: whether a request is in flight is the shared cache hook's
   // answer to give, and a local copy could only ever disagree with it.
   const [alert, setAlert] = useState(null);
 
-  // Cleaned pain-score distribution for the LIVE binarization preview card. Fetched once per
+  // Raw pain-score distribution for the LIVE binarization preview card. Fetched once per
   // participant (lightweight — daily PRO survey rows only, no LFP); the card recomputes the
   // high/low cuts client-side as the user changes strategy or drags the percentile sliders,
   // so no /queryBiomarkerAnalysis roundtrip is needed for the preview.
@@ -170,17 +215,6 @@ function Biomarkers() {
   const [availData, setAvailData] = useState(null);
   const [availLoading, setAvailLoading] = useState(false);
 
-  // The band candidate committed for THIS participant, if any. It is the envelope the commit button
-  // in BiomarkerAnalytics writes to localStorage, and it carries the contact, centre frequency and
-  // bandwidth that the relocated PsdLsbPanel needs in order to fit a conversion for the band on
-  // screen. It is read here rather than inside the panel because localStorage is not observable
-  // from React: the value is re-read on a participant change and again whenever a commit happens
-  // (see onBandCommitted below), so committing a band updates the panel without a page reload.
-  const [committedBand, setCommittedBand] = useState(null);
-  useEffect(() => {
-    const env = loadBandCandidate(participant_uid);
-    setCommittedBand((env && env.band_candidate) || null);
-  }, [participant_uid]);
 
   const snapshot = () => ({
     source, LabelMetric: metric, LabelStrategy: strategy,
@@ -189,15 +223,18 @@ function Biomarkers() {
     MaxPerRating: maxPerRating,
     RefractoryMin: refractoryMin,
     MatchDirection: matchDirection,
-    UseLiveMatching: useLiveMatching,
     MatchExtentSec: matchExtentSec,
     AllowWindowReuse: allowWindowReuse,
+    // The clinic-sheet switch reaches the all-band scan the same way it reaches the heat maps (the
+    // PI, 2026-09-27): on, the clinic and at-home sheets' ratings for the chosen score are added;
+    // off, home surveys only. Moving the switch now marks this stale, like any other setting.
+    IncludeClinicSheetRatings: includeClinicSheetRatings,
     SlidingWindow: slidingWindow,
   });
   /**
    * ASKING FOR A REBUILD, WHICH TAKES MORE THAN SETTING THE REQUEST.
    *
-   * This page never computes automatically. A changed settings
+   * The shared cache fetches on its own only when it is holding nothing at all. A changed settings
    * key does NOT start a request: it marks the stored result stale and leaves it on screen, which is
    * the whole point of the change. So this button cannot work by publishing a new snapshot and
    * waiting — the new key would miss the stored entry, the previous result would be handed back
@@ -210,9 +247,31 @@ function Biomarkers() {
    */
   const [computeRequests, setComputeRequests] = useState(0);
   const servicedComputeRequests = useRef(0);
+  // THE MATCHING SETTINGS OF THE LAST RUN, for the Closed-Loop page to inherit (decision 331): a
+  // press of Recompute records every setting it ran with; a heat-map grid built and shown as current
+  // (the first visit's automatic build, or a new pain score's grid) records the settings it ran
+  // with, keeping the cap, gap and TD length of the last Recompute (or the defaults before one),
+  // which the grid does not read. Saved with the controls; `loadMatchingRun` reads it.
+  const [matchingRun, setMatchingRun] = useState(P.matchingRun || null);
+  const runSettings = () => ({
+    LabelMetric: metric, LabelStrategy: strategy,
+    PercentileLow: percentileLow, PercentileHigh: percentileHigh,
+    MatchToleranceMin: matchTolerance, MatchDirection: matchDirection,
+    AllowWindowReuse: allowWindowReuse, MaxPerRating: maxPerRating, RefractoryMin: refractoryMin,
+    MatchExtentSec: matchExtentSec, IncludeClinicSheetRatings: includeClinicSheetRatings,
+  });
   const compute = () => {
+    setMatchingRun({ settings: runSettings(), ranAt: Date.now() });
     setRequestParams(snapshot());
     setComputeRequests((n) => n + 1);
+    // The calibrated heat-map grid (BiomarkerHeatmapGrids) is a SEPARATE cache family from the
+    // older scan above -- one slot per pain-score metric, so that a metric already viewed stays
+    // cached instead of evicting the last one (see moduleCacheKeys.js). This was the page's SECOND
+    // Recompute-shaped control (the other was a page-specific button, now removed) -- both used to
+    // call this same function but neither actually touched the calibrated grid's own fetch, which
+    // ran independently. Now the one remaining control covers both.
+    recomputeSlots(participant_uid,
+      DEFAULT_METRIC_OPTIONS.map((m) => biomarkerHeatmapSlot(m.key)));
   };
   // "Dirty" = the live options differ from what's currently displayed (or nothing computed yet),
   // so the shown results are stale and a (re)compute is needed.
@@ -221,14 +280,11 @@ function Biomarkers() {
   //  • main match-tolerance slider = eligibility radius (how FAR from a rating a window may be);
   //  • TD-signal slider (matchExtentSec) = how MUCH of the nearest time-domain signal to use.
   const tdEpochs = Math.max(1, Math.round(matchExtentSec / 3));
-  const reuseNote = allowWindowReuse
-    ? "Window reuse is ON: a window may serve several overlapping ratings, raising n at the cost of independence."
-    : "No LSB window is shared between ratings, so each rating is one independent observation of the cache.";
   const liveMatchCaption =
-    `PSD-bridge LSB for a rating = median over every device-PSD event within the main match tolerance `
-    + `(\u00b1${matchTolerance} min). Time-domain LSB = median over the nearest ${tdEpochs} of the 3 s `
-    + `tiles (\u2248${matchExtentSec} s of signal) within that same tolerance — the TD slider sets how `
-    + `much signal to use, not how far to search. ` + reuseNote;
+    `A rating's PSD value is the median over every PSD within the match window `
+    + `(\u00b1${matchTolerance} min). Its TD value is the median over the nearest ${tdEpochs} of the 3 s `
+    + `pieces (\u2248${matchExtentSec} s of signal) within that same window: this slider sets how much signal `
+    + `is used, not how far to search.`;
 
   useEffect(() => {
     if (!participant_uid) {
@@ -242,8 +298,10 @@ function Biomarkers() {
   //
   // `enabled` is what preserves the rule this page has always followed: nothing is computed until
   // the reader asks for it. Until a compute has been requested — this session, or in a previous one
-  // whose request was restored from localStorage above — no scientific job starts on mount.
-  // The hook validates and restores a retained result; Start/Recompute explicitly requests a build.
+  // whose request was restored from localStorage above — the hook is switched off and issues no
+  // request at all. Once a request exists, the hook's ordinary behaviour is exactly what is wanted:
+  // serve the stored bundle if there is one, fetch once if there is not, and never refetch behind
+  // the reader's back.
   const cached = useCachedResult({
     moduleKey: MODULES.biomarkers,
     uid: participant_uid,
@@ -252,8 +310,7 @@ function Biomarkers() {
     // sent to the server, so the key cannot describe a different request from the one that ran.
     settings: requestParams,
     enabled: !!participant_uid && !!requestParams,
-    autoFetch: false,
-    fetcher: () => queryAnalysis("/api/queryBiomarkerAnalysis", {
+    fetcher: () => SessionController.query("/api/queryBiomarkerAnalysis", {
       ParticipantId: participant_uid, ...requestParams,
     }).then((response) => response.data),
   });
@@ -262,18 +319,23 @@ function Biomarkers() {
   const data = cached.data || false;
   const computing = cached.loading;
 
-  // Preserve the transport error so authorization failures retain their status.
+  // Errors used to be raised from the fetch's own catch. The hook catches them instead and reports
+  // the message, so the dialog is raised from here. Note what is lost in the handover: the hook
+  // stringifies the error, so the response status is gone by the time it arrives and the dialog
+  // shows the transport's own message rather than this application's wording for a 403 or a 500.
+  // The report accompanying this change asks for the error object to be carried alongside the
+  // message for that reason.
   useEffect(() => {
-    if (cached.errRaw) SessionController.displayError(cached.errRaw, setAlert);
-  }, [cached.errRaw]);
+    if (cached.err) SessionController.displayError(cached.err, setAlert);
+  }, [cached.err]);
 
   // The rebuild the Compute button asked for. See `compute` above for why it is a counter rather
   // than a direct call.
   useEffect(() => {
     if (computeRequests === servicedComputeRequests.current) return;
     servicedComputeRequests.current = computeRequests;
-    cached.recompute();
-  }, [computeRequests, participant_uid, cached.recompute]);
+    recomputeSlots(participant_uid, [MODULES.biomarkers]);
+  }, [computeRequests, participant_uid]);
 
   /**
    * WHAT MAKES THIS PAGE'S RESULT STALE, WHICH IS MORE THAN THE CACHE CAN SEE BY ITSELF.
@@ -286,74 +348,99 @@ function Biomarkers() {
    * control, and the drift case is worded as a full sentence in the same register as the store's own
    * reasons so that a reader is not left to work out which of two vocabularies they are reading.
    */
-  const controlsDrifted = !!(requestParams && dirty);
+  // THE PAIN SCORE IS NOT A REASON TO RECOMPUTE (the PI, 2026-10-02): every score's heat maps are
+  // fetched and kept, and the last scan's settings fold names the score it ran for, so the Recompute
+  // control compares everything EXCEPT the score. `dirty` above still includes it, for the
+  // binarization preview, whose live numbers are for the score on screen.
+  const withoutScore = (o) => JSON.stringify({ ...o, LabelMetric: undefined });
+  const controlsDrifted = !!(requestParams && withoutScore(requestParams) !== withoutScore(snapshot()));
+  // The heat maps are a second result on this page, rebuilt by the same Recompute. The grid says
+  // when the one on screen was computed under other settings (or before a server restart), so the
+  // control turns for it too, even before any all-band scan has been run (review of 2026-09-26).
+  const [heatmapStale, setHeatmapStale] = useState({ stale: false, reasons: [] });
   const pageStaleReasons = Array.from(new Set([
     ...(cached.staleReasons || []),
+    ...(heatmapStale.stale ? heatmapStale.reasons : []),
     ...(controlsDrifted
       ? ["the controls on this page have been changed since this analysis was computed, so what is "
-         + "shown still describes the previous metric, binarization or matching window"]
+         + "shown still describes the previous high / low split or matching settings"]
       : []),
   ]));
 
   // Persist the lightweight control panel + the last-computed requestParams to localStorage whenever
   // they change, so navigating to the deployment view and back (or a hard reload) restores the exact
-  // view config. The shared cache verifies permission and dataset/QC identity before reuse.
+  // view config. This is the small, always-safe layer; the heavy result rides the in-memory cache.
   useEffect(() => {
     if (!participant_uid) return;
     saveControls(participant_uid, {
       metric, strategy, percentileLow, percentileHigh, matchTolerance,
       maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams,
+      matchExtentSec, allowWindowReuse, includeClinicSheetRatings, matchingRun,
     });
   }, [participant_uid, metric, strategy, percentileLow, percentileHigh, matchTolerance,
-    maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams]);
+    maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams,
+    matchExtentSec, allowWindowReuse, includeClinicSheetRatings, matchingRun]);
 
-  // Fetch cleaned pain-score reports ONCE per participant (no LFP, just the PRO surveys) so the
+  // Fetch raw pain-score reports ONCE per participant (no LFP, just the PRO surveys) so the
   // binarization preview card can show a live histogram with cuts before any heavy compute.
   useEffect(() => {
     if (!participant_uid) return;
-    setPainScores(null);
     setPainLoading(true);
-    queryAnalysis("/api/queryPainScores", { ParticipantId: participant_uid })
+    // With the clinic-sheet switch on, the sheets' ratings too, flagged `sheet` (decision 436).
+    SessionController.query("/api/queryPainScores",
+      { ParticipantId: participant_uid, IncludeClinicSheetRatings: includeClinicSheetRatings })
       .then((response) => {
         setPainScores(response.data);
         setPainLoading(false);
       })
       .catch(() => { setPainLoading(false); /* preview is optional — degrade silently */ });
-    return () => queryAnalysis.cancel("/api/queryPainScores");
-  }, [participant_uid]);
+  }, [participant_uid, includeClinicSheetRatings]);
 
-  // Fetch the data-availability payload ONCE per participant (lightweight, no biomarker compute),
-  // so the timeline renders immediately on page load.
+
+  // THE ACQUISITION TIMELINE (decision 216): the participant and nothing else. The endpoint carries
+  // nothing derived from a pain report, so it never refetches for a new report or a slider; the
+  // per-report circles it used to draw (decision 120's window, then the histogram's) are gone.
   useEffect(() => {
     if (!participant_uid) return;
-    setAvailData(null);
     setAvailLoading(true);
-    queryAnalysis("/api/queryDataAvailability", { ParticipantId: participant_uid })
+    SessionController.query("/api/queryDataAvailability", { ParticipantId: participant_uid })
       .then((response) => {
         setAvailData(response.data);
         setAvailLoading(false);
       })
       .catch(() => { setAvailLoading(false); /* timeline is optional — degrade silently */ });
-    return () => queryAnalysis.cancel("/api/queryDataAvailability");
   }, [participant_uid]);
 
-  // The object handed to the timeline: prefer the live availability payload; fall back to the
-  // availability embedded in a heavy compute result if the live fetch is unavailable.
-  const timelineData = (availData && availData.availability && availData.availability.records
-    && availData.availability.records.length > 0)
-    ? availData
-    : data;
+  // THE RATING-CENTRED SAMPLE INDEX, its own small fetch (decision 216): what the Binarization
+  // card below the timeline and the timeline's binarization colour mode read. Keyed on the server
+  // by the recording set and the report digest; refetched here when the metric changes.
+  const [scanIndexData, setScanIndexData] = useState(null);
+  useEffect(() => {
+    if (!participant_uid) return;
+    SessionController.query("/api/queryPsdScanIndex", { ParticipantId: participant_uid, LabelMetric: metric,
+      IncludeClinicSheetRatings: includeClinicSheetRatings })
+      .then((response) => setScanIndexData((response && response.data) || null))
+      .catch(() => setScanIndexData(null));
+  }, [participant_uid, metric, includeClinicSheetRatings]);
+
+  // The object handed to the timeline: the acquisition-timeline endpoint's own payload. Until
+  // 2026-09-21 (decision 226) the Compute response carried a second copy of it as a fallback; a
+  // failed timeline request now shows as one instead of drawing from Compute.
+  const timelineData = availData;
 
   // The points array for the currently-selected pain metric, fed straight into the preview card.
   // The composite metric ("composite_mpq_leftleg") is NOT a raw PRO column returned by
   // /queryPainScores; it is synthesized here exactly as the backend does — the per-day average of
   // z(MPQ-sum) and z(left-leg-VAS) across all surveys, keeping a day when either part exists.
-  const previewPoints = (() => {
+  // Memoised (2026-10-01): for the composite this builds a NEW array, and a new array on every
+  // render re-ran `painSeriesLive`, the matched-scan model and the timeline on every slider tick.
+  const previewPoints = useMemo(() => {
     if (!painScores || !Array.isArray(painScores.metrics)) return [];
     if (metric === "composite_mpq_leftleg") {
       const get = (k) => {
         const m = painScores.metrics.find((x) => x.key === k);
-        return m ? m.points : [];
+        // the sheets carry no MPQ, so the server adds none to the composite (decision 436)
+        return m ? m.points.filter((p) => !p.sheet) : [];
       };
       const zStats = (pts) => {
         const vs = pts.map((p) => p.v).filter((v) => v != null && Number.isFinite(v));
@@ -389,7 +476,7 @@ function Biomarkers() {
     }
     const m = painScores.metrics.find((x) => x.key === metric);
     return m ? m.points : [];
-  })();
+  }, [painScores, metric]);
   const previewMetricLabel = (((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
     .find((m) => m.key === metric) || {}).label || metric;
 
@@ -422,13 +509,11 @@ function Biomarkers() {
   // histogram (which neural data is available to binarize, updating as the slider moves) AND the
   // timeline's binarization color overlay. Counts are verified identical to the backend
   // `matched_sample_counts`. Memoized so dragging an unrelated control doesn't rebuild it.
-  const scanIndex = (timelineData && timelineData.availability && timelineData.availability.psd_scan_index)
-    || (data && data.availability && data.availability.psd_scan_index) || null;
+  const scanIndex = (scanIndexData && scanIndexData.psd_scan_index) || null;
   // Debounced copies of every slider-driven input to the heavy matched-scan recompute. The raw
   // states stay live everywhere else (slider thumbs, value labels, the binarization preview's
   // cut-lines and counts); only the expensive scanModel + timeline overlay wait for the drag to
   // settle, so all of these sliders now feel as snappy as the survey-match one.
-  const matchToleranceD = useDebounced(matchTolerance);
   const percentileLowD = useDebounced(percentileLow);
   const percentileHighD = useDebounced(percentileHigh);
   const maxPerRatingD = useDebounced(maxPerRating);
@@ -443,650 +528,486 @@ function Biomarkers() {
     });
   }, [scanIndex, painSeriesLive, matchToleranceD, strategy, percentileLowD, percentileHighD,
       maxPerRatingD, refractoryMinD, matchDirection, allowWindowReuse]);
+  // The coverage sentence at the top of the Binarization card (the PI, 2026-09-21): follows the
+  // window slider live, from the same two inputs the model reads.
+  const reportCoverageLive = useMemo(() => {
+    const c = reportCoverage({ scanIndex, painSeries: painSeriesLive, toleranceMin: matchTolerance });
+    // how many of the reports are clinic-sheet ratings (decision 436)
+    return c && { ...c, n_clinic: previewPoints.filter((p) => p && p.sheet).length };
+  }, [scanIndex, painSeriesLive, matchTolerance, previewPoints]);
 
-  // Render an honest, multi-line summary for a branch: the headline estimate plus the rigor
-  // statistics (FDR q, permutation p, autocorrelation-adjusted effective n, Fisher-z CI for the
-  // time domain; balanced accuracy vs chance + AUC for the power domain) and any caveats.
-  // [removed] summaryLine() — the legacy Time-/Power-domain dual-pipeline prose summary it
-  // generated was replaced by the concise per-channel matched-sample + TD/PSD-LSB summary
-  // rendered inline below the Recompute button (see the spectral_feature_importance block).
+  // TRACK A, TASK A1: THE CALIBRATED GRID'S OWN REQUEST, BUILT FROM THE LIVE CONTROLS.
+  //
+  // `requestParams` above is a SNAPSHOT that only exists once Recompute has been pressed. The heat
+  // maps are handed this object instead, built from the controls as they stand, so a first visit
+  // computes a grid with no button press. After that the shared cache does NOT rebuild the grid
+  // when a control moves: it keeps the grid on screen, marked stale, the grid says which settings
+  // moved, and the page's Recompute rebuilds it (review of 2026-09-26). The debounced slider copies
+  // keep a drag from turning the grid stale and back once per pixel.
+  //
+  // ONLY WHAT THE GRID READS. The cap per report, the gap between kept samples and the TD length
+  // are not sent: the heat-map sweep reads none of them (`band_time_sweep_for_participant`), and
+  // sending them only changed the request's key, so moving one marked the grid stale and fetched
+  // every other pain score again for an identical answer (review of 2026-09-26, finding 3).
+  const heatmapRequestParams = useMemo(() => ({
+    source, LabelMetric: metric, LabelStrategy: strategy,
+    PercentileLow: percentileLowD, PercentileHigh: percentileHighD,
+    MatchToleranceMin: matchToleranceD,
+    MatchDirection: matchDirection,
+    AllowWindowReuse: allowWindowReuse,
+    IncludeClinicSheetRatings: includeClinicSheetRatings,
+    SlidingWindow: slidingWindow,
+  }), [source, metric, strategy, percentileLowD, percentileHighD, matchToleranceD, matchDirection,
+      allowWindowReuse, includeClinicSheetRatings]);
+
+  // A heat-map grid built and shown as current is a run of these settings (see `matchingRun`).
+  useEffect(() => {
+    if (!gridStatus || heatmapStale.stale) return;
+    const h = heatmapRequestParams;
+    setMatchingRun((prev) => {
+      const ps = (prev && prev.settings) || {};
+      const rp = requestParams || {};
+      const kept = (key, fallback) => (ps[key] != null ? ps[key]
+        : (rp[key] != null ? rp[key] : fallback));
+      const next = {
+        LabelMetric: h.LabelMetric, LabelStrategy: h.LabelStrategy,
+        PercentileLow: h.PercentileLow, PercentileHigh: h.PercentileHigh,
+        MatchToleranceMin: h.MatchToleranceMin, MatchDirection: h.MatchDirection,
+        AllowWindowReuse: h.AllowWindowReuse, IncludeClinicSheetRatings: h.IncludeClinicSheetRatings,
+        MaxPerRating: kept("MaxPerRating", D.maxPerRating),
+        RefractoryMin: kept("RefractoryMin", D.refractoryMin),
+        MatchExtentSec: kept("MatchExtentSec", D.matchExtentSec),
+      };
+      const same = Object.keys(next).every((k) => String(ps[k]) === String(next[k]));
+      return same ? prev : { settings: next, ranAt: Date.now() };
+    });
+  }, [gridStatus, heatmapStale.stale, heatmapRequestParams]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // [removed] summaryLine() — the legacy Time-/Power-domain dual-pipeline prose summary — and,
+  // on 2026-09-15 (referent audit, item 7), the per-channel high/low/excluded count block that
+  // replaced it: that block read a field the backend stopped computing at decision 77, so it had
+  // drawn nothing since. The calibrated heat maps below carry the matched-report counts now.
+
+  const TOGGLE_SX = { "& .MuiToggleButton-root": { textTransform: "none", ...TYPE.body, py: 0.5, px: 1.25 } };
+  const metricOptions = (timelineData && timelineData.available_metrics)
+    || (data && data.available_metrics) || DEFAULT_METRIC_OPTIONS;
+
+  // The clinic-sheet switch sits with the match window and the split (SPEC.md section 5.1 item 3);
+  // the other four matching settings go under "More options".
+  const clinicSheetControl = (
+    <MDBox>
+      <ControlLabel note={includeClinicSheetRatings
+          ? "Adds clinic scores taken while current was stepped; not more independent evidence."
+          : "The heat maps use the home pain surveys only."}>
+        {"Clinic sheet scores"}
+      </ControlLabel>
+      <ToggleButtonGroup
+        value={includeClinicSheetRatings ? "include" : "exclude"} exclusive size="small"
+        aria-label="clinic sheet scores in the heat maps"
+        onChange={(e, v) => { if (v) setIncludeClinicSheetRatings(v === "include"); }}
+        sx={TOGGLE_SX}
+      >
+        <ToggleButton value="exclude" title="Home pain surveys (REDCap) only">Home surveys only</ToggleButton>
+        <ToggleButton value="include" title="Also pool clinic and at-home sheet scores (verbal 0–10; ×10 for VAS). Taken while current was stepped, so treat the larger n with care">+ clinic titration sessions</ToggleButton>
+      </ToggleButtonGroup>
+    </MDBox>
+  );
+
+  const moreOptions = (
+    <MDBox sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+                 columnGap: 3, rowGap: 2 }}>
+      {/* The cap per rating, and the minimum gap between the samples it keeps. */}
+      <MDBox>
+        <ControlLabel note={`${maxPerRating > 1 ? "Rating value: median of its closest readings." : "One closest reading per pair."}`
+            + " Applies to the all-band scan, high/low preview and Closed-Loop summary; not the heat maps."}>
+          {`Samples per pain rating, at most: ${maxPerRating}`}
+        </ControlLabel>
+        <MDBox px={0.5}>
+          <Slider
+            value={maxPerRating} min={1} max={10} step={1}
+            marks valueLabelDisplay="auto" size="small"
+            aria-label="samples per pain rating, at most"
+            onChange={(e, v) => setMaxPerRating(v)} />
+        </MDBox>
+      </MDBox>
+
+      <MDBox>
+        <ControlLabel note={`${matchDirection === "pro_first"
+            ? "Unused when each report picks its recordings."
+            : maxPerRating <= 1
+            ? "Unused at one reading per rating."
+            : "Stops a burst of readings dominating a rating."}`
+            + " Applies to the all-band scan, high/low preview and Closed-Loop summary; not the heat maps."}>
+          {`Minimum gap between the samples one rating keeps: ${refractoryMin} min`}
+        </ControlLabel>
+        <MDBox px={0.5}>
+          <Slider
+            value={refractoryMin} min={0} max={30} step={1}
+            valueLabelDisplay="auto" size="small"
+            aria-label="minimum gap between kept samples (minutes)"
+            disabled={maxPerRating <= 1 || matchDirection === "pro_first"}
+            onChange={(e, v) => setRefractoryMin(v)} />
+        </MDBox>
+      </MDBox>
+
+      {/* How much time-domain signal each rating aggregates. The match window sets how far to
+          search; this sets how much to use. */}
+      <MDBox>
+        <ControlLabel note="Signal used per rating, not search range. Applies to the all-band scan; not the heat maps."
+                      noteTitle={liveMatchCaption}>
+          {`TD around each rating: ${matchExtentSec} s (the nearest ${Math.max(1, Math.round(matchExtentSec / 3))} of the 3 s pieces)`}
+        </ControlLabel>
+        <MDBox px={0.5}>
+          <Slider
+            value={matchExtentSec} min={3} max={300} step={3}
+            valueLabelDisplay="auto" size="small"
+            aria-label="TD around each rating (seconds)"
+            onChange={(e, v) => setMatchExtentSec(v)} />
+        </MDBox>
+      </MDBox>
+
+      <MDBox>
+        <ControlLabel note={allowWindowReuse
+            ? "More ratings enter, but ratings sharing signal are not independent."
+            : "Each rating is one independent observation."}>
+          {"Let one stretch of recording answer more than one report"}
+        </ControlLabel>
+        <ToggleButtonGroup
+          value={allowWindowReuse ? "reuse" : "none"} exclusive size="small"
+          aria-label="window reuse mode"
+          onChange={(e, v) => { if (v) setAllowWindowReuse(v === "reuse"); }}
+          sx={TOGGLE_SX}
+        >
+          <ToggleButton value="none" title="One recording serves its nearest rating only: independent ratings">No</ToggleButton>
+          <ToggleButton value="reuse" title="One recording serves every rating whose window covers it: more ratings, not independent">Yes</ToggleButton>
+        </ToggleButtonGroup>
+      </MDBox>
+
+      {data && data.live_match_stats && (
+        <MDTypography component="span" sx={NOTE_SX}>
+          {lastComputedLine(data.live_match_stats)}
+        </MDTypography>
+      )}
+    </MDBox>
+  );
 
   return (
     <>
       {alert}
       <DatabaseLayout>
-        <MDBox pt={3}>
-          <Grid container spacing={2}>
-            {/* The Recompute control, at the top of the page, above everything it describes.
-                Pressing it runs the analysis against the controls as they stand right now, which is
-                the same act as the red button further down — one code path, so the two cannot
-                disagree about what a recompute means. */}
-            <Grid item xs={12}>
+        <MDBox pt={3} sx={{ maxWidth: LAYOUT.contentMax, mx: "auto", color: T.ink2 }}>
+          {/* 64 px between sections (SPEC 2.5, the PI's D13): each paper/Section carries its own 64 px below it, so the rows add no gap of their own; the head and the recompute bar carry theirs. */}
+          <Grid container columnSpacing={4} rowSpacing={0}>
+            {/* ── HOW THE PAGE OPENS (SPEC.md section 4 rule 1): the question, the pain score it
+                is read on; the status sentence is the heat maps' own answer, read off the grid. */}
+            <Grid item xs={12} sx={{ mb: 4 }}>
+              <MDBox data-testid="grid-status">
+                <PageHead title="Brain signal vs. pain"
+                  participant={participantCode}
+                  painScore={previewMetricLabel}
+                  status={gridStatus ? gridStatus.sentence : null}
+                  items={gridStatus ? gridStatus.items : []}>
+                  {gridStatus ? <RefusalReason pairs={gridStatus.pairs} rule={gridStatus.rule} /> : null}
+                </PageHead>
+              </MDBox>
+              {/* ── THE ONE PAIN-SCORE SELECTOR, FIRST (decision 304; the review's B4) ───────────
+                  It drives the timeline's pain row, the matching card's preview and both heat maps,
+                  so it sits above all of them. A plain outlined select (the red outline is gone,
+                  SPEC.md section 5.1); "Pain score", the word the heat maps and the Closed-Loop page use. */}
+              <MDBox data-testid="pain-score-select" display="flex" flexDirection="row"
+                alignItems="center" gap={2} flexWrap="wrap">
+                <MDTypography component="label" htmlFor="biomarkers-pain-score"
+                  sx={{ ...TYPE.body, fontWeight: 600, color: T.ink }}>
+                  {"Pain score"}
+                </MDTypography>
+                <FormControl size="small" sx={{ minWidth: 280 }}>
+                  <Select value={metric} onChange={(e) => setMetric(e.target.value)}
+                          inputProps={{ id: "biomarkers-pain-score" }}
+                          sx={{ ...promptSelectSx, "& .MuiSelect-select": { ...TYPE.body, color: `${T.ink} !important` } }}>
+                    {metricOptions.map((m) => (
+                      <MenuItem key={m.key} value={m.key} sx={{ ...TYPE.body }}>{m.label}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink3 }}>
+                  {"Every chart below uses this score."}
+                </MDTypography>
+              </MDBox>
+            </Grid>
+
+            {/* The Recompute control (the PI's own RecomputeBar.js, unchanged), and under it ONE fold
+                for what only a developer reads: when the stored results were last built and whether
+                this browser keeps the view in memory (decision 304). */}
+            <Grid item xs={12} sx={{ mb: 8 }}>
               <RecomputeBar
                 title="pain biomarker exploration"
-                stale={!!(cached.stale || controlsDrifted)}
+                stale={!!(cached.stale || controlsDrifted || heatmapStale.stale)}
                 staleReasons={pageStaleReasons}
                 computedAt={cached.computedAt}
                 loading={computing}
                 notKept={cached.notKept}
                 onRecompute={compute}
               />
-            </Grid>
-            <Grid item xs={12}>
-              <Card sx={{ width: "100%" }}>
-                <Grid container>
-                  {/* Title row (source tabs removed — analysis is always unified time + power) */}
-                  <Grid item xs={12}>
-                    <MDBox px={2} pt={2} pb={1} display="flex" flexDirection="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2}>
-                      <MDTypography variant="h5" fontSize={28} fontWeight="bold">
-                        {"Pain Biomarker Exploration"}
+              <MDBox data-testid="developer-details">
+                <Fold show="Stored results, memory" hide="Hide stored results and memory use">
+                  <CacheStatusLine status={data ? data.cache_status : null} loading={!!computing} />
+                  {/* RETENTION STATUS, WHICH HAS THREE ANSWERS. `underMemoryPressure()` returns false
+                      both when the heap is comfortably below the eviction ratio and when the browser
+                      does not expose heap figures at all (`performance.memory` is Chromium-only), so
+                      the measurement is read first and its absence is its own state. */}
+                  {data && !computing ? (() => {
+                    const mi = memoryInfo();
+                    const sx = { ...TYPE.body, display: "block", color: T.ink3 };
+                    if (mi === null) {
+                      return (
+                        <MDTypography variant="caption" sx={sx}>
+                          {"View cached in memory. This browser does not report heap usage, so "
+                           + "whether it survives a return trip cannot be confirmed here."}
+                        </MDTypography>
+                      );
+                    }
+                    if (underMemoryPressure()) {
+                      return (
+                        <MDTypography variant="caption" sx={{ ...sx, color: T.caution }}>
+                          {`\u25b2 Memory tight (${mi.usedMB.toFixed(0)} of ${mi.limitMB.toFixed(0)} MB used): `
+                           + "this view will be recomputed rather than restored on return."}
+                        </MDTypography>
+                      );
+                    }
+                    return (
+                      <MDTypography variant="caption" sx={sx}>
+                        {`View retained in memory (${mi.usedMB.toFixed(0)} of ${mi.limitMB.toFixed(0)} MB used): `
+                         + "it returns without recomputing from the deployment page."}
                       </MDTypography>
-                    </MDBox>
-                  </Grid>
+                    );
+                  })() : null}
+                </Fold>
+              </MDBox>
+            </Grid>
 
-                  {/* ── DATA-AVAILABILITY TIMELINE up front (ALWAYS shown) ────────────────────
-                      For visualization/exploration: rendered on page load from the lightweight
-                      /queryDataAvailability payload (timelineData), with NO "Compute biomarker
-                      now" required. The pain row is driven LIVE by the selected metric
-                      (painSeriesLive) so it updates instantly when the metric picker below
-                      changes. Falls back to the legacy timeline only if no availability payload
-                      is available at all. The Compute button lives BELOW this. */}
+            {/* ── §1 THE CALIBRATED HEAT MAPS, THE HEADLINE (PRD decision 62; SPEC.md section 5.1
+                item 2): "Power–pain heat maps". Runs on page load from the live
+                controls (`heatmapRequestParams`, debounced like the live scan model), never waiting
+                for the older all-band scan. The card is the component's own. */}
+            <Grid item xs={12}>
+              <BiomarkerHeatmapGrids participantUid={participant_uid}
+                requestParams={heatmapRequestParams}
+                availableMetrics={DEFAULT_METRIC_OPTIONS}
+                pageMetric={metric}
+                onStatus={setGridStatus}
+                onStale={setHeatmapStale}
+                metricLabel={(DEFAULT_METRIC_OPTIONS.find((m) => m.key === metric) || {}).label}
+                onOpenInClosedLoop={() => {
+                  // Take the reader to the grid on the page that can act on it. Nothing is
+                  // exported and nothing is marked out of date here: Closed-Loop Deployment reads
+                  // the calibrated grid straight out of the shared store (decision 67); a band is
+                  // committed on that page's "Choose a band" card. `#cl-grid` names the anchor that
+                  // page puts on the grid panel.
+                  navigate(`/reports/closed-loop/${participant_uid}#cl-grid`);
+                }} />
+            </Grid>
+
+            {/* ── §2 "Report–recording pairing" (SPEC.md section 5.1 item 3): the
+                coverage sentence as the answer, the timing histogram as the figure, then one large
+                "Adjust matching parameters" button (closed by default; the PI, 2026-09-26) opening a
+                compact panel with every matching control, the extra options and the high / low split. */}
+            <Grid item xs={12}>
+              <Section id="biomarker-pairing" question="Report–recording pairing">
+                <MDBox>
+                  <MatchWindowBand
+                    coverage={reportCoverageLive}
+                    metricLabel={previewMetricLabel}
+                    matchTolerance={matchTolerance}
+                    setMatchTolerance={setMatchTolerance}
+                    strategy={strategy}
+                    setStrategy={setStrategy}
+                    strategyOptions={DEFAULT_STRATEGY_OPTIONS}
+                    percentileLow={percentileLow}
+                    percentileHigh={percentileHigh}
+                    matchDirection={matchDirection}
+                    setMatchDirection={setMatchDirection}
+                    scanIndex={scanIndex}
+                    painSeries={painSeriesLive}
+                    includeClinicSheetRatings={includeClinicSheetRatings}
+                    extraControls={clinicSheetControl}
+                    moreOptions={moreOptions}
+                    binarization={(
+                      <BinarizationPreview
+                        points={previewPoints}
+                        strategy={strategy}
+                        percentileLow={percentileLow}
+                        percentileHigh={percentileHigh}
+                        metricLabel={previewMetricLabel}
+                        metricKey={metric}
+                        totalReports={painScores && Number.isFinite(painScores.n_reports) ? painScores.n_reports : null}
+                        loading={painLoading}
+                        matchTolerance={matchTolerance}
+                        scanModel={scanModel}
+                        matchedLoading={availLoading}
+                        matchDirty={dirty}
+                        setPercentileLow={setPercentileLow}
+                        setPercentileHigh={setPercentileHigh}
+                        setStrategy={setStrategy}
+                      />
+                    )}
+                  />
+                </MDBox>
+              </Section>
+            </Grid>
+
+            {/* ── §3 "Recording timeline" (SPEC.md section 5.1 item 4): the acquisition
+                timeline (always shown; decision 216). The pain row follows the selector live. Falls
+                back to the older timeline only when no availability payload came back at all. */}
+            <Grid item xs={12}>
+              <Section id="biomarker-timeline" question="Recording timeline">
+                <MDBox>
                   {timelineData && timelineData.availability && timelineData.availability.records
                         && timelineData.availability.records.length > 0 ? (
-                    <Grid item xs={12}>
-                      <BiomarkerDataTimeline data={timelineData} painOverride={painSeriesLive}
-                        scanModel={scanModel} colorMode={timelineColorMode}
-                        setColorMode={setTimelineColorMode} />
-                    </Grid>
-                  ) : (timelineData && timelineData.timeline && timelineData.timeline.length > 0 ? (
-                    <Grid item xs={12}>
-                      <BiomarkerTimeline key={participant_uid} data={timelineData} figureTitle={"BiomarkerTimeline"} />
-                    </Grid>
+                    <BiomarkerDataTimeline data={timelineData} painOverride={painSeriesLive}
+                      participantUid={participant_uid}
+                      scanModel={scanModel} colorMode={timelineColorMode}
+                      setColorMode={setTimelineColorMode} />
+                  ) : (data && data.timeline && data.timeline.length > 0 ? (
+                    <BiomarkerTimeline data={data} figureTitle={"BiomarkerTimeline"} />
                   ) : (
-                    <Grid item xs={12}>
-                      <MDBox px={2} pb={1.5}>
-                        <MDTypography variant="button" color="text" fontStyle="italic">
-                          {availLoading ? "Loading data-availability timeline…"
-                                        : "No decoded Percept recordings available for this participant yet."}
-                        </MDTypography>
-                      </MDBox>
-                    </Grid>
+                    <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink3, m: 0 }}>
+                      {availLoading ? "Loading the acquisition timeline…"
+                                    : "No decoded Percept recordings available for this participant yet."}
+                    </MDTypography>
                   ))}
-
-                  {/* Pain-metric selection also applies when availability records are absent. */}
-                    <Grid item xs={12}>
-                      <MDBox px={2} pb={1.5} display="flex" flexDirection="row" alignItems="center"
-                             gap={2} flexWrap="wrap" justifyContent="center">
-                        <MDTypography variant="button" fontWeight="bold"
-                                      sx={{ fontSize: 18, color: "#1a1a1a !important" }}>
-                          {"Pain metric (drives live timeline + exploratory analysis):"}
-                        </MDTypography>
-                        <FormControl size="small" sx={{ minWidth: 0, width: { xs: "100%", sm: 420 }, maxWidth: "100%" }}>
-                          <Select value={metric} onChange={(e) => setMetric(e.target.value)}
-                                  sx={{
-                                    // Enlarge ONLY the closed / displayed selected value. A plain
-                                    // fontSize on <Select> lands on .MuiInputBase-root and does NOT
-                                    // resize the rendered value — that text is the inner
-                                    // .MuiSelect-select slot, so target it directly. !important beats
-                                    // MUI's own .MuiInputBase-input rule (equal specificity otherwise).
-                                    "& .MuiSelect-select": {
-                                      fontSize: "18px !important",  // matches the open-menu items
-                                      fontWeight: 700,
-                                      lineHeight: 1.2,
-                                      color: "#1a1a1a !important",  // ink (red is reserved for errors/warnings)
-                                    },
-                                  }}>
-                            {((timelineData && timelineData.available_metrics)
-                               || (data && data.available_metrics) || DEFAULT_METRIC_OPTIONS).map((m) => (
-                              <MenuItem key={m.key} value={m.key} sx={{ fontSize: 18 }}>{m.label}</MenuItem>
-                            ))}
-                          </Select>
-                        </FormControl>
-                      </MDBox>
-                    </Grid>
-
-                  {computing ? (
-                    <Grid item xs={12}>
-                      <MDBox px={2} pb={1}>
-                        <MDTypography variant="button" fontWeight="medium" color="dark" display="block" mb={0.5}>
-                          {"Computing time-domain + power-domain biomarker on full-resolution data — this can take ~10–40 s…"}
-                        </MDTypography>
-                        <LinearProgress color="error" />
-                      </MDBox>
-                    </Grid>
-                  ) : null}
-
-                  {/* Controls row: LEFT box = pain metric + binarization selector + sliders
-                                   RIGHT box = live binarization preview histogram
-                      Thick black border wraps both panels. Renders on every tab.               */}
-                  <Grid item xs={12}>
-                    <MDBox px={2} pb={1.5}>
-                      <Card sx={{ border: "2.5px solid #1A1A1A", boxShadow: "none", borderRadius: 2 }}>
-                        <Grid container sx={{ minHeight: 480 }}>
-
-                          {/* LEFT: pain metric dropdown + binarization dropdown + sliders */}
-                          <Grid item xs={12} md={5}
-                            sx={{ borderRight: { md: "1.5px solid #1A1A1A" }, borderBottom: { xs: "1.5px solid #1A1A1A", md: "none" } }}>
-                            <MDBox p={2} display="flex" flexDirection="column" gap={1.5}>
-                              <MDBox>
-                                <MDTypography variant="button" fontWeight="bold" color="dark" sx={{ fontSize: 17 }}>
-                                  {"Binarization — defines the high vs low pain classifier boundary"}
-                                </MDTypography>
-                                <FormControl fullWidth size="medium" sx={{ mt: 0.5 }}>
-                                  <Select
-                                    value={strategy}
-                                    onChange={(e) => setStrategy(e.target.value)}
-                                    sx={{ fontSize: 16, fontWeight: 500 }}
-                                  >
-                                    {((data && data.available_strategies) || DEFAULT_STRATEGY_OPTIONS).map((s) => (
-                                      <MenuItem key={s.key} value={s.key} sx={{ fontSize: 16 }}>{s.label}</MenuItem>
-                                    ))}
-                                  </Select>
-                                </FormControl>
-                              </MDBox>
-                              {strategy === "tertile" || strategy === "percentile" ? (
-                                // Cut percentiles are set by the two-handle range slider above the
-                                // histogram (right panel). These chips are the live readout of the
-                                // current low/high cut — one control, so plot and readout can't drift.
-                                <MDBox display="flex" flexDirection="row" alignItems="center" gap={2}>
-                                  <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={0.75}>
-                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ fontSize: 13 }}>
-                                      {"Low pain ≤"}
-                                    </MDTypography>
-                                    <MDTypography variant="button" fontWeight="bold" sx={{ fontSize: 15, color: "#0072B2" }}>
-                                      {`${(strategy === "tertile" ? 33.3 : percentileLow).toFixed(0)}ᵗʰ pct`}
-                                    </MDTypography>
-                                  </MDBox>
-                                  <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={0.75}>
-                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ fontSize: 13 }}>
-                                      {"High pain ≥"}
-                                    </MDTypography>
-                                    <MDTypography variant="button" fontWeight="bold" sx={{ fontSize: 15, color: "#D55E00" }}>
-                                      {`${(strategy === "tertile" ? 66.7 : percentileHigh).toFixed(0)}ᵗʰ pct`}
-                                    </MDTypography>
-                                  </MDBox>
-                                </MDBox>
-                              ) : null}
-                              <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 13 }}>
-                                {strategy === "tertile"
-                                  ? "Tertile uses fixed 33⅓ / 66⅔ cuts; samples between them are excluded. Move the range slider above the histogram to switch to adjustable percentile cuts."
-                                  : strategy === "percentile"
-                                    ? "Set the cuts with the two-handle range slider above the histogram; samples between the handles are excluded from training."
-                                    : strategy === "median"
-                                      ? "Every sample is labeled at the median split (~50/50)."
-                                      : "Legacy 2-cluster KMeans labeler."}
-                              </MDTypography>
-
-                              {/* Match direction: pro_first (PRO-anchored, default) vs nearest (PSD-first
-                                  symmetric) vs prior (PSD-first forecasting). */}
-                              <MDBox mt={1.5}>
-                                <MDTypography variant="caption" fontWeight="bold" color="dark"
-                                  sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
-                                  Match direction
-                                </MDTypography>
-                                <ToggleButtonGroup
-                                  value={matchDirection} exclusive size="small"
-                                  aria-label="Match direction"
-                                  onChange={(e, v) => { if (v) setMatchDirection(v); }}
-                                  sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.4, px: 1 } }}
-                                >
-                                  <ToggleButton value="pro_first" title="Walk pain ratings; claim up to N closest PSDs per channel each (maximizes discovery coverage)">PRO-first (discovery)</ToggleButton>
-                                  <ToggleButton value="nearest" title="Pair each PSD with the nearest pain rating in either time direction (symmetric ± window)">Nearest (±window)</ToggleButton>
-                                  <ToggleButton value="prior" title="Pair each PSD only with pain ratings recorded AFTER it (causal / closed-loop forecasting direction)">Prior (forecast)</ToggleButton>
-                                </ToggleButtonGroup>
-                                <MDTypography variant="caption" color="dark" fontStyle="italic"
-                                  sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
-                                  {matchDirection === "pro_first"
-                                    ? "Walks pain ratings (the unit of independence) and claims up to N closest PSDs PER CHANNEL each, within the window. Maximizes the number of ratings that contribute to discovery — the right framing when 'does this band track pain?' is the question."
-                                    : matchDirection === "nearest"
-                                    ? "Each PSD is paired with the closest pain rating in EITHER time direction (symmetric ± window). Cross-sectional association, not forecasting."
-                                    : "Each PSD is paired only with pain ratings recorded AFTER it within the window (causal/forecasting direction). Use for closed-loop deployment."}
-                                </MDTypography>
-                              </MDBox>
-
-                              {/* Per-rating CAP (replaces the old all / one-per-rating toggle). */}
-                              <MDBox mt={1.5}>
-                                <MDTypography variant="caption" fontWeight="bold" color="dark"
-                                  sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
-                                  {`Max LSB samples per pain rating (currently ${maxPerRating})`}
-                                  {maxPerRating > 1 && (
-                                    <span style={{ fontWeight: 400, fontSize: 11.5, color: "#6c757d", display: "block" }}>
-                                      {"When > 1, the rating's LSB is the median over its samples within the rating-centred window."}
-                                    </span>
-                                  )}
-                                </MDTypography>
-                                <MDBox px={0.5}>
-                                  <Slider
-                                    value={maxPerRating} min={1} max={10} step={1}
-                                    marks valueLabelDisplay="auto" size="small"
-                                    onChange={(e, v) => setMaxPerRating(v)} />
-                                </MDBox>
-                                <MDTypography variant="caption" fontWeight="bold" color="dark"
-                                  sx={{ fontSize: 13, display: "block", mb: 0.5, mt: 0.5 }}>
-                                  {`Minimum gap between selected LSBs (${refractoryMin} min)`}
-                                </MDTypography>
-                                <MDBox px={0.5}>
-                                  <Slider
-                                    value={refractoryMin} min={0} max={30} step={1}
-                                    valueLabelDisplay="auto" size="small"
-                                    disabled={maxPerRating <= 1 || matchDirection === "pro_first"}
-                                    onChange={(e, v) => setRefractoryMin(v)} />
-                                </MDBox>
-                                <MDTypography variant="caption" color="dark" fontStyle="italic"
-                                  sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
-                                  {matchDirection === "pro_first"
-                                    ? "Refractory gap does not apply in PRO-first matching: each PSD is claimed by at most one rating, so a streaming burst can't double-count regardless of the gap. Switch to Nearest or Prior to enforce a minimum spacing between kept PSDs."
-                                    : (`Each pain rating keeps at most ${maxPerRating} PSD${maxPerRating > 1 ? "s" : ""} per channel — `
-                                   + (matchDirection === "prior"
-                                      ? "the ones recorded closest in time BEFORE the rating (forecasting direction)"
-                                      : "the ones closest in time to the rating (either direction)")
-                                   + (maxPerRating > 1
-                                      ? `, and no two kept PSDs within ${refractoryMin} min of each other, so a streaming burst around one survey can't dominate. `
-                                      : " — i.e. one independent sample per rating. ")
-                                   + (maxPerRating > 1
-                                      ? "The binary-classification AUC is still cross-validated with folds grouped by rating, so reused ratings can't inflate it; the AUC n is the count of independent ratings."
-                                      : "Every sample is an independent (channel, rating) pair — no double-dipping."))}
-                                </MDTypography>
-                              </MDBox>
-
-                              {/* TD-signal-quantity slider + window-reuse toggle. Matching always runs
-                                  against the pre-computed raw 3 s-tile LSB cache; the MAIN match-tolerance
-                                  slider (above) sets eligibility for both modalities, this slider sets how
-                                  much of the nearest time-domain signal each rating aggregates. */}
-                              <MDBox mt={1.5}>
-                                <MDTypography variant="caption" fontWeight="bold" color="dark"
-                                  sx={{ fontSize: 13, display: "block", mb: 0.5 }}>
-                                  {`Time-domain signal per rating (${matchExtentSec} s \u2248 nearest ${Math.max(1, Math.round(matchExtentSec / 3))} of the 3 s tiles)`}
-                                </MDTypography>
-                                <MDBox px={0.5}>
-                                  <Slider
-                                    value={matchExtentSec} min={3} max={300} step={3}
-                                    valueLabelDisplay="auto" size="small"
-                                    aria-label="time-domain signal per rating (seconds)"
-                                    onChange={(e, v) => setMatchExtentSec(v)} />
-                                </MDBox>
-                                <MDBox sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1 }}>
-                                  <MDTypography variant="caption" fontWeight="bold" color="dark"
-                                    sx={{ fontSize: 13 }}>
-                                    {"Window reuse"}
-                                  </MDTypography>
-                                  <ToggleButtonGroup
-                                    value={allowWindowReuse ? "reuse" : "strict"} exclusive size="small"
-                                    aria-label="window reuse mode"
-                                    onChange={(e, v) => { if (v) setAllowWindowReuse(v === "reuse"); }}
-                                    sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontSize: 12, py: 0.3, px: 1 } }}
-                                  >
-                                    <ToggleButton value="strict" title="Each raw window is assigned to its nearest rating only — one window, one rating (independent observations)">No reuse</ToggleButton>
-                                    <ToggleButton value="reuse" title="Each raw window (per modality) is assigned to every rating whose match tolerance covers it — larger n, but ratings sharing a window are no longer independent">Allow reuse</ToggleButton>
-                                  </ToggleButtonGroup>
-                                </MDBox>
-                                <MDTypography variant="caption" color="dark" fontStyle="italic"
-                                  sx={{ fontSize: 13, display: "block", mt: 0.5 }}>
-                                  {liveMatchCaption}
-                                </MDTypography>
-                                {data && data.live_match_stats && (
-                                  <MDTypography variant="caption" color="text" display="block"
-                                    sx={{ fontSize: 12, mt: 0.5 }}>
-                                    {`Last computed: matched ${data.live_match_stats.n_pro_td || 0} ratings to time-domain LSB · `
-                                     + `${data.live_match_stats.n_pro_psd || 0} to PSD LSB`
-                                     + `${data.live_match_stats.n_pro_unmatched != null ? ` · ${data.live_match_stats.n_pro_unmatched} with no LSB in window` : ""}`
-                                     + `${data.live_match_stats.n_td_used != null ? ` (${data.live_match_stats.n_td_used} TD tiles · ${data.live_match_stats.n_psd_used || 0} PSD events aggregated).` : "."}`}
-                                  </MDTypography>
-                                )}
-                              </MDBox>
-                            </MDBox>
-                          </Grid>
-
-                          {/* RIGHT: live binarization preview histogram */}
-                          <Grid item xs={12} md={7}>
-                            <MDBox p={1.5} sx={{ height: "100%" }}>
-                              <BinarizationPreview
-                                points={previewPoints}
-                                strategy={strategy}
-                                percentileLow={percentileLow}
-                                percentileHigh={percentileHigh}
-                                metricLabel={previewMetricLabel}
-                                metricKey={metric}
-                                totalReports={painScores?.n_reports}
-                                loading={painLoading}
-                                matchTolerance={matchTolerance}
-                                setMatchTolerance={setMatchTolerance}
-                                scanModel={scanModel}
-                                matchedLoading={availLoading}
-                                matchDirty={dirty}
-                                setPercentileLow={setPercentileLow}
-                                setPercentileHigh={setPercentileHigh}
-                                setStrategy={setStrategy}
-                              />
-                            </MDBox>
-                          </Grid>
-
-                        </Grid>
-                      </Card>
-                    </MDBox>
-                  </Grid>
-
-                  {/* ── Exploratory analysis trigger, DIRECTLY BENEATH the Pain Biomarkers box ──
-                      The timeline + preview above are live (no compute). The full-spectrum
-                      exploration (5 Hz sliding-band r + AUC over the matched PSDs) is EXPENSIVE
-                      and runs ONLY on click, using the metric / binarization / match-window chosen
-                      in the box above. */}
-                  <Grid item xs={12}>
-                    <MDBox px={2} pt={0.5} pb={1.5} display="flex" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
-                      <MDButton
-                        variant="contained" color="error" size="large"
-                        onClick={compute} disabled={computing}
-                        sx={{ fontWeight: "bold", fontSize: 16, px: 3, py: 1.25,
-                              backgroundColor: "#d32f2f", color: "#ffffff",
-                              "&:hover": { backgroundColor: "#b71c1c" },
-                              "&.Mui-disabled": { backgroundColor: "#e57373", color: "#ffffff" } }}
-                      >
-                        {computing ? (
-                          <><CircularProgress size={18} sx={{ color: "#fff", mr: 1 }} />{"Computing…"}</>
-                        ) : (data ? "↻ Recompute full-spectrum exploration" : "▶ Start exploratory analysis")}
-                      </MDButton>
-                      {!computing && dirty && data ? (
-                        <MDTypography variant="button" color="error" fontWeight="medium">
-                          {"Settings changed — click to recompute."}
-                        </MDTypography>
-                      ) : null}
-                      {data && data.timeline_points_full ? (
-                        <MDTypography variant="caption" color="dark">
-                          {`(computed on ${Number(data.timeline_points_full).toLocaleString()} full-resolution samples)`}
-                        </MDTypography>
-                      ) : null}
-                      {data && !computing ? <MDTypography variant="caption" color="text">
-                        {cached.notKept
-                          ? "Controls are saved. This result was not retained in memory and will need to be fetched again on return."
-                          : "Controls and results are retained for this session. Access and dataset identity are checked before reuse."}
-                      </MDTypography> : null}
-                    </MDBox>
-                  </Grid>
-
-                  {!data && !alert && !computing ? (
-                    <Grid item xs={12}>
-                      <MDBox p={2}>
-                        <MDTypography variant="button" color="dark">
-                          {"Pick a pain metric and binarization above — the timeline and binarization preview are already live. Click "}
-                          <strong>▶ Start exploratory analysis</strong>{" to run the full-spectrum scan."}
-                        </MDTypography>
-                      </MDBox>
-                    </Grid>
-                  ) : null}
-
-                  {data && data.message ? (
-                    <Grid item xs={12}>
-                      <MDBox p={2}>
-                        <MDTypography variant="h6" color="error" fontSize={18}>
-                          {data.message}
-                        </MDTypography>
-                        <MDTypography variant="button" color="dark">
-                          {"Upload a Percept session for this participant and configure REDCap (REDCAP_API_URL / REDCAP_API_TOKEN), then reload."}
-                        </MDTypography>
-                      </MDBox>
-                    </Grid>
-                  ) : null}
-
-                  {data && data.summary ? (
-                    <Grid item xs={12}>
-                      <MDBox px={2} pb={1}>
-                        {data.label_metric ? (
-                          <MDTypography variant="button" fontWeight="medium" color="dark" display="block">
-                            {"Biomarker computed against: "}
-                            {(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
-                              .find((m) => m.key === data.label_metric) || {}).label || data.label_metric}
-                          </MDTypography>
-                        ) : null}
-                        {data.label_strategy ? (
-                          <MDTypography variant="caption" color="dark" display="block">
-                            {"Binarized by: "}
-                            {(((data && data.available_strategies) || DEFAULT_STRATEGY_OPTIONS)
-                              .find((s) => s.key === data.label_strategy) || {}).label || data.label_strategy}
-                            {(data.label_strategy === "tertile" || data.label_strategy === "percentile")
-                              && data.percentile_low != null
-                              ? ` (≤${Number(data.percentile_low).toFixed(0)}th / ≥${Number(data.percentile_high).toFixed(0)}th pct, daily)`
-                              : ""}
-                          </MDTypography>
-                        ) : null}
-                        {/* Concise per-channel matched-sample summary (replaces the legacy dual-
-                            pipeline Time-/Power-domain prose). For each bipolar channel: how many
-                            matched samples fell HIGH / LOW / excluded-middle by the active cut, and
-                            how many of the channel's LSB vectors are time-domain-derived vs PSD-
-                            derived. Only modeled/real LSB values feed the spectral feature-importance
-                            scan, so these two source counts ARE the analyzable-sample budget. */}
-                        {(() => {
-                          const sfi = data.analytics && data.analytics.timedomain
-                            && data.analytics.timedomain.spectral_feature_importance;
-                          const chansRaw = (sfi && sfi.channels) || [];
-                          if (!chansRaw.length) return null;
-                          // Group all LEFT channels first, then all RIGHT (stable within each side),
-                          // so the list reads L … L, R … R rather than interleaved by backend order.
-                          const sideRank = (c) => {
-                            const s = String((c && c.short) || "").trim().toUpperCase();
-                            if (s[0] === "L") return 0;
-                            if (s[0] === "R") return 1;
-                            return 2;
-                          };
-                          const chans = chansRaw
-                            .map((c, i) => [c, i])
-                            .sort((a, b) => (sideRank(a[0]) - sideRank(b[0])) || (a[1] - b[1]))
-                            .map((pair) => pair[0]);
-                          return (
-                            <MDBox mt={0.5} mb={0.5}>
-                              <MDTypography variant="button" fontWeight="medium" color="dark" display="block">
-                                {"Matched samples per channel "}
-                                <span style={{ fontWeight: 400, color: "#6c757d" }}>
-                                  {"(high / low / excluded · LSB source TD / PSD)"}
-                                </span>
-                              </MDTypography>
-                              {chans.map((c, i) => (
-                                <MDTypography key={i} variant="caption" color="text" display="block"
-                                  sx={{ fontSize: 12.5, lineHeight: 1.5 }}>
-                                  <strong>{c.short}</strong>
-                                  {`: ${c.n_high != null ? c.n_high : "—"} high · `
-                                   + `${c.n_low != null ? c.n_low : "—"} low · `
-                                   + `${c.n_excluded != null ? c.n_excluded : "—"} excluded`}
-                                  {(c.n_td != null || c.n_psd_bridge != null)
-                                    ? <span style={{ color: "#6c757d" }}>{`  ·  ${c.n_td || 0} TD / ${c.n_psd_bridge || 0} PSD LSBs`}</span>
-                                    : null}
-                                </MDTypography>
-                              ))}
-                              {chans.length > 0 && (() => {
-                                // Coherent pooled total = SUM of the per-channel distinct-LSB counts
-                                // above (NOT sfi.binarization, which is pooled epoch-rows in a different
-                                // unit) so this line reconciles with the rows it summarizes.
-                                const sH = chans.reduce((s, c) => s + (c.n_high || 0), 0);
-                                const sL = chans.reduce((s, c) => s + (c.n_low || 0), 0);
-                                const sE = chans.reduce((s, c) => s + (c.n_excluded || 0), 0);
-                                const sTD = chans.reduce((s, c) => s + (c.n_td || 0), 0);
-                                const sPSD = chans.reduce((s, c) => s + (c.n_psd_bridge || 0), 0);
-                                return (
-                                  <MDTypography variant="caption" fontStyle="italic" color="dark" display="block"
-                                    sx={{ fontSize: 11.5, lineHeight: 1.5, mt: 0.25 }}>
-                                    {`All channels: ${sH} high · ${sL} low · ${sE} excluded-middle `
-                                     + `(${sTD} TD · ${sPSD} PSD LSBs). `
-                                     + "Each count is one distinct rating carrying a resolved LSB; only "
-                                     + "those feed the spectral feature-importance scan."}
-                                  </MDTypography>
-                                );
-                              })()}
-                            </MDBox>
-                          );
-                        })()}
-                        {data.powerdomain_pooled_warning ? (
-                          <MDTypography variant="button" fontWeight="medium" color="warning" display="block">
-                            {`⚠ ${data.powerdomain_pooled_warning}`}
-                          </MDTypography>
-                        ) : null}
-                        {data.recorded_powers && data.recorded_powers.length ? (() => {
-                          const left  = data.recorded_powers.filter((p) => /\bL\b|Left/i.test(p.label));
-                          const right = data.recorded_powers.filter((p) => /\bR\b|Right/i.test(p.label));
-                          const other = data.recorded_powers.filter((p) =>
-                            !(/\bL\b|Left/i.test(p.label)) && !(/\bR\b|Right/i.test(p.label)));
-                          const noFreq = data.recorded_powers.every((p) => p.center_hz == null);
-                          const anyAboveCap = data.recorded_powers.some((p) => p.above_cap);
-                          const fmt = (p) => {
-                            const mapped = currentTargetText(p.label);
-                            const base = mapped !== p.label ? mapped : p.region ? `${p.label} (${p.region})` : p.label;
-                            const withHz = p.center_hz != null ? `${base} @ ${Number(p.center_hz).toFixed(1)} Hz` : base;
-                            return p.above_cap ? `${withHz} ⚠` : withHz;
-                          };
-                          // Above-cap (≥50 Hz) sensing bands are rendered in the warning color.
-                          const rowLine = (p, i) => (
-                            <MDTypography key={i} variant="caption"
-                              color={p.above_cap ? "warning" : "text"} sx={{ fontSize: 12 }}>
-                              {fmt(p)}
-                            </MDTypography>
-                          );
-                          return (
-                            <MDBox display="flex" flexDirection="column" alignItems="center" mt={0.5}>
-                              <MDTypography variant="button" fontWeight="medium" color="dark" mb={0.25}>
-                                {"Recorded power channels"}
-                              </MDTypography>
-                              <MDBox display="flex" flexDirection="row" gap={4} justifyContent="center" flexWrap="wrap">
-                                {left.length > 0 && (
-                                  <MDBox display="flex" flexDirection="column" alignItems="center">
-                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ fontSize: 11, textDecoration: "underline" }}>
-                                      {"Left"}
-                                    </MDTypography>
-                                    {left.map(rowLine)}
-                                  </MDBox>
-                                )}
-                                {right.length > 0 && (
-                                  <MDBox display="flex" flexDirection="column" alignItems="center">
-                                    <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ fontSize: 11, textDecoration: "underline" }}>
-                                      {"Right"}
-                                    </MDTypography>
-                                    {right.map(rowLine)}
-                                  </MDBox>
-                                )}
-                                {other.map(rowLine)}
-                              </MDBox>
-                              {anyAboveCap && (
-                                <MDTypography variant="caption" color="warning" fontStyle="italic" sx={{ fontSize: 11.5, mt: 0.25 }}>
-                                  {"⚠ Sensing band ≥ 50 Hz — outside the validated theta/alpha/beta/low-gamma biomarker range."}
-                                </MDTypography>
-                              )}
-                              {noFreq && (
-                                <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11.5, mt: 0.25 }}>
-                                  {"Sensing-band center frequency not available in this device export."}
-                                </MDTypography>
-                              )}
-                            </MDBox>
-                          );
-                        })() : null}
-                      </MDBox>
-                    </Grid>
-                  ) : null}
-
-                </Grid>
-              </Card>
+                </MDBox>
+              </Section>
             </Grid>
 
-            {requestParams && <Grid item xs={12}><BiomarkerHeatmapGrids
-              participantUid={participant_uid} requestParams={requestParams}
-              pageMetric={metric} availableMetrics={data?.available_metrics || DEFAULT_METRIC_OPTIONS}
-              metricLabel={metric} /></Grid>}
-
-            {data && data.analytics ? (
-              <BiomarkerAnalytics analytics={data.analytics} summary={data.summary}
-                recordedPowers={data.recorded_powers}
-                programmedThresholds={data.programmed_thresholds}
-                binStrategy={strategy} binMetricKey={metric}
-                binPercentileLow={percentileLow} binPercentileHigh={percentileHigh}
-                participantUid={participant_uid}
-                requestParams={requestParams}
-                matchDirty={dirty}
-                onBandCommitted={(bc) => {
-                  setCommittedBand(bc || null);
-                  // A committed band is WHAT THE DEPLOYMENT VIEW IS ABOUT, so committing a
-                  // different one puts every deployment answer behind — not wrong about the band it
-                  // was computed for, but no longer about the band that has been chosen. The
-                  // deployment results are marked rather than discarded, so a reader can still see
-                  // what the previous candidate looked like while that page's Recompute control
-                  // tells them it is out of date.
-                  markClosedLoopFamilyStale(participant_uid,
-                    "a new band candidate was committed on the Biomarker Exploration page since "
-                    + "this result was computed");
-                }}
-                metricLabel={(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
-                  .find((m) => m.key === data.label_metric) || {}).label || data.label_metric} />
-            ) : null}
-
-            {/* ── DEVICE-SCALE CALIBRATION ──────────────────────────────────────────────────────
-                Two panels relocated here from the Closed-Loop Deployment page. They belong on this
-                page because each answers a question the analyst asks while choosing a band, not a
-                question the clinician asks while programming: the deployment page now carries only
-                what has to be read at a visit.
-
-                The two are complementary and are deliberately framed against each other. The
-                left-hand panel fits a conversion from the participant's OWN paired recordings for
-                the band that has been committed, so it is an observed measurement and is drawn in
-                a solid frame. The right-hand panel serves the frozen per-participant model that
-                the threshold estimator falls back on when the device never sensed a band at all,
-                so every number in it is a MODELLED extrapolation and it is drawn in a dashed
-                frame. The dashed-versus-solid distinction is the deployment page's convention for
-                modelled against observed, applied here for the same reason: a reader should not
-                have to remember which of two adjacent conversion figures was measured. */}
+            {/* ── BACKGROUND (SPEC.md section 5.1 item 5): the older all-band scan's state and
+                settings, the sliding correlation over time, the calibration in effect and the
+                research checks. Folded where the spec folds them; the calibration keeps its two
+                constants in the open (its own panel folds how they were fitted). */}
             <Grid item xs={12}>
-              <MDBox px={2} pt={2}>
-                <MDTypography variant="h5" fontWeight="bold" sx={{ fontSize: 24, lineHeight: 1.3 }}>
-                  {"Device-scale calibration"}
-                </MDTypography>
-                <MDTypography variant="body2" color="dark" sx={{ fontSize: 13.5 }}>
-                  {"The exploration above works in physical units; the device works in its own "
-                   + "least-significant-bit units. These two panels are how a band power measured "
-                   + "offline is turned into a number that can be entered on the Percept RC, and "
-                   + "they are placed here because that translation has to be settled before a "
-                   + "programming visit rather than during one. A solid frame marks a quantity "
-                   + "measured from this participant's own paired recordings; a dashed frame marks "
-                   + "a quantity produced by a model standing in for recordings that do not exist."}
-                </MDTypography>
-              </MDBox>
-            </Grid>
-            <Grid item xs={12} lg={6}>
-              <MDBox px={2} pb={1}>
-                <MDTypography variant="button" fontWeight="bold" color="dark"
-                  sx={{ fontSize: 14, display: "block", mb: 0.5 }}>
-                  {"Does the committed band convert to device units, and is the conversion linear?"}
-                </MDTypography>
-                {/* Solid frame: an OBSERVED quantity. The panel pairs offline PSD epochs with the
-                    device's own LSB recordings for this band and fits the proportional law, and it
-                    reports its own falsification check on that law's slope. */}
-                <MDBox sx={{ border: `2px solid ${PAL.accentBorder}`, borderRadius: 2, p: 0.75 }}>
-                  <PsdLsbPanel participantUid={participant_uid} bandCandidate={committedBand}
-                    requestParams={requestParams} inputIdentity={data?.InputManifest} autoFetch={false} />
+              <MDTypography component="h2" sx={SECTION_TITLE_SX}>{"Last scan"}</MDTypography>
+
+              {computing ? (
+                <MDBox mt={2}>
+                  <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink, mt: 0, mb: 0.5 }}>
+                    {"Running the all-band scan on TD and the device's band power: about 10 to 40 s…"}
+                  </MDTypography>
+                  <LinearProgress />
                 </MDBox>
-                <MDTypography variant="caption" color="dark"
-                  sx={{ fontSize: 11.5, display: "block", mt: 0.5, fontStyle: "italic" }}>
-                  {committedBand
-                    ? "Solid frame: fitted from this participant's own time-matched recordings of "
-                      + "the committed band."
-                    : "Solid frame: this panel fits from observed recordings, so it has nothing to "
-                      + "fit until a band is committed. Click a band in the scan above, then use "
-                      + "\u201CCommit this band\u201D in its validation readout."}
-                </MDTypography>
-              </MDBox>
-            </Grid>
-            <Grid item xs={12} lg={6}>
-              <MDBox px={2} pb={1}>
-                <MDTypography variant="button" fontWeight="bold" color="dark"
-                  sx={{ fontSize: 14, display: "block", mb: 0.5 }}>
-                  {"What conversion is assumed for a band the device never sensed?"}
-                </MDTypography>
-                {/* Dashed frame: a MODELLED quantity. Nothing in this panel was measured at the
-                    band a reader may be considering; the gain there is read off a fitted trend
-                    across frequency, which is exactly the kind of number that should not be
-                    mistaken for an observation. */}
-                <MDBox sx={{ border: `2px dashed ${PAL.neutralBorder}`, borderRadius: 2, p: 0.75 }}>
-                  <ConversionModelPanel participantUid={participant_uid} inputIdentity={data?.InputManifest} autoFetch={false} />
+              ) : null}
+
+              {!data && !alert ? (
+                <MDBox mt={2}>
+                  <MDTypography variant="button" sx={{ ...TYPE.body, color: T.ink2 }}>
+                    {"Timeline and matching preview follow the controls; heat maps show the settings they were computed with and flag changes. Click "}
+                    <strong>Recompute</strong>{" above to run the all-band scan."}
+                  </MDTypography>
                 </MDBox>
-                <MDTypography variant="caption" color="dark"
-                  sx={{ fontSize: 11.5, display: "block", mt: 0.5, fontStyle: "italic" }}>
-                  {"Dashed frame: a frozen model, not a measurement. The gain at any particular "
-                   + "band is interpolated from the fitted trend across frequency, so it carries "
-                   + "the trend's assumptions as well as its uncertainty."}
-                </MDTypography>
+              ) : null}
+
+              {data && data.message ? (
+                <MDBox mt={2}>
+                  <MDTypography component="p" sx={{ ...TYPE.lead, color: T.ink, m: 0 }}>
+                    {data.message}
+                  </MDTypography>
+                  <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink2, m: 0 }}>
+                    {"Upload a Percept session and configure REDCap (REDCAP_API_URL / REDCAP_API_TOKEN), then reload."}
+                  </MDTypography>
+                </MDBox>
+              ) : null}
+
+              {/* THE LAST ALL-BAND SCAN'S SETTINGS. The shared-report warning stays in the open
+                  (it is a warning); the score and split the scan ran under, and the list of the
+                  power channels the recordings carry, sit in one fold (decision 304). */}
+              {data && data.summary ? (
+                <MDBox mt={2}>
+                  <ReportSharingNote summary={data.summary} />
+                  <Fold show="Last scan settings" hide="Hide the last scan's settings">
+                    {data.label_metric ? (
+                      <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink2, display: "block" }}>
+                        {"Pain score: "}
+                        {(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
+                          .find((m) => m.key === data.label_metric) || {}).label || data.label_metric}
+                      </MDTypography>
+                    ) : null}
+                    {data.label_strategy ? (
+                      <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink2, display: "block" }}>
+                        {"Split into high and low by: "}
+                        {(DEFAULT_STRATEGY_OPTIONS
+                          .find((st) => st.key === data.label_strategy) || {}).label || data.label_strategy}
+                        {/* A tertile split always cuts at the thirds, whatever percentiles the request
+                            carried and the server echoed (review of 2026-09-26). */}
+                        {data.label_strategy === "tertile"
+                          ? " (at or below the 33rd and at or above the 67th percentile of daily ratings)"
+                          : data.label_strategy === "percentile" && data.percentile_low != null
+                            ? ` (at or below the ${Number(data.percentile_low).toFixed(0)}th and at or above the ${Number(data.percentile_high).toFixed(0)}th percentile of daily ratings)`
+                            : ""}
+                      </MDTypography>
+                    ) : null}
+                    {data.clinic_sheet_ratings && data.clinic_sheet_ratings.included ? (
+                      <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink2, display: "block" }}>
+                        {data.clinic_sheet_ratings.n_added
+                          ? `Includes ${data.clinic_sheet_ratings.n_added} clinic and at-home sheet ratings, the same switch the heat maps use.`
+                          : (data.clinic_sheet_ratings.reason
+                            ? `Clinic sheet ratings are on, but ${data.clinic_sheet_ratings.reason}.`
+                            : "Clinic sheet ratings are on, but none carried this score.")}
+                      </MDTypography>
+                    ) : (
+                      <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink2, display: "block" }}>
+                        {"Home pain surveys only; the same switch the heat maps use is off."}
+                      </MDTypography>
+                    )}
+                    {data.recorded_powers && data.recorded_powers.length ? (
+                      <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink2, display: "block", mt: 0.5 }}>
+                        {"Recorded power channels: "}
+                        {data.recorded_powers.map((pw) => {
+                          const base = pw.region ? `${pw.label} (${pw.region})` : pw.label;
+                          const withHz = pw.center_hz != null ? `${base} at ${Number(pw.center_hz).toFixed(1)} Hz` : base;
+                          return pw.above_cap ? `${withHz} (above 50 Hz, outside the 8-30 Hz range)` : withHz;
+                        }).join("; ")}
+                      </MDTypography>
+                    ) : null}
+                  </Fold>
+                </MDBox>
+              ) : null}
+
+              {/* THE OLDER, UNCALIBRATED ALL-BAND SCAN (decision 61 keeps it separate from the
+                  calibrated grids above). Only after a Recompute; folded (decision 304). */}
+              {data && hasSlidingCorrelation(data.analytics) ? (
+                <MDBox mt={2}>
+                  <Fold show="Band–pain link over time"
+                    inside="from the all-band scan" hide="Hide how each band's link changed over time">
+                    <Grid container spacing={2}>
+                      <BiomarkerAnalytics analytics={data.analytics}
+                        metricLabel={(((data && data.available_metrics) || DEFAULT_METRIC_OPTIONS)
+                          .find((m) => m.key === data.label_metric) || {}).label || data.label_metric} />
+                    </Grid>
+                  </Fold>
+                </MDBox>
+              ) : null}
+
+              {/* DEVICE-SCALE CALIBRATION (decision 212): the panel states the two constants in one
+                  open line and folds how they were fitted. The page adds no prose of its own. */}
+              <MDBox mt={4} data-testid="calibration-section">
+                <CalibrationInEffectPanel participantUid={participant_uid} />
+              </MDBox>
+
+              {/* Control analyses: saved, dated checks run offline (the PI, 2026-09-24); they feed
+                  nothing on this page. Folded and still mounted; their request goes out the first
+                  time the fold is opened (speed-up item C8, 2026-10-02). */}
+              <MDBox mt={4} pt={3} pb={2} data-paper="background-row"
+                sx={{ borderTop: `1px solid ${T.rule}` }}>
+                {/* The spec's plain title (SPEC 2026-09-26 section 6, "Control analyses"), set by
+                    WP7 with the pin in `foldedDeveloperLines.source.test.js`. */}
+                <Fold show="Chance and current checks (offline)"
+                  inside="saved research checks; nothing on this page reads them"
+                  hide="Hide the checks against chance and against the current"
+                  onChange={(open) => { if (open) setChecksOpened(true); }}>
+                  <SectionRevealedContext.Provider value={checksOpened}>
+                    <ControlAnalysesSection participantUid={participant_uid} page="biomarkers" clinicSheets={includeClinicSheetRatings} plain />
+                  </SectionRevealedContext.Provider>
+                  {/* the device's electrode identifier runs (the PI, 2026-10-06); fetched on first opening */}
+                  <ElectrodeIdentifierPanel participantUid={participant_uid} revealed={checksOpened} />
+                </Fold>
               </MDBox>
             </Grid>
           </Grid>
@@ -1095,6 +1016,7 @@ function Biomarkers() {
     </>
   );
 }
+
 
 // [removed] module-level fmt()/fmtP() — their only consumer was summaryLine(), removed above.
 // The recorded-power list uses its own local fmt(); other panels format inline.

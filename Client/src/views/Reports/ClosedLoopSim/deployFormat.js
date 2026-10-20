@@ -9,7 +9,7 @@
  * purpose is that a reader can see at a glance that 1.40 and 14.00 are different lengths.
  */
 
-const isNum = (v) => typeof v === "number" && Number.isFinite(v);
+const isNum = (v) => v != null && Number.isFinite(Number(v));
 
 /**
  * Milliamps, always to two decimal places with the leading and trailing zeros forced.
@@ -73,6 +73,17 @@ export function fmtNum(v, d = 3) {
 }
 
 /**
+ * One odds ratio with its 95% interval beside it (P-03, June audit item [0]). An odds ratio stored
+ * before its interval existed says so rather than printing the number alone as if it had none to
+ * give; one the test could not estimate says that, never "1.00" or a blank.
+ */
+export function fmtOddsRatioWithInterval(or, lo, hi) {
+  if (!isNum(or)) return "could not be estimated";
+  if (!isNum(lo) || !isNum(hi)) return `${Number(or).toFixed(2)} (no interval stored with it)`;
+  return `${Number(or).toFixed(2)} (95% interval ${Number(lo).toFixed(2)} to ${Number(hi).toFixed(2)})`;
+}
+
+/**
  * A proportion rendered as a percentage. Callers on the duty-cycle panel must supply their own
  * wording for WHAT the percentage is a fraction of; this function deliberately returns only the
  * number and the per-cent sign, because the one error the duty panel exists to prevent is a
@@ -108,14 +119,13 @@ export function fmtFieldValue(field) {
  *
  * "The upper limit could be arbitrarily large" and "we failed to compute an upper limit" call for
  * different responses from a reader, and the previous version of this page rendered both as an
- * em-dash. The canonical serializer maps absent and nonfinite bounds to null, so null is
- * unavailable. Only explicit infinity values establish an unbounded interval.
+ * em-dash. Anything non-finite is reported here as unbounded, and the panels are required to print
+ * the literal word rather than a dash or a bar clipped at the edge of an axis.
  */
 export function ciBound(ci, i) {
   const raw = ci && ci.length > i ? ci[i] : null;
-  return isNum(raw) ? { value: Number(raw), unbounded: false, unavailable: false }
-    : { value: null, unbounded: raw === Infinity || raw === -Infinity,
-        unavailable: raw !== Infinity && raw !== -Infinity };
+  return isNum(raw) ? { value: Number(raw), unbounded: false }
+    : { value: null, unbounded: true };
 }
 
 /**
@@ -161,9 +171,8 @@ export function signWord(sign) {
  * Who has to act on a rule that could not be evaluated, keyed on the payload's own `kind`.
  *
  * This table replaces one hardcoded sentence that told the reader every unevaluable rule was a
- * value they had to read off the programmer. That was true of exactly one of RCS08's four
- * unevaluable rules. For the other three the module was never handed the fields the rule reads,
- * which is a defect in how the analysis is wired up and cannot be fixed at a programming visit, so
+ * value they had to read off the programmer. Missing analysis inputs instead indicate a defect
+ * in how the analysis is wired up and cannot be fixed at a programming visit, so
  * telling a clinician to go and read something off the device sends them to look for a value that
  * is not there.
  */
@@ -184,10 +193,48 @@ export const UNEVALUABLE = {
         + "property of the configuration. It still blocks",
   },
   failed: {
-    actor: "measurement — a property of the recording",
+    actor: "not stated by the rule table: read the rule's own wording",
     copy: "the rule was evaluated against this configuration and the configuration violates it",
   },
 };
+
+/**
+ * Who clears a REFUSAL, from the rule's own `resolved_by` (the server's `constraints.RESOLVED_BY`).
+ * Every blocking rule that fails has the same kind ("failed"), and this page used to name one actor
+ * for all of them, "measurement, a property of the recording", including D52 (the sensing pair must
+ * flank the stimulating contacts), which is cleared at the programmer by a change of contacts
+ * (review finding, 2026-09-26). A row from a response that predates the field names no actor.
+ * `clears` is the sentence "What would change this answer" prints under the row.
+ */
+export const REFUSAL_RESOLVED_BY = {
+  configuration: {
+    actor: "clinician, a change of settings at the programmer",
+    clears: "Only a change to the configuration clears this; nothing else on this list does.",
+  },
+  band: {
+    actor: "band selection: another band or sensing pair",
+    clears: "Only choosing another band or sensing pair clears this; more measurement on this band "
+      + "does not, and no setting at the programmer does.",
+  },
+  recording: {
+    actor: "measurement, a property of the lead or the recording",
+    clears: "Only a new measurement that meets the rule clears this (an impedance test in range, a "
+      + "recording free of the artefact the device flags).",
+  },
+  analysis: {
+    actor: "analysis: how the numbers were computed",
+    clears: "Only a change to how this platform computed the numbers clears this; nothing at the "
+      + "programmer does.",
+  },
+};
+
+export function refusalFor(row) {
+  const base = UNEVALUABLE.failed;
+  const r = REFUSAL_RESOLVED_BY[row && row.resolved_by];
+  if (r) return { ...base, actor: r.actor, clears: r.clears };
+  return { ...base, clears: "Read the rule's own wording for what clears it; the rule table does not "
+    + "say whether a change of settings, another band or a new measurement is needed." };
+}
 
 /** Fall back to naming the kind rather than guessing an actor for a kind we have not seen. */
 export function unevaluableFor(kind) {

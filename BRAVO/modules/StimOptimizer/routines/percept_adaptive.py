@@ -51,9 +51,22 @@ DUAL = "dual"
 SINGLE = "single"
 SINGLE_INVERSE = "single_inverse"
 
-# Participant-specific provenance and examples are maintained outside source control.
-ADAPTIVE_ENABLE_REQUIRES_PD_INDICATION = False   # RCS08 is programmed in Parkinson's mode
-NON_PD_WORKFLOW_CEILING = "thresholds capture"   # applies only to a non-Parkinson's-mode participant
+# ---------------------------------------------------------------------------------------------
+# ELIGIBILITY: participant-specific programming facts are not device-wide defaults.
+# White paper UC202012929dEN p. 13 restricts non-Parkinson programming workflows
+# to thresholds capture. The deployment must establish the actual programming
+# mode from participant-bound evidence; this is not an engineering diagnosis.
+NON_PD_WORKFLOW_CEILING = "thresholds capture"
+
+
+def participant_eligibility(participant_uid):
+    """Read explicitly configured historical mode evidence; absent facts are unavailable."""
+    try:
+        from modules.DecodeCommon.private_clinical_config import adaptive_eligibility_for
+    except ImportError:
+        from DecodeCommon.private_clinical_config import adaptive_eligibility_for
+    return adaptive_eligibility_for(participant_uid)
+
 
 #: WHAT PARKINSON'S MODE DOES *NOT* CHANGE, checked because it looked like it might.
 #: Parkinson's mode also unlocks the CHOICE of threshold mode rather than forcing Dual Threshold,
@@ -136,7 +149,7 @@ TITRATION_SETTLE_RANGE_S = (30.0, 45.0)
 try:
     from modules.DecodeCommon import device_ranges as _DR
 except ImportError:                                              # pragma: no cover
-    from modules.DecodeCommon import device_ranges as _DR
+    from DecodeCommon import device_ranges as _DR
 RANGE_SOURCE_FDA = _DR.RANGE_SOURCE_FDA
 RANGE_SOURCE_TIP_CARD = _DR.RANGE_SOURCE_TIP_CARD
 RANGE_SOURCE_TABLET = _DR.RANGE_SOURCE_TABLET
@@ -177,15 +190,11 @@ DOCUMENTED_RANGES = {
     "adaptive amplitude limit": {"range": ADAPTIVE_AMP_LIMIT_RANGE_MA, "units": "mA", "source": RANGE_SOURCE_FDA},
     "adaptive band centre": {"range": (8.0, 30.0), "units": "Hz", "source": RANGE_SOURCE_FDA + "; WP p. 14"},
 }
-# Participant-specific provenance and examples are maintained outside source control.
+#: The one parameter with NO range in any source, the tablet included (2026-09-15: the PI read the
+#: detection-blanking range, 0-30 s, off the tablet; the startup delay was not on the screens he
+#: read). No participant-specific observations establish a general device range.
 UNPUBLISHED_RANGES = ("adaptive startup delay",)
 
-
-
-# Aditya canonical compatibility imports/constants.
-
-
-SINGLE_THRESHOLD_FRACTION = 0.75
 
 def documented_range_ms(name, mode=None):
     """The documented (lo, hi) in milliseconds for a timing parameter, or None when none exists.
@@ -218,9 +227,8 @@ def select_threshold_mode(mode, *, validated_hemispheres=(), configuring_both_he
                           biomarker_timescale_s=None):
     """Choose a threshold mode and return its consequences, or refuse with reasons.
 
-    Selecting the mode is now a real choice. While the participant was programmed outside
-    Parkinson's mode the device forced Dual Threshold, so the module only had to describe it; the
-    mode is selectable now and the module has to help pick.
+    This compares device mode behavior; participant programming eligibility must
+    be established separately from decoded or explicitly configured evidence.
 
     `validated_hemispheres` names the hemispheres for which a control band has actually passed the
     deployability screen. `configuring_both_hemispheres` says whether an Adaptive program will exist
@@ -446,8 +454,12 @@ def estimate_response_latency(times_s, band_power, amp_mA, *, step_index=None, f
 
 #: Adaptive Therapy can be driven by a band in this range only. Outside it, sensing is possible but
 #: therapy cannot respond. White paper p. 14 parameter table, "LFP Frequency Range":
-#: "8-30Hz (Adaptive) / 1-96Hz (Sensing Only)".
-ADAPTIVE_LFP_BAND_HZ = (8.0, 30.0)
+#: "8-30Hz (Adaptive) / 1-96Hz (Sensing Only)". THE OBJECT LIVES IN `DecodeCommon.device_ranges`
+#: since 2026-09-25 (item P-15), the same one home as the timing ranges above: the name stays here
+#: for every reader in this module, `constraints.py`, `prescription.py` and the Biomarkers module's
+#: `bravo_service.ADAPTIVE_LO_HZ`/`ADAPTIVE_HI_HZ` and `analytics.BAND_TIME_SWEEP_CENTER_LO_HZ`/
+#: `_HI_HZ`, which now bind to the same tuple; pinned by `tests/test_device_ranges_one_home.py`.
+ADAPTIVE_LFP_BAND_HZ = _DR.ADAPTIVE_LFP_BAND_HZ
 #: The wider range available when only recording.
 SENSING_ONLY_LFP_BAND_HZ = (1.0, 96.0)
 
@@ -755,23 +767,3 @@ def validate_policy(policy):
                 f"paused amplitude {paused} mA lies outside the adaptive limits "
                 f"[{a_lo}, {a_hi}] mA.")
     return problems
-
-
-# Retained active Aditya interfaces.
-def derive_single_threshold(lfp_lower, lfp_upper, frac=SINGLE_THRESHOLD_FRACTION):
-    """Reproduce the device's single-threshold calculation: ``frac * (upper - lower) + lower``.
-
-    This is NOT a free parameter of ours — it is what the device will compute from the two captured
-    LFP values, so any plan that proposes a single-threshold policy must predict the threshold this
-    way rather than choosing one. Raises on inverted captures, which the device also refuses: "it is
-    possible that the thresholds gathered by the system are either too close together or are
-    inverted. In this case, the A610 application will prompt the user to either ... recapture ... or
-    select the manual adjustment option." (p. 15)
-    """
-    lo, hi = float(lfp_lower), float(lfp_upper)
-    if not (hi > lo):
-        raise ValueError(
-            f"inverted or degenerate LFP captures (lower={lo!r}, upper={hi!r}). The device refuses "
-            "this and prompts for recapture or manual adjustment; a derived threshold from an "
-            "inverted pair is meaningless.")
-    return frac * (hi - lo) + lo

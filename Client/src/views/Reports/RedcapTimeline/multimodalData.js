@@ -4,6 +4,17 @@ import {dailySeries, fivePointMedian, ouraPoints} from './ouraData';
 
 export const SUMMARY_COLORS = ['#356E9B', '#B86C2D'];
 export const SUMMARY_METRICS = ['left_leg_vas_intensity', 'mpq_standard_0_45'];
+const SUMMARY_CHOICES = [['left_leg_vas_intensity','vas_intensity','nrs_intensity'], ['mpq_standard_0_45']];
+const KNOWN_RANGES = {left_leg_vas_intensity:[0,100],vas_intensity:[0,100],nrs_intensity:[0,10],mpq_standard_0_45:[0,45]};
+// Keep the requested standard MPQ measure explicit, including when unavailable.
+// Never substitute the distinct legacy sum or relabel overall VAS as left-leg VAS.
+export function summarySurveyMetrics(metrics) {
+  return SUMMARY_CHOICES.map(keys => {
+    const choices = keys.map(key => metrics.find(metric => metric.key === key)).filter(Boolean);
+    const metric = choices.find(item => item.points.some(point => Number.isFinite(point.value))) || choices[0];
+    return metric ? {...metric, range: metric.range || KNOWN_RANGES[metric.key]} : null;
+  });
+}
 export const SUMMARY_OURA = ['steps', 'sleep_total'];
 const dayStamp = day => Date.parse(`${day.slice(0, 10)}T12:00:00Z`);
 
@@ -21,10 +32,9 @@ export function surveyGapTrace(trace) {
 }
 
 export function summarySurveyTraces(metrics, visits, phases, range, smooth, homes, unknown) {
-  return SUMMARY_METRICS.flatMap((key, index) => {
-    const metric = metrics.find(item => item.key === key);
+  return summarySurveyMetrics(metrics).flatMap((metric, index) => {
     if (!metric) return [];
-    return metricTraces(metric, phases, range, smooth, visits[key] || [], homes, true, unknown).map(original => {
+    return metricTraces(metric, phases, range, smooth, visits[metric.key] || [], homes, true, unknown).map(original => {
       const trend = original.mode === 'lines';
       const trace = trend ? surveyGapTrace(original) : original;
       return {...trace, name: `${metric.label} · ${trend ? '5-point median' : original.name}`,
@@ -70,9 +80,9 @@ export function summaryLayout({range, xRange, width, left, right, limits, events
     paper_bgcolor: 'transparent', plot_bgcolor: 'transparent', font: {family: 'Roboto, sans-serif', color: '#344767', size: compact ? 12 : 14},
     xaxis: {type: 'date', range: xRange || [`${range.start} 00:00:00`, `${range.end} 23:59:59`],
       title: {text: 'Date · Pacific time', standoff: 12}, nticks: compact ? 3 : 7, automargin: true, showgrid: false},
-    yaxis: {title: {text: left, standoff: 8}, ...(limits ? {range: limits[0]} : {rangemode: 'tozero'}),
+    yaxis: {title: {text: left, standoff: 8}, ...(limits?.[0] ? {range: limits[0]} : {rangemode: 'tozero'}),
       color: SUMMARY_COLORS[0], automargin: true, zeroline: false, gridcolor: '#edf0f4'},
-    yaxis2: {title: {text: right, standoff: 8}, ...(limits ? {range: limits[1]} : {rangemode: 'tozero'}),
+    yaxis2: {title: {text: right, standoff: 8}, ...(limits?.[1] ? {range: limits[1]} : {rangemode: 'tozero'}),
       color: SUMMARY_COLORS[1], overlaying: 'y', side: 'right', automargin: true, zeroline: false, showgrid: false},
     ...(neuralPeriod ? (() => {const neural = homeNeuralLayout(neuralPeriod,width); return {yaxis:neural.yaxis,yaxis2:neural.yaxis2};})() : {}),
     shapes: context.shapes, annotations: context.annotations, showlegend: false, hovermode: 'closest',

@@ -13,17 +13,9 @@ Coded by www.creative-tim.com
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-// Material Dashboard 2 React Base Styles
-import colors from "assets/theme/base/colors";
-import borders from "assets/theme/base/borders";
-import boxShadows from "assets/theme/base/boxShadows";
-
-// Material Dashboard 2 React Helper Function
-import rgba from "assets/theme/functions/rgba";
-
-const { black, white } = colors;
-const { borderWidth, borderRadius } = borders;
-const { md } = boxShadows;
+// App shell (SPEC.md section 2.5, 2026-09-26): a card is white, a 1 px hairline border in the
+// `rule` grey, 6 px corners and no shadow. Values come from the design tokens only.
+import { CARD } from "assets/theme/base/tokens";
 
 const card = {
   styleOverrides: {
@@ -33,11 +25,11 @@ const card = {
       position: "relative",
       minWidth: 0,
       wordWrap: "break-word",
-      backgroundColor: white.main,
+      backgroundColor: CARD.background,
       backgroundClip: "border-box",
-      border: `${borderWidth[0]} solid ${rgba(black.main, 0.125)}`,
-      borderRadius: borderRadius.xl,
-      boxShadow: md,
+      border: CARD.border,
+      borderRadius: CARD.borderRadius,
+      boxShadow: CARD.boxShadow,
       overflow: "visible",
     },
   },

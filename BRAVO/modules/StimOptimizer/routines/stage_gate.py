@@ -78,7 +78,7 @@ THE FOUR CONDITIONS
 
 Typical use::
 
-    from modules.StimOptimizer.routines import stage_gate as GATE
+    from StimOptimizer.routines import stage_gate as GATE
     g = GATE.evaluate_gate(stage1_result.frozen)
     print(g.describe())
     if not g.passed:
@@ -128,13 +128,6 @@ SELECTION_ALPHA = 0.05
 #: well as its own permutation test, because the band was chosen from a family of candidates and the
 #: uncorrected p-value of a selected maximum is not a valid test of it.
 SELECTION_FDR_Q = 0.05
-
-
-
-# Aditya canonical compatibility imports/constants.
-
-
-
 
 
 @dataclass(frozen=True)
@@ -217,23 +210,19 @@ class ResponseSummary:
         return body + src
 
 
-# Participant-specific provenance and examples are maintained outside source control.
-RCS08_SELECTED_BANDS = (
-    SelectedBand(outcome="nrs", center_hz=3.9215, band_width_hz=DEFAULT_BAND_WIDTH_HZ,
-                 r=-0.5303, perm_p=0.0809, fdr_q=None, exceeds_null_95th=False,
-                 provenance="biomarker track 2026-09-02, audit F8 part 2, commit 6001e00; "
-                            "selection-corrected from perm_p 0.0500"),
-    SelectedBand(outcome="left_leg_vas", center_hz=14.817, band_width_hz=DEFAULT_BAND_WIDTH_HZ,
-                 r=-0.6343, perm_p=0.4166, fdr_q=0.5055, exceeds_null_95th=False,
-                 provenance="biomarker track 2026-09-02, audit F8 part 2, commit 6001e00; "
-                            "selection-corrected from perm_p 0.6074"),
-)
+def source_evidence_for(participant_uid):
+    """Optional historical evidence for an explicitly bound participant.
 
-# Participant-specific provenance and examples are maintained outside source control.
-RCS08_RESPONSE_SUMMARY = ResponseSummary(
-    responds=False, n_cells_suppressing=3, n_cells_total=15, one_sided_p=0.996,
-    replication_note="the sole bilateral replication is at 165 Hz",
-    source="the LFP-response run on the real RCS08 record, 2026-09-02")
+    This accessor is never an automatic fallback for the active gate. Prefer
+    live analyses; provenance records when this historical snapshot was made.
+    """
+    try:
+        from modules.DecodeCommon.private_clinical_config import stage_gate_evidence_for
+    except ImportError:
+        from DecodeCommon.private_clinical_config import stage_gate_evidence_for
+    record = stage_gate_evidence_for(participant_uid)
+    return (tuple(SelectedBand(**band) for band in record["selected_bands"]),
+            ResponseSummary(**record["response_summary"]))
 
 
 @dataclass
@@ -440,7 +429,14 @@ def check_openloop_resolved(frozen) -> GateCondition:
 
 
 def check_selected_band_in_adaptive_window(selected_bands) -> GateCondition:
-    """Does any SELECTED biomarker band lie entirely inside the 8-30 Hz adaptive window?"""
+    """Does any SELECTED biomarker band lie entirely inside the 8-30 Hz adaptive window?
+
+    This is a pure DEVICE check and it is kept as its own condition precisely so that it cannot be
+    confused with the statistical one. A band outside the window is excluded whatever its p-value
+    turns out to be, and a band inside the window is admitted here whatever its p-value turns out to
+    be. Conflating the two reasons would overstate the case against a band that fails only one of
+    them.
+    """
     if not selected_bands:
         return GateCondition("selected_band_inside_adaptive_window", None,
                              "no selected biomarker band was supplied, so whether any candidate is "
@@ -569,12 +565,11 @@ def verdict_row(center_hz, r) -> dict:
         "center_hz": float(center_hz),
         "responds": (None if getattr(r, "responds", None) is None else bool(r.responds)),
         "separation_d": _f(getattr(r, "separation_d", None)),
-        "separation_d_on_log": _f(getattr(r, "separation_d_on_log", None)),
         "power_low": _f(getattr(r, "power_low", None)),
         "power_high": _f(getattr(r, "power_high", None)),
         "amp_low_mA": _f(getattr(r, "amp_low_mA", None)),
         "amp_high_mA": _f(getattr(r, "amp_high_mA", None)),
-        "slope_log_per_mA": _f(getattr(r, "slope_log_per_mA", None)),
+        "slope_per_mA": _f(getattr(r, "slope_per_mA", None)),      # device units per mA (decision 202)
         "slope_p": _f(getattr(r, "slope_p", None)),
         "n_low": int(getattr(r, "n_low", 0) or 0),
         "n_high": int(getattr(r, "n_high", 0) or 0),
@@ -793,7 +788,7 @@ def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_H
                 f"{rule['n_era_negative_significant']} fall with current, "
                 f"{rule['n_pain_positive']} rise with pain. Best separated qualifying band: "
                 f"centre {best:g} Hz, width {float(band_width_hz):g} Hz, era-blocked slope "
-                f"{float(rb.slope_log_per_mA):.3g} per mA (p = {float(rb.slope_p):.3g}), capture "
+                f"{float(rb.slope_per_mA):.3g} device units per mA (p = {float(rb.slope_p):.3g}), capture "
                 f"separation {float(rb.separation_d):.2f} SD"
                 + (" (the two captures alone do not separate it)" if rb.responds is not True
                    else "")))
@@ -846,30 +841,24 @@ def check_adaptive_band(frozen, *, lfp=None, band_centers=DEFAULT_BAND_CENTERS_H
 
 
 def _ceiling_by_side(ceiling_mA, hemispheres):
-    """``(scalar_ceiling, by_side)`` from either one number or a per-side mapping.
-
-    ``ceiling_mA`` is a float (the module hard limit, the default) or a mapping ``{hemisphere:
-    (ceiling_mA, provenance)}`` / ``{hemisphere: ceiling_mA}`` from
-    ``safety_ceiling.ceilings_by_hemisphere`` (2026-09-12). ``scalar_ceiling`` is the smallest of
-    the sides' ceilings, for the one number the page's condition line prints; ``by_side`` maps each
-    hemisphere to ``{"ceiling_mA", "provenance"}`` and is ``None`` when a plain number was given.
-    """
+    """Validate explicit ceilings; the representable grid is never clinical evidence."""
+    from .. import safety_ceiling as SC
     if isinstance(ceiling_mA, dict):
+        values = SC.ceiling_mA_by_side(ceiling_mA, sides=hemispheres)
         by_side = {}
-        for h in hemispheres:
-            v = ceiling_mA.get(h)
-            if v is None:
-                v = (float(AMP_CEILING_MA), "module hard limit, no ceiling given for this side")
-            if isinstance(v, (tuple, list)):
-                by_side[h] = dict(ceiling_mA=float(v[0]), provenance=str(v[1]))
-            else:
-                by_side[h] = dict(ceiling_mA=float(v), provenance="caller-supplied")
-        scalar = min(v["ceiling_mA"] for v in by_side.values()) if by_side else float(AMP_CEILING_MA)
-        return scalar, by_side
-    return float(ceiling_mA), None
+        for side, value in values.items():
+            original = ceiling_mA[side]
+            provenance = (str(original[1]) if isinstance(original, (tuple, list)) and len(original) > 1
+                          else "caller-supplied")
+            by_side[side] = dict(ceiling_mA=value, provenance=provenance)
+        if not by_side:
+            raise SC.ClinicalConfigurationUnavailable("No hemisphere has an explicit clinical ceiling.")
+        return min(values.values()), by_side
+    value = SC.ceiling_mA_by_side({"explicit": ceiling_mA}, sides=("explicit",))["explicit"]
+    return value, None
 
 
-def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA,
+def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=None,
                            side_effect_evidence=None) -> GateCondition:
     """Adaptive amplitude limits must sit under the ceiling and inside the delivered envelope.
 
@@ -897,7 +886,8 @@ def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA
                              "no frozen setting to check: Stage 1 produced no hemisphere result")
     ceiling_scalar, by_side = _ceiling_by_side(ceiling_mA, [s.hemisphere for s in frozen.settings])
     defaulted = []
-    # Participant-specific provenance and examples are maintained outside source control.
+    # A defaulted upper limit is observed history, not a proposed safe setting.
+    # Historical delivery above the current explicit ceiling remains unassessed.
     history_above_ceiling = {}
     for s in frozen.settings:
         ceil_h = by_side[s.hemisphere]["ceiling_mA"] if by_side else ceiling_scalar
@@ -974,7 +964,7 @@ def check_amplitude_limits(frozen, *, amp_limits=None, ceiling_mA=AMP_CEILING_MA
 def evaluate_gate(frozen, *, lfp=None, amp_limits=None, selected_bands=None,
                   response_summary=None,
                   band_centers=DEFAULT_BAND_CENTERS_HZ, band_width_hz=DEFAULT_BAND_WIDTH_HZ,
-                  min_rate_hz=PA.MIN_ADAPTIVE_RATE_HZ, ceiling_mA=AMP_CEILING_MA,
+                  min_rate_hz=PA.MIN_ADAPTIVE_RATE_HZ, ceiling_mA=None,
                   min_sep_d=LFP.MIN_CAPTURE_SEPARATION_D, alpha=SELECTION_ALPHA,
                   fdr_q=SELECTION_FDR_Q, side_effect_evidence=None,
                   pain_positive_by_channel=None, response_fn=None) -> GateResult:
@@ -1031,6 +1021,3 @@ def evaluate_gate(frozen, *, lfp=None, amp_limits=None, selected_bands=None,
                                side_effect_evidence=side_effect_evidence),
     ]
     return GateResult(conditions=conditions, frozen=frozen)
-
-
-# Retained active Aditya interfaces.

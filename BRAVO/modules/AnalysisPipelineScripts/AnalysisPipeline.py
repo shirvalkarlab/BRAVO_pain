@@ -18,8 +18,7 @@ if __name__ == "__main__":
                     HandleRefreshAnalysis()
 
             except Timeout:
-                print("Another analysis still holds the processing lock.")
-                sys.exit(1)
+                print("Lockfile Not Acquired before Timeout")
                 
         elif sys.argv[1] == "ExtractSpectralFeaturesDuringStimulation":
             from modules.AnalysisPipelineScripts.ExtractSpectralFeaturesDuringStimulation import HandleRefreshAnalysis
@@ -29,8 +28,7 @@ if __name__ == "__main__":
                     HandleRefreshAnalysis()
                     
             except Timeout:
-                print("Another analysis still holds the processing lock.")
-                sys.exit(1)
+                print("Lockfile Not Acquired before Timeout")
     
     else:
         task_id = sys.argv[2]
@@ -56,5 +54,3 @@ if __name__ == "__main__":
                     job.result_message = str(e)
                     job.state = "Failed"
                 job.save()
-                if job.state == "Failed":
-                    sys.exit(1)

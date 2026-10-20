@@ -1,4 +1,3 @@
-from modules.ReportCache import cached_report
 """"""
 """
 =========================================================
@@ -21,20 +20,19 @@ Data Upload Handler Module
 
 import os
 import json
-import time
+import logging
 import traceback
 from copy import deepcopy
 from pathlib import Path
 import hmac, hashlib
-import numpy as np
 
 import rest_framework.views as RestViews
 import rest_framework.parsers as RestParsers
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
-from Server.renderers import BinaryRenderer
 
 from django.utils.decorators import method_decorator
+from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.conf import settings
 
@@ -42,6 +40,8 @@ from Server import models
 from modules.HelperFunctions import sanitize_input, get_or_none, json_compliant_handler
 from modules import Database, DataCurator, DataAnalysis
 from modules.AsyncJobScheduler import ProcessingScheduler
+
+_log = logging.getLogger(__name__)
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -399,7 +399,6 @@ class QueryTimeseriesAnalysis(RestViews.APIView):
 
     parser_classes = [RestParsers.JSONParser]
     permission_classes = [IsAuthenticated]
-    renderer_classes = [BinaryRenderer]
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
     def post(self, request):
@@ -427,21 +426,20 @@ class QueryTimeseriesAnalysis(RestViews.APIView):
             userConfig["APIAccess"] = hasattr(request.user, "api_access")
             result = Database.getCachedResult("/queryTimeseriesAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
             if result:
-                return Response(status=200, data=result, content_type='application/json')
+                return Response(status=200, data=result)
             
             Analysis = DataAnalysis.processTimeseriesAnalysis(request.data["ParticipantId"], request.data["AnalysisId"], userConfig)
             if request.data["TherapyId"]:
                 Analysis["Therapy"] = DataAnalysis.processTimeseriesAnalysis(request.data["ParticipantId"], request.data["TherapyId"], userConfig)["Therapy"]
                 Analysis = DataAnalysis.computeTherapeuticEffects(Analysis)
-
-            Analysis["ProcessingConfiguration"] = userConfig
-
+                
             if not request.data["ActiveChannels"] == "RequestAllChannel":
                 Analysis = DataAnalysis.selectRecordingChannel(Analysis, request.data["ActiveChannels"])
             Analysis = json_compliant_handler(Analysis)
 
+            Analysis["ProcessingConfiguration"] = userConfig
             Database.saveCachedResult(Analysis, "/queryTimeseriesAnalysis", request.data["ParticipantId"], {**userConfig, **request.data})
-            return Response(status=200, data=Analysis, content_type='application/json')
+            return Response(status=200, data=Analysis)
 
         elif request.data["RequestType"] == "UpdateData":
             if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "AnalysisId", "RecordingName", "RecordingTags"]):
@@ -471,34 +469,38 @@ class QueryTimeseriesAnalysis(RestViews.APIView):
         return Response(status=400, data={"message": "Malformed Input"})
     
     def get(self, request):
-        ParticipantId = request.GET.get("ParticipantId", None)
-        RecordingId = request.GET.get("RecordingId", None)
-        StartTime = int(request.GET.get("StartTime", 0))
-        StopTime = int(request.GET.get("StopTime", 0))
-        Step = int(request.GET.get("Step", 0))
-        ChannelName = request.GET.get("ChannelName", None)
-
-        ProcessingConfiguration = {key: request.GET.get(key, None) for key in request.GET.dict().keys() if key not in ["ParticipantId", "RecordingId", "StartTime", "StopTime", "Step", "ChannelName"]}
-        Permissions = Database.checkAccessPermission(request.user, ParticipantId, 
-                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
-        if not Permissions:
+        """Return Fixel's binary time-series range while POST remains a JSON analysis API."""
+        participant_id = request.GET.get("ParticipantId")
+        recording_id = request.GET.get("RecordingId")
+        if not participant_id or not recording_id:
+            return Response(status=400, data={"message": "ParticipantId and RecordingId are required"})
+        try:
+            range_config = {
+                "StartTime": int(request.GET.get("StartTime", 0)),
+                "StopTime": int(request.GET.get("StopTime", 0)),
+                "Step": int(request.GET.get("Step", 0)),
+            }
+        except (ValueError, TypeError):
+            return Response(status=400, data={"message": "Invalid time-series range"})
+        if range_config["Step"] < 0:
+            return Response(status=400, data={"message": "Step must be nonnegative"})
+        permissions = Database.checkAccessPermission(
+            request.user, participant_id,
+            study_uid=(request.user.configuration or {}).get("ActiveStudy"),
+        )
+        if not permissions:
             return Response(status=403)
-        
-        start_time = time.time()
-        Data, Metadata = DataAnalysis.getTimeseriesData(ParticipantId, RecordingId, {**ProcessingConfiguration, **{
-            "ChannelName": ChannelName,
-            "StartTime": StartTime,
-            "StopTime": StopTime,
-            "Step": Step
-        }})
-        stop_time = time.time()
-        print(len(Data))
-        print(f"Time series data loaded in {stop_time - start_time:.2f} seconds.")
-
-        response = Response(Data.tobytes(), status=200, content_type='application/octet-stream')
-        response["X-Metadata"] = json.dumps(Metadata)
+        processing = {key: value for key, value in request.GET.items()
+                      if key not in {"ParticipantId", "RecordingId", "StartTime", "StopTime", "Step", "ChannelName"}}
+        channel = request.GET.get("ChannelName")
+        if channel is not None:
+            processing["ChannelName"] = channel
+        data, metadata = DataAnalysis.getTimeseriesData(
+            participant_id, recording_id, {**processing, **range_config})
+        response = HttpResponse(data.tobytes(), content_type="application/octet-stream")
+        response["X-Metadata"] = json.dumps(metadata)
         return response
-    
+
 
 class QueryNeuralActivitySnapshot(RestViews.APIView):
     """
@@ -585,7 +587,6 @@ class QueryNeuralActivitySnapshot(RestViews.APIView):
     permission_classes = [IsAuthenticated]
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
-    @cached_report
     def post(self, request):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
@@ -624,7 +625,741 @@ class QueryNeuralActivitySnapshot(RestViews.APIView):
             return Response(status=200)
 
         return Response(status=400, data={"message": "Malformed Input"})
-        
+
+
+class QueryBiomarkerAnalysis(RestViews.APIView):
+    """
+    API View for pain-biomarker analysis (Shirvalkar Lab Biomarkers module).
+
+    **URL:** ``/queryBiomarkerAnalysis``  **Methods:** POST
+
+    Computes the selectable-source biomarker timeline (time-domain streaming PSD<->pain and/or
+    the ~10-min chronic LFP threshold detector) for a participant, aligned to REDCap PROs, and
+    returns the unified "combined" timeline the React Biomarkers card plots.
+
+    **Request Parameters:**
+
+    :param ParticipantId: participant uid (required)
+    :param source: "timedomain" | "powerdomain" | "both" (default "both"). "powerdomain" is the
+        chronic BrainSense Timeline LFP-power source; "chronic" is accepted as a legacy alias.
+    :param LabelMetric: pain metric the biomarker is computed against (nrs | vas | left_leg_vas |
+        back_vas | mpq_sum | composite_mpq_leftleg; default nrs)
+    :param ProcessedPRO: optional list of PRO record dicts (else REDCap env vars are used)
+    :param RedcapRecordId: optional REDCap record_id filter
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.run_for_participant(request.data)
+        except Exception as e:
+            # Never 500 the card; surface the error as a friendly message it can render.
+            return Response(status=200, data={
+                "source": request.data.get("source", "both"),
+                "channels": [], "timeline": [], "summary": {},
+                "message": "Biomarker computation error: " + str(e),
+            })
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+# `QueryBandValidation` (/queryBandValidation) and `EmitBandCandidate` (/emitBandCandidate) stood
+# here until 2026-09-12. No page called either route (grep of Client/src), and the service
+# functions behind them had no other caller. Deleted on the PI's decision (Biomarkers review
+# finding B12). The shared core they trimmed, `_validate_band_core`, stays: the stability column
+# and the four Closed-Loop endpoints below read it.
+
+
+class QueryServerIdentity(RestViews.APIView):
+    """
+    API View returning a token that changes when the server restarts or its analysis code reloads.
+
+    **URL:** ``/queryServerIdentity``  **Methods:** POST
+
+    WHY THIS EXISTS. The browser caches the three analysis modules' results in memory so that
+    switching between the Biomarkers, Stim Optimizer and Closed-Loop Deployment views, or hiding
+    and showing a plot, does not recompute anything. That cache lives in the tab and therefore
+    OUTLIVES a server restart: without this endpoint a clinician could restart the server, come
+    back to a tab left open, and be shown results computed by code that is no longer running, with
+    nothing on screen indicating it.
+
+    The token is built from two parts, and both are needed.
+
+    The first is the start time of the MASTER server process, read from the process table rather
+    than generated here. A value generated per process would differ between the gunicorn workers,
+    so consecutive requests would land on different workers, return different tokens, and the
+    browser would invalidate its cache constantly — the opposite of what the cache is for. The
+    master's start time is shared by every worker and changes only when the server is restarted.
+
+    The second is a fingerprint of the analysis code's modification times. A reload signal
+    (``kill -HUP``) re-executes the workers while the master keeps running, so the master's start
+    time alone would NOT change after a code change, and a cache built against the old code would
+    survive a deployment. Taking the newest modification time across the three analysis packages
+    means a code change invalidates the browser's cache, which is the behaviour a developer
+    reloading the server expects.
+
+    The endpoint deliberately does no database work and touches no participant data, so it is cheap
+    enough to call on every module mount.
+
+    **Response:** ``{"boot_token": str, "started_at": float | None, "code_fingerprint": str,
+    "detail": str}``
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    # Matches every neighbouring analysis view rather than relying on the framework default. This
+    # endpoint returns no participant data, but an unauthenticated route here would still disclose
+    # the server's restart time and a fingerprint of its deployed code, and an inconsistent
+    # permission declaration in a file where every other view is authenticated is the kind of thing
+    # a reader assumes is deliberate.
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response(_server_identity())
+
+
+def _master_process_start_ticks():
+    """Start time of the master server process, shared by every worker.
+
+    Read from ``/proc`` rather than generated, for the reason the view's docstring gives: a value
+    generated in the worker would differ per worker and the browser would never see a stable token.
+    Returns None off Linux or when the process table is not readable, in which case the caller
+    falls back to a weaker token and says so.
+    """
+    import os
+
+    try:
+        ppid = os.getppid()
+        with open("/proc/%d/stat" % ppid, "r") as fh:
+            raw = fh.read()
+        # The second field is the executable name in parentheses and may itself contain spaces or
+        # parentheses, so the fields after it are found by splitting on the LAST closing bracket.
+        # `starttime` is field 22 counting from one; the first field after the bracket is field 3,
+        # so it sits at index 19 of the remainder.
+        tail = raw.rsplit(")", 1)[1].split()
+        return "ppid%d-%s" % (ppid, tail[19])
+    except Exception:
+        return None
+
+
+def _analysis_code_fingerprint():
+    """Newest modification time across the analysis packages, as a short hex string.
+
+    This is what makes a reload visible to the browser. Only the three packages whose results are
+    cached are walked, and only their Python files, so the cost is a directory scan rather than a
+    read of any file's contents.
+    """
+    import hashlib
+    import os
+
+    roots = []
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    for pkg in ("Biomarkers", "StimOptimizer", "ClosedLoopDeployment"):
+        roots.append(os.path.join(here, "modules", pkg))
+    newest = 0.0
+    count = 0
+    for root in roots:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in ("__pycache__", "tests")]
+            for fn in filenames:
+                if not fn.endswith(".py"):
+                    continue
+                try:
+                    newest = max(newest, os.path.getmtime(os.path.join(dirpath, fn)))
+                    count += 1
+                except OSError:
+                    continue
+    if not count:
+        return "unknown"
+    return hashlib.sha1(("%.3f/%d" % (newest, count)).encode("utf-8")).hexdigest()[:12]
+
+
+#: Computed once per worker at first use rather than on every request. The values it depends on
+#: cannot change within the life of a worker process: the master's start time is fixed, and a code
+#: change re-executes the workers, which recomputes this.
+_SERVER_IDENTITY_CACHE = {}
+
+
+def _server_identity():
+    if _SERVER_IDENTITY_CACHE:
+        return dict(_SERVER_IDENTITY_CACHE)
+    import os
+    import time
+
+    ticks = _master_process_start_ticks()
+    fp = _analysis_code_fingerprint()
+    if ticks is None:
+        # No process table: fall back to this worker's own identity and SAY SO, because the caller
+        # needs to know the token is weaker than usual. A per-worker token can differ between
+        # requests, so a browser seeing `stable` as false should invalidate on a token change only
+        # when it also has other reason to, rather than treating every change as a restart.
+        token = "worker%d-%s" % (os.getpid(), fp)
+        detail = ("the master process start time could not be read, so this token identifies the "
+                  "WORKER rather than the server and may differ between requests")
+        stable = False
+    else:
+        token = "%s-%s" % (ticks, fp)
+        detail = ("token combines the master process start time with a fingerprint of the analysis "
+                  "code's modification times, so it changes on a restart and on a code reload")
+        stable = True
+    _SERVER_IDENTITY_CACHE.update({
+        "boot_token": token,
+        "code_fingerprint": fp,
+        "stable_across_workers": stable,
+        "observed_at": time.time(),
+        "detail": detail,
+    })
+    return dict(_SERVER_IDENTITY_CACHE)
+
+
+class QueryClosedLoopDeployment(RestViews.APIView):
+    """
+    API View for the closed-loop deployment report (ClosedLoopDeployment module).
+
+    Returns the whole report for ONE candidate configuration: device eligibility against all 51
+    encoded Percept rules, the three edges of the amplitude/power/pain triangle each labelled with
+    the clustering unit it was estimated at, the sign-coherence verdict, and the threshold placement
+    with the device alerts it predicts.
+
+    The verdict is deliberately THREE-valued (``blocked`` / ``unsupported`` / ``supported``) rather
+    than a boolean. A configuration the device forbids and a configuration the evidence does not
+    support call for different actions from the reader — the first is a configuration problem, the
+    second a measurement problem — and collapsing them into a single "not ready" was the specific
+    complaint the panel disposition raised.
+
+    **URL:** ``/queryClosedLoopDeployment``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId, Candidates (list of candidate dicts), optional
+    Hemisphere (default "Left") and PowerScale (default "power_linear", the device-parity scale of
+    rule D11).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                        study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            # THROUGH THE MODULE'S OWN SERVICE ENTRY POINT, like the other two analysis modules.
+            # `run_for_participant` resolves the participant, applies the endpoint's documented
+            # defaults, and never raises -- so reaching the handler below now means the module could
+            # not even be IMPORTED, which is a different and much louder kind of problem.
+            from modules.ClosedLoopDeployment import bravo_service as cld_service
+            Analysis = cld_service.run_for_participant(request.data)
+        except Exception as e:
+            # LOGGED, WITH THE TRACEBACK. This handler answering HTTP 200 with a readable sentence
+            # is right for the page and was catastrophic as the ONLY record: on 2026-09-04 a
+            # module-level import broke the whole package, every request came back through here, and
+            # nothing wrote it down. It stayed broken for five days and was found by reading code.
+            # `exception` rather than `error`, because the name of the module that would not import
+            # exists only in the traceback.
+            _log.exception("closed-loop deployment report failed for participant %s",
+                           request.data.get("ParticipantId"))
+            return Response(status=200, data={"available": False,
+                                              "reason": "deployment report error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+class QueryClosedLoopChosenBand(RestViews.APIView):
+    """
+    API View for the band chosen on the Closed-Loop page, recorded on the server (the PI's ruling 8,
+    decision 233). Until 2026-09-23 the choice lived only in the browser that made it.
+
+    One endpoint, three actions. ``read`` returns the band chosen now (or none) with the last rows
+    of the history and the newest band on each side (``by_side``); ``choose`` records a new choice; ``clear`` records that none is chosen. The
+    record is append-only (``modules.ClosedLoopDeployment.chosen_band``): nothing is rewritten, the
+    current band is the newest row, and every row names who made it. A save that did not land says
+    so (``saved`` False with a reason), so the page can say the choice lives in this browser only.
+
+    **URL:** ``/queryClosedLoopChosenBand``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId, Action ("read", "choose" or "clear"); for "choose",
+    BandCandidate, Source ("grid", "upload" or "browser_storage") and, for "browser_storage" only,
+    CommittedAt (when the band was chosen in the browser).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "Action"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                        study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        from modules.ClosedLoopDeployment import chosen_band
+        uid = str(request.data["ParticipantId"])
+        action = request.data.get("Action")
+        who = getattr(request.user, "email", None) or str(request.user)
+        if action == "read":
+            out = chosen_band.current(uid)
+            out["history"] = chosen_band.history(uid, limit=20)
+            # One band per side (the PI, 2026-10-08), for "2 independent controllers".
+            out["by_side"] = chosen_band.current_by_side(uid)["by_side"]
+        elif action == "choose":
+            out = chosen_band.choose(uid, request.data.get("BandCandidate"), chosen_by=who,
+                                     source=request.data.get("Source"),
+                                     committed_at=request.data.get("CommittedAt"))
+        elif action == "clear":
+            out = chosen_band.clear(uid, chosen_by=who)
+        else:
+            return Response(status=400, data={"message": "Action must be read, choose or clear"})
+        return Response(status=200, data=json_compliant_handler(out))
+
+
+class QueryControlAnalyses(RestViews.APIView):
+    """
+    API View for the saved control analyses a page shows (the PI, 2026-09-24): for one page, every
+    analysis it lists, each with its newest saved run (or none yet), how many runs are kept, what it
+    does and its literature. Reads saved files only; a run is started offline
+    (`python3 -m modules.ControlAnalyses.run`), never by a request.
+
+    **URL:** ``/queryControlAnalyses``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId, Page ("biomarkers" or "stim_optimizer").
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "Page"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                        study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        from modules.ControlAnalyses import registry, snapshots
+        page = request.data.get("Page")
+        if page not in registry.PAGES:
+            return Response(status=400, data={"message": "Page must be one of " + ", ".join(registry.PAGES)})
+        out = snapshots.page_payload(str(request.data["ParticipantId"]), page)
+        return Response(status=200, data=json_compliant_handler(out))
+
+
+class QueryDeploymentROC(RestViews.APIView):
+    """
+    API View that computes the rating-clustered deployment ROC + cut-point table for ONE committed
+    band (DESIGN_biomarker_pipeline_v2 Phase B). Same band feature as the stability column (the
+    shared `_validate_band_core`); the AUC bootstrap CI resamples whole rating clusters (not raw samples), and the match direction defaults
+    to causal prior/forecasting (toggle to pro_first via MatchDirection).
+
+    **URL:** ``/queryDeploymentROC``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId, Channel, CenterHz and the scan's own matching and
+    binarization keys, plus optional NBoot (default 500).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data,
+                                           required_keys=["ParticipantId", "Channel", "CenterHz"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.band_deployment_roc(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "roc error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+class QueryLsbPower(RestViews.APIView):
+    """
+    API View that anchors a Phase-B cut-point to deployable device LSB units (percentile-anchored on
+    the device Timeline), reports the empirical µV²/LSB ratio (FYI cross-check), and the AUC power /
+    sample-size on the count of independent ratings (DESIGN_biomarker_pipeline_v2 Phase C).
+
+    **URL:** ``/queryLsbPower``  **Methods:** POST
+
+    **Request Parameters:** same as /queryDeploymentROC, plus Cutpoint (the oriented log-power
+    threshold chosen in Phase B).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data,
+                                           required_keys=["ParticipantId", "Channel", "CenterHz"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.band_lsb_and_power(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "lsb/power error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+class QueryElectrodeIdentifierCheck(RestViews.APIView):
+    """
+    The electrode identifier's own spectra and rankings (each electrode against the other lead's
+    contact 3, stimulation off) for the Biomarkers page's bottom fold (the PI, 2026-10-06).
+
+    **URL:** ``/queryElectrodeIdentifierCheck``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId (uid).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.electrode_identifier_check(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "electrode identifier error: " + str(e)})
+
+        return Response(status=200, data=json_compliant_handler(Analysis))
+
+
+class QueryTimelineDetail(RestViews.APIView):
+    """
+    The Biomarkers timeline's detail panel (item P-18, the PI's go-ahead 2026-10-06): for one
+    clicked mark, the voltage trace, the device's own PSD and the device's sensed band power within
+    12 h, on that contact pair only. Device values at face value; no pain rating.
+
+    **URL:** ``/queryTimelineDetail``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId (uid), Channel, Dtype, Product, TStart (epoch s).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "Channel",
+                                                                         "Dtype", "TStart"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.timeline_detail(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "timeline detail error: " + str(e)})
+
+        return Response(status=200, data=json_compliant_handler(Analysis))
+
+
+class QueryStimProgram(RestViews.APIView):
+    """
+    The Closed-Loop page's "Stimulation program" card (decision 467): the program the device runs
+    today, from the newest export, for "Inherit current settings". Nothing is written anywhere.
+
+    **URL:** ``/queryStimProgram``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId (uid).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        from modules.ClosedLoopDeployment import bravo_service
+        return Response(status=200, data=json_compliant_handler(bravo_service.stim_program(request.data)))
+
+
+class QueryWiringComparison(RestViews.APIView):
+    """
+    The Closed-Loop page's wiring card (decision 472): the three sense-to-control wirings run as two
+    Dual Threshold controllers over the time both sides were recorded, scored on the same pain
+    ratings, with a recommendation. Reads only; gates nothing.
+
+    **URL:** ``/queryWiringComparison``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId, Bands ({"Left": {...}, "Right": {...}}), PainScore, and the
+    matching settings and StimProgram the page sends with its reports.
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        from modules.ClosedLoopDeployment import bravo_service
+        return Response(status=200, data=json_compliant_handler(bravo_service.wiring_comparison(request.data)))
+
+
+class QueryPsdLsbConversionModel(RestViews.APIView):
+    '.'
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.psd_lsb_conversion_model(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "psd/lsb model error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+class QueryDeploymentRocByEra(RestViews.APIView):
+    """
+    API View that refits the deployment ROC + Youden cut-point WITHIN each stimulation era
+    (OFF / LOW / HIGH) for one committed band, so a band whose threshold swings across stim states
+    is flagged as a fragile controller anchor (DESIGN_biomarker_pipeline_v2 Phase D).
+
+    **URL:** ``/queryDeploymentRocByEra``  **Methods:** POST
+
+    **Request Parameters:** same as /queryDeploymentROC.
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data,
+                                           required_keys=["ParticipantId", "Channel", "CenterHz"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.band_deployment_roc_by_era(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "era-roc error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+class QueryDeploymentSummary(RestViews.APIView):
+    """
+    API View that assembles the one authoritative Deploy-to-Percept review payload for a committed
+    band: identity, device-control mapping, evidence (AUC/OR with CI), the percentile-anchored LSB
+    threshold, power/sample-size, per-era portability, and the explicit GATES + CAVEATS a clinician
+    signs against (DESIGN_biomarker_pipeline_v2 Phase E).
+
+    **URL:** ``/queryDeploymentSummary``  **Methods:** POST
+
+    **Request Parameters:** same as /queryLsbPower (Channel, CenterHz, Cutpoint, ...).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data,
+                                           required_keys=["ParticipantId", "Channel", "CenterHz"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.deployment_summary(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "summary error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+class QueryPainScores(RestViews.APIView):
+    'Implementation details are defined by the code and its regression contracts.'
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.pain_scores_for_participant(request.data)
+        except Exception as e:
+            return Response(status=200, data={"metrics": [], "n_reports": 0,
+                                              "message": "Pain-score error: " + str(e)})
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+class QueryDataAvailability(RestViews.APIView):
+    """
+    API View for the always-on ACQUISITION timeline (Shirvalkar Lab Biomarkers module).
+
+    **URL:** ``/queryDataAvailability``  **Methods:** POST
+
+    Returns what neural data exists, when, on which contact, by which route, with its inline
+    calibrated values, plus the chronic stimulation series (decision 216). Nothing in it derives
+    from a pain report: the pain row comes from ``/queryPainScores`` and the rating-centred sample
+    index from ``/queryPsdScanIndex``. It does NOT run the biomarker detector.
+
+    **Request Parameters:**
+
+    :param ParticipantId: participant uid (required)
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.availability_for_participant(request.data)
+        except Exception as e:
+            # Never 500 the card; surface an empty payload it can render as an empty-state.
+            return Response(status=200, data={
+                "availability": {"records": [], "pain": {"t": [], "y": []},
+                                 "stim": {"t": [], "y": []}, "freq_bands": [], "span": []},
+                "message": "Data-availability error: " + str(e),
+            })
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+class QueryPsdScanIndex(RestViews.APIView):
+    """
+    The rating-centred sample index for the Biomarkers page's Binarization card and the timeline's
+    binarization colour mode (decision 216): every full-spectrum PSD the exploratory scan pools,
+    voltage-trace entries stamped at each pain report's time. Split out of ``/queryDataAvailability``
+    so the acquisition timeline never depends on a pain report.
+
+    **URL:** ``/queryPsdScanIndex``  **Methods:** POST
+
+    :param ParticipantId: participant uid (required)
+    :param LabelMetric: pain metric (default nrs)
+    """
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.psd_scan_index_for_participant(request.data)
+        except Exception as e:
+            return Response(status=200, data={"psd_scan_index": [], "message": "Sample index error: " + str(e)})
+        return Response(status=200, data=json_compliant_handler(Analysis))
+
+
 class QueryBurstAnalysis(RestViews.APIView):
     """
     API View for neural burst analysis. 
@@ -835,7 +1570,6 @@ class QueryChronicTimeline(RestViews.APIView):
     permission_classes = [IsAuthenticated]
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
-    @cached_report
     def post(self, request):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
@@ -968,7 +1702,6 @@ class QueryChronicNeuralActivity(RestViews.APIView):
     permission_classes = [IsAuthenticated]
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
-    @cached_report
     def post(self, request):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})
@@ -1069,7 +1802,7 @@ class QueryCustomizedAnalysis(RestViews.APIView):
 
             try:
                 if request.data["StartProcessing"]:
-                    DataAnalysis.processCustomizedPipeline(analysis, Database.retrieveProcessingSettings(request.user.configuration)[0])
+                    DataAnalysis.processCustomizedPipeline(analysis)
                     analysis.metadata["results"] = True
                 else:
                     # Reset Results
@@ -1080,8 +1813,11 @@ class QueryCustomizedAnalysis(RestViews.APIView):
                     analysis.metadata["results"] = False
 
             except Exception as e:
+                # Log the full traceback server-side; return a GENERIC message to the client. The raw
+                # str(e) can leak internal detail (paths, SQL fragments, library internals) to an API
+                # caller. The traceback above is in docker logs for diagnosis.
                 print(traceback.format_exc())
-                return Response(status=400, data={"message": str(e)})
+                return Response(status=400, data={"message": "Analysis execution failed. See server logs for details."})
             
             analysis.save()
             Overview = DataAnalysis.queryCustomizedAnalysis(request.data["ParticipantId"], analysis)
@@ -1125,10 +1861,7 @@ class QueryCustomizedAnalysis(RestViews.APIView):
                 for node in group:
                     if "result" in node.keys():
                         if node["result"] == request.data["ResultId"]:
-                            try:
-                                result = DataAnalysis.extractAnalysisOutput(node)
-                            except DataAnalysis.StaleAnalysisError as exc:
-                                return Response(status=409, data={"status": "stale", "message": str(exc)})
+                            result = DataAnalysis.extractAnalysisOutput(node)
                             result = DataAnalysis.selectRecordingChannel(result, request.data["ActiveChannels"] if "ActiveChannels" in request.data.keys() else [])
             #Overview = DataAnalysis.queryCustomizedAnalysis(request.data["ParticipantId"], analysis)
             result = json_compliant_handler(result)
@@ -1158,16 +1891,9 @@ class QueryAIModels(RestViews.APIView):
             models = DataAnalysis.extractMachineLearningModels(request.data["ParticipantId"])
             return Response(status=200, data=models)
 
-        elif request.data["RequestType"] == "RequestAvailability":
-            return Response(status=200, data=DataAnalysis.machineLearningAvailability())
         else:
-            try:
-                result = DataAnalysis.extractMachineLearningModels(request.data["ParticipantId"], model_key=request.data["ModelType"], config=request.data)
-                return Response(status=200, data=result)
-            except DataAnalysis.ModelUnavailable as error:
-                return Response(status=503, data={"message": str(error)})
-            except (KeyError, ValueError) as error:
-                return Response(status=400, data={"message": str(error)})
+            result = DataAnalysis.extractMachineLearningModels(request.data["ParticipantId"], model_key=request.data["ModelType"], config=request.data)
+            return Response(status=200, data=result)
 
         return Response(status=400, data={"message": "Malformed Input"})
     
@@ -1291,3 +2017,146 @@ class QueryMedicationCycleAnalysis(RestViews.APIView):
             return Response(status=200, data=result)
 
         return Response(status=400, data={"message": "Malformed Input"})
+class QueryStimOptimizer(RestViews.APIView):
+    """
+    API View for Bayesian optimization of DBS stimulation parameters (StimOptimizer module).
+
+    **URL:** ``/queryStimOptimizer``  **Methods:** POST
+
+    Fits an independent Gaussian-process surrogate per ARM, where an arm is one pain site crossed
+    with one hemisphere, over the (frequency, amplitude) grid, under a separately modelled safety
+    constraint. Returns the posterior surfaces, the exploration queue, the next proposed batch and
+    the Plotly figure JSON for the browser.
+
+    This endpoint is deliberately built to be able to say that the data do NOT support a parameter
+    recommendation. Read ``recommendation_supported`` and ``blockers`` before reading any optimum:
+    an arm whose ``optimum_resolved`` is false has a predicted gain smaller than the posterior
+    uncertainty at that cell, which means the surface indicates where to look next, not what to
+    program.
+
+    **Request Parameters:**
+
+    :param ParticipantId: participant uid (required)
+    :param Sites: list of pain-site metrics (default ["left_leg", "back"])
+    :param Hemispheres: list of "Left"/"Right" (default both)
+    :param WashinMin: wash-in exclusion window in MINUTES (default 1.0)
+    :param Backend: "plotly" to include figure JSON (default) or "none" for tables only
+    :param NBatches: forward-simulated batches for the trajectory panel (default 3)
+    :param Q: batch size per simulated batch (default 4)
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                    study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.StimOptimizer import bravo_service
+            Analysis = bravo_service.run_for_participant(request.data)
+        except Exception as e:
+            # Never 500 the card; surface the error as a message the view can render.
+            return Response(status=200, data={
+                "available": False, "arms": {}, "summary": [], "blockers": [],
+                "reason": "StimOptimizer computation error: " + str(e),
+            })
+
+        Analysis = json_compliant_handler(Analysis)
+        return Response(status=200, data=Analysis)
+
+
+class ExportTitrationSheet(RestViews.APIView):
+    """
+    Turns the Stim Optimizer page's titration session (`/queryStimOptimizer`'s own
+    `titration_plan` block, `modules/StimOptimizer/titration_plan.py`) into an actual clinic
+    workbook -- the "Make Google sheet" button on `TitrationSessionCard.js`. The PI's ruling,
+    2026-09-14: copy the lab's template into a new file (never write into the template itself),
+    write the schedule into the new file, name it from the visit date, and let a re-export for the
+    same date overwrite that file rather than making a second copy.
+
+    **URL:** ``/exportTitrationSheet``  **Methods:** POST
+
+    :param ParticipantId: participant uid (required)
+    :param VisitDate: "YYYY-MM-DD" (required) -- the date shown on the sheet's own header cell and
+        used to build the file's name.
+
+    Rebuilds the plan through the SAME code path `/queryStimOptimizer` uses
+    (`bravo_service.run_for_participant`), so the exported sheet is always the plan the page is
+    showing, not a second, independently derived copy of it.
+
+    Returns JSON in every case except one: when this server has Google credentials
+    (`modules/StimOptimizer/google_sheets_client.py`), a real Google Sheet is written and the
+    response names its URL. Without credentials, the response is a filled `.xlsx` file streamed as
+    a download -- ``Content-Disposition: attachment`` -- rather than JSON, and the frontend reads
+    the plain-language setup note from its own copy of the same text rather than from this
+    response.
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "VisitDate"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                    study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.StimOptimizer import bravo_service
+            Analysis = bravo_service.run_for_participant(request.data)
+        except Exception as e:
+            return Response(status=200, data={
+                "available": False,
+                "reason": "StimOptimizer computation error: " + str(e),
+            })
+
+        plan = (Analysis or {}).get("titration_plan") or {}
+        if not plan.get("available"):
+            return Response(status=200, data={
+                "available": False,
+                "reason": plan.get("reason") or "no titration plan is available for this participant",
+            })
+
+        participant = models.Participant.find(uid=request.data["ParticipantId"])
+        # Preserve the behavior covered by the regression tests.
+        participant_code = (getattr(participant, "name", None) or "").strip()
+
+        try:
+            from modules.StimOptimizer import sheet_export
+            from modules.StimOptimizer import google_sheets_client as gsc
+            drive = gsc.client_if_available()
+            result = sheet_export.export(plan, participant_code, request.data["VisitDate"], drive=drive,
+                                         participant_uid=request.data["ParticipantId"])
+        except Exception as e:
+            return Response(status=200, data={
+                "available": False,
+                "reason": "sheet export error: " + str(e),
+            })
+
+        if result.get("mode") == "error":
+            return Response(status=200, data={"available": False, "reason": result.get("reason")})
+
+        if result.get("mode") == "drive":
+            return Response(status=200, data={"available": True, **result})
+
+        # xlsx mode: stream the filled workbook as a download.
+        from django.http import FileResponse
+        path = result["path"]
+        name = result["name"]
+        resp = FileResponse(
+            open(path, "rb"),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        resp["Content-Disposition"] = f'attachment; filename="{name}.xlsx"'
+        return resp
+

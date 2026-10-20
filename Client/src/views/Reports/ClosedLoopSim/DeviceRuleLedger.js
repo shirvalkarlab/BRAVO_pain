@@ -4,22 +4,17 @@
  *
  * WHAT THIS REPLACES, AND WHY IT MATTERS CLINICALLY. The panel this supersedes rendered three of the
  * nine outcome kinds the rule evaluator produces, and it printed every row of the unevaluable bucket
- * with one fixed sentence saying the value had not been read off the programmer. For RCS08 that
- * sentence is true of exactly one of four unevaluable rules. The other three could not be evaluated
- * because the fields they read were never routed into the module, which is a defect in how the
- * analysis is wired and cannot be resolved at a programming visit — so the old copy sent a clinician
- * to the A610 to look for three values that are not on it. The copy is therefore keyed on the
- * payload's own `kind` here, and each row names its actor.
+ * with one fixed sentence saying the value had not been read off the programmer. Missing
+ * analysis inputs instead indicate a wiring problem that cannot be resolved at a programming
+ * visit. The copy is therefore keyed on the payload's own `kind`, and each row names its actor.
  *
  * WHY THE ADVISORY BUCKET IS SPLIT FOUR WAYS. The payload's `eligibility.advisories` list mixes four
  * kinds that mean different things: a predicate that returned false (`advisory_failed`), a rule
  * recorded for the reader with no predicate to check (`advisory_no_predicate`), a rule whose inputs
  * were absent (`advisory_not_determinable`), and a rule that PASSED and whose passing value the
  * module pinned because the meaning of the rest of the report depends on it (`recorded_value`). The
- * previous filter admitted only `advisory_failed`, so for RCS08 it discarded 24 of 26 rows including
- * both pinned values — and the pinned values are precisely the ones a reader must see, because one
- * of them records the programming mode in force, which is what makes the Adaptive workflow reachable
- * at all.
+ * previous filter admitted only `advisory_failed`, discarding other kinds and pinned values.
+ * These values can include the programming mode that determines workflow eligibility.
  *
  * WHY EVERY BLOCK IS DRAWN EVEN WHEN IT IS EMPTY. A bucket that disappears when it has no rows
  * cannot be distinguished from a bucket that was never rendered. Drawing the heading with a zero
@@ -35,107 +30,89 @@
  * which is what the state means.
  */
 import { useState } from "react";
-import { Card, Divider } from "@mui/material";
+import { Card } from "@mui/material";
 import MDBox from "components/MDBox";
-import MDButton from "components/MDButton";
 import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
-import { unevaluableFor } from "./deployFormat";
+import { TYPE, WRAP, CARD, STATE } from "assets/theme/base/tokens";
+import Fold from "./Fold";
+import { refusalFor, unevaluableFor } from "./deployFormat";
 
-/** The four state shapes, drawn small enough to sit on a text baseline. */
-function RuleGlyph({ state, size = 13 }) {
-  const s = size;
-  const c = s / 2;
-  if (state === "satisfied") {
-    return (
-      <svg width={s} height={s} viewBox="0 0 16 16" aria-label="satisfied" role="img">
-        <circle cx="8" cy="8" r="7" fill={PAL.pass} />
-        <path d="M4.5 8.3 L7 10.8 L11.5 5.5" stroke="#fff" strokeWidth="1.9" fill="none"
-          strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    );
-  }
-  if (state === "violated") {
-    return (
-      <svg width={s} height={s} viewBox="0 0 16 16" aria-label="violated" role="img">
-        <rect x="1" y="1" width="14" height="14" rx="1.5" fill={PAL.fail} />
-        <path d="M5 5 L11 11 M11 5 L5 11" stroke="#fff" strokeWidth="1.9" strokeLinecap="round" />
-      </svg>
-    );
-  }
-  if (state === "unevaluable") {
-    return (
-      <svg width={s} height={s} viewBox="0 0 16 16" aria-label="cannot be evaluated" role="img">
-        <rect x="1.2" y="1.2" width="13.6" height="13.6" rx="1.5" fill="none" stroke={PAL.warnText}
-          strokeWidth="1.6" strokeDasharray="3 2" />
-        <text x="8" y="12" textAnchor="middle" fontSize="10" fontWeight="700"
-          fill={PAL.warnText}>?</text>
-      </svg>
-    );
-  }
-  if (state === "deferred") {
-    return (
-      <svg width={s} height={s} viewBox="0 0 16 16" aria-label="deferred duplicate" role="img">
-        <rect x="1.2" y="1.2" width="13.6" height="13.6" rx="1.5" fill="none" stroke={PAL.deferred}
-          strokeWidth="1.6" />
-        <path d="M4.5 6.5 H11.5 M4.5 9.5 H11.5" stroke={PAL.deferred} strokeWidth="1.6"
-          strokeLinecap="round" />
-      </svg>
-    );
-  }
-  // Advisory: a filled disc with no mark inside, so it reads as "noted" rather than as a verdict.
+/**
+ * The state marks, as the shared glyphs (SPEC 2026-09-26 section 2.3): ✕ refuses (red), ○ could not
+ * check (grey), ✓ allowed (ink), = counted under another rule, · a recommendation. Each is a SHAPE,
+ * so the table reads correctly with no colour at all.
+ */
+const RULE_MARK = {
+  violated: { glyph: STATE.refused.glyph, ink: STATE.refused.ink, label: "refuses" },
+  unevaluable: { glyph: STATE.notChecked.glyph, ink: STATE.notChecked.ink, label: "could not check" },
+  satisfied: { glyph: STATE.pass.glyph, ink: STATE.pass.ink, label: "allowed" },
+  deferred: { glyph: "=", ink: PAL.ink3, label: "counted under another rule" },
+  advisory: { glyph: "·", ink: PAL.ink3, label: "recommended, not required" },
+};
+function RuleGlyph({ state }) {
+  const m = RULE_MARK[state] || RULE_MARK.advisory;
   return (
-    <svg width={s} height={s} viewBox="0 0 16 16" aria-label="advisory" role="img">
-      <circle cx={c ? 8 : 8} cy="8" r="6.6" fill="none" stroke={PAL.neutral} strokeWidth="1.6" />
-      <circle cx="8" cy="8" r="2.4" fill={PAL.neutral} />
-    </svg>
+    <span role="img" aria-label={m.label} style={{ ...TYPE.body, fontWeight: 600, color: m.ink,
+      display: "inline-block", width: "1.2em", textAlign: "center" }}>{m.glyph}</span>
   );
 }
+
+/** "clinician, at the A610" -> "Clinician, at the A610": sentence case, never capitals. */
+const sentenceCase = (t) => (t ? String(t).charAt(0).toUpperCase() + String(t).slice(1) : t);
 
 /**
  * One rule row. `actor` is rendered as a right-aligned label on the row rather than folded into the
  * explanatory sentence, so a reader can run their eye down the right-hand edge and see at once how
- * much of the ledger is theirs to fix. For RCS08 that column shows two rows belonging to the
- * clinician and two belonging to the analysis, which is the distinction the previous single sentence
- * erased.
+ * much of the ledger is theirs to fix. The label distinguishes clinician actions from analysis
+ * changes rather than assigning every issue to the clinician.
  */
 function RuleRow({ row, state, ink, copy, actor }) {
   const [open, setOpen] = useState(false);
   if (!row) return null;
   return (
-    <MDBox py={0.5} sx={{ borderTop: "1px solid rgba(0,0,0,0.07)" }}>
-      <MDBox display="flex" flexDirection="row" alignItems="flex-start" gap={0.9}>
-        <MDBox flex="0 0 auto" mt={0.2}><RuleGlyph state={state} /></MDBox>
+    <MDBox py={1} sx={{ borderTop: `1px solid ${PAL.rule}` }}>
+      <MDBox display="flex" flexDirection="row" alignItems="flex-start" gap={1}>
+        <MDBox flex="0 0 auto"><RuleGlyph state={state} /></MDBox>
         <MDBox flex="1 1 auto">
-          <MDTypography variant="caption" sx={{ fontSize: 11.5, color: "#2A2A2A" }}>
-            <b style={{ fontFamily: PAL.mono, color: ink }}>{row.rule_id}</b>
+          <MDTypography variant="caption" sx={{ ...TYPE.body, color: PAL.ink }}>
+            {ink === PAL.warnText ? <span aria-hidden="true" style={{ marginRight: 4, color: ink }}>▲</span> : null}
+            <b style={{ fontWeight: 600, color: ink }}>{row.rule_id}</b>
             {"  "}{row.title || "untitled rule"}
-            {row.page ? <i style={{ color: "#7A7A7A" }}>{`  (${row.page}`}
+            {row.page ? <i style={{ color: PAL.ink3 }}>{`  (${row.page}`}
               {row.source ? `, ${row.source}` : ""}{")"}</i> : null}
           </MDTypography>
           {copy ? (
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 11, color: ink }}>
+            <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", color: ink }}>
               {copy}
             </MDTypography>
           ) : null}
           {row.observed ? (
-            <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
-              fontFamily: PAL.mono, color: "#4A4A4A", mt: 0.2 }}>
+            <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body,
+              color: PAL.ink2, mt: 0.25 }}>
               {`observed: ${row.observed}`}
+            </MDTypography>
+          ) : null}
+          {/* The server's note on a row it kept although another rule owns the same finding (the
+              owner could not be evaluated, or the two disagreed): why it still counts here. */}
+          {row.deferral_note ? (
+            <MDTypography variant="caption" data-deferral-note="" sx={{ ...TYPE.body, display: "block",
+              color: PAL.ink2, mt: 0.25 }}>
+              {row.deferral_note}
             </MDTypography>
           ) : null}
           {row.why ? (
             <>
-              <MDButton size="small" variant="text" onClick={() => setOpen((o) => !o)}
-                sx={{ fontSize: 10.5, color: PAL.accent, cursor: "pointer", display: "block",
+              <MDTypography variant="caption" onClick={() => setOpen((o) => !o)}
+                sx={{ fontSize: PAL.fs.body, color: PAL.accent, cursor: "pointer", display: "block",
                   mt: 0.2, "&:hover": { textDecoration: "underline" } }}>
                 {open ? "Hide the rule's own wording" : "Read the rule's own wording"}
-              </MDButton>
+              </MDTypography>
               {open ? (
-                <MDTypography variant="caption" sx={{ display: "block", fontSize: 11,
-                  color: "#3A3A3A", mt: 0.3, pl: 1,
-                  borderLeft: "2px solid rgba(0,0,0,0.12)" }}>
+                <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body,
+                  color: PAL.ink2, mt: 0.3, pl: 1,
+                  borderLeft: `2px solid ${PAL.rule}` }}>
                   {row.why}
                   {row.deferral_reason ? <><br /><br />{row.deferral_reason}</> : null}
                 </MDTypography>
@@ -144,10 +121,9 @@ function RuleRow({ row, state, ink, copy, actor }) {
           ) : null}
         </MDBox>
         {actor ? (
-          <MDBox flex="0 0 auto" pl={1} sx={{ maxWidth: 190, textAlign: "right" }}>
-            <MDTypography variant="caption" sx={{ fontSize: 10, fontWeight: "bold",
-              letterSpacing: 0.3, color: ink }}>
-              {actor.toUpperCase()}
+          <MDBox flex="0 0 auto" pl={1} sx={{ maxWidth: 200, textAlign: "right" }}>
+            <MDTypography variant="caption" sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink2 }}>
+              {sentenceCase(actor)}
             </MDTypography>
           </MDBox>
         ) : null}
@@ -159,14 +135,13 @@ function RuleRow({ row, state, ink, copy, actor }) {
 /** A bucket heading that is drawn whether or not the bucket has rows in it. */
 function BucketHead({ state, title, count, note }) {
   return (
-    <MDBox display="flex" flexDirection="row" alignItems="center" gap={0.8} mt={1.2}>
-      <RuleGlyph state={state} size={14} />
-      <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", letterSpacing: 0.4,
-        color: "#4A4A4A" }}>
-        {`${title.toUpperCase()} \u00B7 ${count}`}
+    <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={1} mt={2} flexWrap="wrap">
+      <RuleGlyph state={state} />
+      <MDTypography component="h3" variant="caption" sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink }}>
+        {`${title} \u00B7 ${count}`}
       </MDTypography>
       {note ? (
-        <MDTypography variant="caption" sx={{ fontSize: 10.5, color: "#8A8A8A" }}>
+        <MDTypography variant="caption" sx={{ ...TYPE.body, color: PAL.ink3 }}>
           {note}
         </MDTypography>
       ) : null}
@@ -181,43 +156,48 @@ function CollapsedGroup({ rows, state, title, note }) {
     <MDBox mt={0.8}>
       <BucketHead state={state} title={title} count={rows.length} note={note} />
       {rows.length > 0 ? (
-        <MDButton size="small" variant="text" onClick={() => setOpen((o) => !o)}
-          sx={{ fontSize: 10.5, color: PAL.accent, cursor: "pointer", display: "block", ml: 2.8,
+        <MDTypography variant="caption" onClick={() => setOpen((o) => !o)}
+          sx={{ ...TYPE.body, color: PAL.accent, cursor: "pointer", display: "block", ml: 3,
             "&:hover": { textDecoration: "underline" } }}>
           {open ? "Collapse these rules"
             : `Show these ${rows.length} rules (${rows.map((r) => r.rule_id).join(", ")})`}
-        </MDButton>
+        </MDTypography>
       ) : null}
       {open ? rows.map((r) => (
-        <RuleRow key={`cg-${r.rule_id}`} row={r} state={state} ink="#5A5A5A" copy={null}
+        <RuleRow key={`cg-${r.rule_id}`} row={r} state={state} ink={PAL.ink3} copy={null}
           actor={null} />
       )) : null}
     </MDBox>
   );
 }
 
-export default function DeviceRuleLedger({ report }) {
+export default function DeviceRuleLedger({ report, bare = false }) {
+  // `bare` (the PI, 2026-10-08: one decision panel, not two): drawn inside the decision card's
+  // closed Details fold, with no card and no title of its own.
+  const Shell = bare ? MDBox : Card;
+  const shellSx = bare ? {} : { ...CARD, p: 3 };
+  const heading = bare ? null : (
+    <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Device rule check</MDTypography>);
   const { data, loading, err } = report || { data: null, loading: false, err: null };
 
   if (loading) {
     return (
-      <Card><MDBox p={2}>
-        <MDTypography variant="button">Running the encoded Percept rule table…</MDTypography>
-      </MDBox></Card>
+      <Shell sx={shellSx}>
+        {heading}
+        <MDTypography sx={{ ...TYPE.lead, color: PAL.ink2, mt: 1 }}>Checking the device's rules…</MDTypography>
+      </Shell>
     );
   }
   if (!data || !data.eligibility) {
     return (
-      <Card><MDBox p={2}>
-        <MDTypography variant="h6" sx={{ fontSize: 15 }}>Device rule ledger</MDTypography>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5,
-          color: PAL.neutral }}>
-          {`The rule table has not been run for this configuration${err ? ` (${err})` : ""}. `}
-          Eligibility is evaluated for one channel and one centre frequency rather than for a
-          participant, so a candidate configuration has to be chosen before these rules mean
-          anything.
+      <Shell sx={shellSx}>
+        {heading}
+        <MDTypography sx={{ ...TYPE.lead, color: PAL.ink2, mt: 1, maxWidth: "68ch" }}>
+          {`The device's rules have not been checked for this configuration${err ? ` (${err})` : ""}. `}
+          They are checked for one sensing contact pair at one band, not for a participant, so a band
+          has to be chosen before these rules mean anything.
         </MDTypography>
-      </MDBox></Card>
+      </Shell>
     );
   }
 
@@ -232,11 +212,13 @@ export default function DeviceRuleLedger({ report }) {
   const recorded = byKind("recorded_value");
   const advNoPredicate = byKind("advisory_no_predicate");
   const advNotDeterminable = byKind("advisory_not_determinable");
+  // An advisory whose own check raised: a defect in the rule table, named as one.
+  const advError = byKind("predicate_error");
   // Any advisory kind this component has not been taught about. Collecting the remainder rather than
   // assuming four kinds means a new kind added upstream appears on the page as an unclassified row
   // instead of vanishing, which is the failure the previous single-kind filter had.
   const KNOWN = ["advisory_failed", "recorded_value", "advisory_no_predicate",
-    "advisory_not_determinable"];
+    "advisory_not_determinable", "predicate_error"];
   const advOther = advisories.filter((a) => a && KNOWN.indexOf(a.kind) < 0);
 
   // The satisfied rules are not enumerated in the payload; they are the rules that passed without
@@ -255,116 +237,168 @@ export default function DeviceRuleLedger({ report }) {
     g.rows.push(u);
   });
 
+  // THE FIVE COUNTS, always in the open, and made to ADD UP to the total checked (the PI,
+  // 2026-09-26: Refuses + Could not check + Allowed had stopped summing to the total once any
+  // deferred or advisory row existed, because those lived only inside the closed fold below).
+  // "Allowed" means only rules that were satisfied with nothing to report; a rule that passed but
+  // was pinned for its recorded value gets its own "Pinned" count rather than being folded into
+  // Allowed; every remaining non-blocking row (deferred, a recommendation not met, one with no
+  // automatic check, one whose inputs were absent, or an unrecognised kind) is "Notes". These are
+  // the same rows the fold below lists one by one; this is only their count, named once each.
+  const nAllowed = satisfied;
+  const nPinned = recorded.length;
+  const nNotes = deferred.length + advFailed.length + advNotDeterminable.length
+    + advNoPredicate.length + advError.length + advOther.length;
+
   return (
-    <Card>
-      <MDBox p={2}>
-        <MDTypography variant="h6" sx={{ fontSize: 15 }}>Device rule ledger</MDTypography>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 11.5, color: "#4A4A4A" }}>
-          {el.summary || "no summary reported"}
-        </MDTypography>
-        <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5, color: "#8A8A8A",
-          mt: 0.3 }}>
+    <Shell sx={shellSx}>
+      {heading}
+      <MDTypography data-testid="rule-counts" sx={{ ...TYPE.lead, color: PAL.ink, mt: 1 }}>
+        <span style={{ color: failures.length ? PAL.failText : PAL.ink }}>
+          <span aria-hidden="true" style={{ marginRight: 4 }}>{STATE.refused.glyph}</span>
+          {`Refuses (${failures.length})`}
+        </span>
+        {" · "}
+        <span style={{ color: PAL.ink3 }}>
+          <span aria-hidden="true" style={{ marginRight: 4 }}>{STATE.notChecked.glyph}</span>
+          {`Could not check (${unknowns.length})`}
+        </span>
+        {" · "}
+        <span>
+          <span aria-hidden="true" style={{ marginRight: 4 }}>{STATE.pass.glyph}</span>
+          {`Allowed (${nAllowed == null ? "not derivable" : nAllowed})`}
+        </span>
+        {" · "}
+        <span style={{ color: PAL.ink3 }}>
+          {`Passed, value shown (${nPinned})`}
+        </span>
+        {" · "}
+        <span style={{ color: PAL.ink3 }}>
+          {`Notes, not blocking (${nNotes})`}
+        </span>
+        {el.checked != null ? <span style={{ color: PAL.ink3 }}>{` of ${el.checked} rules checked`}</span> : null}
+      </MDTypography>
+      <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 1, maxWidth: "68ch" }}>
+        {el.summary || "no summary reported"}
+      </MDTypography>
+
+      {/* REFUSED rows stay in the open, in red with ✕ and in the rule table's own words: a refusal
+          is the one state no further measurement or lookup can clear, and it is never folded. */}
+      {failures.length > 0 ? (
+        <MDBox mt={1}>
+          <BucketHead state="violated" title="Refuses" count={failures.length} note={null} />
+          {failures.map((f) => {
+            const u = !f.kind || f.kind === "failed" ? refusalFor(f) : unevaluableFor(f.kind);
+            return (
+              <RuleRow key={`f-${f.rule_id}`} row={f} state="violated" ink={PAL.failText}
+                copy={u.copy} actor={u.actor} />
+            );
+          })}
+        </MDBox>
+      ) : null}
+
+      {/* COULD NOT CHECK, subdivided by kind so who can resolve it is legible from position. These
+          still block: a rule that could not be checked is not a rule that passed. Open, like the
+          refusals. */}
+      {unknowns.length > 0 ? (
+        <MDBox mt={1}>
+          <BucketHead state="unevaluable" title="Could not check" count={unknowns.length}
+            note="these still block: a rule that could not be checked is not a rule that passed" />
+          {unknownKinds.map((g) => {
+            const u = unevaluableFor(g.kind);
+            return (
+              <MDBox key={`uk-${g.kind}`} mt={1}>
+                <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", color: PAL.ink2 }}>
+                  {`${g.rows.length} ${g.rows.length === 1 ? "rule" : "rules"}: ${u.copy}`}
+                </MDTypography>
+                {g.rows.map((r) => (
+                  <RuleRow key={`u-${r.rule_id}`} row={r} state="unevaluable" ink={PAL.ink2}
+                    copy={null} actor={u.actor} />
+                ))}
+              </MDBox>
+            );
+          })}
+        </MDBox>
+      ) : null}
+
+      <Fold show={`Notes and pinned values, not blocking (${nNotes} notes: counted under another rule, `
+        + `recommendations; ${nPinned} pinned: passed, shown because the value matters)`}
+        hide="Hide the notes" mt={2}>
+        <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, maxWidth: "68ch" }}>
           Each row carries the rule identifier and the document page it was read from, so a finding
           can be checked against the source rather than taken on trust. The label on the right of a
           row names who can resolve it.
         </MDTypography>
 
-        <Divider sx={{ my: 1 }} />
+        {failures.length === 0 ? (
+          <BucketHead state="violated" title="Refuses" count={0} note="the device refuses nothing" />
+        ) : null}
+        {unknowns.length === 0 ? (
+          <BucketHead state="unevaluable" title="Could not check" count={0}
+            note="every rule could be checked" />
+        ) : null}
 
-        {/* VIOLATED. Drawn first because a violated rule is the only state that no further
-            measurement or lookup can clear. */}
-        <BucketHead state="violated" title="Violated" count={failures.length}
-          note={failures.length === 0 ? "no rule is violated" : null} />
-        {failures.map((f) => {
-          const u = unevaluableFor(f.kind);
-          return (
-            <RuleRow key={`f-${f.rule_id}`} row={f} state="violated" ink={PAL.fail}
-              copy={u.copy} actor={u.actor} />
-          );
-        })}
-
-        {/* CANNOT BE EVALUATED, subdivided by kind so the actor is legible from position. */}
-        <BucketHead state="unevaluable" title="Cannot be evaluated" count={unknowns.length}
-          note={unknowns.length === 0 ? "every rule could be evaluated"
-            : "these block: a rule that cannot be evaluated is not a rule that passed"} />
-        {unknownKinds.map((g) => {
-          const u = unevaluableFor(g.kind);
-          return (
-            <MDBox key={`uk-${g.kind}`} mt={0.6} ml={0.4}>
-              <MDTypography variant="caption" sx={{ display: "block", fontSize: 10.5,
-                fontWeight: "bold", color: PAL.warnText }}>
-                {`${g.rows.length} ${g.rows.length === 1 ? "rule" : "rules"} \u2014 ${u.copy}`}
-              </MDTypography>
-              {g.rows.map((r) => (
-                <RuleRow key={`u-${r.rule_id}`} row={r} state="unevaluable" ink={PAL.warnText}
-                  copy={null} actor={u.actor} />
-              ))}
-            </MDBox>
-          );
-        })}
-
-        {/* DEFERRED DUPLICATE. The finding is real and is counted once, against the rule that owns
-            the narrower condition. Rendering it as a separate state stops a reader either
-            double-counting it as a second failure or concluding the rule was never checked. */}
-        <BucketHead state="deferred" title="Deferred to another rule" count={deferred.length}
-          note={deferred.length === 0 ? "no rule deferred its finding"
+        {/* COUNTED UNDER ANOTHER RULE. The finding is real and is counted once, against the rule
+            that owns the narrower condition, so a reader neither counts it twice nor concludes the
+            rule was never checked. */}
+        <BucketHead state="deferred" title="Counted under another rule" count={deferred.length}
+          note={deferred.length === 0 ? "no rule passed its finding to another"
             : "the same finding as another rule's, counted once"} />
         {deferred.map((d) => (
-          <RuleRow key={`d-${d.rule_id}`} row={d} state="deferred" ink={PAL.deferred}
+          <RuleRow key={`d-${d.rule_id}`} row={d} state="deferred" ink={PAL.ink2}
             copy={`This finding is owned by ${d.deferred_to || "another rule"} and is counted `
               + `there rather than here${d.counts_toward_verdict === false
                 ? ", so it does not count towards the verdict twice" : ""}.`}
             actor={null} />
         ))}
 
-        {/* ADVISORY SHORTFALLS: a predicate that returned false on a rule the documents phrase as a
-            recommendation rather than a requirement. These do not block, and softening a rule must
-            not make it invisible. */}
-        <BucketHead state="advisory" title="Advisory shortfalls" count={advFailed.length}
+        {/* RECOMMENDATIONS NOT MET: rules the documents phrase as a recommendation rather than a
+            requirement. They do not block, and softening a rule must not make it invisible. */}
+        <BucketHead state="advisory" title="Recommended, not required: not met" count={advFailed.length}
           note="reported, not blocking" />
         {advFailed.map((a) => (
           <RuleRow key={`af-${a.rule_id}`} row={a} state="advisory" ink={PAL.warnText}
-            copy="This rule's condition is not satisfied. The documents phrase it as a
-              recommendation rather than a requirement, so it does not block."
+            copy="This rule's condition is not met. The documents phrase it as a recommendation
+              rather than a requirement, so it does not block."
             actor={null} />
         ))}
 
-        {/* PINNED RECORDED VALUES: rules that PASSED and whose passing value the module pinned
-            because the meaning of the rest of the report depends on it. Pinned open rather than
-            collapsed with the other satisfied rules, and labelled so a reader understands it is
-            here because the VALUE matters and not because the pass does. */}
-        <BucketHead state="satisfied" title="Pinned values" count={recorded.length}
-          note="satisfied, and shown because the recorded value is load-bearing" />
+        {/* VALUES THAT MATTER: rules that PASSED and whose value the module kept on show because
+            the rest of the report reads differently depending on it. */}
+        <BucketHead state="satisfied" title="Allowed, and shown because the value matters" count={recorded.length}
+          note="the rule passed; the recorded value is what the rest of this report depends on" />
         {recorded.map((a) => (
-          <RuleRow key={`rv-${a.rule_id}`} row={a} state="satisfied" ink={PAL.pass}
-            copy="Pinned because the recorded VALUE matters to how the rest of this report reads,
+          <RuleRow key={`rv-${a.rule_id}`} row={a} state="satisfied" ink={PAL.ink}
+            copy="Shown because the recorded VALUE matters to how the rest of this report reads,
               not because the rule passed."
             actor={null} />
         ))}
 
-        {/* The two informational advisory kinds. Collapsed by default because there are twenty-two
-            of them on RCS08 and each carries a paragraph, and expanding them by default would bury
-            the buckets above. The counts and the rule identifiers are visible while collapsed, so
-            nothing is hidden — only folded. */}
+        {/* The two informational kinds, numerous and long: the count and the rule identifiers are
+            in the open inside these notes, the rows one click further. */}
         <CollapsedGroup rows={advNotDeterminable} state="advisory"
-          title="Advisory, could not be determined"
-          note="the inputs for these advisory rules were absent" />
+          title="Recommended, not required: could not be checked"
+          note="the inputs for these rules were absent" />
         <CollapsedGroup rows={advNoPredicate} state="advisory"
-          title="Advisory, no machine check exists"
-          note="recorded for the reader; the documents state no numeric condition" />
+          title="Recommended, not required: no automatic check exists"
+          note="recorded for the reader; the documents state no number to check against" />
+        {advError.length > 0 ? (
+          <CollapsedGroup rows={advError} state="advisory"
+            title="Recommended, not required: the check raised an error"
+            note="a defect in the rule table, not a property of this configuration; it does not block" />
+        ) : null}
         {advOther.length > 0 ? (
-          <CollapsedGroup rows={advOther} state="advisory" title="Advisory, unclassified kind"
-            note="this interface does not recognise these kinds; report them" />
+          <CollapsedGroup rows={advOther} state="advisory" title="Recommended, not required: unrecognised kind"
+            note="this page does not recognise these kinds; report them" />
         ) : null}
 
-        {/* SATISFIED, collapsed to a count. */}
-        <BucketHead state="satisfied" title="Satisfied and not otherwise reported"
+        {/* ALLOWED and not otherwise reported, as a count. */}
+        <BucketHead state="satisfied" title="Allowed and not otherwise reported"
           count={satisfied == null ? "not derivable" : satisfied}
           note={el.checked != null
-            ? `derived by subtraction from the ${el.checked} rules checked, not enumerated in the `
-              + "payload"
+            ? `counted by the server from the ${el.checked} rules checked, not listed one by one`
             : null} />
-      </MDBox>
-    </Card>
+      </Fold>
+    </Shell>
   );
 }

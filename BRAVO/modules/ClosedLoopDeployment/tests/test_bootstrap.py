@@ -18,10 +18,15 @@ This combination — a between-cluster regressor plus a cluster-level error comp
 which the effective sample size is the number of CLUSTERS rather than the number of observations,
 and it is the case in which treating observations as independent, or trusting a sandwich estimator
 built from a handful of clusters, does the most damage.
+
+Merged here 2026-10-05: test_bootstrap_plan_memory.py.
 """
+import tracemalloc
+
 import numpy as np
 import pytest
 
+from Biomarkers.routines import analytics as AN
 from ClosedLoopDeployment import edges as E
 
 
@@ -438,7 +443,7 @@ def test_at_or_above_the_threshold_the_edge_stays_on_cr0_and_says_so():
                          channel="CH", center_hz=20.5)
     assert e.n_clusters == E.MIN_RELIABLE_CLUSTERS
     assert "CR0 cluster-robust" in e.note and "WILD CLUSTER BOOTSTRAP" not in e.note
-    assert e.ci is not None and e.resolved
+    assert e.ci is not None and e.resolved and e.statistically_established
 
 
 def test_a_few_cluster_edge_is_reported_rather_than_disqualified():
@@ -449,23 +454,58 @@ def test_a_few_cluster_edge_is_reported_rather_than_disqualified():
     e = E.actuation_edge(_toy_table(n_epochs=4, per_epoch=8), channel="CH", center_hz=20.5)
     assert e.estimate is not None and e.n_clusters == 4
     assert e.p == pytest.approx(2.0 / 16), "the enumerated floor at four clusters is 2/16"
-    assert e.ci is None and e.resolved and not e.statistically_established
+    # no interval means not statistically established; the point sign still resolves the edge
+    # (PI rule 2026-09-13, "established means mean only")
+    assert e.ci is None and not e.statistically_established and e.resolved
     assert "UNBOUNDED" in e.note
     assert "FEW CLUSTERS" in e.note, "the historical marker stays, as information"
+    assert "few clusters" in e.confounded_by
 
 
-def test_state_auc_resamples_reports_while_therapy_slope_uses_cluster_bootstrap():
+def test_the_therapy_edge_switches_to_the_wild_cluster_bootstrap_at_few_clusters():
+    """This used to be one test asserting that the pain edge and the therapy edge switched
+    inference method on the same condition. That claim is no longer true and the test has been
+    split rather than relabelled: the pain edge no longer fits a regression at all, so it has
+    nothing to switch, and its own behaviour is checked in the test below this one. The therapy
+    edge is unchanged, and so are its assertions.
+    """
     import pandas as pd
-    e2 = E.state_edge(_toy_table(n_epochs=9), channel="CH", center_hz=20.5)
-    assert e2.n_clusters == 9 and e2.cluster_unit == "report_id"
-    assert "resampling whole pain report groups" in e2.note
-    assert "area under the curve" in e2.scale
     dm = pd.DataFrame({"epoch": np.arange(10), "amp_mA_Left": np.linspace(1, 4, 10),
                        "nrs": 6 - 0.8 * np.linspace(1, 4, 10)
                               + np.random.default_rng(0).normal(0, 0.15, 10)})
     e3 = E.therapy_edge(dm)
     assert e3.n_clusters == 10 and "WILD CLUSTER BOOTSTRAP-t" in e3.note
     assert e3.p >= 2.0 / 2 ** 10
+
+
+def test_the_pain_edge_gets_its_uncertainty_by_resampling_whole_pain_reports():
+    """What the pain edge does NOW, asserted on what it does rather than on what it no longer does.
+
+    THE WILD CLUSTER BOOTSTRAP IS GENUINELY NOT USED HERE, and this is a change of method and not
+    only of routine. That bootstrap flips the sign of whole clusters of regression residuals with
+    the null imposed, works out how often the resulting t statistic beats the observed one, and
+    inverts that test to get a confidence set for a regression coefficient. The pain edge no longer
+    has a regression coefficient: it carries how far this band's power gets above or below coin
+    flipping at telling high pain from low pain, and its interval is the 2.5th to 97.5th percentile
+    of that quantity recomputed on whole pain reports drawn with replacement.
+
+    What IS preserved is the principle both methods exist for -- the resampling unit is the cluster,
+    here the pain report, never the individual spectral sample -- because many spectral samples can
+    share one pain report and therefore share its score exactly, and resampling samples would
+    manufacture confidence out of recording coverage. So: same principle, different quantity,
+    different kind of interval, and the note has to say which.
+    """
+    e2 = E.state_edge(_toy_table(n_epochs=9), channel="CH", center_hz=20.5)
+    assert e2.cluster_unit == "report_id", e2.cluster_unit
+    assert e2.n_clusters == 9, e2.n_clusters
+    assert "resampling whole pain reports rather than individual samples" in e2.note, e2.note
+    assert "area under the curve minus 0.5" in e2.scale, e2.scale
+    assert "WILD CLUSTER BOOTSTRAP-t" not in e2.note, \
+        "the pain edge must not claim an inference method it does not use"
+    # this toy table separates the two pain states completely, which collapses the interval to a
+    # point. The edge must say that is a limit of the method, not report it as exact knowledge.
+    if e2.ci is not None and abs(e2.ci[1] - e2.ci[0]) < 1e-12:
+        assert "THE INTERVAL HAS NO WIDTH" in e2.note, e2.note
 
 
 def test_the_edge_refuses_to_fall_back_to_cr0_when_the_bootstrap_cannot_be_formed():
@@ -478,3 +518,59 @@ def test_the_edge_refuses_to_fall_back_to_cr0_when_the_bootstrap_cannot_be_forme
     assert p is None and ci is None
     assert "INFERENCE UNAVAILABLE" in note and "not reported in its place" in note
     assert raw["available"] is False
+
+# ------------------------------------------------------------------------------------------------
+# The sign-flip plan's memory (from test_bootstrap_plan_memory.py, merged 2026-10-05). These two
+# test the Biomarkers bootstrap plan (`analytics._BootstrapPlan`) directly.
+# ------------------------------------------------------------------------------------------------
+# The sign-flip bootstrap never builds a samples-by-samples matrix (P-12, section 5 item 3).
+#
+# `_BootstrapPlan` formed the restricted residuals through the projection matrix
+# `Xr @ pinv(Xr)`, which has one row and one column per sample. The band-power cells on the
+# Closed-Loop evidence hold 43,835 to 64,510 samples, so that matrix is 15 to 33 GB; for R 0-3+ it
+# exceeded the container's 42 GB and the process was killed, which is why that pair's P-12 cells
+# were never measured (`artifacts/analysis_2026-09-25_P12_two_uncertainty_methods.md`). The same
+# residuals come from projecting each vector directly, `Xr @ (pinv(Xr) @ v)`, which needs memory in
+# proportion to the samples, not their square.
+
+
+def _plan_design(n, n_clusters, seed=0):
+    rng = np.random.default_rng(seed)
+    groups = np.repeat(np.arange(n_clusters), n // n_clusters)
+    x = rng.normal(size=groups.size)
+    X = np.column_stack([np.ones_like(x), x, rng.normal(size=groups.size)])
+    y = 0.2 * x + rng.normal(size=groups.size) + rng.normal(size=n_clusters)[groups]
+    return y, X, groups
+
+
+def test_the_plan_needs_memory_in_proportion_to_the_samples_not_their_square():
+    """5,000 samples: the old projection matrix alone is 200 MB; the plan must peak far below."""
+    y, X, groups = _plan_design(5000, 50)
+    tracemalloc.start()
+    try:
+        plan = AN._BootstrapPlan(y, X, groups, coef_index=1, n_boot=99, seed=0, impose_null=True,
+                                chunk=16)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert plan.available
+    assert peak < 60e6, f"peak {peak / 1e6:.0f} MB: a samples-by-samples matrix is being built"
+
+
+def test_the_restricted_residuals_are_the_projection_residuals():
+    """The residuals the plan uses equal the textbook ones, M_r y and M_r x_j, computed here with
+    the explicit projection matrix on a small design (the arithmetic order differs, so this
+    compares to a rounding tolerance; the p-values are compared with the explicit loop in
+    test_the_bootstrap_matches_an_independent_textbook_implementation)."""
+    y, X, groups = _plan_design(400, 20, seed=3)
+    order = np.argsort(groups, kind="stable")
+    Xs, ys = X[order], y[order]
+    Xr = Xs[:, [0, 2]]
+    P = Xr @ np.linalg.pinv(Xr)
+    plan = AN._BootstrapPlan(y, X, groups, coef_index=1, n_boot=99, seed=0, impose_null=True)
+    Aj = (np.linalg.inv(Xs.T @ Xs) @ Xs.T)[1]
+    W, _, _ = AN._rademacher_weights(20, 99, 0)
+    Wb = np.repeat(W, np.unique(groups, return_counts=True)[1], axis=1)
+    np.testing.assert_allclose(plan.num0, (Wb * (ys - P @ ys)[None, :]) @ Aj, rtol=0, atol=1e-10)
+    np.testing.assert_allclose(plan.num1, (Wb * (Xs[:, 1] - P @ Xs[:, 1])[None, :]) @ Aj,
+                               rtol=0, atol=1e-10)

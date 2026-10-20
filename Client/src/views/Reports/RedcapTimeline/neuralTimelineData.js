@@ -1,5 +1,5 @@
 import {escapeText, eventTimeLabel, homeTiming, localTime, settingsSummary} from './data';
-import {displayTarget,isRCS08Participant} from 'utils/participantTargets';
+import {displayTarget} from 'utils/participantTargets';
 import {contactConfiguration} from './contactSchematic';
 import {groupState,compareGroupStates} from './neuralGroupState';
 
@@ -56,16 +56,19 @@ export function neuralPlot(events, metric, range, participant, unknownIntervals 
   const start = `${range.start} 00:00:00`, end = `${range.end} 23:59:59`;
   const contactCatalog=new Map();
   const contactEvents=metric.key==='contacts'?ordered.map(event=>{
-    const configuration=contactConfiguration(programsAt(event,participant),isRCS08Participant(participant));
+    const configuration=contactConfiguration(programsAt(event,participant),event.lead_geometry || false);
     if(!contactCatalog.has(configuration.key))contactCatalog.set(configuration.key,contactCatalog.size+1);
     return {...configuration,number:contactCatalog.get(configuration.key)};
   }):[];
   const series = new Map(), unresolved = [], categories = [], shapes = [], configurations = [], states = new Map();
   ordered.forEach((event,index) => {
-    const time = localTime(event.time), next = ordered[index+1] ? localTime(ordered[index+1].time) : end;
+    const snapshotOnly = event.kind === "settings_observation";
+    // Observational snapshots never replace a reviewed home assignment.
+    const nextHome = ordered.slice(index+1).find(item => item.kind !== "settings_observation");
+    const time = localTime(event.time), next = nextHome ? localTime(nextHome.time) : end;
     if (time > end || next < start) return;
-    const segments = knownSegments(time < start ? start : time,next > end ? end : next,unknownIntervals);
-    const observed = time >= start && time <= end && !unknownIntervals.some(gap => event.time >= gap.start && (gap.end === null || event.time < gap.end));
+    const segments = snapshotOnly ? [] : knownSegments(time < start ? start : time,next > end ? end : next,unknownIntervals);
+    const observed = time >= start && time <= end && (snapshotOnly || !unknownIntervals.some(gap => event.time >= gap.start && (gap.end === null || event.time < gap.end)));
     if (!segments.length && !observed) return;
     const sidePrograms = programsAt(event,participant);
     let categoryValue;

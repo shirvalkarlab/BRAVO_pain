@@ -1,0 +1,40 @@
+{
+  "_fixture_provenance": "Independently authored synthetic UI contract; no participant observations.",
+  "available": true,
+  "identity": {
+    "contact": "ZERO_THREE_RIGHT",
+    "center_freq_hz": 24.5,
+    "bandwidth_hz": 5,
+    "pain_score": "nrs",
+    "pro_metric": "nrs",
+    "clinic_sheet_ratings": {
+      "included": false
+    }
+  },
+  "verdict": "deployable",
+  "match_direction": "prior",
+  "gates": [
+    {
+      "key": "forward_validated",
+      "state": "pass",
+      "evaluated": true,
+      "label": "Holds on later weeks"
+    },
+    {
+      "key": "stim_stable",
+      "state": "indeterminate",
+      "evaluated": true,
+      "label": "Stable across stimulation"
+    }
+  ],
+  "evidence": {
+    "auc": 0.75,
+    "auc_lo": 0.6,
+    "auc_hi": 0.9
+  },
+  "caveats": [],
+  "device_control": {
+    "polarity": "positive",
+    "suggested_mode": "dual"
+  }
+}

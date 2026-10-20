@@ -23,9 +23,191 @@ import json
 
 from modules import Database
 from modules.MedtronicPercept import BrainSenseEvent, BrainSenseStream, BrainSenseSurvey, IndefiniteStream, ChronicBrainSense, Therapy, Percept
+from modules.MedtronicPercept import chronic_schedule
 from modules.HelperFunctions import current_time, get_or_none
 
 key = os.environ.get('DATASERVER_ENCRYPTION')
+
+
+def _chronic_center_freqs(groups):
+    """Per-hemisphere chronic-trend sensing-band center frequency (Hz) from the GROUP-level config:
+    Groups.Final[].ProgramSettings.SensingChannel[].SensingSetup.FrequencyInHertz, keyed by
+    HemisphereLocation. Returns {'LeftHemisphere': hz, 'RightHemisphere': hz} (keys matching the
+    chronic recording's ChannelNames tokens); active group wins, else last finite. Fully defensive:
+    any malformed/absent structure yields {} so decode never fails. (Mirrors
+    Biomarkers.routines.analytics.chronic_center_freqs; kept local so the decoder does not depend on
+    the Biomarkers package.)
+    """
+    if isinstance(groups, dict):
+        group_list = groups.get("Final") or groups.get("Initial") or []
+    elif isinstance(groups, list):
+        group_list = groups
+    else:
+        return {}
+    freqs = {}
+    for grp in group_list:
+        if not isinstance(grp, dict):
+            continue
+        active = bool(grp.get("ActiveGroup"))
+        ps = grp.get("ProgramSettings")
+        if not isinstance(ps, dict):
+            continue
+        for ch in ps.get("SensingChannel", []) or []:
+            if not isinstance(ch, dict):
+                continue
+            hemi_raw = str(ch.get("HemisphereLocation") or ch.get("Hemisphere") or "")
+            if "Left" in hemi_raw:
+                hemi = "LeftHemisphere"
+            elif "Right" in hemi_raw:
+                hemi = "RightHemisphere"
+            else:
+                continue
+            ss = ch.get("SensingSetup") if isinstance(ch.get("SensingSetup"), dict) else ch
+            hz = None
+            for k in ("FrequencyInHertz", "Frequency", "CenterFrequency", "CenterFrequencyInHertz"):
+                try:
+                    fv = float(ss.get(k))
+                    if fv == fv and fv > 0:  # finite & positive
+                        hz = round(fv, 2)
+                        break
+                except (TypeError, ValueError):
+                    continue
+            if hz is None:
+                continue
+            if freqs.get(hemi) is None or active:
+                freqs[hemi] = hz
+    return freqs
+
+
+# Percept bipolar sensing-channel config -> compact contact label (e.g. "0-3").
+_CONTACT_LABELS = {
+    "ZERO_AND_THREE": "0-3", "ONE_AND_THREE": "1-3", "ZERO_AND_TWO": "0-2",
+    "ZERO_AND_ONE": "0-1", "TWO_AND_THREE": "2-3", "ONE_AND_TWO": "1-2",
+}
+
+
+def _chronic_contacts(groups):
+    """Per-hemisphere chronic-trend sensing CONTACT (e.g. '0-3') from the GROUP-level config:
+    Groups.Final[].ProgramSettings.SensingChannel[].Channel, keyed by HemisphereLocation. Returns
+    {'LeftHemisphere': '0-3', 'RightHemisphere': '0-2'} (keys matching the chronic recording's
+    ChannelNames tokens); active group wins, else last seen. Fully defensive: any malformed/absent
+    structure yields {}. Mirrors _chronic_center_freqs but reads the Channel (contact pair) rather
+    than the frequency — the programmed sensing CONTACT also changes over time, so the chronic LFP
+    is a sequence of (contact, frequency) configs, not one fixed channel.
+    """
+    if isinstance(groups, dict):
+        group_list = groups.get("Final") or groups.get("Initial") or []
+    elif isinstance(groups, list):
+        group_list = groups
+    else:
+        return {}
+    out = {}
+    for grp in group_list:
+        if not isinstance(grp, dict):
+            continue
+        active = bool(grp.get("ActiveGroup"))
+        ps = grp.get("ProgramSettings")
+        if not isinstance(ps, dict):
+            continue
+        for ch in ps.get("SensingChannel", []) or []:
+            if not isinstance(ch, dict):
+                continue
+            hemi_raw = str(ch.get("HemisphereLocation") or ch.get("Hemisphere") or "")
+            if "Left" in hemi_raw:
+                hemi = "LeftHemisphere"
+            elif "Right" in hemi_raw:
+                hemi = "RightHemisphere"
+            else:
+                continue
+            raw = str(ch.get("Channel", "")).replace("SensingElectrodeConfigDef.", "")
+            contact = _CONTACT_LABELS.get(raw)
+            if contact is None:
+                continue
+            if out.get(hemi) is None or active:
+                out[hemi] = contact
+    return out
+
+
+def _chronic_contact_schedule(JSON):
+    """Per-hemisphere DATED sensing-CONTACT schedule from GroupHistory.
+
+    Parallel to _chronic_freq_schedule but for the bipolar contact (the recording electrode pair),
+    which is reprogrammed over time just like the frequency. GroupHistory's dated snapshots record
+    WHEN the contact changed. Returns {hemi_token: [[epoch_seconds, "0-3"], ...]} sorted by time
+    with consecutive same-contact points collapsed to change-points. The union across all ingested
+    sessions reconstructs the full contact-over-time history, which the report segments against each
+    trend's span so each chronic point lands in the row of the contact it was actually recorded from.
+    Fully defensive: returns {} on any malformed structure so decode never fails.
+    """
+    from datetime import datetime
+    out = {}
+    gh = JSON.get("GroupHistory")
+    if not isinstance(gh, list):
+        return out
+    for entry in gh:
+        if not isinstance(entry, dict):
+            continue
+        sd = entry.get("SessionDate")
+        if not sd:
+            continue
+        try:
+            t = datetime.fromisoformat(str(sd).replace("Z", "+00:00")).timestamp()
+        except (ValueError, TypeError):
+            continue
+        cmap = _chronic_contacts(entry.get("Groups"))
+        for hemi_token, contact in cmap.items():
+            out.setdefault(hemi_token, []).append([t, contact])
+    for hemi_token, pts in out.items():
+        pts.sort(key=lambda p: p[0])
+        cps = []
+        for tp, contact in pts:
+            if not cps or cps[-1][1] != contact:
+                cps.append([tp, contact])
+        out[hemi_token] = cps
+    return out
+
+
+def _chronic_freq_schedule(JSON):
+    """Per-hemisphere DATED sensing-frequency schedule from GroupHistory.
+
+    A single session stamps ONE current sensing frequency, but the programmed band changes over
+    time. GroupHistory is a list of dated snapshots ({SessionDate, Groups}) of the full group config,
+    so it records WHEN the sensing frequency changed. We turn it into a step-function schedule per
+    hemisphere: {hemi_token: [[epoch_seconds, hz], ...]} sorted by time with consecutive same-Hz
+    points collapsed to change-points. The union of these schedules across every ingested session
+    reconstructs the full frequency-over-time history, which the report segments against each trend's
+    own time span to draw an accurate frequency ribbon. Fully defensive: returns {} on any malformed
+    structure so decode never fails.
+    """
+    from datetime import datetime
+    out = {}
+    gh = JSON.get("GroupHistory")
+    if not isinstance(gh, list):
+        return out
+    for entry in gh:
+        if not isinstance(entry, dict):
+            continue
+        sd = entry.get("SessionDate")
+        if not sd:
+            continue
+        try:
+            t = datetime.fromisoformat(str(sd).replace("Z", "+00:00")).timestamp()
+        except (ValueError, TypeError):
+            continue
+        # Reuse the active-group frequency extractor on this snapshot's Groups list.
+        hz_map = _chronic_center_freqs(entry.get("Groups"))
+        for hemi_token, hz in hz_map.items():
+            out.setdefault(hemi_token, []).append([t, hz])
+    # Sort by time and collapse to change-points (drop a snapshot whose Hz equals the previous one).
+    for hemi_token, pts in out.items():
+        pts.sort(key=lambda p: p[0])
+        cps = []
+        for tp, hz in pts:
+            if not cps or cps[-1][1] != hz:
+                cps.append([tp, hz])
+        out[hemi_token] = cps
+    return out
+
 
 def extractPatientInformation(JSON):
     PatientOverview = {}
@@ -132,12 +314,75 @@ def extractPatientInformation(JSON):
 
     return PatientOverview
 
+def surveyExtraRecordings(Data, session_start):
+    """The recordings of the sections first read on 2026-10-05 (decision 443): the electrode survey's
+    own streams (those not identical to the montage), spectra whose run cannot be told (stamped with
+    the session start, tablet clock, flagged `RunUnknown`), in-session signal checks not identical to
+    another spectrum (session start), and the threshold band-power streams (their own start)."""
+    out = []
+    if Data.get("ElectrodeSurveyTD"):
+        out += [{"name": "", "type": "MedtronicElectrodeSurvey", "date": R["StartTime"], "recording": R,
+                 "metadata": {"ChannelNames": R["ChannelNames"], "Duration": R["Duration"]}}
+                for R in BrainSenseSurvey.saveBrainSenseSurvey(Data["ElectrodeSurveyTD"])]
+    for u in Data.get("SurveyPSDRunUnknown") or []:
+        R = {"StartTime": session_start, "Descriptor": {"MedtronicPSD": [u["PSD"]]}, "RunUnknown": True,
+             "CandidateRuns": list(u.get("candidate_runs") or []), "Source": u.get("source")}
+        out.append({"name": "", "type": "MedtronicSurveyPSD", "date": session_start, "recording": R,
+                    "metadata": {"Source": u.get("source"), "RunUnknown": True}})
+    for c in Data.get("SignalCheckPSD") or []:
+        R = {"StartTime": session_start, "Descriptor": {"SignalCheck": c}}
+        out.append({"name": "", "type": "MedtronicSignalCheckPSD", "date": session_start, "recording": R,
+                    "metadata": {"Channel": c.get("Channel")}})
+    for t in Data.get("ThresholdPower") or []:
+        R = dict(t, StartTime=t["FirstPacketDateTime"], ChannelNames=[t.get("Channel")],
+                 Duration=(len(t["Sequences"]) / t["SamplingRate"]) if t.get("SamplingRate") else None)
+        out.append({"name": "", "type": "MedtronicThresholdPowerDomain", "date": t["FirstPacketDateTime"],
+                    "recording": R, "metadata": {"ChannelNames": [t.get("Channel")], "Duration": R["Duration"]}})
+    return out
+
+
+def brainSenseStreamRecordings(Data, fix_breaking=False):
+    """The BrainSense streaming recordings of one export: time-domain and band power, each built
+    from whatever decoded (decision 440). Time-domain used to be stored only when band power also
+    decoded, so one bad band-power reading lost a whole export's time-domain streaming."""
+    TimeDomainRecordings, PowerDomainRecordings = [], []
+    if Data.get("StreamingTD") or Data.get("StreamingPower"):
+        TimeDomainRecordings, PowerDomainRecordings = BrainSenseStream.saveBrainSenseStreams(
+            list(Data.get("StreamingTD") or []), list(Data.get("StreamingPower") or []), FixBreaking=fix_breaking)
+    out_td = [{
+        "name": "",
+        "type": "MedtronicBrainSenseTimeDomain",
+        "date": Recording["StartTime"],
+        "recording": Recording,
+        "metadata": {
+            "ChannelNames": Recording["ChannelNames"],
+            "Duration": Recording["Duration"],
+        }
+    } for Recording in TimeDomainRecordings]
+    out_power = [{
+        "name": "",
+        "type": "MedtronicBrainSensePowerDomain",
+        "date": Recording["StartTime"],
+        "recording": Recording,
+        "metadata": {
+            "ChannelNames": Recording["ChannelNames"],
+            "Duration": Recording["Duration"],
+            "Therapy": Recording["Descriptor"]["Therapy"],
+        }
+    } for Recording in PowerDomainRecordings]
+    return out_td, out_power
+
+
 def decodeMedtronicJSON(JSON):
+    # The settings record is read BEFORE the decode: `Percept.processTherapySettings` deletes each
+    # sensing entry's `ChannelSignalResult` from the export in place, and that field names the lead
+    # each entry's signal comes from (decision 488; read after the decode, no record carried it).
+    _settings_record = chronic_schedule.settings_record(JSON)
     Data = get_or_none(Percept.extractPerceptJSON)(JSON)
     if not Data:
         raise Exception("Medtronic Percept Content Extraction Error")
     
-    # TODO: Handle Process Failure
+    # Failures are carried to the export's row (decision 441), see the return below.
 
     # Extract Device/Patient Info
     SessionOverview = extractPatientInformation(JSON)
@@ -173,6 +418,13 @@ def decodeMedtronicJSON(JSON):
     
     # Process BrainSense Survey
     SurveyRecordings = []
+    # every section first read on 2026-10-05, at the session start where it has no time (decision 443)
+    _session_start = SessionOverview["SessionTimestamp"]
+    try:
+        _session_start = Percept.getTimestamp(JSON["SessionDate"]) if JSON.get("SessionDate") else _session_start
+    except Exception:
+        pass
+    SurveyRecordings += surveyExtraRecordings(Data, _session_start)
     if "ElectrodeIdentifierTD" in Data.keys():
         SurveyRecordings += [{
             "name": "",
@@ -235,45 +487,50 @@ def decodeMedtronicJSON(JSON):
             }
         } for Recording in IndefiniteStream.saveIndefiniteStreams(Data["IndefiniteStream"])]
         
-    # Process BrainSense Streams
-    TimeDomainRecordings = []
-    PowerDomainRecordings = []
-    if "StreamingTD" in Data.keys() and "StreamingPower" in Data.keys():
-        TimeDomainRecordings, PowerDomainRecordings = BrainSenseStream.saveBrainSenseStreams(Data["StreamingTD"], Data["StreamingPower"], FixBreaking=JSON["AutomaticStreamingFix"])
-        StreamingRecordings += [{
-            "name": "",
-            "type": "MedtronicBrainSenseTimeDomain",
-            "date": Recording["StartTime"],
-            "recording": Recording,
-            "metadata": {
-                "ChannelNames": Recording["ChannelNames"],
-                "Duration": Recording["Duration"],
-            }
-        } for Recording in TimeDomainRecordings]
-        StreamingRecordings += [{
-            "name": "",
-            "type": "MedtronicBrainSensePowerDomain",
-            "date": Recording["StartTime"],
-            "recording": Recording,
-            "metadata": {
-                "ChannelNames": Recording["ChannelNames"],
-                "Duration": Recording["Duration"],
-                "Therapy": Recording["Descriptor"]["Therapy"],
-            }
-        } for Recording in PowerDomainRecordings]
+    # Process BrainSense Streams: time-domain and band power each from whatever decoded (decision 440)
+    _td, _power = brainSenseStreamRecordings(Data, fix_breaking=JSON["AutomaticStreamingFix"])
+    StreamingRecordings += _td + _power
 
     # Stiore Chronic BrainSenses
     ChronicRecordings = []
     if "LFPTrends" in Data.keys():
-        ChronicRecordings += [{
-            "name": "",
-            "type": "MedtronicChronicBrainSense",
-            "date": Recording["StartTime"],
-            "recording": Recording,
-            "metadata": {
-                "ChannelNames": Recording["ChannelNames"],
-            }
-        } for Recording in ChronicBrainSense.saveChronicBrainSense(Data["LFPTrends"])]
+        # The chronic-trend (BrainSense Timeline / LFPTrendLogs) sensing-band CENTER FREQUENCY lives
+        # at the GROUP level (Groups.Final[].ProgramSettings.SensingChannel[].SensingSetup.
+        # FrequencyInHertz), NOT on the per-trend recording -- a different path than the streaming
+        # power-domain frequency. Extract the per-hemisphere map once here (raw JSON is in scope) and
+        # stamp each chronic recording's metadata so the frequency persists to the DB and is readable
+        # at report time. _chronic_center_freqs is local & defensive (returns {} on any malformed
+        # structure), so decode never fails on a missing/odd Groups block.
+        _chronic_hz = _chronic_center_freqs(JSON.get("Groups"))
+        # DATED frequency schedule from GroupHistory (records WHEN the band changed, which a single
+        # current value cannot). Stamped per recording so the report can segment each trend's span
+        # against the real change-points instead of collapsing it to one frequency.
+        _freq_sched = _chronic_freq_schedule(JSON)
+        # DATED contact schedule from GroupHistory (records WHEN the recording contact pair changed).
+        # The programmed sensing CONTACT is reprogrammed over time just like the frequency, so the
+        # chronic LFP is a sequence of (contact, frequency) configs; stamping this lets the report
+        # split each hemisphere's trend into the contact rows the signal was actually recorded from.
+        _contact_sched = _chronic_contact_schedule(JSON)
+        for Recording in ChronicBrainSense.saveChronicBrainSense(Data["LFPTrends"]):
+            chans = Recording["ChannelNames"]
+            # ChannelNames[0] is like "RightHemisphere LFP" -> token "RightHemisphere".
+            hemi_token = str(chans[0]).split(" ")[0] if chans else ""
+            md = {"ChannelNames": chans}
+            if hemi_token in _chronic_hz:
+                md["CenterFrequencyHz"] = _chronic_hz[hemi_token]
+            if hemi_token in _freq_sched and _freq_sched[hemi_token]:
+                # [[epoch_seconds, hz], ...] change-points for this hemisphere.
+                md["FreqScheduleHz"] = _freq_sched[hemi_token]
+            if hemi_token in _contact_sched and _contact_sched[hemi_token]:
+                # [[epoch_seconds, "0-3"], ...] contact change-points for this hemisphere.
+                md["ContactSchedule"] = _contact_sched[hemi_token]
+            ChronicRecordings.append({
+                "name": "",
+                "type": "MedtronicChronicBrainSense",
+                "date": Recording["StartTime"],
+                "recording": Recording,
+                "metadata": md,
+            })
     
     EventRecordings = []
     if "PatientEventLogs" in Data.keys():
@@ -296,5 +553,14 @@ def decodeMedtronicJSON(JSON):
         "SurveyRecordings": SurveyRecordings,
         "StreamingRecordings": StreamingRecordings,
         "ChronicRecordings": ChronicRecordings,
-        "EventRecordings": EventRecordings
+        "EventRecordings": EventRecordings,
+        # NOTHING SWALLOWED (decision 441): the extractors that failed and the band-power
+        # recordings set aside, written onto the export's row by the ingest.
+        "ProcessFailure": [str(f) for f in (Data.get("ProcessFailure") or [])],
+        # this export's settings record: session start and end settings, GroupHistory entries and
+        # event-log switches of active group. The ingest builds ONE chronic contact/band schedule
+        # per device from every export's record and writes it onto every chronic recording
+        # (`chronic_schedule.py`, decision 487); the per-export schedules above are replaced by it.
+        "SensingSettingsRecord": _settings_record,
+        "StreamingPowerSetAside": list(Data.get("StreamingPowerSetAside") or []),
     }

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily export after existing source ingestion windows
+
+[Timer]
+OnCalendar=*-*-* 23:15:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=bravo-daily-source.service
+
+[Install]
+WantedBy=timers.target

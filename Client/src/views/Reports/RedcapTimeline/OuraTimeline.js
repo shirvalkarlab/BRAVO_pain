@@ -8,7 +8,7 @@ import OuraChart from './OuraChart';
 import StimulationContext from './StimulationContext';
 
 const EMPTY = [];
-export default function OuraTimeline({participant, phases = EMPTY, homeTransitions = EMPTY, unknownIntervals = EMPTY}) {
+export default function OuraTimeline({participant, refreshRevision=0, phases = EMPTY, homeTransitions = EMPTY, unknownIntervals = EMPTY}) {
   const [revision, setRevision] = useState(0);
   const [selected, setSelected] = useState(OURA_DEFAULTS);
   const [range, setRange] = useState(null);
@@ -17,7 +17,7 @@ export default function OuraTimeline({participant, phases = EMPTY, homeTransitio
   const [selectedTransition, setSelectedTransition] = useState('');
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const selectTransition = useCallback(id => {setSelectedTransition(id); setDetailsExpanded(true);}, []);
-  const query = useOuraTimeline(participant, revision);
+  const query = useOuraTimeline(participant, [refreshRevision,revision]);
   const metrics = query.data?.metrics || EMPTY;
   const options = useMemo(() => [...metrics].sort((a, b) => (a.group || '').localeCompare(b.group || '') || a.label.localeCompare(b.label)), [metrics]);
   const today = localTime(Date.now() / 1000).slice(0, 10);
@@ -56,8 +56,8 @@ export default function OuraTimeline({participant, phases = EMPTY, homeTransitio
       </Stack>
       {studyPhases.length > 0 && <Stack direction="row" flexWrap="wrap" gap={1}>{studyPhases.map(phase => <Chip key={phase.key} variant="outlined" label={`${phase.label} · ${localTime(phase.start).slice(0, 10)}`}
         sx={{borderColor: phase.color, height: 'auto', '& .MuiChip-label': {whiteSpace: 'normal', py: 1}}} />)}</Stack>}
-      <MDTypography variant="body2">Heart rate and HRV retain their recorded times, including daytime readings when available. Steps, estimated total calories and sleep totals are daily measures. Missing or excluded readings remain gaps.</MDTypography>
-      <MDTypography variant="body2">The first sleep chart shows the longest sleep episode; the second adds all other recorded sleep, including naps. Both exclude awake time. Hover for values and dates. Drag to zoom; double-click to reset.</MDTypography>
+      <MDTypography variant="body2">Sleep heart rate and HRV retain their recorded times within stored sleep episodes. Steps, active calories, non-wear time, readiness and sleep totals are daily measures. Missing or excluded readings remain gaps.</MDTypography>
+      <MDTypography variant="body2">Total recorded sleep sums distinct, non-overlapping stored episodes on each original Oura day, including naps when returned. Provider coverage is not independently verified. Hover for values and dates. Drag to zoom; double-click to reset.</MDTypography>
       {smooth && <MDTypography variant="body2">The red line is a centered five-point median: each observation plus up to two before and two after it. Daily charts use five observed daily values; HR and HRV use five recorded readings. Fewer points are used at the ends. The window can cross study phases and missing periods; it is not a five-day window. Raw observations are unconnected points; only the median is drawn as a line. Gaps remain visible.</MDTypography>}
     </Stack></Card>
     {query.data && valid && context && <StimulationContext events={events} selected={currentEvent} onSelect={selectTransition} previous={previous} limited={events.length > 12} openDetails={detailsExpanded} onDetailsChange={setDetailsExpanded} />}
@@ -65,6 +65,8 @@ export default function OuraTimeline({participant, phases = EMPTY, homeTransitio
     {context && <MDTypography variant="body2">Red markers show reviewed home-program records. Click a marker label for complete settings. Daily totals can span stimulation changes; they are not assigned a single program.</MDTypography>}
     {query.loading && <MDTypography role="status">Loading Oura timeline…</MDTypography>}
     {query.error && <Alert severity="error">{query.error}</Alert>}
+    {query.freshnessError && <Alert severity="warning">{query.freshnessError}</Alert>}
+    {query.data?.message && <Alert severity="info">{query.data.message}</Alert>}
     {!valid && <Alert severity="warning">Choose valid dates with From on or before Through, and Through no later than today.</Alert>}
     {query.data && valid && <>
       {!metrics.some(metric => metric.points.some(p => Number.isFinite(p.value))) && <Alert severity="info">No eligible Oura observations are available for this participant.</Alert>}

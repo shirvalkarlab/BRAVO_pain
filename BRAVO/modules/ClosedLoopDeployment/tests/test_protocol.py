@@ -338,7 +338,7 @@ def test_the_note_states_what_the_plan_does_not_establish():
     p = protocol.titration_plan(FOUR, n_pairs=10, seed=13)
     note = p.note
     assert "randomisation is the point" in note
-    assert "ASSUMPTION" in note and "two eras" in note
+    assert "ASSUMPTION" in note and "not an effect established" in note
     assert "upper bound" in note                    # blocks are not fully independent
     assert "plan and not a result" in note
     assert "no clinical safety review" in note

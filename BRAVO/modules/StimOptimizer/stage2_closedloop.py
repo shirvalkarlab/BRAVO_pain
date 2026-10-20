@@ -36,10 +36,8 @@ its reason attached is information; a clipped value is a fabrication wearing the
 
 WHY THE RANKING IS NOT AN EFFICACY RANKING
 ------------------------------------------
-Stage 1 ranks candidates by a pain objective because pain outcomes exist for open-loop settings in
-this record. No closed-loop pain outcome exists for anyone here — the loop has never been run — so
-there is nothing to fit a surrogate to and no honest way to predict which valid policy relieves more
-pain. Stage 2 therefore ranks the valid policies by DEPLOYABILITY, using the device's own criterion
+Stage 1 ranks open-loop candidates by a pain objective. Stage 2 makes no closed-loop efficacy
+prediction: it ranks valid policies by DEPLOYABILITY, using the device's own criterion
 for whether a threshold can be placed at all: the standardised separation between the two LFP
 captures, from ``routines/lfp_response.assess_response``. A better-separated band is one where the
 device can put a threshold the signal reliably crosses in both directions. That is a necessary
@@ -49,10 +47,10 @@ invites being read as a preference ordering and this one is not.
 
 Typical use::
 
-    from modules.StimOptimizer import stage1_openloop as S1, stage2_closedloop as S2
-    from modules.StimOptimizer.routines import stage_gate as GATE
+    from StimOptimizer import stage1_openloop as S1, stage2_closedloop as S2
+    from StimOptimizer.routines import stage_gate as GATE
 
-    s1 = S1.run_stage1("rcs08_bo_design_matrix.csv", data_horizon="2026-08-12")
+    s1 = S1.run_stage1("authorized_design_matrix.csv", data_horizon="2030-01-01")
     gate = GATE.evaluate_gate(s1.frozen)                 # no LFP evidence -> will refuse
     s2 = S2.run_stage2(s1.frozen, gate)
     print(s2.describe())
@@ -87,20 +85,6 @@ DEFAULT_BAND_WIDTHS_HZ = (4.0, 5.0, 6.0)
 #: one being chosen here, because that trade-off is a clinical judgement.
 DEFAULT_AMP_WINDOW_HALF_WIDTHS_MA = (0.5, 1.0)
 
-
-
-# Aditya canonical compatibility imports/constants.
-from dataclasses import dataclass, field
-
-import numpy as np
-
-import pandas as pd
-
-from .routines import lfp_response as LFP
-
-from .routines import percept_adaptive as PA
-
-from .routines import stage_gate as GATE
 
 @dataclass(frozen=True)
 class ClosedLoopPolicy:
@@ -297,6 +281,10 @@ def enumerate_candidates(frozen, *, lfp=None, hemispheres=None, modes=DEFAULT_MO
     :class:`ClosedLoopPolicy` objects; ``rejected`` holds ``(policy, problems)`` pairs.
     """
     hemis = tuple(frozen.hemispheres) if hemispheres is None else tuple(hemispheres)
+    # ``ceiling_mA`` is one number or a per-side mapping, read exactly as the gate reads it
+    # (``stage_gate._ceiling_by_side``): each side's window is bounded by ITS OWN ceiling (decision
+    # 308; until then the window used the 5.0 mA module limit while the gate checked 4.5 mA).
+    _ceil_scalar, _ceil_by_side = GATE._ceiling_by_side(ceiling_mA, list(hemis))
     accepted, rejected = [], []
     # Response verdicts are cached per (side, band centre, width) because assess_response fits a
     # regression and the same band is reused across every mode and amplitude window. Per SIDE
@@ -305,7 +293,9 @@ def enumerate_candidates(frozen, *, lfp=None, hemispheres=None, modes=DEFAULT_MO
 
     for hemi in hemis:
         setting = frozen.setting(hemi)
-        windows = _amp_windows(setting, half_widths=amp_window_half_widths, ceiling_mA=ceiling_mA)
+        _ceil_h = (_ceil_by_side[hemi]["ceiling_mA"] if _ceil_by_side and hemi in _ceil_by_side
+                   else _ceil_scalar)
+        windows = _amp_windows(setting, half_widths=amp_window_half_widths, ceiling_mA=_ceil_h)
         lfp_h = GATE.evidence_for_side(lfp, hemi)
         for c in band_centers:
             for w in band_widths:
@@ -341,7 +331,7 @@ def enumerate_candidates(frozen, *, lfp=None, hemispheres=None, modes=DEFAULT_MO
                                               else float("nan")),
                                 response_reason=(response.reason if response is not None
                                                  else "no LFP evidence supplied"),
-                                slope_log_per_mA=(float(response.slope_log_per_mA)
+                                slope_per_mA=(float(response.slope_per_mA)
                                                   if response is not None else float("nan")),
                                 slope_p=(float(response.slope_p) if response is not None
                                          else float("nan"))),
@@ -367,7 +357,7 @@ def _policy_frame(policies) -> pd.DataFrame:
             threshold_single=p.threshold_single,
             thresholds_determined=p.thresholds_determined,
             separation_d=p.evidence.get("separation_d", float("nan")),
-            slope_log_per_mA=p.evidence.get("slope_log_per_mA", float("nan")),
+            slope_per_mA=p.evidence.get("slope_per_mA", float("nan")),
             slope_p=p.evidence.get("slope_p", float("nan"))))
     return pd.DataFrame(rows)
 
@@ -465,6 +455,3 @@ def run_stage2(frozen, gate, *, lfp=None, rate_hz=None, pw_us=None, allow_gate_f
     return Stage2Result(started=True, frozen=frozen, gate=gate, policies=pol, rejected=rej,
                         refusal_reasons=[], ranking_basis=basis, ranking_assessed=assessed,
                         notes=notes)
-
-
-# Retained active Aditya interfaces.

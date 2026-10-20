@@ -19,6 +19,9 @@ Data Curators
 """
 
 import os, pathlib
+import time
+import copy
+from collections import OrderedDict
 import uuid
 import shutil
 import datetime
@@ -34,10 +37,13 @@ import blosc2
 from filelock import Timeout, FileLock
 
 from Server import models
+from modules.DecodeCommon import data_start as _data_start
+from modules.DecodeCommon.private_clinical_config import config_digest as _clinical_config_digest
 from modules.NeuroPace.PersystDecoder import parsePersystRecording
 from modules.MedtronicPercept.Session import decodeMedtronicJSON
+from modules.MedtronicPercept import TabletClock
 from modules.ExternalDevices.DelsysTrigno import decodeMDATData, decodeHPFCSVData
-from modules.ExternalDevices.BRAVOfflineWinUI import decodeMDATv2, decodeMDATv3, decodeMDATAuto
+from modules.ExternalDevices.BRAVOfflineWinUI import decodeMDATv2, decodeMDATv3
 from modules.ExternalDevices.MATLAB import decodeMATLABFile
 from modules.ExternalDevices.BRAVORecordingStructure import decodebdata
 from modules.AlphaOmega.MPX import extractAlphaOmegaRecordings
@@ -55,9 +61,160 @@ def loadCacheFile(source_file):
     rawBytes = secureEncoder.decrypt(rawBytes)
     return rawBytes
 
+def implant_device_uids(device_uid=None, serial=None, owner_uid=None, owner_only=None, masked_serial=None):
+    """Resolve verified implant members; known redacted tokens never become serial evidence.
+
+    The optional token is classified from the current raw export before hashing.
+    Persisted flags apply only to the exact source owner/device and corresponding
+    owner/type/serial tuple. Missing, false or malformed flags do not reclassify a
+    concrete serial. Private exact-device groups remain the only masked aliases.
+    """
+    from modules.DecodeCommon import implants
+    rows = list(models.DBSDevice.objects.values_list("uid", "serial_number", "owner_id", "type"))
+    marked_devices = {(str(uid), str(owner)) for uid, owner, md in
+        models.SourceFile.objects.filter(type="MedtronicJSON", device__in=[r[0] for r in rows],
+            metadata__SerialIdentityMasked=True).values_list("device", "owner_id", "metadata")
+        if isinstance(md, dict) and md.get("SerialIdentityMasked") is True}
+    masked = {(str(owner), dtype, token) for uid, token, owner, dtype in rows
+              if (str(uid), str(owner)) in marked_devices}
+    scoped_owner = owner_only if owner_only is not None else owner_uid
+    seed = next((row for row in rows if str(row[0]) == str(device_uid)), None)
+    if masked_serial is not None and seed is not None and (scoped_owner is None or str(seed[2]) == str(scoped_owner)):
+        masked.add((str(seed[2]), seed[3], masked_serial))
+    normalized = [(uid, "redacted" if (str(owner), dtype, token) in masked else token, owner, dtype)
+                  for uid, token, owner, dtype in rows]
+    # Serial-only lookup cannot use a known masked/HMAC-masked token as a seed.
+    if device_uid is None and any(str(owner) == str(scoped_owner) and token == serial
+                                  for owner, _dtype, token in masked):
+        return []
+    return implants.device_uids(normalized, device_uid, serial, owner_uid, owner_only)
+
+
+def clock_anchor_table(device_uid=None, owner=None, extra=()):
+    """The clock anchors of one device's stored Percept exports (`SourceFile.metadata["ClockAnchor"]`,
+    written at ingest), plus `extra`. By device where it is known, since clock blocks are numbered
+    per device; by owner otherwise."""
+    if device_uid:
+        # (one implant can be several records: same serial, or the PI's ruling, decision 489)
+        q = models.SourceFile.objects.filter(device__in=implant_device_uids(device_uid))
+    elif owner is not None:
+        q = models.SourceFile.objects.filter(owner=owner)
+    else:
+        q = models.SourceFile.objects.none()
+    anchors = [(m or {}).get("ClockAnchor") for m in q.values_list("metadata", flat=True)]
+    return TabletClock.AnchorTable([a for a in anchors if a] + [a for a in extra if a], identity_salt=_clinical_config_digest())
+
+
+def clock_anchor_tables(owner):
+    """{device uid: AnchorTable} over an owner's stored exports, for a caller that reads many of
+    them; the key "" holds the exports with no device recorded. One query."""
+    rows = {}
+    devs = set(models.SourceFile.objects.filter(owner=owner).values_list("device", flat=True))
+    # each record's implant (decisions 444, 489): the sorted uids of every record of it
+    implant_of = {dev: (tuple(implant_device_uids(dev)) if dev else ("",)) for dev in devs}
+    for dev, md in models.SourceFile.objects.filter(owner=owner).values_list("device", "metadata"):
+        a = (md or {}).get("ClockAnchor")
+        if a:
+            rows.setdefault(implant_of.get(dev, (dev or "",)), []).append(a)
+    # keyed by device uid as before, each holding every record of its implant
+    out = {}
+    for dev in devs:
+        key = implant_of.get(dev)
+        if key in rows:
+            out[dev or ""] = TabletClock.AnchorTable(rows[key], identity_salt=_clinical_config_digest())
+    return out
+
+
+def loadPerceptJSON(source_file, table=None, table_from=None):
+    """A stored Percept export with EVERY time on the tablet's clock (the PI, 2026-09-26: no time
+    from the implanted device's clock). THE ONE WAY a Percept export is read: every device-clock
+    field is converted by `TabletClock.convert_export` against the device's anchor table, and the
+    file on disk is never changed. A caller reading many exports of one device builds the table
+    once (`clock_anchor_table`) and passes it; the ingest passes `table_from`, which builds the
+    table from the export itself; otherwise it is read here."""
+    JSON = json.loads(loadCacheFile(source_file))
+    if isinstance(JSON, dict) and "SessionDate" in JSON and "DeviceInformation" in JSON:
+        if table is None and table_from is not None:
+            table = table_from(JSON)
+        if table is None:
+            dev = getattr(source_file, "device", "") or None
+            table = clock_anchor_table(device_uid=dev, owner=None if dev else getattr(source_file, "owner", None))
+        TabletClock.convert_export(JSON, table)
+    return JSON
+
+
+def _masked_ingest_device_uid(JSON, owner_uid, stored_serial):
+    """Locate one existing device by the canonical lead descriptor, never model alone."""
+    from collections import Counter
+    from modules.MedtronicPercept import Session
+    if not owner_uid:
+        return None
+    try:
+        info = Session.extractPatientInformation(JSON)["Device"]
+        leads, dtype = info["ConnectedLeads"], info["Type"]
+        if not leads or not dtype:
+            return None
+        wanted = Counter((lead["type"], lead["name"]) for lead in leads)
+    except (KeyError, TypeError, ValueError, IndexError):
+        return None
+    matches = []
+    for device in models.DBSDevice.objects.filter(owner_id=owner_uid, serial_number=stored_serial, type=dtype):
+        if models.matchDevice(device, leads):
+            actual = Counter((lead.type, lead.target) for lead in device.electrodes.all())
+            if actual == wanted:
+                matches.append(str(device.uid))
+    return matches[0] if len(matches) == 1 else None
+
+
+def _ingest_clock_table(JSON, source_file, device=None, owner_uid=None):
+    """Use an owner-bound device seed before canonical clock conversion.
+
+    Raw redaction is classified before optional HMAC deidentification. A masked
+    token requires exactly one canonical lead-set match among this owner's
+    serial/type candidates; unknown or ambiguous matches use only the new
+    export's own anchor. No persistent device or source identity is rewritten.
+    """
+    from modules.DecodeCommon.implants import concrete_serial
+    own = TabletClock.export_anchor(JSON)
+    owner_uid = owner_uid or getattr(source_file, "owner_id", None)
+    try:
+        raw_serial = JSON["DeviceInformation"]["Final"]["NeurostimulatorSerialNumber"]
+    except (KeyError, TypeError):
+        raw_serial = None
+    serial, masked = None, False
+    if isinstance(raw_serial, str) and raw_serial:
+        masked = not concrete_serial(raw_serial)
+        # This in-memory metadata is persisted by the normal decoder's existing
+        # source save. It contains no serial and never changes the retained raw.
+        source_file.metadata["SerialIdentityMasked"] = masked
+        serial = (hmac.new(HASH_KEY.encode("utf8"), raw_serial.encode("utf-8"), hashlib.sha256).hexdigest()
+                  if source_file.metadata.get("automatic_deidentification") else raw_serial)
+    uids = []
+    if device is not None:
+        uids = implant_device_uids(device.uid, owner_only=owner_uid,
+                                  masked_serial=serial if masked else None)
+    elif serial is not None and masked:
+        seed = _masked_ingest_device_uid(JSON, owner_uid, serial)
+        if seed is not None:
+            uids = implant_device_uids(seed, owner_only=owner_uid, masked_serial=serial)
+    elif serial is not None:
+        uids = implant_device_uids(serial=serial, owner_uid=owner_uid)
+    anchors = []
+    for uid in uids:
+        anchors += [(md or {}).get("ClockAnchor") for md in
+                    models.SourceFile.objects.filter(device=uid).values_list("metadata", flat=True)]
+    return own, TabletClock.AnchorTable([a for a in anchors if a] + [own], identity_salt=_clinical_config_digest())
+
+
 def saveCacheFile(filename, metadata, raw_bytes):
     source_file = models.SourceFile.create(type=metadata["UploadType"], metadata=metadata)
     source_file.name = filename
+    # Mirror the dedup hash into the indexed column so the duplicate check is an index seek
+    # (see SourceFile.unique_hashed). Kept in lockstep with metadata["UniqueHashed"].
+    source_file.unique_hashed = metadata.get("UniqueHashed", "")
+    # Mirror the institute into the indexed column so the (unique_hashed, institute) dedup check is an
+    # index seek rather than a JSON_EXTRACT on metadata["Institute"].
+    source_file.institute = str(metadata.get("Institute", ""))
     source_file.pointer = DATABASE_PATH + "cache" + os.path.sep + source_file.uid + "_" + filename
     hashed = Database.saveSourceFile(secureEncoder.encrypt(raw_bytes), source_file.pointer, bytes=True)
     source_file.hashed = hashed
@@ -95,7 +252,10 @@ def NeuroPacePersystDatDecoder(source_file, person=None):
     Recordings = parsePersystRecording(rawBytes, source_file.metadata["layout"])
     for stream in Recordings:
         recording = models.Recording(**{key: stream[key] for key in stream.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person, source__metadata__Uploader=source_file.metadata["Uploader"]):
+        # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before write,
+        # replacing the per-recording JSON-blob + source__metadata__Uploader (JSON_EXTRACT) scans.
+        fingerprint = Database.contentFingerprint(stream["recording"])
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
         filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
@@ -104,19 +264,18 @@ def NeuroPacePersystDatDecoder(source_file, person=None):
         if not hashed:
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
-            continue 
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+            continue
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
     os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
     shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".persystdat")
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".persystdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = device.uid
+    source_file.device = device.uid
     source_file.owner = person
     source_file.save()
 
@@ -124,49 +283,286 @@ def NeuroPacePersystDatDecoder(source_file, person=None):
     person.save()
     return True
 
+def restamp_chronic_schedule(person, device):
+    """Rebuild the one chronic contact/band schedule of `device` (every device record sharing its
+    serial number, for this participant: one implant can be filed as several records, decision 444)
+    from all its exports' settings records and write it onto all its chronic recordings. Returns
+    the counts from `chronic_schedule.restamp_device_chronic`."""
+    from django.db import transaction
+    from modules.MedtronicPercept import chronic_schedule
+    # every record of the implant (same serial, or the PI's ruling: decision 489), this owner's
+    uids = implant_device_uids(str(device.uid), owner_only=getattr(person, "uid", person))
+    if not uids:
+        raise ValueError("No owner-bound implant inventory is available.")
+    # Save all schedule rows together. Validation occurs inside the lock before
+    # the first write; a save failure rolls back every earlier schedule write.
+    with transaction.atomic():
+        sfs = list(models.SourceFile.objects.select_for_update().filter(
+            owner=person, device__in=uids, type="MedtronicJSON"))
+        rows = list(models.Recording.objects.select_for_update().filter(
+            source__in=sfs, type="MedtronicChronicBrainSense"))
+        by_source = {}
+        for r in rows:
+            by_source.setdefault(str(r.source_id), []).append(r)
+        result = chronic_schedule.restamp_device_chronic(sfs, by_source)
+        inventory = sorted((str(sf.uid), str(sf.hashed),
+                            (sf.metadata or {}).get("SensingSettingsRecord")) for sf in sfs)
+        result.update(rule_version=chronic_schedule.RULE_VERSION,
+                      configuration_digest=_clinical_config_digest(),
+                      inventory_digest=hashlib.sha256(json.dumps(inventory, sort_keys=True,
+                          separators=(",", ":"), allow_nan=False).encode()).hexdigest())
+        # Earlier exports must carry the same accepted inventory result; a later
+        # complete rebuild resolves any earlier preparation failure for them too.
+        for sf in sfs:
+            sf.metadata = dict(sf.metadata or {}, ChronicScheduleRestamp=result)
+            sf.save(update_fields=["metadata"])
+        return result
+
+
 def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
-    import logging
-    from time import perf_counter as _perf_counter
-    _decode_started = _perf_counter()
-    rawBytes = loadCacheFile(source_file)
-    JSON = json.loads(rawBytes)
-    reviewed_participant = person or (device.owner if device else None) or source_file.owner
-    from modules import RCS08DataPolicy
-    reviewed_policy = RCS08DataPolicy.applies_to(reviewed_participant)
-    if reviewed_policy:
-        from modules.PerceptPresentationPrivacy import deidentify_stored_source
-        sanitized, _ = deidentify_stored_source(source_file, "RCS08")
-        JSON = json.loads(sanitized)
-        reason = RCS08DataPolicy.source_exclusion(JSON)
-        if reason:
-            source_file.owner = reviewed_participant
-            source_file.metadata["AnalysisExclusion"] = reason
-            source_file.metadata["Timezone"] = ""
-            source_file.metadata["Device"] = ""
-            source_file.save()
-            return True
-        # A redacted serial number must not create another implant record.
-        canonical = models.DBSDevice.find(owner=reviewed_participant, name=RCS08DataPolicy.CANONICAL_NAME)
-        if canonical:
-            device = canonical
+    """Decode one Percept export and store everything in it, ONE EXPORT AT A TIME (decision 439).
+    Copies of the same item in different exports are merged, so what is stored must not depend on
+    which of two uploads reached the database first; the lock makes the check-then-write of every
+    item atomic across web workers and batch ingests."""
+    with FileLock(DATABASE_PATH + "PerceptIngestSerial.lock"):
+        return _MedtronicPerceptJSONDecoder(source_file, device=device, person=person)
+
+
+def _event_source_provenance(source):
+    return {"source_id": str(source.uid), "source_hash": str(source.hashed or ""),
+            "read_all_status": source.metadata.get("ReadAllStatus"),
+            "fully_read_for_session": source.metadata.get("FullyReadForSession")}
+
+
+def _event_source_index(source, cache):
+    """One export-scoped bounded cache of compact verified source event indexes."""
+    from modules.MedtronicPercept import BrainSenseEvent, Percept
+    key = (str(source.uid), str(source.hashed))
+    if key == cache.get("current_key"):
+        return cache["current_index"]
+    indexes = cache.setdefault("legacy_indexes", OrderedDict())
+    if key in indexes:
+        indexes.move_to_end(key)
+        return indexes[key]
+    raw = json.loads(loadCacheFile(source))  # integrity checked + decrypted by canonical loader
+    table = cache.get("table")
+    if table is None:
+        table = clock_anchor_table(device_uid=source.device or None, owner=source.owner)
+    index = BrainSenseEvent.sourceEventIndex(raw, table, TabletClock, Percept)
+    indexes[key] = index
+    while len(indexes) > 4:
+        indexes.popitem(last=False)
+    return index
+
+
+def _event_sql_json_value(connection, value):
+    """Storage-equivalence evidence ONLY, never the raw-spectrum identity."""
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT JSON_EXTRACT(%s, '$')", [json.dumps(value, allow_nan=False)])
+        text = cursor.fetchone()[0]
+    if isinstance(text, bytes):
+        text = text.decode("utf-8")
+    if not isinstance(text, str):
+        raise ValueError("unexpected_json_storage_projection")
+    return json.loads(text)
+
+
+def _valid_event_identity(identity):
+    from modules.MedtronicPercept.BrainSenseEvent import RAW_SPECTRUM_VERSION
+    if not isinstance(identity, dict) or identity.get("version") != RAW_SPECTRUM_VERSION:
+        return False
+    return (all(isinstance(identity.get(k), str) and len(identity[k]) == 64 and
+                all(c in "0123456789abcdef" for c in identity[k]) for k in ("sha256", "raw_identity_sha256")) and
+            bool(identity.get("source_id")) and bool(identity.get("source_hash")))
+
+
+def _event_mysql_identities(event, source, record, stored, connection, cache, person):
+    """Trusted source digests, plus explicit unresolved sides. Never numeric tolerance."""
+    from modules.MedtronicPercept.BrainSenseEvent import rawSpectrumDigest
+    incoming_ids, stored_ids, blocked = {}, {}, {}
+    try:
+        incoming_index = _event_source_index(source, cache)
+    except Exception:
+        incoming_index = {}
+    for side, block in (event.get("data") or {}).items():
+        if not side.startswith("HemisphereLocationDef"):
+            continue
+        key = (event["name"], float(event["date"]), side)
+        matches = incoming_index.get(key, [])
+        try:
+            verified = (len(matches) == 1 and rawSpectrumDigest(matches[0]["block"]) == rawSpectrumDigest(block))
+        except ValueError:
+            verified = False
+        if not verified:
+            blocked[side] = "incoming_raw_identity_not_unique_or_verified"
+            continue
+        incoming_ids[side] = dict(matches[0]["identity"], **{k: v for k, v in _event_source_provenance(source).items() if k in ("source_id", "source_hash")})
+        have = (stored or {}).get(side)
+        if have is None:
+            continue
+        identity = have.get("RawSpectrumIdentity")
+        if _valid_event_identity(identity):
+            origin = (record.source if str(record.source.uid) == identity["source_id"] and record.source.owner == person
+                      else models.SourceFile.find(uid=identity["source_id"], owner=person))
+            if origin is not None and str(origin.hashed) == identity["source_hash"]:
+                stored_ids[side] = identity
+                continue
+        # Legacy rows must prove their origin. Do not hash rounded SQL arrays as raw.
+        origins = {str(record.source.uid): record.source}
+        recovery_failed = False
+        for observation in have.get("SenseIDObservations") or []:
+            uid = (observation.get("source") or {}).get("source_id")
+            if uid and str(uid) not in origins:
+                found = models.SourceFile.find(uid=uid, owner=person)
+                if found is not None:
+                    origins[str(uid)] = found
+                else:
+                    recovery_failed = True
+        candidates = []
+        for origin in origins.values():
+            try:
+                origin_matches = _event_source_index(origin, cache).get(key, [])
+                if len(origin_matches) != 1:
+                    recovery_failed = True
+                for candidate in origin_matches:
+                    projected = _event_sql_json_value(connection, candidate["block"])
+                    if all(projected.get(field) == have.get(field) for field in ("Frequency", "FFTBinData")):
+                        candidates.append(dict(candidate["identity"], source_id=str(origin.uid), source_hash=str(origin.hashed)))
+            except Exception:
+                recovery_failed = True
+        identities = {(candidate["sha256"], candidate["raw_identity_sha256"]) for candidate in candidates}
+        if recovery_failed or len(identities) != 1:
+            blocked[side] = "legacy_raw_identity_or_storage_proof_unavailable"
+            continue
+        stored_ids[side] = sorted(candidates, key=lambda value: value["source_id"])[0]
+    return incoming_ids, stored_ids, blocked
+
+
+def _save_event_mysql_metadata(record, previous, updated, connection):
+    """Update metadata paths without reserializing any existing spectral array."""
+    fields = {"SenseID", "SenseIDObservations", "SenseIDConflict", "SenseIDStatus", "RawSpectrumIdentity",
+              "SpectrumIdentityStatus", "SpectrumIdentityReason", "UnverifiedSenseIDObservations"}
+    assignments, params = [], []
+    for side, block in updated.items():
+        if not side.startswith("HemisphereLocationDef"):
+            continue
+        if side not in previous:
+            assignments.append("%s, JSON_EXTRACT(%s, '$')")
+            params.extend(["$." + json.dumps(side), json.dumps(block, allow_nan=False)])
+            continue
+        if any(previous[side].get(field) != block.get(field) for field in ("Frequency", "FFTBinData")):
+            raise ValueError("existing_event_spectrum_rewrite_refused")
+        for field in sorted(fields):
+            if field in block and block.get(field) != previous[side].get(field):
+                assignments.append("%s, JSON_EXTRACT(%s, '$')")
+                params.extend(["$." + json.dumps(side) + "." + json.dumps(field), json.dumps(block[field], allow_nan=False)])
+    if not assignments:
+        return
+    table = connection.ops.quote_name(models.Recording._meta.db_table)
+    with connection.cursor() as cursor:
+        cursor.execute("UPDATE " + table + " SET metadata=JSON_SET(metadata, " + ", ".join(assignments) + ") WHERE uid=%s", params + [record.uid])
+        if cursor.rowcount != 1:
+            raise ValueError("event_metadata_update_row_missing")
+    record.metadata = updated
+
+
+def _store_patient_event(event, source_file, person, identity_cache=None):
+    """Merge one copy of a patient event into what is stored (decision 439,
+    `BrainSenseEvent.mergeEventData`): create it, attach a PSD or a side a stored copy lacks, fill
+    an empty contact pair, or drop it when no copy has brain data. Returns the action taken."""
+    from modules.MedtronicPercept.BrainSenseEvent import mergeEventData
+    existing = models.DBSEvent.objects.filter(date=event["date"], type=event["type"], name=event["name"],
+                                              source__owner=person).first()
+    record = existing.data.first() if existing is not None else None
+    stored = None if existing is None else (dict(record.metadata or {}) if record is not None else {})
+    from django.db import connections
+    alias = getattr(getattr(source_file, "_state", None), "db", None) or "default"
+    connection = connections[alias]
+    incoming_ids = stored_ids = None
+    blocked = {}
+    if connection.vendor == "mysql":
+        incoming_ids, stored_ids, blocked = _event_mysql_identities(
+            event, source_file, record, stored, connection, identity_cache if identity_cache is not None else {}, person)
+    # Uploaded identity claims are never trusted, including on non-MySQL backends.
+    incoming = copy.deepcopy(event.get("data") or {})
+    for side, block in incoming.items():
+        if side.startswith("HemisphereLocationDef"):
+            block.pop("RawSpectrumIdentity", None)
+    action, data, conflicts = mergeEventData(stored, incoming,
+        stored_source=_event_source_provenance(record.source) if record is not None else None,
+        incoming_source=_event_source_provenance(source_file), stored_identities=stored_ids,
+        incoming_identities=incoming_ids, blocked_sides=blocked)
+    if conflicts:
+        report = {"type": event["type"], "name": event["name"], "date": event["date"], "sides": conflicts,
+                  "contact_ambiguous_sides": [side for side in conflicts if data.get(side, {}).get("SenseIDConflict")],
+                  "identity_unavailable": blocked}
+        reports = source_file.metadata.setdefault("IngestConflicts", [])
+        if report not in reports:
+            reports.append(report)
+    if action == "create":
+        existing = models.DBSEvent(name=event["name"], type=event["type"], date=event["date"], source=source_file)
+        existing.save()
+    if action in ("create", "update"):
+        if record is None:
+            record = models.Recording(name=event["name"], type=event["type"], date=event["date"], source=source_file)
+            record.metadata = data
+            record.save()
+            existing.data.add(record)
+        elif connection.vendor == "mysql":
+            _save_event_mysql_metadata(record, stored, data, connection)
+        else:
+            record.metadata = data
+            record.save()
+    return action
+
+
+def _MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
+    _t0 = time.time()
+    def _dstage(label, _last=[time.time()]):
+        now = time.time()
+        print(f"[decode-timing] {label}: {now - _last[0]:.3f}s (total {now - _t0:.3f}s)", flush=True)
+        _last[0] = now
+
+    # Every device-clock time converted to the tablet's clock before anything reads it (the PI,
+    # 2026-09-26); the table spans the device's stored exports so a re-exported entry converts to
+    # the same time in every export. This export's own anchor is kept on its row for the next one.
+    _own = {}
+    def _table_from(raw):
+        a, t = _ingest_clock_table(raw, source_file, device=device, owner_uid=getattr(person, "uid", None))
+        _own["anchor"] = a
+        # Build only a compact event index while this raw export is already in memory.
+        from django.db import connections
+        alias = getattr(getattr(source_file, "_state", None), "db", None) or "default"
+        if connections[alias].vendor == "mysql":
+            from modules.MedtronicPercept import BrainSenseEvent, Percept
+            _own["event_identities"] = {"current_key": (str(source_file.uid), str(source_file.hashed)),
+                                        "current_index": BrainSenseEvent.sourceEventIndex(raw, t, TabletClock, Percept), "table": t}
+        return t
+    JSON = loadPerceptJSON(source_file, table_from=_table_from)
+    # Preserve read-completeness evidence without using it to guess contact precedence.
+    source_file.metadata["ReadAllStatus"] = JSON.get("ReadAllStatus")
+    source_file.metadata["FullyReadForSession"] = JSON.get("FullyReadForSession")
+    _tc = JSON.get("_TabletClock") or {}
+    # entries the tablet clock could not place are named on the export's row, never silent (decision 444)
+    source_file.metadata["ClockLeftOut"] = _tc.get("left_out") or {}
+    source_file.metadata["ClockLeftUnconverted"] = _tc.get("left_unconverted") or {}
+    if _own.get("anchor"):
+        # the anchor, and the entries this export carried first (later exports look them up)
+        source_file.metadata["ClockAnchor"] = dict(
+            _own["anchor"], first_carried=(JSON.get("_TabletClock") or {}).get("first_carried") or {})
+    _dstage("loadPerceptJSON (read + decrypt + tablet clock)")
     if source_file.metadata["automatic_concatenation"]:
         JSON["AutomaticStreamingFix"] = True
     else:
         JSON["AutomaticStreamingFix"] = False
     
-    # Keep the source clock coordinates before the decoder transforms DateTime.
-    # This only stamps derived metadata; retained source bytes/hashes are unchanged.
-    from modules import PerceptClock, PerceptClockData
-    PerceptClockData.stamp_source(source_file, JSON)
-    patient_event_psds = PerceptClock.extract_event_recordings(JSON)
-    logging.getLogger(__name__).info("Decode stage=load_parse elapsed_seconds=%.3f", _perf_counter() - _decode_started)
-    _structural_started = _perf_counter()
     DatabaseEntries = decodeMedtronicJSON(JSON)
-    logging.getLogger(__name__).info("Decode stage=structure elapsed_seconds=%.3f", _perf_counter() - _structural_started)
-    if reviewed_policy:
-        removed = RCS08DataPolicy.filter_decoded_entries(DatabaseEntries)
-        if removed:
-            source_file.metadata["PreimplantExclusions"] = removed
+    _dstage("decodeMedtronicJSON (CPU structural decode)")
+    # what could not be read is recorded on the export's row, never swallowed (decision 441)
+    source_file.metadata["ProcessFailure"] = DatabaseEntries.get("ProcessFailure") or []
+    source_file.metadata["StreamingPowerSetAside"] = DatabaseEntries.get("StreamingPowerSetAside") or []
+    if source_file.metadata["ProcessFailure"]:
+        print(f"[ingest] extractors failed for {source_file.uid}: {source_file.metadata['ProcessFailure']}", flush=True)
     
     if source_file.metadata["automatic_deidentification"]:
         DatabaseEntries["SessionOverview"]["Name"] = hmac.new(HASH_KEY.encode("utf8"), DatabaseEntries["SessionOverview"]["Name"].encode("utf-8"), hashlib.sha256).hexdigest()
@@ -176,9 +572,13 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
 
     # Process Patient/Device/Electrode Information for Storage and Query
     lock = FileLock(DATABASE_PATH + "ParticipantInfoLookup.lock")
-    _participant_lock_started = _perf_counter()
+    _t_lock = time.time()
     with lock.acquire(timeout=180):
-        logging.getLogger(__name__).info("Decode stage=participant_lock_wait elapsed_seconds=%.3f", _perf_counter() - _participant_lock_started)
+        _waited = time.time() - _t_lock
+        if _waited > 0.5:
+            print(f"[decode-timing] WARNING: waited {_waited:.1f}s for ParticipantInfoLookup.lock "
+                  f"(another upload held it, or a crashed upload left it stale)", flush=True)
+        _dstage("acquire ParticipantInfoLookup.lock")
         if not device:
             device, device_created = models.DBSDevice.find_or_create(DatabaseEntries["SessionOverview"]["Device"]["SerialNumber"], 
                                                                      DatabaseEntries["SessionOverview"]["Device"]["ConnectedLeads"], 
@@ -229,6 +629,7 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         
         source_file.owner = person
         source_file.save()
+    _dstage("device/person/electrode find_or_create (under lock)")
 
     
     electrodes = device.electrodes.all()
@@ -279,16 +680,51 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     
     AllEntries = []
     for log in DatabaseEntries["TherapyChangeHistory"]:
-        if models.TherapyModification.include(date=log["date"], type=log["type"], **Database.deviceMetadataLookup(device.uid, prefix="source__metadata"), owner=person):
+        if models.TherapyModification.include(date=log["date"], type=log["type"], source__device=device.uid, owner=person):
             continue
         AllEntries.append(models.TherapyModification(**log, source=source_file, owner=person))
     models.TherapyModification.objects.bulk_create(AllEntries)
+    _dstage("therapy/stimulation/modification inserts")
     
+    # SPECTRA ACROSS EXPORTS, bit for bit (decision 445): a spectrum whose run cannot be told is
+    # stored once, and only if the same device spectrum is not already held; a recording that
+    # carries a spectrum on its run removes any stored run-unknown copy of it.
+    from modules.MedtronicPercept.BrainSenseSurvey import spectrumKey, streamRelation
+    _held_keys = set()
+    for _md in models.Recording.objects.filter(source__owner=person).exclude(type__in=["MedtronicChronicBrainSense",
+            "PatientControllerEvent", "MedtronicDeviceImpedance"]).values_list("metadata", flat=True):
+        _md = _md or {}
+        _held_keys.update(_md.get("SpectrumKeys") or [])
+        if _md.get("SpectrumKey"):
+            _held_keys.add(_md["SpectrumKey"])
+
     for survey in DatabaseEntries["SurveyRecordings"]:
+        _desc = (survey["recording"].get("Descriptor") or {}) if isinstance(survey["recording"], dict) else {}
+        if survey["type"] == "MedtronicSurveyPSD":
+            _key = spectrumKey(_desc["MedtronicPSD"][0])
+            if _key in _held_keys:
+                continue
+            survey["metadata"] = dict(survey.get("metadata") or {}, SpectrumKey=_key)
+            _held_keys.add(_key)
+        else:
+            _keys = [spectrumKey(q) for q in list(_desc.get("MedtronicPSD") or []) + list(_desc.get("SurveyPSD") or [])
+                     if isinstance(q, dict)]
+            if _keys:
+                survey["metadata"] = dict(survey.get("metadata") or {}, SpectrumKeys=_keys)
+                for _old in models.Recording.objects.filter(source__owner=person, type="MedtronicSurveyPSD"):
+                    if (_old.metadata or {}).get("SpectrumKey") in set(_keys):
+                        _old.delete()
+                _held_keys.update(_keys)
         recording = models.Recording(**{key: survey[key] for key in survey.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
-        content_hashed = hmac.new(HASH_KEY.encode("utf8"), pickle.dumps(survey["recording"]), hashlib.sha256).hexdigest()
-        recording.metadata["ContentHash"] = content_hashed
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+        # Hash-first dedup: compute the content hash (cheap, in-memory) and check the INDEXED
+        # Recording.hashed column before writing. The previous pre-write check filtered on
+        # metadata=recording.metadata (full JSON-blob equality) + source__metadata__Uploader
+        # (JSON_EXTRACT) — both un-indexable JSON-field scans that become full-table scans on the
+        # populated production MySQL and ran once PER recording (the upload hang). The content hash
+        # distinguishes recordings at least as precisely as the metadata blob, so this is faster and
+        # no less correct.
+        fingerprint = Database.contentFingerprint(survey["recording"])
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
         filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
@@ -297,19 +733,38 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         if not hashed:
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
-            continue 
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+            continue
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
     for stream in DatabaseEntries["StreamingRecordings"]:
+        # THE SAME STREAM IN TWO EXPORTS, on the values (decision 445): identical, or the start of a
+        # stored one -> not stored again; longer, with the stored one as its start -> replaces it;
+        # any value different -> stored.
+        _skip = False
+        if isinstance(stream["recording"], dict) and "Data" in stream["recording"]:
+            for _old in models.Recording.objects.filter(source__owner=person, type=stream["type"], date=stream["date"]):
+                if list((_old.metadata or {}).get("ChannelNames") or []) != list(stream["recording"].get("ChannelNames") or []):
+                    continue
+                try:
+                    _stored = Database.loadSourceFile(_old.pointer, _old.hashed)
+                except Exception:
+                    continue
+                _rel = streamRelation(_stored.get("Data"), stream["recording"]["Data"])
+                if _rel == "duplicate":
+                    _skip = True
+                    break
+                if _rel == "longer":
+                    _old.delete()
+        if _skip:
+            continue
         recording = models.Recording(**{key: stream[key] for key in stream.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
-        content_hashed = hmac.new(HASH_KEY.encode("utf8"), pickle.dumps(stream["recording"]), hashlib.sha256).hexdigest()
-        recording.metadata["ContentHash"] = content_hashed
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+        # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before write,
+        # replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+        fingerprint = Database.contentFingerprint(stream["recording"])
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
         filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
@@ -318,18 +773,20 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         if not hashed:
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
-            continue 
-        
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+            continue
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
     for stream in DatabaseEntries["ChronicRecordings"]:
         recording = models.Recording(**{key: stream[key] for key in stream.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+        # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before write,
+        # replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+        # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+        # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+        fingerprint = Database.contentFingerprint(stream["recording"])
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
 
@@ -340,32 +797,26 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
             continue
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
         full_recording = models.Recording.find(type="MedtronicChronicNeuralActivity", source__owner=person)
         if full_recording:
             full_recording.delete()
 
-    # Annotation duplication must not suppress a novel physical PSD or hemisphere.
-    # Existing recording metadata, native times and manual alignment are retained.
-    source_file.metadata["PerceptClockReconciliation"] = PerceptClockData.save_patient_event_psds(
-        source_file, patient_event_psds, device.uid)
+    _dstage("survey/streaming/chronic recording inserts (saveSourceFile + Recording.save)")
     for event in DatabaseEntries["EventRecordings"]:
+        if event["type"] == "PatientControllerEvent":
+            # every copy merged; an event with no brain data in any copy is not stored (decision 439)
+            _store_patient_event(event, source_file, person, identity_cache=_own.get("event_identities"))
+            continue
         if models.DBSEvent.include(date=event["date"], type=event["type"], name=event["name"], source__owner=person):
             continue
         event_log = models.DBSEvent(**{key: event[key] for key in event.keys() if key in ["name", "type", "date"]}, source=source_file)
         event_log.save()
         if "data" in event.keys():
-            if event["type"] == "PatientControllerEvent" and any(
-                    PerceptClock.valid_spectrum(block) for block in event["data"].values()):
-                # Exact native PSD representations were reconciled above.
-                # Physical deduplication occurs in the canonical analysis view.
-                continue
             recording = models.Recording(**{key: event[key] for key in event.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
             recording.metadata = {**recording.metadata, **event["data"]}
             recording.save()
@@ -376,13 +827,52 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".json"
     source_file.metadata["Timezone"] = DatabaseEntries["SessionOverview"]["SessionTimezone"]
     source_file.metadata["Device"] = device.uid
+    source_file.device = device.uid
     source_file.metadata["SessionEndTimestamp"] = DatabaseEntries["SessionOverview"]["SessionEndTimestamp"]
+    source_file.metadata["SensingSettingsRecord"] = DatabaseEntries.get("SensingSettingsRecord")
     source_file.owner = person
     source_file.date = DatabaseEntries["SessionOverview"]["SessionTimestamp"]
     source_file.save()
 
+    # ONE chronic contact/band schedule per device, from every export's settings record, written
+    # onto every chronic recording of the device (decision 487; MedtronicPercept/chronic_schedule.py).
+    # A failure is written on this export's row, never swallowed (decision 441).
+    try:
+        source_file.metadata["ChronicScheduleRestamp"] = restamp_chronic_schedule(person, device)
+    except Exception as e:
+        source_file.metadata["ChronicScheduleRestamp"] = {"failed": repr(e)[:500]}
+        print(f"[ingest] chronic schedule restamp failed for {source_file.uid}: {e!r}", flush=True)
+    source_file.save()
+
     person.last_update = models.current_time()
     person.save()
+
+    # Eagerly warm the per-recording biomarker PSD cache for this participant so the spectra of the
+    # files just ingested are Welch'd and persisted NOW, off the upload's critical path. This is what
+    # makes a later "Calculate biomarker" reuse cached spectra instead of recomputing them. Fully
+    # decoupled: a daemon thread, a lazy import (a Biomarkers import error cannot break ingestion),
+    # and a broad except (a cache failure is logged, never raised). The cache itself only decodes the
+    # recordings not already cached, so re-running on an existing participant is cheap.
+    try:
+        import threading
+
+        def _warm_biomarker_psd(uid):
+            try:
+                from modules.Biomarkers import bravo_service as _bs
+                _bs.warm_psd_cache(uid)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Biomarker PSD cache warm after ingestion failed for %s", uid, exc_info=True)
+
+        # BRAVO_INGEST_WARM=0 skips it: a bulk re-ingest started one per export and they piled up
+        # (40 GB in one process after 50 exports, 2026-10-05); the caches are rebuilt once after.
+        if os.environ.get("BRAVO_INGEST_WARM", "1") != "0":
+            threading.Thread(target=_warm_biomarker_psd, args=(person.uid,),
+                             name="biomarker-psd-warm", daemon=True).start()
+    except Exception:
+        pass   # never let cache warming affect the ingestion result
+
     return True
 
 def NeuroImageStorage(source_file, person):
@@ -400,6 +890,7 @@ def NeuroImageStorage(source_file, person):
     source_file.pointer = DATABASE_PATH + "imaging" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".image"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
@@ -446,7 +937,12 @@ def MATFileDecoder(source_file, person, startTime=None):
                     "ChannelNames": ProcessedData["ChannelNames"]
                 }
             }, source=source_file)
-            if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+                        # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before
+            # write, replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+            # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+            # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+            fingerprint = Database.contentFingerprint(ProcessedData)
+            if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
                 recording.delete()
                 continue
 
@@ -456,13 +952,11 @@ def MATFileDecoder(source_file, person, startTime=None):
             if not hashed:
                 print("Hashing Failed for Data Storage")
                 print(recording.__dict__)
-                continue 
-            if models.Recording.include(hashed=hashed, source__owner=person):
-                recording.delete()
-            else:
-                recording.pointer = filename
-                recording.hashed = hashed
-                recording.save()
+                continue
+            recording.pointer = filename
+            recording.hashed = hashed
+            recording.content_fingerprint = fingerprint
+            recording.save()
 
     elif DataType == "CustomizedTimelineData":
         for ProcessedData in MATFile:
@@ -471,7 +965,12 @@ def MATFileDecoder(source_file, person, startTime=None):
                     "ChannelNames": ProcessedData["ChannelNames"]
                 }
             }, source=source_file)
-            if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+                        # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before
+            # write, replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+            # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+            # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+            fingerprint = Database.contentFingerprint(ProcessedData)
+            if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
                 recording.delete()
                 continue
 
@@ -481,13 +980,11 @@ def MATFileDecoder(source_file, person, startTime=None):
             if not hashed:
                 print("Hashing Failed for Data Storage")
                 print(recording.__dict__)
-                continue 
-            if models.Recording.include(hashed=hashed, source__owner=person):
-                recording.delete()
-            else:
-                recording.pointer = filename
-                recording.hashed = hashed
-                recording.save()
+                continue
+            recording.pointer = filename
+            recording.hashed = hashed
+            recording.content_fingerprint = fingerprint
+            recording.save()
 
     elif DataType == "CustomizedStreamingData":
         for ProcessedData in MATFile:
@@ -501,7 +998,12 @@ def MATFileDecoder(source_file, person, startTime=None):
                     "Duration": ProcessedData["Duration"]
                 }, **ProcessedData["Descriptor"]}
             }, source=source_file)
-            if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+                        # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before
+            # write, replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+            # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+            # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+            fingerprint = Database.contentFingerprint(ProcessedData)
+            if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
                 recording.delete()
                 continue
 
@@ -511,13 +1013,11 @@ def MATFileDecoder(source_file, person, startTime=None):
             if not hashed:
                 print("Hashing Failed for Data Storage")
                 print(recording.__dict__)
-                continue 
-            if models.Recording.include(hashed=hashed, source__owner=person):
-                recording.delete()
-            else:
-                recording.pointer = filename
-                recording.hashed = hashed
-                recording.save()
+                continue
+            recording.pointer = filename
+            recording.hashed = hashed
+            recording.content_fingerprint = fingerprint
+            recording.save()
             
     else:
         raise Exception("MAT File DataType Incorrect")
@@ -528,13 +1028,14 @@ def MATFileDecoder(source_file, person, startTime=None):
     source_file.metadata["Timezone"] = ""
     if not "Device" in source_file.metadata.keys():
         source_file.metadata["Device"] = ""
+        source_file.device = ""
     source_file.owner = person
     source_file.save()
 
     person.last_update = models.current_time()
     person.save()
     
-    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__Participant=person.uid)
+    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__contains={"Participant": person.uid})
     return True
 
 def HPFCSVDecoder(source_file, person, startTime=None):
@@ -564,7 +1065,12 @@ def HPFCSVDecoder(source_file, person, startTime=None):
                 "ChannelNames": ProcessedData["ChannelNames"]
             }
         }, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__owner=person):
+                # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before
+        # write, replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+        # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+        # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+        fingerprint = Database.contentFingerprint(ProcessedData)
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
 
@@ -574,26 +1080,25 @@ def HPFCSVDecoder(source_file, person, startTime=None):
         if not hashed:
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
-            continue 
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+            continue
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
     os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
     shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat")
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
     person.last_update = models.current_time()
     person.save()
     
-    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__Participant=person.uid)
+    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__contains={"Participant": person.uid})
     return True
 
 def AlphaOmegaMPXDecoder(source_file, person, name=""):
@@ -620,7 +1125,12 @@ def AlphaOmegaMPXDecoder(source_file, person, name=""):
                 "ChannelNames": ProcessedData["ChannelNames"]
             }
         }, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__metadata__Uploader=source_file.metadata["Uploader"]):
+                # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before
+        # write, replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+        # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+        # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+        fingerprint = Database.contentFingerprint(ProcessedData)
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
 
@@ -630,26 +1140,25 @@ def AlphaOmegaMPXDecoder(source_file, person, name=""):
         if not hashed:
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
-            continue 
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+            continue
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
     os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
     shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat")
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
     person.last_update = models.current_time()
     person.save()
     
-    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__Participant=person.uid)
+    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__contains={"Participant": person.uid})
     return True
 
 def UFMDATDecoder(source_file, person):
@@ -664,7 +1173,12 @@ def UFMDATDecoder(source_file, person):
                 "ChannelNames": ProcessedData["ChannelNames"]
             }
         }, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__metadata__Uploader=source_file.metadata["Uploader"]):
+                # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before
+        # write, replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+        # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+        # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+        fingerprint = Database.contentFingerprint(ProcessedData)
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
 
@@ -674,39 +1188,30 @@ def UFMDATDecoder(source_file, person):
         if not hashed:
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
-            continue 
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+            continue
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
     os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
     shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat")
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
     person.last_update = models.current_time()
     person.save()
     
-    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__Participant=person.uid)
+    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__contains={"Participant": person.uid})
     return True
 
-def UFMDATv3Decoder(source_file, person):
-    return UFMDATv2Decoder(source_file, person, decoder=decodeMDATv3)
-
-
-def UFMDATAutoDecoder(source_file, person):
-    return UFMDATv2Decoder(source_file, person, decoder=decodeMDATAuto)
-
-
-def UFMDATv2Decoder(source_file, person, decoder=decodeMDATv2):
+def UFMDATv2Decoder(source_file, person):
     rawBytes = loadCacheFile(source_file)
-    TrignoData = decoder(rawBytes)
+    TrignoData = decodeMDATv2(rawBytes)
 
     def CommonName(nameList):
         commonNames = []
@@ -733,14 +1238,84 @@ def UFMDATv2Decoder(source_file, person, decoder=decodeMDATv2):
                 "ChannelNames": ProcessedData["ChannelNames"]
             }
         }, source=source_file)
+                # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before
+        # write, replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+        # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+        # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+        fingerprint = Database.contentFingerprint(ProcessedData)
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
+            recording.delete()
+            continue
+
         filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
         hashed = Database.saveSourceFile(ProcessedData, filename)
+        # TODO: Error handling
         if not hashed:
-            raise IOError("MDAT recording storage failed")
-        # Hash and participant identity are required: equal dates/channel names
-        # do not establish equal samples, especially across participants.
+            print("Hashing Failed for Data Storage")
+            print(recording.__dict__)
+            continue
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
+
+    os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
+    shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat")
+    source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
+    source_file.metadata["Timezone"] = ""
+    source_file.metadata["Device"] = ""
+    source_file.device = ""
+    source_file.owner = person
+    source_file.save()
+
+    person.last_update = models.current_time()
+    person.save()
+    
+    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__contains={"Participant": person.uid})
+    return True
+
+def UFMDATv3Decoder(source_file, person):
+    rawBytes = loadCacheFile(source_file)
+    TrignoData = decodeMDATv3(rawBytes)
+
+    def CommonName(nameList):
+        commonNames = []
+        allSubString = nameList[0].split(" ")
+        for i in range(len(allSubString)):
+            Found = True
+            for j in range(len(nameList)):
+                if not allSubString[i] in nameList[j].split(" "):
+                    Found = False
+            if Found:
+                commonNames.append(allSubString[i])
+        return commonNames
+    
+    try:
+        SourceFilename = source_file.name.replace(source_file.name[source_file.name.index("["):source_file.name.index("]")+1], "").replace(".mdat","")
+    except Exception as e:
+        SourceFilename = ""
+
+    for ProcessedData in TrignoData:
+        recording = models.Recording(**{
+            "name": SourceFilename, "type": "SynchronizedMDAT", "date": ProcessedData["StartTime"], "metadata": {
+                "SensorType": ("_".join(CommonName(ProcessedData["ChannelNames"]))),
+                "Duration": ProcessedData["Duration"],
+                "ChannelNames": ProcessedData["ChannelNames"]
+            }
+        }, source=source_file)
+        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__metadata__contains={"Uploader": source_file.metadata["Uploader"]}):
+            recording.delete()
+            continue
+
+        filename = DATABASE_PATH + "recordings" + os.path.sep + person.uid + os.path.sep + recording.uid + ".bdat"
+        hashed = Database.saveSourceFile(ProcessedData, filename)
+        # TODO: Error handling
+        if not hashed:
+            print("Hashing Failed for Data Storage")
+            print(recording.__dict__)
+            continue 
         if models.Recording.include(hashed=hashed, source__owner=person):
-            os.remove(filename)
+            recording.delete()
         else:
             recording.pointer = filename
             recording.hashed = hashed
@@ -757,7 +1332,7 @@ def UFMDATv2Decoder(source_file, person, decoder=decodeMDATv2):
     person.last_update = models.current_time()
     person.save()
     
-    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__Participant=person.uid)
+    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__contains={"Participant": person.uid})
     return True
 
 def BRAVORecordingBinaryDecoder(source_file, person):
@@ -793,7 +1368,12 @@ def BRAVORecordingBinaryDecoder(source_file, person):
                 "ChannelNames": ChannelNames
             }
         }, source=source_file)
-        if models.Recording.include(date=recording.date, type=recording.type, metadata=recording.metadata, source__metadata__Uploader=source_file.metadata["Uploader"]):
+                # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before
+        # write, replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
+        # Deterministic content fingerprint identifies a re-uploaded recording (the blosc2 hash
+        # stored in `hashed` is non-deterministic and cannot). Indexed -> index seek, not scan.
+        fingerprint = Database.contentFingerprint(ProcessedData)
+        if models.Recording.include(content_fingerprint=fingerprint, source__owner=person):
             recording.delete()
             continue
 
@@ -803,26 +1383,25 @@ def BRAVORecordingBinaryDecoder(source_file, person):
         if not hashed:
             print("Hashing Failed for Data Storage")
             print(recording.__dict__)
-            continue 
-        if models.Recording.include(hashed=hashed, source__owner=person):
-            recording.delete()
-        else:
-            recording.pointer = filename
-            recording.hashed = hashed
-            recording.save()
+            continue
+        recording.pointer = filename
+        recording.hashed = hashed
+        recording.content_fingerprint = fingerprint
+        recording.save()
 
     os.makedirs(DATABASE_PATH + "raws" + os.path.sep + person.uid, exist_ok=True)
     shutil.move(source_file.pointer, DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat")
     source_file.pointer = DATABASE_PATH + "raws" + os.path.sep + person.uid + os.path.sep + source_file.uid + ".mdat"
     source_file.metadata["Timezone"] = ""
     source_file.metadata["Device"] = ""
+    source_file.device = ""
     source_file.owner = person
     source_file.save()
 
     person.last_update = models.current_time()
     person.save()
     
-    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__Participant=person.uid)
+    models.SourceFile.purge(type="CachedResult", date__lt=person.last_update, metadata__contains={"Participant": person.uid})
     return True
 
 def ImportBRAVOExport(source_file):
@@ -870,7 +1449,7 @@ def ImportBRAVOExport(source_file):
 
             json_file = saveCacheFile(person.uid + "_" + uuid.uuid4().hex + ".json", metadata, PacketContent)
             #lockFile = json_file.pointer + ".lock"
-            if models.SourceFile.objects.exclude(pk=json_file.pk).filter(metadata__Institute=metadata["Institute"], metadata__UniqueHashed=metadata["UniqueHashed"]).exists():
+            if models.SourceFile.objects.exclude(pk=json_file.pk).filter(unique_hashed=metadata["UniqueHashed"], institute=str(metadata["Institute"])).exists():
                 json_file.delete()
             else:
                 try:
@@ -1230,6 +1809,25 @@ def ImportBRAVOStructure(source_file):
     
     return participant
 
+def _chronic_export_from_start(recording, start_s):
+    """A chronic file that runs past the implant date, re-encoded with its samples before it cut:
+    ``(bytes, hash)`` in the store's own encoding, or ``(None, None)`` when nothing is left."""
+    Data = Database.loadSourceFile(recording.pointer, recording.hashed)
+    cut = _data_start.trim_segment(Data["Time"], Data["Data"], start_s, time_axis=0)
+    if cut is None:
+        return None, None
+    Data = {**Data, "Time": cut[0], "Data": cut[1]}
+    os.makedirs(DATABASE_PATH + "exports", exist_ok=True)
+    temp = DATABASE_PATH + "exports" + os.path.sep + recording.uid + ".trimmed.bdat"
+    hashed = Database.saveSourceFile(Data, temp)
+    try:
+        return Database.loadSourceBinary(temp), hashed
+    finally:
+        for f in (temp, temp + ".lock"):
+            if os.path.exists(f):
+                os.remove(f)
+
+
 def ExportBRAVOStructure(participant, deidentified=False, password="BRAVOExportv2"):
     rawBytes = b"BRAVO Export"
     hashed_key = hashlib.sha256(password.encode("utf-8")).digest()
@@ -1384,7 +1982,11 @@ def ExportBRAVOStructure(participant, deidentified=False, password="BRAVOExportv
         fid.write(headerContent)
         fid.write(exportContent)
 
-    events = models.TherapyModification.find_all(owner=participant)
+    # From the implant date on (the PI, 2026-09-24): rows dated before it are the device before it
+    # went in and are left out of the export; a chronic file that runs past it is exported trimmed.
+    DataStart = _data_start.data_start_s(participant)
+    events = [e for e in models.TherapyModification.find_all(owner=participant)
+              if _data_start.listed_date(e.date, DataStart) is not None]
     for event in events:
         EventInfo = {
             "uid": event.uid,
@@ -1402,7 +2004,8 @@ def ExportBRAVOStructure(participant, deidentified=False, password="BRAVOExportv
         fid.write(headerContent)
         fid.write(exportContent)
 
-    events = models.Annotation.find_all(owner=participant)
+    events = [e for e in models.Annotation.find_all(owner=participant)
+              if _data_start.listed_date(e.date, DataStart) is not None]
     for event in events:
         EventInfo = {
             "uid": event.uid,
@@ -1420,7 +2023,8 @@ def ExportBRAVOStructure(participant, deidentified=False, password="BRAVOExportv
         fid.write(exportContent)
 
     for source in sources:
-        events = models.DBSEvent.find_all(source=source)
+        events = [e for e in models.DBSEvent.find_all(source=source)
+                  if _data_start.listed_date(e.date, DataStart) is not None]
         for event in events:
             EventInfo = {
                 "uid": event.uid,
@@ -1438,6 +2042,13 @@ def ExportBRAVOStructure(participant, deidentified=False, password="BRAVOExportv
 
         recordings = models.Recording.find_all(source=source)
         for recording in recordings:
+            TrimmedBytes = None
+            if _data_start.listed_date(recording.date, DataStart) is None:
+                if recording.type != "MedtronicChronicBrainSense" or recording.pointer == "":
+                    continue
+                TrimmedBytes, TrimmedHash = _chronic_export_from_start(recording, DataStart)
+                if TrimmedBytes is None:
+                    continue
             RecordingInfo = {
                 "uid": recording.uid,
                 "name": recording.name,
@@ -1449,6 +2060,9 @@ def ExportBRAVOStructure(participant, deidentified=False, password="BRAVOExportv
                 "source": source.uid,
             }
             
+            if TrimmedBytes is not None:
+                RecordingInfo["date"] = float(DataStart)
+                RecordingInfo["hashed"] = TrimmedHash
             headerContent = b"XXXXRECD"
             exportContent = createExportContent(json.dumps(RecordingInfo), FernetEncoder)
             headerContent += len(exportContent).to_bytes(4, "little")
@@ -1457,13 +2071,14 @@ def ExportBRAVOStructure(participant, deidentified=False, password="BRAVOExportv
 
             if recording.pointer == "":
                 continue
-            data = Database.loadSourceBinary(recording.pointer)
+            data = TrimmedBytes if TrimmedBytes is not None else Database.loadSourceBinary(recording.pointer)
             headerContent = b"XXXXRAWD"
             headerContent += len(data).to_bytes(4, "little")
             fid.write(headerContent)
             fid.write(data)
 
-        therapies = models.Therapy.find_all(source=source)
+        therapies = [t for t in models.Therapy.find_all(source=source)
+                     if _data_start.listed_date(t.date, DataStart) is not None]
         for therapy in therapies:
             TherapyInfo = {
                 "uid": therapy.uid,

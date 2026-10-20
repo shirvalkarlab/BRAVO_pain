@@ -1,20 +1,28 @@
-BRAVO/.env
-BRAVO/db.sqlite3
-BRAVO/mysql.config
-Client/node_modules
-Client/build
+# Only application inputs belong in the build context.
 .git
-.env.appliance
-secrets
-backups
+.venv
+.uv-cache
+.runtime
+**/__pycache__
+**/.pytest_cache
+**/node_modules
+Client/build
+**/.env
+.env.*
+**/mysql.config
+**/db.sqlite3
+**/*.log
+**/secrets
+**/BRAVOStorage
+**/data
+**/results
+**/output
+**/outputs
+**/cache
+**/private
 
-/tmp
-/outputs
-/reports
-
-# Local review artifacts are not source inputs.
-/output
-
-# Participant-specific runtime assets are transferred privately, never published.
-/BRAVO/config/*.csv
-/BRAVO/modules/Biomarkers/data/psd_lsb_models/*.json
+# Runtime model assets are mounted privately, never baked into an image.
+**/*.pkl
+**/*.pickle
+**/*.joblib
+task-state

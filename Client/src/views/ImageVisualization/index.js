@@ -29,8 +29,7 @@ import {
   IconButton,
 } from "@mui/material";
 
-import ViewInAr from "@mui/icons-material/ViewInAr";
-import Timeline from "@mui/icons-material/Timeline";
+import { ViewInAr, Timeline } from "@mui/icons-material";
 import { TwitterPicker, BlockPicker } from "react-color";
 
 import React from "react";
@@ -414,7 +413,7 @@ function ImageVisualization() {
           </MDBox>
 
           <Dialog open={showRecordingList} onClose={() => setShowRecordingList(false)} 
-            PaperProps={{ sx: {minWidth: 0, width: 900, maxWidth: "calc(100vw - 32px)"} }}
+            PaperProps={{ sx: {minWidth: { xs: "100vw", sm: 900 }} }}
           >
             <ImagingSelect images={availableItems} onSelectRecording={(recordings) => {
               addModels(availableItems.filter((a) => recordings.includes(a.Id)))
@@ -430,7 +429,7 @@ function ImageVisualization() {
                 {editTargetEntry.item}
               </MDTypography>
             </MDBox>
-            <DialogContent sx={{width: 500, maxWidth: "100%", minWidth: 0}} >
+            <DialogContent style={{minWidth: 500}} >
               <MDBox style={{display: "flex", flexDirection: "row"}}>
                 <TextField
                   variant="standard"

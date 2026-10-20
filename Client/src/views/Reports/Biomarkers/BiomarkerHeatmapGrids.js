@@ -7,8 +7,12 @@
  * pins a persistent scatter/violin panel beside each grid, and the sensing contact pair is chosen
  * from a strip of small thumbnail grids rather than a dropdown.
  *
- * The grid uses the live page controls, but computation starts only when the reader presses
- * Run band grid. Optional cross-setting stability is part of the request and cache identity.
+ * WHY THIS COMPONENT FETCHES ON ITS OWN, ON MOUNT, RATHER THAN WAITING FOR A BUTTON. The PRD's
+ * complaint was that the calibrated grid used to be gated behind the older full-spectrum scan
+ * having already run. `requestParams` here is built by the parent from the LIVE top-of-page
+ * controls (see `heatmapRequestParams` in index.js) rather than from the older routine's
+ * click-triggered snapshot, so the very first render already has something to ask for and the
+ * request fires without any button press.
  *
  * WHY THE TWO GRIDS ARE TRACKED AS TWO SEPARATE DISPLAYED RESULTS. The correlation grid depends
  * only on how pain reports are matched to recordings; the AUC grid depends on that AND on the
@@ -37,8 +41,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { Card, Grid, CircularProgress, Collapse, IconButton, Checkbox, FormControlLabel } from "@mui/material";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import { Grid } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
@@ -46,28 +49,58 @@ import MDButton from "components/MDButton";
 
 import Plotly from "plotly.js-dist";
 import { PlotlyRenderManager } from "graphing-utility/Plotly";
-import { useAnalysisQuery } from "./queryAnalysis";
+import { SessionController } from "database/session-control";
+import { prefetchClosedLoopFromBiomarkers } from "views/Reports/ClosedLoopSim/neighbourPrefetch";
 import { useCachedResult } from "database/useCachedResult";
-import PAL from "views/Reports/ClosedLoopSim/palette";
-import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB, divergingRgb, diverging } from "./binarizationModel";
+// Read only (the PI's file, not edited): the settings the shown grid was computed under.
+import { getResult, settingsKey } from "database/resultCache";
+import { biomarkerHeatmapSlot, prefetchBiomarkerHeatmapMetric } from "views/Reports/moduleCacheKeys";
+import { cellKey, getCell, putCell } from "./heatmapCellCache";
+import { PLOT_MARGIN, PLOT_BOTTOM, plotMargin, panelBoxStyle } from "./panelLayout";
+import { T, TYPE, LAYOUT } from "assets/theme/base/tokens";
+import { DIVERGING, RANGE, textInk } from "assets/theme/base/dataColors";
+import { PLOTLY_LAYOUT, PLOTLY_CONFIG, FONT_FAMILY, FIGURE_TEXT_PX, directLabel, mergeDeep } from "views/Reports/figureStyle";
+import ColorKey from "views/Reports/paper/ColorKey";
+import Fold from "./Fold";
+import GridSkeleton from "./GridSkeleton";
+import { gridSourceWords, bandSelectionWords, SourceGridDetails, CurrentScopeNotes } from "./SweepProvenance";
+import Section from "views/Reports/paper/Section";
+import { BIN_HI, BIN_LO, BIN_HI_RGB, BIN_LO_RGB, BIN_MID, diverging } from "./binarizationModel";
 import { contactSortKey } from "./contactOrder";
-import { bestCellReadout, cellNP, fmtP, hoverCustomData, tierBullets, deviceSpectrumBullets, stabilityMark, stabilityBullet, clinicSheetBullets } from "./gridReadouts";
-const biomarkerHeatmapSlot = (metric) => `biomarkers/heatmap/${metric}`;
+import { bestCellReadout, cellNP, fmtP, pEquals, hoverCustomData, tierBullets, deviceSpectrumBullets, needsMultiplePsds, stabilityMark, stabilityBullet, clinicSheetBullets, sourceSplitLine } from "./gridReadouts";
 
-const num = (v, d = 3) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
+/** Participants whose likeliest Closed-Loop bands were asked for in this page load (decision 430). */
+const CL_PREFETCHED = new Set();
 
-// COLOUR: the diverging scale lives in binarizationModel.js (one definition, shared with the
-// Closed-Loop page's band heat map since 2026-09-11).
-// A fixed-stop colorscale Plotly can interpolate continuously between, built from the same two
-// Okabe-Ito colours as every other diverging scale on this page (BIN_LO/BIN_HI) so this grid does
-// not introduce a third, uncoordinated colour convention.
-function divergingColorscale(center, halfRange) {
-  const stops = [-1, -0.5, 0, 0.5, 1];
-  return stops.map((t) => {
-    const v = center + t * halfRange;
-    const c = divergingRgb(v, center, halfRange);
-    return [(t + 1) / 2, `rgb(${c.map((x) => Math.round(x)).join(",")})`];
-  });
+// The heat maps' hover text, a size under the figure text (the PI, 2026-09-26: "reduce font size");
+// 11 px is the page's floor (decision 258).
+const HEATMAP_HOVERLABEL = { ...PLOTLY_LAYOUT.hoverlabel,
+  font: { ...PLOTLY_LAYOUT.hoverlabel.font, size: 11 } };
+const num = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not given" : Number(v).toFixed(d));
+
+// COLOUR (the redesign of 2026-09-26, SPEC.md section 3.1): the one nine-stop diverging scale
+// (dataColors.DIVERGING, blue -> light grey -> vermillion) on FIXED symmetric ranges: a correlation
+// from -0.5 to +0.5, an area under the curve from 0.25 to 0.75 around 0.5 (a coin toss). Values
+// beyond the range draw at the end colour; the hover prints the true value. The thumbnails use the
+// same range as the large maps, so every map on the card reads against one key.
+const SCALE = {
+  correlation: { center: 0, halfRange: (RANGE.correlation[1] - RANGE.correlation[0]) / 2 },
+  auc: { center: 0.5, halfRange: (RANGE.areaUnderCurve[1] - RANGE.areaUnderCurve[0]) / 2 },
+};
+
+/** The red cross beside a pair the device refuses (drawn, not typed, so it adds no text). */
+function RefusedCross({ label, size = 12 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" role="img" aria-label={label}>
+      <path d="M3.5 3.5 L12.5 12.5 M12.5 3.5 L3.5 12.5" stroke={T.refused} strokeWidth="2.4"
+        strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** A plain axis in the shared figure style, for the render manager's figures. */
+function axisStyle(extra = {}) {
+  return mergeDeep(PLOTLY_LAYOUT.xaxis, extra);
 }
 
 /** Which grid cell (row = length of signal, column = band centre) is the "best" one the server
@@ -109,18 +142,143 @@ function heatmapHeight(rows) {
  * outliers, the shuffled reference, the split rule). Only `corrSw.notes` is read -- `aucSw.notes`
  * is never different (both grids share one per-channel sweep response), so reading both and
  * concatenating them, as this drawer used to, only doubled every bullet for no reason. */
-function bulletsFor(sw) {
+// ---- THE STATUS AT THE HEAD OF THE HEAT MAPS (decision 304; the review's B3, and the Closed-Loop
+// decision card's pattern of 2026-09-26: one status line, red bullets of five words or fewer for what
+// the device refuses, yellow for evidence not yet evaluated, the details folded, nothing said twice).
+
+/** The side a sweep's contact pair is on, from the response's own fields. */
+function sideOf(ch, sw) {
+  const h = (sw && sw.display_hemisphere) || "";
+  if (/left/i.test(h) || /_LEFT$/.test(ch)) return "Left";
+  if (/right/i.test(h) || /_RIGHT$/.test(ch)) return "Right";
+  return null;
+}
+
+/**
+ * Which pairs the device refuses with today's stimulating contacts, READ from the response's
+ * `sensing_rule` block (decisions 217, 243, 247: the Stim Optimizer's `sensing_rule_block` shape,
+ * `by_side[side].allowed_channel`). Nothing is worked out here: with no block on the response the
+ * answer is null and the page marks nothing. A side with no rule applied (no stimulating contact on
+ * record) refuses nothing; a side whose contacts allow no pair refuses every pair on it.
+ */
+export function refusedPairs(sweeps, rule) {
+  const bySide = rule && rule.by_side;
+  if (!bySide) return null;
+  const names = Object.keys(sweeps || {});
+  const refused = names.filter((ch) => {
+    const side = sideOf(ch, sweeps[ch]);
+    const r = side && bySide[side];
+    return !!(r && r.rule_applied && r.allowed_channel !== ch);
+  });
+  const allowed = ["Left", "Right"].map((side) => bySide[side])
+    .filter((r) => r && r.rule_applied && r.allowed_channel && names.includes(r.allowed_channel))
+    .map((r) => r.allowed_display || r.allowed_channel);
+  return { refused, allowed, total: names.length };
+}
+
+/** How many (pair, band) best cells clear the 22-band correction, split by direction. */
+export function correctionCounts(sweeps) {
+  let rise = 0; let fall = 0; const pairs = [];
+  Object.keys(sweeps || {}).forEach((ch) => {
+    const sw = sweeps[ch];
+    let here = 0;
+    ((sw && sw.best_correlation_rows) || []).forEach((r) => {
+      const q = r.family_wise_q_8_to_30hz == null ? NaN : Number(r.family_wise_q_8_to_30hz);
+      const rr = Number(r.pearson_r);
+      if (!(q < 0.05) || !Number.isFinite(rr) || rr === 0) return;
+      if (rr > 0) rise += 1; else fall += 1;
+      here += 1;
+    });
+    if (here) pairs.push((sw && sw.display_short) || ch);
+  });
+  return { rise, fall, pairs };
+}
+
+/** The status line, from the grid response alone. */
+export function gridStatusLine(result, metricLabel) {
+  const sweeps = (result && result.band_time_sweep) || {};
+  const win = result && result.settings_applied && result.settings_applied.match_tolerance_min;
+  const head = [metricLabel, Number.isFinite(Number(win)) ? `${Number(win)}-min window` : null]
+    .filter(Boolean).join(", ");
+  const { rise, fall, pairs } = correctionCounts(sweeps);
+  const where = pairs.length ? `, on ${pairs.join(", ")}` : "";
+  const band = (n) => (n === 1 ? "band" : "bands");
+  const verb = (n, one, many) => (n === 1 ? one : many);
+  return `${head ? `${head}: ` : ""}after allowing for the 22 bands tested in each pair, ${rise} ${band(rise)} `
+    + `${verb(rise, "rises", "rise")} with pain and ${fall} ${verb(fall, "falls", "fall")} with it${where}.`;
+}
+
+/**
+ * The page head's status, read off the correlation grid (SPEC.md section 5.1 item 1, the taste
+ * audit's E4, 2026-09-26): the status sentence, and the status list -- a red ✕ item for the pairs
+ * the device refuses with today's contacts, an amber ▲ item when no stability answer has reached
+ * the grid. The words are the ones the heat-map card printed before they moved to the page head.
+ * Returns null while there is no grid.
+ */
+export function gridStatusParts(result, sw, metricLabel) {
+  if (!result || !sw) return null;
+  const sweeps = result.band_time_sweep || {};
+  const rule = result.sensing_rule;
+  const pairs = refusedPairs(sweeps, rule);
+  const rows = sw.best_correlation_rows || [];
+  const stabilityUntested = rows.length > 0 && rows.every((r) => r.cross_setting_stability)
+    && rows.every((r) => (r.cross_setting_stability || {}).answer === "not tested");
+  const items = [];
+  if (pairs && pairs.refused.length) {
+    items.push({ state: "refused", text: `${pairs.refused.length} of ${pairs.total} pairs refused`, key: "refused" });
+  }
+  if (stabilityUntested) items.push({ state: "caution", text: "Stability not yet tested", key: "stability" });
+  const sentence = `${pairs && pairs.allowed.length ? `Allowed pairs today: ${pairs.allowed.join(", ")}. ` : ""}`
+    + gridStatusLine(result, metricLabel);
+  return { sentence, items, pairs, rule };
+}
+
+/** The device's sensing rule in plain words, printed in the open beside the refused count. */
+export const SENSING_RULE_PLAIN = "Sensing only on the two contacts on either side of the stimulating "
+  + "contact; other pairs can't be programmed today.";
+
+/**
+ * Why the device refuses the pairs: one plain sentence in the open, next to the refused count (a
+ * refusal's reason is never folded, SPEC section 4 rule 4), and each lead's own reason one click
+ * away. Nothing when no pair is refused.
+ */
+export function RefusalReason({ pairs, rule }) {
+  if (!pairs || !pairs.refused.length || !rule || !rule.by_side) return null;
+  return (
+    <MDBox data-testid="refusal-reason" mt={1}>
+      <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink, m: 0, maxWidth: LAYOUT.proseMax }}>
+        {SENSING_RULE_PLAIN}
+      </MDTypography>
+      <Fold show="Contacts and allowed pair" hide="Hide each lead's contacts">
+        {["Left", "Right"].map((side) => {
+          const r = rule.by_side[side];
+          if (!r || !r.rule_applied) return null;
+          return (
+            <MDTypography key={side} component="span" display="block" sx={{ ...TYPE.body, color: T.ink2 }}>
+              {`${side}: ${r.allowed_display ? `${r.allowed_display} only` : "no allowed pair"}`}
+            </MDTypography>
+          );
+        })}
+      </Fold>
+    </MDBox>
+  );
+}
+
+export function bulletsFor(sw) {
   // Concise since 2026-09-15 (the PI). The backend's own notes are already short; the three
   // display-only bullets say one thing each; the snapshot bullet is gone from here because the
   // orange caption above the grid already carries it (say a small point once).
   const notes = sw.notes || [];
   return [
     ...notes.slice(0, 3),
-    "A white circle marks each column's best cell; a heavy ring also clears the 22-band correction "
-      + "\u2014 a research finding, not a device-ready setting.",
-    "The left grid ignores the binarization cuts (a continuous score has no split); the right grid "
-      + "recomputes and flashes.",
-    "Clicking a cell shows its plain, uncorrected Pearson r/p and Mann-Whitney p \u2014 not the grid's corrected numbers.",
+    "Dark ring: column's best square; heavy ring: survives correction for 22 bands (research finding, "
+      + "not a device setting).",
+    "Left grid ignores high/low cuts; right grid recomputes.",
+    "Click a square: its R (Pearson) and Mann-Whitney p, uncorrected.",
+    "Colours saturate at \u00b10.5 (R) and 0.25/0.75 (AUC; 0.5 = chance); hover shows the true value.",
+    // P-19 (the PI, 2026-09-25): the two sources, named here once in full and TD / PSD everywhere else.
+    "Band power: time domain (TD) recording, in 3 s pieces, if any fall in the match window; else "
+      + "PSD (the device's 30 s snapshot). The TD/PSD lines above the scatter describe the cell only.",
     ...notes.slice(3),
   ];
 }
@@ -150,14 +308,15 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
   const grid = kind === "auc" ? sw.auc_grid : sw.correlation_grid;
   const rows = (grid || []).length;
   const cols = centers.length;
-  const center = kind === "auc" ? 0.5 : 0;
-  const halfRange = kind === "auc" ? 0.5 : 1;
+  const { center, halfRange } = kind === "auc" ? SCALE.auc : SCALE.correlation;
   const bestRows = kind === "auc" ? sw.best_auc_rows : sw.best_correlation_rows;
   const bestByCol = useMemo(() => bestCellIndexByColumn(sw, bestRows), [sw, bestRows]);
 
   // Plain lengths of signal on the axis (the PI, 2026-09-15: nothing appended -- which rows the
   // device can be set to is said once, in the caption's bullets).
-  const yLabels = useMemo(() => seconds.map((s) => secondsLabel(s)), [seconds]);
+  // An asterisk to the left of a row that needed two or more PSDs (see the PSD bullet).
+  const yLabels = useMemo(
+    () => seconds.map((s) => (needsMultiplePsds(sw, s) ? "*" : "") + secondsLabel(s)), [seconds, sw]);
   // Review 2026-09-15, B1: the corrected statistics for each column's best cell, on hover.
   const customdata = useMemo(() => hoverCustomData(sw, kind === "auc" ? "auc" : "corr"), [sw, kind]);
   // Sized 25% larger than the first Plotly pass, per the PI's own comparison against the size
@@ -176,7 +335,8 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
   // Trace 2 (the cross-highlight) is ALWAYS present, even with empty x/y when nothing is active,
   // so its index never shifts -- the second effect below can restyle it directly by index without
   // touching trace 0 (the heatmap) or trace 1 (the best-cell markers).
-  const HIGHLIGHT_TRACE = 3;   // heatmap 0, best-cell circles 1, stability symbols 2 (decision 185)
+  // heatmap 0, the best-cell rings' white outline 1, the rings 2, stability shapes 3 (decision 185)
+  const HIGHLIGHT_TRACE = 4;
 
   useEffect(() => {
     if (!rows || !cols) return undefined;
@@ -189,42 +349,47 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
     fig.subplots(1, 1, { sharex: false, sharey: false });
     fig.traces.push({
       type: "heatmap", z: grid, x: centers, y: yLabels,
-      colorscale: divergingColorscale(center, halfRange), zmin: center - halfRange,
+      colorscale: DIVERGING, zmin: center - halfRange,
       zmax: center + halfRange, zmid: center, showscale: false,
       xgap: 1.5, ygap: 1.5,
       customdata,
-      hovertemplate: `${kind === "auc" ? "AUC" : "r"} = %{z:.3f}<br>%{x} Hz, %{y}<br>%{customdata}<extra></extra>`,
+      hovertemplate: `${kind === "auc" ? "high pain told from low" : "R"} %{z:.2f}<br>%{x} Hz, %{y} of signal<br>%{customdata}<extra></extra>`,
     });
-    // A WHITE circle on every column's best cell (the PI, 2026-09-15: "use a white circle for the
-    // relevant values on top of the relevant cell" -- the hover's "(1m circled)" points at it), a
-    // heavier ring where that cell also clears the 22-band correction. Until today only the
-    // corrected cells carried a marker, in dark ink, so "circled" often pointed at nothing.
+    // THE BEST-CELL RING (SPEC.md section 3.2): a dark ring on every column's best cell, 1.5 px, with
+    // a 1 px white outline so it reads on either end of the scale; 2.5 px where that cell also clears
+    // the allowance for 22 bands. (Until 2026-09-26 a white ring; the hover's "circled" points at it.)
     const bestX = [], bestY = [], bestW = [];
     Object.keys(bestByCol).forEach((c) => {
       const b = bestByCol[c];
       if (!b) return;
       bestX.push(centers[Number(c)]); bestY.push(yLabels[b.row]);
-      bestW.push(b.row_data && b.row_data.family_wise_significant_8_to_30hz === true ? 3 : 1.4);
+      bestW.push(b.row_data && b.row_data.family_wise_significant_8_to_30hz === true ? 2.5 : 1.5);
     });
     fig.traces.push({
       type: "scatter", mode: "markers", x: bestX, y: bestY, showlegend: false,
-      marker: { symbol: "circle-open", size: 14, color: "#FFFFFF", line: { width: bestW, color: "#FFFFFF" } },
+      marker: { symbol: "circle-open", size: 15, color: T.surface, line: { width: bestW.map((w) => w + 2), color: T.surface } },
       hoverinfo: "skip",
     });
-    // B3 (decision 185): inside each column's circle, the cross-setting stability answer -- the
-    // Closed-Loop card's own symbol (green tick, red cross, amber disc), nothing where the answer
-    // is not known yet. Read off the best row's `cross_setting_stability`, which the backend
-    // attaches from the store at request time. Trace index STABILITY_TRACE, before the highlight.
-    const stX = [], stY = [], stSym = [], stCol = [];
+    fig.traces.push({
+      type: "scatter", mode: "markers", x: bestX, y: bestY, showlegend: false,
+      marker: { symbol: "circle-open", size: 15, color: T.ink, line: { width: bestW, color: T.ink } },
+      hoverinfo: "skip",
+    });
+    // B3 (decision 185): inside each column's ring, the cross-setting stability answer by SHAPE in
+    // ink on a small white disc (✓ the same, ✕ different, ? cannot tell), nothing where the answer
+    // is not known yet. Read off the best row's `cross_setting_stability`.
+    const stX = [], stY = [], stText = [];
     Object.keys(bestByCol).forEach((c) => {
       const b = bestByCol[c];
       const m = b && b.row_data ? stabilityMark(b.row_data.cross_setting_stability) : null;
       if (!m) return;
-      stX.push(centers[Number(c)]); stY.push(yLabels[b.row]); stSym.push(m.symbol); stCol.push(m.color);
+      stX.push(centers[Number(c)]); stY.push(yLabels[b.row]); stText.push(m.glyph);
     });
     fig.traces.push({
-      type: "scatter", mode: "markers", x: stX, y: stY, showlegend: false,
-      marker: { symbol: stSym, size: 7, color: stCol, line: { width: 1.5, color: stCol } },
+      type: "scatter", mode: "markers+text", x: stX, y: stY, text: stText, showlegend: false,
+      textposition: "middle center",
+      textfont: { family: FONT_FAMILY, size: FIGURE_TEXT_PX, color: T.ink },
+      marker: { symbol: "circle", size: 11, color: T.surface, line: { width: 0 } },
       hoverinfo: "skip",
     });
     // The shared cross-highlight, trace index HIGHLIGHT_TRACE -- always pushed, empty until the
@@ -232,40 +397,46 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
     // is what fixes the highlight trace's index in place across every redraw this effect causes.
     fig.traces.push({
       type: "scatter", mode: "markers", x: [], y: [], showlegend: false,
-      marker: { symbol: "square-open", size: 22, color: "#1a1a1a", line: { width: 2 } },
+      marker: { symbol: "square-open", size: 22, color: T.accent, line: { width: 2, color: T.accent } },
       hoverinfo: "skip",
     });
     // The per-cell dash markers for snapshot-served reports (decision 106) were REMOVED on
     // 2026-09-10 at the PI's direction ("the caption in orange below the title is sufficient");
     // the snapshot route now honours the length axis (decision 121), so there is no frozen column
     // to mark. Nothing else is pushed after the highlight trace, whose index is restyled below.
-    // Every 3rd band centre, exactly the sparse labelling the original SVG grid used (too many of
-    // the 22 centres to label all of them without the text overlapping).
+    // Every 3rd band centre, labelled with its TRUE centre ("8.5, 11.5 ..."; SPEC.md section 3.2:
+    // never rounded to a whole number, which put "9" under a band centred on 8.5 Hz).
     const xTickVals = centers.filter((c, i) => i % 3 === 0);
-    const xTickText = xTickVals.map((c) => Number(c).toFixed(0));
+    const xTickText = xTickVals.map((c) => String(Number(c)));
+    // NO `width` HERE (2026-09-22, found watching the page live). A fixed width stops Plotly's
+    // responsive resize from shrinking the figure to its box: the box measured 527 pixels, the
+    // figure was drawn at 750, and the 223 extra pixels spilled right -- invisible until a cell was
+    // picked, when the side panel covered them and took the columns from about 25 Hz up with it,
+    // and cut the hover label off mid-word. Left unset, Plotly draws at the box's width; `width`
+    // stays below as the box's own upper limit, so a wide screen draws it no larger than before.
     fig.setLayoutProps({
-      height, width, margin: { l: 46, r: 8, t: 8, b: 40 },
+      height, margin: plotMargin(PLOT_BOTTOM),
+      font: PLOTLY_LAYOUT.font, paper_bgcolor: T.surface, plot_bgcolor: T.surface,
+      // The heat maps' hover is three lines; set smaller than the figure text (the PI, 2026-09-26).
+      hoverlabel: HEATMAP_HOVERLABEL,
       // No gridlines (the cell borders via xgap/ygap already separate the cells), no axis line,
       // no tick marks (`ticks: ""`) on either axis -- floating labels only. The x-axis also
       // replaces Plotly's own automatic tick choice with an explicit array so it labels a real
       // band centre every 3rd column, matching the y-axis's one-label-per-row convention instead
       // of whatever round numbers Plotly would have picked on its own.
-      xaxis: { showgrid: false, zeroline: false, showline: false, ticks: "",
-        tickmode: "array", tickvals: xTickVals, ticktext: xTickText },
-      yaxis: { type: "category", autorange: "reversed", showgrid: false, zeroline: false,
-        showline: false, ticks: "" },
+      xaxis: axisStyle({ showline: false, ticks: "", tickmode: "array", tickvals: xTickVals,
+        ticktext: xTickText, title: { text: "Band centre (Hz)" } }),
+      yaxis: axisStyle({ type: "category", autorange: "reversed", showline: false, ticks: "",
+        title: { text: "Length of signal" } }),
       hovermode: "closest",
     });
-    fig.setXlabel("Band centre (Hz)", { fontSize: 12 });
-    fig.setYlabel("Length of signal", { fontSize: 12 });
     fig.render();
     // `fig.render()` always shows the hover-activated modebar (zoom/pan/download icons) with its
     // own hardcoded config -- `PlotlyRenderManager` has no override for that, and it is a shared
     // class used by many other pages, so it is not changed here. Instead this one call re-applies
     // the SAME data/layout the render manager just drew, but with the modebar switched off, scoped
     // only to these two heat maps.
-    Plotly.react(divId, fig.traces, fig.layout,
-      { displayModeBar: false, responsive: true, doubleClick: false });
+    Plotly.react(divId, fig.traces, fig.layout, { ...PLOTLY_CONFIG, doubleClick: false });
 
     const el = document.getElementById(divId);
     if (el) {
@@ -335,7 +506,7 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
 
   if (!rows || !cols) {
     return (
-      <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11.5 }}>
+      <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3 }}>
         {"No grid could be computed for this contact pair."}
       </MDTypography>
     );
@@ -344,7 +515,7 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
   return (
     <MDBox
       sx={flash ? {
-        outline: `2px solid ${PAL.accentBorder || "#0072B2"}`,
+        outline: `2px solid ${T.accent}`,
         borderRadius: 1,
         transition: "outline-color 0.15s",
       } : { outline: "2px solid transparent", borderRadius: 1 }}
@@ -359,7 +530,7 @@ function PlotlyHeatmap({ divId, sw, kind, hoveredCell, pinnedCell, onHover, onCl
 /** A small strip of thumbnail correlation grids, one per sensing contact pair, all drawn from the
  * one response already held -- clicking a thumbnail is what chooses the contact pair for the two
  * big grids below (Option 2's replacement for a dropdown, task A3). */
-function ContactStrip({ sweeps, channel, setChannel }) {
+function ContactStrip({ sweeps, channel, setChannel, refused }) {
   const names = Object.keys(sweeps || {}).sort((a, b) => {
     const ka = contactSortKey(a, sweeps[a]);
     const kb = contactSortKey(b, sweeps[b]);
@@ -367,7 +538,7 @@ function ContactStrip({ sweeps, channel, setChannel }) {
   });
   if (names.length <= 1) return null;
   return (
-    <MDBox display="flex" flexDirection="row" flexWrap="wrap" gap={1.25} mb={1.5}>
+    <MDBox display="flex" flexDirection="row" flexWrap="wrap" gap={2} mb={2}>
       {names.map((ch) => {
         const sw = sweeps[ch];
         const active = ch === channel;
@@ -382,26 +553,40 @@ function ContactStrip({ sweeps, channel, setChannel }) {
           ? (sw.display_region ? `${sw.display_short} (${sw.display_region})` : sw.display_short)
           : ch.replace(/_/g, " ");
         return (
-          <MDBox key={ch} onClick={() => setChannel(ch)}
+          <MDBox key={ch} onClick={() => setChannel(ch)} role="button" tabIndex={0}
+            aria-pressed={active} data-testid="pair-thumb" data-channel={ch}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setChannel(ch); } }}
             sx={{
-              cursor: "pointer", border: active ? `2.5px solid #1a1a1a` : "1.5px solid #ccc",
-              borderRadius: 1.5, p: 0.5, background: "#fff",
-              boxShadow: active ? "0 0 0 2px rgba(0,0,0,0.08)" : "none",
+              // Small multiples (SPEC.md section 5.1): 120 x 60 px on the SAME colour range as the
+              // large maps, the label above in 12 px; the selected pair underlined in the accent; a
+              // pair the device refuses today greyed, with its red cross and "Refused today".
+              cursor: "pointer", p: 0, background: "none",
+              borderBottom: `2px solid ${active ? T.accent : "transparent"}`, pb: 0.5,
+              opacity: refused && refused.includes(ch) ? 0.55 : 1,
             }}>
-            <MDTypography variant="caption" fontWeight={active ? "bold" : "medium"} color="dark"
-              sx={{ fontSize: 10.5, display: "block", textAlign: "center" }}>
+            <MDTypography component="span"
+              sx={{ ...TYPE.body, fontWeight: active ? 600 : 400, color: active ? T.accent : T.ink,
+                display: "block" }}>
               {label}
             </MDTypography>
+            {refused && refused.includes(ch) ? (
+              <MDBox display="flex" alignItems="center" gap={0.5}>
+                <RefusedCross label="refused by the device" size={12} />
+                <MDTypography component="span" sx={{ ...TYPE.body, fontWeight: 600, color: `${T.refused} !important` }}>
+                  {"Refused today"}
+                </MDTypography>
+              </MDBox>
+            ) : null}
             {rows && cols ? (
-              <svg width={92} height={46}>
+              <svg width={120} height={60} aria-hidden="true">
                 {grid.map((row, r) => row.map((v, c) => (
-                  <rect key={`${r}-${c}`} x={(c / cols) * 92} y={(r / rows) * 46}
-                    width={92 / cols + 0.5} height={46 / rows + 0.5}
-                    fill={diverging(v, 0, 1)} />
+                  <rect key={`${r}-${c}`} x={(c / cols) * 120} y={(r / rows) * 60}
+                    width={120 / cols + 0.5} height={60 / rows + 0.5}
+                    fill={diverging(v, SCALE.correlation.center, SCALE.correlation.halfRange)} />
                 )))}
               </svg>
             ) : (
-              <MDBox sx={{ width: 92, height: 46, background: "#f2f2f2" }} />
+              <MDBox sx={{ width: 120, height: 60, background: T.fillMuted }} />
             )}
           </MDBox>
         );
@@ -424,8 +609,8 @@ function PlotlyViolin({ divId, highVals, lowVals, side }) {
     const fig = figRef.current;
     fig.clearData();
     fig.subplots(1, 1, { sharex: false, sharey: false });
-    const hiColor = PAL.fail || BIN_HI;
-    const loColor = PAL.accent || BIN_LO;
+    const hiColor = BIN_HI;
+    const loColor = BIN_LO;
     // Same hue for the violin body and its jittered points, in each group's own colour -- the
     // fill is given a LOW alpha (rgba at 0.4) while the marker stays solid/near-opaque, so the
     // markers read as visibly darker than the pale fill they sit on without needing a second,
@@ -441,7 +626,7 @@ function PlotlyViolin({ divId, highVals, lowVals, side }) {
       points: "all", pointpos: 0, jitter: 0.4, marker: hiPoint,
       line: { color: hiColor }, fillcolor: hiFill,
       box: { visible: false }, meanline: { visible: true },
-      hovertemplate: "%{y:.1f} LSB<extra>High pain</extra>",
+      hovertemplate: "%{y:.1f} device units (LSB)<extra>High pain</extra>",
     });
     fig.traces.push({
       type: "violin", x: lowVals.map(() => "Low pain"), y: lowVals,
@@ -449,22 +634,24 @@ function PlotlyViolin({ divId, highVals, lowVals, side }) {
       points: "all", pointpos: 0, jitter: 0.4, marker: loPoint,
       line: { color: loColor }, fillcolor: loFill,
       box: { visible: false }, meanline: { visible: true },
-      hovertemplate: "%{y:.1f} LSB<extra>Low pain</extra>",
+      hovertemplate: "%{y:.1f} device units (LSB)<extra>Low pain</extra>",
     });
     fig.setLayoutProps({
-      height: side, width: side, margin: { l: 56, r: 8, t: 8, b: 34 },
-      xaxis: { showgrid: false, zeroline: false, tickfont: { size: 14 } },
-      yaxis: { showgrid: false, zeroline: false },
+      height: side, margin: plotMargin(PLOT_BOTTOM),
+      font: PLOTLY_LAYOUT.font, paper_bgcolor: T.surface, plot_bgcolor: T.surface,
+      hoverlabel: PLOTLY_LAYOUT.hoverlabel,
+      // The two groups are named on the axis itself ("High pain", "Low pain"): a direct label.
+      xaxis: axisStyle({ tickfont: { size: FIGURE_TEXT_PX, color: T.ink } }),
+      yaxis: axisStyle({ title: { text: "Band power (device units, LSB)" } }),
       violinmode: "group", showlegend: false,
     });
-    fig.setYlabel("Band power (LSB)", { fontSize: 13 });
     fig.render();
     // Same reasoning as PlotlyHeatmap's own identical call: fig.render() always shows the
     // hover-activated modebar with no override in the shared render-manager class; re-apply the
     // same data/layout with it switched off, and with the responsive resize this component exists
     // for, scoped to just this one div.
-    Plotly.react(divId, fig.traces, fig.layout,
-      { displayModeBar: false, responsive: true, doubleClick: false });
+    // Drag to zoom, double-click back to the full view, no toolbar (the PI, 2026-10-03).
+    Plotly.react(divId, fig.traces, fig.layout, { ...PLOTLY_CONFIG, doubleClick: "reset+autosize" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [divId, highVals, lowVals, side]);
 
@@ -472,8 +659,8 @@ function PlotlyViolin({ divId, highVals, lowVals, side }) {
     // Guarded: Plotly'''s own .purge() throws (uncaught, since this runs in an effect cleanup with
     // no React error boundary anywhere in this app) if the div it manages is already gone from the
     // DOM -- observed live on a native double-click, which Plotly'''s own internal click pipeline
-    // can apparently unmount/rebuild around even with the built-in reset-on-dblclick action turned
-    // off (doubleClick: false, set on the Plotly.react calls below). Checking first makes this
+    // can apparently unmount/rebuild around (this plot's reset-on-double-click is on since
+    // 2026-10-03; the heat maps keep it off). Checking first makes this
     // cleanup robust to that regardless of why the div is already gone, rather than chasing the
     // exact internal Plotly sequence that removes it.
     if (figRef.current && document.getElementById(divId)) figRef.current.purge();
@@ -481,18 +668,25 @@ function PlotlyViolin({ divId, highVals, lowVals, side }) {
 
   // A true square: width 100% up to `side`, height locked to match via aspect-ratio, so the panel
   // itself is square and Plotly's own responsive resize fills exactly that square.
-  return <div id={divId} style={{ width: "100%", maxWidth: side, aspectRatio: "1 / 1" }} />;
+  return <div id={divId} style={panelBoxStyle(side)} />;
 }
 
 /** The shared title line for both persistent side panels: channel, band centre, length of signal. */
-/* Participant-specific motivating examples are maintained outside source control. */
+/**
+ * OPEN ITEM 26, the always-visible half. The dashes on the grid say WHICH cells; this says how much
+ * of this contact pair is affected, without opening the drawer -- because on this record the answer
+ * can be most of it. A contact with none renders nothing at all rather than a reassuring
+ * line: there is nothing to reassure about, and a caveat that appears everywhere stops being read.
+ */
 function CaptionBullets({ items, color }) {
   if (!items || !items.length) return null;
   return (
-    <MDBox component="ul" sx={{ m: 0, mb: 0.5, pl: 2.2 }}>
+    <MDBox component="ul" sx={{ m: 0, mb: 0.5, pl: 2.5 }}>
       {items.map((line) => (
-        <MDTypography key={line} component="li" variant="caption" color="dark"
-          sx={{ fontSize: 13, display: "list-item", color }}>
+        // Body-size type, left-aligned, one bullet per line (the PI, 2026-10-02: the notes were
+        // small caption type, 12 px / 18 px; now 14 px / 22 px, the page's body size).
+        <MDTypography key={line} component="li"
+          sx={{ ...TYPE.body, display: "list-item", textAlign: "left", color: color || T.ink2 }}>
           {line}
         </MDTypography>
       ))}
@@ -502,21 +696,23 @@ function CaptionBullets({ items, color }) {
 
 /** Two short bullets (the PI, 2026-09-15: "MUCH more concise, ideally with bullet points"). A
  * contact with no snapshot-served report renders nothing. */
+// A note, not a caution (SPEC 2.3: the caution ink always carries ▲), so it is drawn in the caption
+// grey like the other notes under the maps.
 function DeviceSpectrumCaption({ sw }) {
-  return <CaptionBullets items={deviceSpectrumBullets(sw)} color="#8a5a00" />;
+  return <CaptionBullets items={deviceSpectrumBullets(sw)} />;
 }
 
 /** Which rows the device can be set to, from the ranges on the response (`device_timing_ranges`,
  * the one home), as bullets. */
 function DeviceTierCaption({ ranges, sw }) {
-  return <CaptionBullets items={tierBullets(ranges, (sw && sw.integration_seconds_delivered) || [])} />;
+  return <CaptionBullets items={tierBullets(ranges, (sw && sw.integration_seconds_delivered) || [], sw)} />;
 }
 
 /** The symbols inside the circles (decision 185): one bullet, shown only once a stored stability
  * answer has reached at least one row -- a legend for symbols that are not drawn is noise. */
 /** What the heat maps pool (decision 186): at-home ratings only, or the sheets' scores too. */
 function ClinicSheetCaption({ sw }) {
-  return <CaptionBullets items={clinicSheetBullets(sw)} color="#8a5a00" />;
+  return <CaptionBullets items={clinicSheetBullets(sw)} />;
 }
 
 function StabilityCaption({ sw }) {
@@ -533,37 +729,45 @@ function PanelTitle({ pinnedCell, channelLabel }) {
   // pinned cell). Font size doubled from the original 11.5 now that it is the one copy carrying
   // this information for both panels.
   return (
-    <MDTypography variant="caption" fontWeight="bold" color="dark"
-      sx={{ fontSize: 23, display: "block", mb: 0.5 }}>
+    <MDTypography component="p"
+      sx={{ ...TYPE.title, color: T.ink, display: "block", mb: 0.5, mt: 0, textAlign: "center" }}>
       {`${channelLabel(pinnedCell.channel)} · ${pinnedCell.center} Hz · `}
       {`${secondsLabel(pinnedCell.secondsDisplay != null ? pinnedCell.secondsDisplay : pinnedCell.seconds)} of signal`}
     </MDTypography>
   );
 }
 
+/** The box a statistics line sits in: the same centred box and left inset as the plot below it, so
+ *  the line starts where the plot area starts (the PI, 2026-10-02: the lines were offset). */
+const statsBoxSx = () => ({ width: "100%", textAlign: "center", minWidth: 0 });
+
+/** ONE line, never wrapped: the headline statistic above a plot. */
+function HeadlineLine({ testId, title, children }) {
+  return (
+    <MDTypography component="p" data-testid={testId} title={title}
+      sx={{ ...TYPE.body, color: T.ink, display: "block", mb: 0.25, mt: 0,
+        whiteSpace: "nowrap" }}>
+      {children}
+    </MDTypography>
+  );
+}
+
 /**
- * The scatter panel is split into two pieces that render in DIFFERENT places on the page now
- * (open item 7 feedback: the big pinned-cell title and the statistics line were "forcing the top
- * plot to look janky" by sitting inside the same box as the plot, which is what was carving space
- * out of it):
- *   - `ScatterStatsLine` renders next to the correlation heat map's own heading, at the SAME row.
- *   - `PlotlyScatter` renders next to the correlation heat map itself, as a native Plotly figure
- *     sized to a genuine square (not merely the heat map's height) -- nothing is reserved above it
- *     any more, since the title and stats line moved elsewhere.
- * The big pinned-cell title (`PanelTitle`) moves out further still, up to sit beside the contact
- * strip (see the main render below) so its own bottom edge lines up with the strip's.
+ * The clicked square's two statistics lines. Since the redesign of 2026-09-26 the two large maps sit
+ * side by side and the clicked square's title (`PanelTitle`), these lines and the two plots sit in
+ * the row under them: the scatter under the correlation map, the violin under the area map.
  */
-function ScatterStatsLine({ cell, pinnedCell, sw }) {
+export function ScatterStatsLine({ cell, pinnedCell, sw, side }) {
   if (!pinnedCell) {
     return (
-      <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
-        {"Click a cell to see the underlying scatter and its fit."}
+      <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3 }}>
+        {"Click a square to see its ratings plotted against band power, with the fitted line."}
       </MDTypography>
     );
   }
   if (!cell || cell.loading || !cell.points || !cell.points.length) {
     return (
-      <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
+      <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3 }}>
         {cell && cell.loading ? "Loading…" : "No underlying pairs could be loaded for this cell."}
       </MDTypography>
     );
@@ -578,17 +782,37 @@ function ScatterStatsLine({ cell, pinnedCell, sw }) {
   // other cell the readout says so rather than leaving the reader to assume the plain r is it.
   const readout = (sw && pinnedCell)
     ? bestCellReadout(sw, "corr", pinnedCell.col, pinnedCell.row, { includeN: false }) : null;
+  const nSheet = cell.points.filter((pt) => pt.from_clinic_sheet).length;
   return (
-    <MDBox>
-      <MDTypography variant="caption" color="dark" sx={{ fontSize: 15, display: "block", mb: 0.25 }}>
-        {`Pearson r = ${num(r, 3)}, p = ${fmtP(p)}, n = ${n} (uncorrected)`}
-      </MDTypography>
-      {readout ? (
-        <MDTypography variant="caption" sx={{ fontSize: 13, display: "block", mb: 0.5,
-          color: readout.isBest ? PAL.accent : "#6A6A6A" }}>
+    <MDBox sx={statsBoxSx(side)}>
+      <HeadlineLine testId="scatter-headline" title="p is uncorrected">
+        {`r = ${num(r, 2)}, ${pEquals(p)}, n = ${n}`}
+      </HeadlineLine>
+      {/* The scatter and the line below are fitted to these same n pairs; the clinic-sheet ratings
+          among them (decision 186) are drawn hollow and counted here, under the headline. */}
+      {nSheet ? (
+        <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3, display: "block", mb: 0.5 }}>
+          {`${nSheet} of them clinic-sheet scores (hollow points)`}
+        </MDTypography>
+      ) : null}
+      {readout && readout.text ? (
+        <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", mb: 0.5,
+          color: readout.isBest ? T.ink : T.ink3, fontWeight: readout.isBest ? 600 : 400 }}>
           {readout.text}
         </MDTypography>
       ) : null}
+      {/* P-19 (the PI, 2026-09-25): the cell's correlation on its TD reports alone and on its PSD
+          reports alone, one line of text above the scatter, off the grid response. Never in the
+          hover, never a figure; nothing for a stored grid built before the split. */}
+      {(() => {
+        const line = sourceSplitLine(sw, pinnedCell.col, pinnedCell.row);
+        return line ? (
+          <MDTypography variant="caption" data-testid="source-split-line"
+            sx={{ ...TYPE.body, color: T.ink2, display: "block", mb: 0.5, whiteSpace: "pre-line" }}>
+            {line}
+          </MDTypography>
+        ) : null;
+      })()}
     </MDBox>
   );
 }
@@ -623,37 +847,66 @@ function PlotlyScatter({ divId, cell, pinnedCell, side, metricLabel }) {
     const intercept = my - slope * mx;
     const xlo = Math.min(...xs), xhi = Math.max(...xs);
 
-    const colorFor = (label) => (label === "high" ? (PAL.fail || BIN_HI)
-      : (label === "low" ? (PAL.accent || BIN_LO) : "#aaaaaa"));
+    const colorFor = (label) => (label === "high" ? BIN_HI : (label === "low" ? BIN_LO : BIN_MID));
+    // One trace per class and per source: a rating from the clinic or at-home sheets (decision
+    // 186, when the switch is on) is drawn hollow, so the reader sees which points the sheets
+    // added; the line below is fitted to every point, the same pairs the grid correlated.
     const groups = { high: [], low: [], other: [] };
     points.forEach((pt) => { (groups[pt.label] || groups.other).push(pt); });
     ["high", "low", "other"].forEach((label) => {
-      const pts = groups[label];
-      if (!pts.length) return;
-      fig.traces.push({
-        type: "scatter", mode: "markers", name: label === "high" ? "High pain" : "Low pain",
-        x: pts.map((pt) => pt.power), y: pts.map((pt) => pt.pain), showlegend: false,
-        marker: { size: 5, color: colorFor(label), opacity: 0.75 },
-        hovertemplate: "%{x:.0f} LSB, %{y:.1f}<extra></extra>",
+      [false, true].forEach((sheet) => {
+        const pts = groups[label].filter((pt) => !!pt.from_clinic_sheet === sheet);
+        if (!pts.length) return;
+        fig.traces.push({
+          type: "scatter", mode: "markers", showlegend: false,
+          name: `${label === "high" ? "High pain" : label === "low" ? "Low pain" : "Excluded"}${sheet ? ", clinic sheet" : ""}`,
+          x: pts.map((pt) => pt.power), y: pts.map((pt) => pt.pain),
+          marker: sheet
+            ? { size: 6, color: "rgba(0,0,0,0)", opacity: 0.9, line: { color: colorFor(label), width: 1.5 } }
+            : { size: 5, color: colorFor(label), opacity: 0.75 },
+          hovertemplate: `%{x:.0f} device units, %{y:.1f}${sheet ? " (clinic sheet)" : ""}<extra></extra>`,
+        });
       });
     });
     fig.traces.push({
       type: "scatter", mode: "lines", showlegend: false, hoverinfo: "skip",
       x: [xlo, xhi], y: [intercept + slope * xlo, intercept + slope * xhi],
-      line: { color: "#1a1a1a", width: 1.5 },
+      line: { color: T.ink, width: 1.5 },
     });
 
+    // Direct labels (SPEC.md section 5.1): "r = ..." at the end of the fitted line, and the three
+    // kinds of point named once at the right edge, in their text-safe inks, instead of a legend.
+    const rVal = (() => {
+      const syy = ys.reduce((a, v) => a + (v - my) ** 2, 0);
+      return sxx > 0 && syy > 0 ? sxy / Math.sqrt(sxx * syy) : null;
+    })();
+    const annotations = [];
+    if (rVal != null) {
+      // Inside the plot, above the line's end: the right margin is the small shared gap now.
+      annotations.push({ ...directLabel(xhi, intercept + slope * xhi, `r = ${num(rVal, 2)}`, T.ink),
+        xanchor: "right", xshift: -4, yanchor: "bottom", yshift: 4 });
+    }
+    const named = [];
+    if (groups.high.length) named.push(["high pain", textInk(BIN_HI)]);
+    if (groups.low.length) named.push(["low pain", BIN_LO]);
+    if (points.some((pt) => pt.from_clinic_sheet)) named.push(["\u25cb clinic sheet", T.ink3]);
+    named.forEach(([text, color], i) => annotations.push({
+      xref: "paper", yref: "paper", x: 1, y: 1 - i * 0.07, xanchor: "right", yanchor: "top",
+      text, showarrow: false, font: { family: FONT_FAMILY, size: FIGURE_TEXT_PX, color },
+    }));
+
     fig.setLayoutProps({
-      height: side, width: side, margin: { l: 56, r: 8, t: 8, b: 40 },
-      xaxis: { showgrid: false, zeroline: false },
-      yaxis: { showgrid: false, zeroline: false },
+      height: side, margin: plotMargin(PLOT_BOTTOM),
+      font: PLOTLY_LAYOUT.font, paper_bgcolor: T.surface, plot_bgcolor: T.surface,
+      hoverlabel: PLOTLY_LAYOUT.hoverlabel,
+      xaxis: axisStyle({ title: { text: "Band power (device units, LSB)" } }),
+      yaxis: axisStyle({ title: { text: `Pain${metricLabel ? ` (${metricLabel})` : ""}` } }),
+      annotations,
       showlegend: false,
     });
-    fig.setXlabel("Band power (LSB)", { fontSize: 13 });
-    fig.setYlabel(`Pain${metricLabel ? ` (${metricLabel})` : ""}`, { fontSize: 13 });
     fig.render();
-    Plotly.react(divId, fig.traces, fig.layout,
-      { displayModeBar: false, responsive: true, doubleClick: false });
+    // Drag to zoom, double-click back to the full view, no toolbar (the PI, 2026-10-03).
+    Plotly.react(divId, fig.traces, fig.layout, { ...PLOTLY_CONFIG, doubleClick: "reset+autosize" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [divId, points, side, metricLabel]);
 
@@ -661,8 +914,8 @@ function PlotlyScatter({ divId, cell, pinnedCell, side, metricLabel }) {
     // Guarded: Plotly'''s own .purge() throws (uncaught, since this runs in an effect cleanup with
     // no React error boundary anywhere in this app) if the div it manages is already gone from the
     // DOM -- observed live on a native double-click, which Plotly'''s own internal click pipeline
-    // can apparently unmount/rebuild around even with the built-in reset-on-dblclick action turned
-    // off (doubleClick: false, set on the Plotly.react calls below). Checking first makes this
+    // can apparently unmount/rebuild around (this plot's reset-on-double-click is on since
+    // 2026-10-03; the heat maps keep it off). Checking first makes this
     // cleanup robust to that regardless of why the div is already gone, rather than chasing the
     // exact internal Plotly sequence that removes it.
     if (figRef.current && document.getElementById(divId)) figRef.current.purge();
@@ -672,26 +925,30 @@ function PlotlyScatter({ divId, cell, pinnedCell, side, metricLabel }) {
   // A true square: width 100% up to `side`, height locked to match via aspect-ratio, so the panel
   // itself is square and Plotly's own responsive resize fills exactly that square -- rather than
   // filling a rectangular column at a fixed height (the previous, non-square "fill the panel" fix).
-  return <div id={divId} style={{ width: "100%", maxWidth: side, aspectRatio: "1 / 1" }} />;
+  return <div id={divId} style={panelBoxStyle(side)} />;
 }
 
 /** Persistent panel next to the AUC grid: two violins (high/low pain) and the cell's own AUC with
  * its Mann-Whitney p and the two counts, read off the grid response (decision 188). */
-function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw }) {
+function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw, part = "both" }) {
+  // `part` (2026-09-26): the statistics and the plot are drawn in separate rows of the shared grid,
+  // so the violin starts at the same height as the scatter; "both" keeps the old single block.
+  const showStats = part !== "plot";
+  const showPlot = part !== "stats";
   if (!pinnedCell) {
+    if (!showStats) return null;
     return (
-      <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
-        {"Click a cell to see the high/low pain comparison."}
+      <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3 }}>
+        {"Click a square to compare band power in high-pain and low-pain reports."}
       </MDTypography>
     );
   }
   if (!cell || cell.loading || !cell.points || !cell.points.length) {
+    if (!showStats) return <MDBox sx={{ height }} />;
     return (
-      <MDBox sx={{ height }}>
-        <MDTypography variant="caption" color="dark" fontStyle="italic" sx={{ fontSize: 11 }}>
-          {cell && cell.loading ? "Loading…" : "No underlying pairs could be loaded for this cell."}
-        </MDTypography>
-      </MDBox>
+      <MDTypography variant="caption" sx={{ ...TYPE.body, color: T.ink3 }}>
+        {cell && cell.loading ? "Loading…" : "No underlying pairs could be loaded for this cell."}
+      </MDTypography>
     );
   }
   const pts = cell.points;
@@ -699,29 +956,34 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw }) {
   const lowVals = pts.filter((p) => p.label === "low").map((p) => p.power);
   const { p, nHigh, nLow } = cellNP(sw, "auc", pinnedCell.col, pinnedCell.row);
 
-  return (
-    <MDBox>
+  const statsBlock = (
+    <MDBox sx={statsBoxSx(height)}>
       {/* No title here -- it duplicated the scatter panel's own title exactly (both describe the
           same pinned cell); that one copy, above the scatter panel, is now the only one. */}
-      <MDTypography variant="caption" color="dark" sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
-        {`AUC = ${num(aucValue, 3)}, p = ${fmtP(p)} (Mann-Whitney; high n=${nHigh}, low n=${nLow})`}
-      </MDTypography>
+      <HeadlineLine testId="violin-headline" title="p is uncorrected">
+        {`AUC = ${num(aucValue, 2)}, ${pEquals(p)}, n = ${nHigh} high, n = ${nLow} low`}
+      </HeadlineLine>
       {/* The grid's own corrected statistic for this cell, the same small line in the same ink as
           beside the scatter (the PI, 2026-09-15); the plot below moves down by its height. */}
       {(() => {
         const readout = (sw && pinnedCell)
           ? bestCellReadout(sw, "auc", pinnedCell.col, pinnedCell.row, { includeN: false }) : null;
-        return readout ? (
-          <MDTypography variant="caption" sx={{ fontSize: 13, display: "block", mb: 0.5,
-            color: readout.isBest ? PAL.accent : "#6A6A6A" }}>
+        return readout && readout.text ? (
+          <MDTypography variant="caption" sx={{ ...TYPE.body, display: "block", mb: 0.5,
+            color: readout.isBest ? T.ink : T.ink3, fontWeight: readout.isBest ? 600 : 400 }}>
             {readout.text}
           </MDTypography>
         ) : null;
       })()}
-      <PlotlyViolin divId="biomarker-violin-panel" highVals={highVals} lowVals={lowVals}
-        side={height} />
     </MDBox>
   );
+  const plotBlock = (
+    <PlotlyViolin divId="biomarker-violin-panel" highVals={highVals} lowVals={lowVals}
+      side={height} />
+  );
+  if (!showPlot) return statsBlock;
+  if (!showStats) return plotBlock;
+  return <MDBox>{statsBlock}{plotBlock}</MDBox>;
 }
 
 // SweepMetric (which raw pain score the correlation and AUC are computed against) is grouped with
@@ -729,8 +991,10 @@ function ViolinPanel({ cell, pinnedCell, channelLabel, height, aucValue, sw }) {
 // grids, the same as changing the match window or direction, so it must trigger the "replace both"
 // path rather than accidentally falling into the catch-all branch that also happens to replace
 // both -- correct by construction rather than by coincidence of the fallback's own behaviour.
+// The clinic-sheet switch is a matching setting too: it decides which ratings are paired, so it
+// changes the correlation grid as well as the area grid (review of 2026-09-26, finding 2).
 const MATCH_SETTING_KEYS = ["MatchToleranceMin", "MatchDirection", "AllowWindowReuse", "LabelMetric",
-  "SweepMetric", "IncludeCrossSettingStability"];
+  "SweepMetric", "IncludeClinicSheetRatings"];
 const BIN_SETTING_KEYS = ["LabelStrategy", "PercentileLow", "PercentileHigh"];
 
 function settingsSubset(params, keys) {
@@ -739,9 +1003,73 @@ function settingsSubset(params, keys) {
   return out;
 }
 
+/** True when a new grid differs from the one on screen ONLY in the high / low split, so the
+ *  correlation grid (which the split cannot change) keeps its frame and only the area grid is
+ *  replaced (PRD section 3). Any matching change, or no earlier grid, replaces both. */
+export function onlyTheAucGridChanges(prev, next) {
+  if (!prev || !next) return false;
+  const differs = (k) => settingsSubset(prev, [k])[k] !== settingsSubset(next, [k])[k];
+  return !MATCH_SETTING_KEYS.some(differs) && BIN_SETTING_KEYS.some(differs);
+}
+
+// The settings a reader can move, in the words the matching panel uses for them. A key listed as
+// ignored cannot differ between the grid on screen and the request (the score has its own slot) or
+// is not a setting at all.
+const SETTING_WORDS = [
+  [["MatchToleranceMin"], "the match window"],
+  [["MatchDirection"], "the match direction"],
+  [["AllowWindowReuse"], "whether one stretch of recording may answer more than one report"],
+  [["LabelStrategy", "PercentileLow", "PercentileHigh"], "the high / low split"],
+  [["IncludeClinicSheetRatings"], "the clinic sheet scores"],
+];
+const SETTINGS_NOT_NAMED = ["source", "SlidingWindow", "SweepMetric", "LabelMetric"];
+
+/** Which settings differ between the grid on screen and the controls, in plain words, each once. */
+export function settingsChangedWords(shown, current) {
+  if (!shown || !current) return [];
+  const norm = (o) => { try { return JSON.parse(settingsKey(o)) || {}; } catch (e) { return {}; } };
+  const a = norm(shown);
+  const b = norm(current);
+  const differs = (k) => JSON.stringify(a[k] === undefined ? null : a[k])
+    !== JSON.stringify(b[k] === undefined ? null : b[k]);
+  const words = SETTING_WORDS.filter(([keys]) => keys.some(differs)).map(([, w]) => w);
+  const named = new Set(SETTINGS_NOT_NAMED.concat(...SETTING_WORDS.map(([keys]) => keys)));
+  if (Object.keys({ ...a, ...b }).some((k) => !named.has(k) && differs(k))) words.push("another setting");
+  return words;
+}
+
+/** "a", "a and b", "a, b and c". */
+function joinWords(words) {
+  if (words.length <= 1) return words.join("");
+  return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+/** The request for one clicked square. It carries the settings the SHOWN grid was computed under,
+ *  so the scatter and violin pair the same reports with the same recordings as the r and q printed
+ *  for that square, even when the controls have moved since (review of 2026-09-26, finding 1). */
+export function heatmapCellRequest({ participantUid, shownSettings, requestParams, metric,
+  channel, center, seconds }) {
+  const base = { ...(shownSettings || requestParams || {}) };
+  delete base.SweepMetric;
+  return {
+    ParticipantId: participantUid, ...base, SweepMetric: metric,
+    BandTimeSweepCell: "1", Channel: channel, BandCenterHz: center, IntegrationSeconds: seconds,
+  };
+}
+
+/** The settings one pain score's grid is filed under (its slot's key). The page's own score is NOT
+ *  part of another score's key: every score's grid carries its own `LabelMetric` and `SweepMetric`
+ *  (the server reads `SweepMetric` first, `sweep_metric_param`), so a grid fetched in the background
+ *  while another score was on screen is the same entry as the one fetched on the switch. Before
+ *  this, the background fetch carried the page's score and the switch looked for its own, so every
+ *  switch said "the settings on this page have changed" (the PI, 2026-10-02). Only matching and
+ *  split settings can differ between two keys of one score. */
+export function gridSettingsFor(requestParams, metricKey) {
+  return { ...requestParams, LabelMetric: metricKey, SweepMetric: metricKey };
+}
+
 function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics, pageMetric,
-  metricLabel, onOpenInClosedLoop }) {
-  const queryAnalysis = useAnalysisQuery();
+  metricLabel, onOpenInClosedLoop, onStatus, onStale }) {
   const options = useMemo(() => (
     (availableMetrics && availableMetrics.length ? availableMetrics : [])
   ), [availableMetrics]);
@@ -751,12 +1079,10 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   // component's own selection drift from the page's.
   const metric = pageMetric || "nrs";
 
-  const [includeCrossSettingStability, setIncludeCrossSettingStability] = useState(false);
   const [channel, setChannel] = useState(null);
   const [corrResult, setCorrResult] = useState(null);   // what the correlation grid is drawn from
   const [aucResult, setAucResult] = useState(null);      // what the AUC grid is drawn from
   const [aucFlashKey, setAucFlashKey] = useState(0);
-  const [howToReadOpen, setHowToReadOpen] = useState(false);
   const prevSettingsRef = useRef(null);
 
   // ONE shared hover state and ONE shared pinned state, read by BOTH grids -- this is what makes
@@ -765,7 +1091,8 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   const [hoveredCell, setHoveredCell] = useState(null);       // { row, col } | null
   const [pinnedCell, setPinnedCell] = useState(null);         // { row, col, channel, center, seconds }
   const [pinnedCellData, setPinnedCellData] = useState(null);
-  const cellCacheRef = useRef(new Map());
+  // The fetched squares live at module scope (`heatmapCellCache.js`), so they survive a switch of
+  // pain score, a remount and leaving the page (the PI, 2026-10-02).
 
   const reqKey = requestParams ? JSON.stringify(requestParams) : null;
 
@@ -779,28 +1106,50 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   // shared slot, because `resultCache` holds exactly one entry per slot and marks it stale (not a
   // second entry) on a settings change -- one slot per metric is what lets six pain scores stay
   // simultaneously cached instead of each switch evicting the last one.
-  const cur = useMemo(() => ({ ...requestParams, SweepMetric: metric,
-    IncludeCrossSettingStability: includeCrossSettingStability }),
+  const cur = useMemo(() => gridSettingsFor(requestParams, metric),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [reqKey, metric, includeCrossSettingStability]);
+    [reqKey, metric]);
   const cachedGrid = useCachedResult({
     moduleKey: biomarkerHeatmapSlot(metric),
     uid: participantUid,
     settings: cur,
     enabled: !!participantUid && !!requestParams,
-    autoFetch: false,
-    identity: cur,
-    fetcher: () => queryAnalysis("/api/queryBiomarkerAnalysis",
-      { ParticipantId: participantUid, ...cur, BandTimeSweep: "1" })
+    fetcher: () => SessionController.query("/api/queryBiomarkerAnalysis",
+      { ParticipantId: participantUid, ...requestParams, BandTimeSweep: "1", SweepMetric: metric })
       .then((response) => (response && response.data) || null),
   });
-  useEffect(() => {
-    setCorrResult(null); setAucResult(null); setPinnedCell(null); setPinnedCellData(null);
-    setHoveredCell(null);
-    cellCacheRef.current = new Map(); prevSettingsRef.current = null;
-  }, [participantUid, reqKey, metric, includeCrossSettingStability]);
   const loading = cachedGrid.loading;
   const err = cachedGrid.err;
+
+  // WHAT THE SHOWN GRID WAS COMPUTED UNDER. The shared cache hands back the grid it holds when a
+  // setting moves, marked stale, and starts no request (the PI's design: the page's Recompute
+  // rebuilds). The entry's own key is the settings it was computed with; it is read here so the
+  // grid can say which settings have moved, and so a clicked square is fetched with the SAME
+  // settings as the grid it was clicked on.
+  const shownKey = (participantUid && cachedGrid.data)
+    ? ((getResult(biomarkerHeatmapSlot(metric), participantUid, null) || {}).key || null) : null;
+  const shownSettings = useMemo(() => {
+    try { return shownKey ? JSON.parse(shownKey) : null; } catch (e) { return null; }
+  }, [shownKey]);
+  // Out of date: a grid is on screen and was computed under other settings (or before a server
+  // restart). Not while its rebuild is running: the waiting words say that instead.
+  const outOfDate = !!cachedGrid.data && cachedGrid.stale && !loading;
+  const changedWords = useMemo(() => (outOfDate ? settingsChangedWords(shownSettings, cur) : []),
+    [outOfDate, shownSettings, cur]);
+  const otherStaleReasons = (cachedGrid.staleReasons || []).filter(
+    (r) => !/settings on this page have changed/.test(r));
+  const staleSentence = !outOfDate ? null
+    : changedWords.length
+      ? `These heat maps were computed before ${joinWords(changedWords)} ${changedWords.length > 1 ? "were" : "was"} changed; they still show the earlier settings.`
+      : `These heat maps may be out of date: ${otherStaleReasons[0] || "they were computed under other settings"}.`;
+  const staleSignature = `${outOfDate}|${staleSentence || ""}`;
+  useEffect(() => {
+    if (onStale) {
+      onStale({ stale: outOfDate, changed: changedWords,
+        reasons: outOfDate ? [`the heat maps: ${staleSentence}`] : [] });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onStale, staleSignature]);
 
   // THE ASYMMETRIC CORRELATION/AUC UPDATE RULE (PRD §3), UNCHANGED, now keyed off the cached
   // bundle's own identity rather than a raw network response -- it fires exactly when the bundle
@@ -809,31 +1158,26 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   useEffect(() => {
     const d = cachedGrid.data;
     if (!d) return;
+    // Compared between the settings the previous grid and this one were COMPUTED under (read off
+    // the cache entry), not the controls: with a grid served stale the two can differ.
     const prev = prevSettingsRef.current;
-    const matchChanged = !prev || MATCH_SETTING_KEYS.some(
-      (k) => settingsSubset(prev, [k])[k] !== settingsSubset(cur, [k])[k]);
-    const binChanged = BIN_SETTING_KEYS.some(
-      (k) => prev && settingsSubset(prev, [k])[k] !== settingsSubset(cur, [k])[k]);
-    prevSettingsRef.current = cur;
+    const next = shownSettings || cur;
+    prevSettingsRef.current = next;
 
-    if (matchChanged || !corrResult) {
-      setCorrResult(d);
-      setAucResult(d);
-    } else if (binChanged) {
+    if (corrResult && onlyTheAucGridChanges(prev, next)) {
       // Correlation depends only on matching (PRD §3): keep the previous correlation grid's
       // object identity so its frame does not redraw, and replace the AUC grid with a flash.
       setAucResult(d);
       setAucFlashKey((k) => k + 1);
     } else {
-      // Nothing that changes either grid moved (e.g. only the contact-pair strip was
-      // clicked) -- still take the freshest response so a served-from-store flag is current.
+      // A matching setting moved, there was no grid yet, or nothing that changes either grid
+      // moved (then the freshest response is still taken, so a served-from-store flag is current).
       setCorrResult(d);
       setAucResult(d);
     }
     const sweeps = (d && d.band_time_sweep) || {};
     const keys = Object.keys(sweeps);
     if (keys.length && (!channel || !sweeps[channel])) setChannel(keys[0]);
-    cellCacheRef.current = new Map();
     setPinnedCell(null); setPinnedCellData(null); setHoveredCell(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cachedGrid.data]);
@@ -846,10 +1190,55 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   // see yet), and is cancelled by a generation token whenever the participant, the live controls or
   // the selected metric change again before it finishes -- a fast slider drag or a quick run of
   // dropdown switches must not pile up an ever-growing queue of superseded background requests.
+  const prefetchGenRef = useRef(0);
+  useEffect(() => {
+    // Not while the selected score's own grid is out of date: the other scores would be built under
+    // settings the grid on screen does not show, before the reader has asked for them.
+    if (!participantUid || !requestParams || loading || cachedGrid.stale) return undefined;
+    const gen = (prefetchGenRef.current += 1);
+    const others = options.filter((o) => o.key !== metric);
+    let cancelled = false;
+    (async () => {
+      // eslint-disable-next-line no-restricted-syntax
+      for (const o of others) {
+        if (cancelled || prefetchGenRef.current !== gen) return;
+        const otherCur = gridSettingsFor(requestParams, o.key);
+        // eslint-disable-next-line no-await-in-loop
+        await prefetchBiomarkerHeatmapMetric(participantUid, o.key, otherCur, () =>
+          SessionController.query("/api/queryBiomarkerAnalysis",
+            { ParticipantId: participantUid, ...requestParams, BandTimeSweep: "1", SweepMetric: o.key })
+            .then((response) => (response && response.data) || null));
+      }
+    })();
+    return () => { cancelled = true; };
+    // `reqKey` is the stable proxy for `requestParams` here, same as the fetch above -- including
+    // the object itself would fire on every render (a new reference each time).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [participantUid, reqKey, metric, loading, options, cachedGrid.stale]);
+
+  // THE CLOSED-LOOP ANSWERS FOR THE LIKELIEST BANDS, asked for from here (decision 430): once this
+  // grid is in and current, and 5 s after, so the reader's own requests go first. Once per page
+  // load per participant; the server saves the answers, so choosing one of these bands on the
+  // Closed-Loop page is served at once.
+  useEffect(() => {
+    if (!participantUid || loading || cachedGrid.stale || !cachedGrid.data) return undefined;
+    if (CL_PREFETCHED.has(participantUid)) return undefined;
+    const t = setTimeout(() => {
+      CL_PREFETCHED.add(participantUid);
+      prefetchClosedLoopFromBiomarkers(participantUid).catch(() => {});
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [participantUid, loading, cachedGrid.stale, cachedGrid.data]);
+
   const corrSweeps = (corrResult && corrResult.band_time_sweep) || {};
   const aucSweeps = (aucResult && aucResult.band_time_sweep) || {};
   const corrSw = channel && corrSweeps[channel];
   const aucSw = channel && aucSweeps[channel];
+  // The page head prints the status sentence and list (SPEC.md section 5.1 item 1); they are read
+  // off this grid, so the grid hands them up whenever what they are read from changes.
+  useEffect(() => {
+    if (onStatus) onStatus(gridStatusParts(corrResult, corrSw || null, metricLabel));
+  }, [onStatus, corrResult, corrSw, metricLabel]);
   // The device's documented timing ranges, carried on the response since rule version v12
   // (review 2026-09-15, B4). Absent on an older response: the rows are then labelled plainly.
   const deviceRanges = (corrResult && corrResult.device_timing_ranges) || null;
@@ -865,16 +1254,15 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   };
 
   const fetchCell = (ch, center, seconds) => {
-    const key = `${ch}|${center}|${seconds}`;
-    if (cellCacheRef.current.has(key)) return Promise.resolve(cellCacheRef.current.get(key));
-    const body = {
-      ParticipantId: participantUid, ...cur,
-      BandTimeSweepCell: "1", Channel: ch, BandCenterHz: center, IntegrationSeconds: seconds,
-    };
-    return queryAnalysis("/api/queryBiomarkerAnalysis", body).then((response) => {
+    const key = cellKey(participantUid, metric, shownKey, ch, center, seconds);
+    const held = getCell(key);
+    if (held !== undefined) return Promise.resolve(held);
+    const body = heatmapCellRequest({ participantUid, shownSettings, requestParams, metric,
+      channel: ch, center, seconds });
+    return SessionController.query("/api/queryBiomarkerAnalysis", body).then((response) => {
       const d = (response && response.data) || {};
       const cell = d.band_time_sweep_cell || { points: [], message: d.message };
-      cellCacheRef.current.set(key, cell);
+      putCell(key, cell);
       return cell;
     });
   };
@@ -924,192 +1312,185 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
   // must match the heat maps' height exactly, since they sit in the same Grid row.
   const panelHeight = heatmapHeight((corrSw && (corrSw.correlation_grid || []).length) || 0);
 
+  // THE LAYOUT (the redesign of 2026-09-26, SPEC.md section 5.1 item 2): one card, its title the
+  // question it answers, its answer the status line read off the grid; then the pair thumbnails as
+  // small multiples on one colour range, the two large maps side by side (each with its key), the
+  // clicked square's scatter and violin under them, the caption keys, and two folds.
+  const corrKey = (
+    <ColorKey scale={DIVERGING} range={RANGE.correlation} lowLabel="falls with pain"
+      midLabel="0" highLabel="rises with pain" title="R with pain" />
+  );
+  const aucKey = (
+    <ColorKey scale={DIVERGING} range={RANGE.areaUnderCurve} lowLabel="lower in high pain"
+      midLabel="0.5 coin toss" highLabel="higher in high pain"
+      title="AUC" />
+  );
+  const subhead = { ...TYPE.body, fontWeight: 600, color: T.ink, display: "block", mb: 0, mt: 0 };
+  const aucCellValue = (pinnedCell && aucSw && aucSw.auc_grid && aucSw.auc_grid[pinnedCell.row])
+    ? aucSw.auc_grid[pinnedCell.row][pinnedCell.col] : null;
+
+  // The shared section (taste audit C6, 2026-09-26): the question as its title, the rest as its
+  // body. While a grid is being worked out there is no spinner (C2): with a grid already on screen
+  // the waiting words sit beside the title; with none, still grey blocks shaped like the grid.
+  const waitingWords = "Computing the calibrated grid…";
   return (
-    <Card sx={{ width: "100%" }}>
-      <MDBox p={2}>
-        <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="center"
-          flexWrap="wrap" gap={1}>
-          <MDTypography variant="h5" fontWeight="bold" sx={{ fontSize: 24, lineHeight: 1.3 }}>
-            {"How well each band tracks pain"}
-          </MDTypography>
-          <MDButton size="small" color="info" disabled={loading || !requestParams} onClick={cachedGrid.recompute}>Run band grid</MDButton>
-          {loading ? <CircularProgress size={20} /> : null}
-        </MDBox>
-        <FormControlLabel
-          control={<Checkbox checked={includeCrossSettingStability} disabled={loading}
-            onChange={(event) => setIncludeCrossSettingStability(event.target.checked)} />}
-          label="Include cross-setting stability" />
-        <MDTypography variant="caption" sx={{ display: "block" }}>
-          Adds stability estimates when you run the band grid.
+    <Section id="biomarker-heat-maps" question="Power–pain heat maps"
+      actions={loading && corrSw && aucSw ? (
+        <MDTypography component="span" role="status" sx={{ ...TYPE.body, color: T.ink3 }}>
+          {waitingWords}
         </MDTypography>
-        <MDBox display="flex" flexDirection="row" alignItems="center" flexWrap="wrap" gap={1.5} mt={1}>
-          {/* The pain-score dropdown that used to live here is gone -- one consolidated dropdown
-              now lives at the top of the page (index.js, below the binarization box) and drives
-              this section through the `pageMetric` prop. */}
-          {metricLabel ? (
-            <MDTypography variant="caption" color="dark" sx={{ fontSize: 12 }}>
-              {`Pain score: ${metricLabel}`}
-            </MDTypography>
-          ) : null}
-          {matchDirectionLabel ? (
-            <MDBox sx={{ border: `1.5px solid ${PAL.accentBorder || "#0072B2"}`, borderRadius: 1.5,
-              px: 1, py: 0.4, background: "#0072B208" }}>
-              <MDTypography variant="caption" fontWeight="medium" color="dark" sx={{ fontSize: 11 }}>
-                {matchDirectionLabel === "prior"
-                  ? "Matched using recordings from before each rating"
-                  : "Matched using recordings from either time direction"}
-              </MDTypography>
-            </MDBox>
-          ) : null}
-          <MDBox sx={{ ml: "auto" }}>
-            <MDButton variant="outlined" color="dark" size="small" disabled={!gridReady || !onOpenInClosedLoop}
-              onClick={() => onOpenInClosedLoop && onOpenInClosedLoop({ channel, sweep: corrSw })}>
-              {"Open this grid in Closed-Loop →"}
-            </MDButton>
-            <MDTypography variant="caption" color="dark" fontStyle="italic"
-              sx={{ fontSize: 10, display: "block", mt: 0.25, maxWidth: 240 }}>
-              {gridReady
-                ? "Closed-Loop Deployment reads this same grid. Opens it there, where any point "
-                  + "can be picked as a candidate band."
-                : "Available once the grid has been computed for a sensing contact pair."}
+      ) : null}>
+
+        {/* THE HEAT MAPS SAY WHEN THEY ARE OUT OF DATE (review of 2026-09-26, finding 1): a changed
+            matching or split setting does not rebuild them; this line names what moved, above the
+            maps, and points to the page's one Recompute button (the PI, 2026-10-02: two buttons were redundant). */}
+        {staleSentence ? (
+          <MDBox data-testid="heatmaps-out-of-date" role="status" mt={1}
+            display="flex" flexDirection="row" alignItems="center" flexWrap="wrap" gap={1.5}>
+            <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink, m: 0, maxWidth: LAYOUT.proseMax }}>
+              <span aria-hidden="true" style={{ color: T.caution, marginRight: 6 }}>{"\u25b2"}</span>
+              {staleSentence}
+              {" Press Recompute at the top of the page to rebuild them."}
             </MDTypography>
           </MDBox>
-        </MDBox>
+        ) : null}
 
         {err ? (
-          <MDTypography variant="caption" sx={{ fontSize: 11.5, display: "block", mt: 1,
-            color: PAL.fail || "#D55E00" }}>{`The grid could not be computed: ${err}`}</MDTypography>
+          <MDTypography component="p" role="alert" sx={{ ...TYPE.body, display: "block", mt: 1,
+            color: T.ink }}>
+            {`The grid could not be computed: ${err}. `}
+            {corrSw && aucSw ? "The heat maps below are the last completed result. " : "No heat map is available from this request. "}
+            {"Check your connection, then press Recompute at the top of the page to try again."}
+          </MDTypography>
         ) : null}
         {corrResult && corrResult.message ? (
-          <MDTypography variant="caption" color="dark" fontStyle="italic"
-            sx={{ fontSize: 11.5, display: "block", mt: 1 }}>{corrResult.message}</MDTypography>
+          <MDTypography component="p"
+            sx={{ ...TYPE.body, color: T.ink2, display: "block", mt: 1 }}>{corrResult.message}</MDTypography>
         ) : null}
 
         {corrSw && aucSw ? (
           <>
-            {/* THE PINNED-CELL TITLE, moved out of the scatter panel entirely and up to sit beside
-                the contact strip -- its own row, with `alignItems="flex-end"` so the title's
-                BOTTOM edge lines up with the strip's bottom edge, per direct feedback ("should be
-                higher up, so that the floor is aligned with the small clickable heat map
-                sub-panels"). A separate, small Grid container rather than folding into the main
-                one below: this is the only row that wants bottom-alignment, and the main grid's
-                other rows want top-alignment (a heading beside a same-height plot, etc). */}
-            <Grid container spacing={2} alignItems="flex-end">
-              <Grid item xs={12} md={7}>
-                <ContactStrip sweeps={corrSweeps} channel={channel} setChannel={setChannel} />
-              </Grid>
-              <Grid item xs={12} md={5} />
-            </Grid>
+            {/* The one caveat line above the maps (SPEC.md section 5.1): how the reports were paired. */}
+            {matchDirectionLabel ? (
+              <MDTypography component="p" sx={{ ...TYPE.body, color: T.ink3, mt: 2, mb: 2 }}>
+                {matchDirectionLabel === "prior"
+                  ? "Matched using recordings from before each rating. A research reading, not a setting to program."
+                  : "Matched using recordings from either time direction. A research reading, not a setting to program."}
+              </MDTypography>
+            ) : <MDBox mt={2} />}
 
-            {/* Each grid sits at ~2/3 of its previous footprint, with a persistent panel to its
-                right at matching height (open item 7, parts 4b-4d): the scatter+fit panel next to
-                the correlation grid, the violin panel next to the AUC grid. A click on EITHER grid
-                populates BOTH panels (they describe the same cell) and highlights that cell on
-                BOTH grids; hovering either grid highlights the cell on both without fetching.
-                The correlation section's heading and the scatter panel's statistics line share a
-                row (both now sit OUTSIDE their own plot, at the same level) -- per direct
-                feedback, moving the title out of the scatter panel was "forcing the top plot to
-                look janky"; splitting its statistics line out the same way is what lets the actual
-                plot below be a full, undiminished square matching the heat map's own height. The
-                AUC section is unchanged: the violin panel already keeps its statistics line inside
-                its own box, above its own plot, and reads fine there already ("the bottom violin
-                plot looks better aligned... leave it as is"). */}
-            <Grid container spacing={2} alignItems="flex-start">
-              <Grid item xs={12} md={7}>
-                <MDTypography variant="button" fontWeight="bold" color="dark"
-                  sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
-                  {"Correlation with pain — depends only on matching"}
-                </MDTypography>
-                <DeviceSpectrumCaption sw={corrSw} />
-                <ClinicSheetCaption sw={corrSw} />
-                <DeviceTierCaption ranges={deviceRanges} sw={corrSw} />
-                <StabilityCaption sw={corrSw} />
-              </Grid>
-              {/* The pinned cell's title and its two statistics lines sit at the BOTTOM of this
-                  cell, visually just above the scatter plot (the PI, 2026-09-15: they "sat way too
-                  high"). `alignSelf: stretch` + a column flex with `justifyContent: flex-end`
-                  pushes them down against whatever height the captions on the left take. */}
-              <Grid item xs={12} md={5} sx={{ display: "flex", flexDirection: "column",
-                justifyContent: "flex-end", alignSelf: "stretch" }}>
-                <PanelTitle pinnedCell={pinnedCell} channelLabel={channelLabel} />
-                <ScatterStatsLine cell={pinnedCellData} pinnedCell={pinnedCell} sw={corrSw} />
-              </Grid>
+            <MDTypography component="p" data-testid="heatmap-source" sx={{ ...TYPE.body, color: T.ink2, mb: 1 }}>{gridSourceWords(corrSw)}</MDTypography>
+            <CurrentScopeNotes sweep={corrSw}/>
+            <SourceGridDetails sweep={corrSw}/>
 
-              <Grid item xs={12} md={7}>
+            <ContactStrip sweeps={corrSweeps} channel={channel} setChannel={setChannel}
+              refused={(refusedPairs(corrSweeps, corrResult && corrResult.sensing_rule) || {}).refused} />
+
+            {/* ONE GRID OF SHARED ROWS (the PI, 2026-09-26: the two maps, and the scatter and the
+                violin, sat at different heights because the right title wrapped and the two
+                statistics blocks differ in length). Title, key, map, statistics and plot each take
+                one row across both columns, so the two columns start every row at the same height
+                whatever either holds; on a phone the areas stack column by column. */}
+            <MDBox data-testid="heatmap-rows" sx={{
+              display: "grid", columnGap: 3, rowGap: 1, alignItems: "start",
+              gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "minmax(0, 1fr) minmax(0, 1fr)" },
+              gridTemplateAreas: {
+                xs: `"t1" "k1" "m1" "t2" "k2" "m2" "pt" "s1" "g1" "s2" "g2" "cap"`,
+                md: `"t1 t2" "k1 k2" "m1 m2" "pt pt" "s1 s2" "g1 g2" "cap cap"`,
+              },
+            }}>
+              <MDTypography component="h3" sx={{ ...subhead, gridArea: "t1" }}>
+                {"R with pain"}
+              </MDTypography>
+              <MDBox sx={{ gridArea: "k1" }}>{corrKey}</MDBox>
+              <MDBox sx={{ gridArea: "m1", minWidth: 0 }}>
                 <PlotlyHeatmap divId="biomarker-heatmap-correlation" sw={corrSw} kind="correlation"
                   deviceRanges={deviceRanges}
                   hoveredCell={hoveredCell} pinnedCell={pinnedCell}
                   onHover={handleHover} onClick={(r, c) => handleClick(corrSw, r, c)} />
-              </Grid>
-              <Grid item xs={12} md={5}>
-                <PlotlyScatter divId="biomarker-scatter-panel" cell={pinnedCellData}
-                  pinnedCell={pinnedCell} side={panelHeight} metricLabel={metricLabel} />
-              </Grid>
-
-              <Grid item xs={12} md={7}>
-                <MDTypography variant="button" fontWeight="bold" color="dark"
-                  sx={{ fontSize: 15, display: "block", mb: 0.5 }}>
-                  {"High vs low pain (AUC) — also depends on the binarization cuts above"}
-                </MDTypography>
+              </MDBox>
+              <MDTypography component="h3" sx={{ ...subhead, gridArea: "t2" }}>
+                {"High vs. low pain classification"}
+              </MDTypography>
+              <MDBox sx={{ gridArea: "k2" }}>{aucKey}</MDBox>
+              <MDBox sx={{ gridArea: "m2", minWidth: 0 }}>
                 <PlotlyHeatmap divId="biomarker-heatmap-auc" sw={aucSw} kind="auc"
                   deviceRanges={deviceRanges}
                   hoveredCell={hoveredCell} pinnedCell={pinnedCell} flashKey={aucFlashKey}
                   onHover={handleHover} onClick={(r, c) => handleClick(aucSw, r, c)} />
-              </Grid>
-              <Grid item xs={12} md={5}>
-                <ViolinPanel cell={pinnedCellData} pinnedCell={pinnedCell}
-                  channelLabel={channelLabel} height={panelHeight} sw={aucSw}
-                  aucValue={(pinnedCell && aucSw && aucSw.auc_grid
-                    && aucSw.auc_grid[pinnedCell.row] && aucSw.auc_grid[pinnedCell.row][pinnedCell.col])}
-                />
-              </Grid>
-            </Grid>
-
-            <MDBox mt={1.5}>
-              <MDBox display="flex" alignItems="center" sx={{ cursor: "pointer" }}
-                onClick={() => setHowToReadOpen((v) => !v)}>
-                <IconButton size="small" sx={{ transform: howToReadOpen ? "rotate(180deg)" : "none" }}>
-                  <ExpandMoreIcon fontSize="small" />
-                </IconButton>
-                <MDTypography variant="caption" fontWeight="bold" color="dark" sx={{ fontSize: 12 }}>
-                  {"How to read this"}
-                </MDTypography>
               </MDBox>
-              <Collapse in={howToReadOpen}>
-                <MDBox sx={{ border: `1.5px solid ${PAL.accentBorder || "#0072B255"}`, borderRadius: 2,
-                  p: 1.25, background: "#0072B208", mt: 0.5 }}>
-                  {/* `aucSw.notes` is dropped -- both grids come from the same per-channel sweep
-                      response and its `notes` never differs between them, so concatenating the two
-                      only ever rendered every note twice (open item 7, decision 2026-09-09).
-                      Order, reduced from 13 bullets to 8 and reordered by priority: the three
-                      "how to read the statistics" notes the backend already puts first (best-of-ten
-                      selection bias, what 0.5 means, direction/folding) -- the two the PI required
-                      plus the direction note moved up beside them -- then the two remaining
-                      display-only notes that matter most for reading the page at a glance (the
-                      circled-cell correction, why the left grid doesn't redraw), then the
-                      single-cell-statistic caveat, then the sweep's own mechanical bookkeeping
-                      (tile rounding, cell independence, outliers, the shuffled reference, the split
-                      rule) last. The old fourth static bullet ("0.5 means... not 0") is deleted
-                      outright -- it restated the backend's own second note nearly verbatim. */}
+
+              {/* The clicked square: its title, its two statistics blocks and the two plots. A click
+                  on EITHER grid fills both and highlights the square on both. */}
+              <MDBox sx={{ gridArea: "pt", mt: 2 }}>
+                <PanelTitle pinnedCell={pinnedCell} channelLabel={channelLabel} />
+              </MDBox>
+              <MDBox sx={{ gridArea: "s1" }}>
+                <ScatterStatsLine cell={pinnedCellData} pinnedCell={pinnedCell} sw={corrSw} side={panelHeight} />
+              </MDBox>
+              <MDBox sx={{ gridArea: "g1", minWidth: 0 }}>
+                <PlotlyScatter divId="biomarker-scatter-panel" cell={pinnedCellData}
+                  pinnedCell={pinnedCell} side={panelHeight} metricLabel={metricLabel} />
+              </MDBox>
+              <MDBox sx={{ gridArea: "s2" }}>
+                <ViolinPanel part="stats" cell={pinnedCellData} pinnedCell={pinnedCell}
+                  channelLabel={channelLabel} height={panelHeight} sw={aucSw}
+                  aucValue={aucCellValue} />
+              </MDBox>
+              <MDBox sx={{ gridArea: "g2", minWidth: 0 }}>
+                <ViolinPanel part="plot" cell={pinnedCellData} pinnedCell={pinnedCell}
+                  channelLabel={channelLabel} height={panelHeight} sw={aucSw}
+                  aucValue={aucCellValue} />
+              </MDBox>
+
+              <MDBox sx={{ gridArea: "cap", mt: 2 }}>
+                <DeviceSpectrumCaption sw={corrSw} />
+                <ClinicSheetCaption sw={corrSw} />
+                <DeviceTierCaption ranges={deviceRanges} sw={corrSw} />
+                <StabilityCaption sw={corrSw} />
+              </MDBox>
+            </MDBox>
+
+            <MDBox mt={2} display="flex" flexDirection="row" alignItems="center" flexWrap="wrap" gap={2}>
+              <MDButton variant="outlined" color="dark" size="small" disabled={!gridReady}
+                sx={{ textTransform: "none", ...TYPE.body, borderColor: T.ink3, color: T.ink }}
+                onClick={() => onOpenInClosedLoop && onOpenInClosedLoop({ channel, sweep: corrSw })}>
+                {"Open this grid in Closed-Loop \u2192"}
+              </MDButton>
+              <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink3, maxWidth: 360 }}>
+                {gridReady
+                  ? bandSelectionWords(corrSw)
+                  : "Available once the grid has been computed for a sensing contact pair."}
+              </MDTypography>
+            </MDBox>
+
+            <MDBox mt={2}>
+              <Fold show="Reading guide">
+                {/* No box inside the card (decision 304): a hairline down the left edge marks the
+                    drawer, whose notes are 14 px at weight 400 (SPEC.md section 5.1). `aucSw.notes`
+                    is dropped -- both grids come from the same per-channel sweep response. Order:
+                    the backend's three "how to read the statistics" notes, the display notes, then
+                    the sweep's own mechanical bookkeeping (`bulletsFor`). */}
+                <MDBox data-testid="reading-notes"
+                  sx={{ borderLeft: `1px solid ${T.rule}`, pl: 2, maxWidth: LAYOUT.proseMax }}>
                   {bulletsFor(corrSw).map((n, i) => (
-                    <MDTypography key={i} variant="caption" color="dark"
-                      sx={{ fontSize: 17, display: "block", mb: 0.5, lineHeight: 1.4 }}>
-                      {`• ${n}`}
+                    <MDTypography key={i} component="p"
+                      sx={{ ...TYPE.body, color: T.ink2, display: "block", mb: 1, mt: 0 }}>
+                      {`\u2022 ${n}`}
                     </MDTypography>
                   ))}
                 </MDBox>
-              </Collapse>
+              </Fold>
             </MDBox>
           </>
-        ) : (!loading ? (
-          <MDTypography variant="caption" color="dark" fontStyle="italic"
-            sx={{ fontSize: 11.5, display: "block", mt: 1 }}>
+        ) : (err && !loading ? null : !loading ? (
+          <MDTypography component="p"
+            sx={{ ...TYPE.body, color: T.ink3, display: "block", mt: 1 }}>
             {corrResult ? "No band centre produced a grid for this contact pair."
-              : "Computing the calibrated grid…"}
+              : "No heat map is available yet."}
           </MDTypography>
-        ) : null)}
-      </MDBox>
-    </Card>
+        ) : <GridSkeleton words={waitingWords} shape="heatmaps" />)}
+    </Section>
   );
 }
 

@@ -37,5 +37,5 @@ test('dense records limit annotations; date errors suppress plots and restore fu
 test('settings can be removed and restored and unavailable records do not fabricate charts',async()=>{
  await render();await act(async()=>element.querySelector('button[title="Clear"]').click());expect(charts()).toEqual([]);expect(element.textContent).toContain('Select a setting above');
  await click('Default settings');expect(charts()).toHaveLength(5);
- await render({homeTransitions:[]});expect(charts()).toEqual([]);expect(element.textContent).toContain('No reviewed home-program records');
+ await render({homeTransitions:[]});expect(charts()).toEqual([]);expect(element.textContent).toContain('No program-setting observations or reviewed home programs');
 });

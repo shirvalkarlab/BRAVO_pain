@@ -88,3 +88,18 @@ test('current CL is independently visible with source provenance even when no me
   await render(<StimulationPrograms comparison={{available:true,metrics:[metric],current_closed_loop:{...current_closed_loop,source:undefined}}} metrics={[selected]}/>);
   expect(element.textContent).toContain('reviewed current home-program settings');expect(element.textContent).toContain('No eligible surveys');
 });
+
+
+test('historical medication view uses reviewed end, explains ongoing notes and rejects invalid coverage',async()=>{
+  const start=Date.parse('2026-08-01T00:00:00-07:00')/1000,end=Date.parse('2026-08-15T00:00:00-07:00')/1000;
+  const episodes=[{id:'historical',name:'Synthetic',drug_class:'Class A',start,end:null,ongoing:true,dose:'1 unit',frequency:'Daily'}];
+  const comparison={available:true,metrics:[],episodes,provenance:{period_start:start,period_end_exclusive:end}};
+  await render(<Medications comparison={comparison} metrics={[]} today="2026-09-03"/>);
+  expect(element.textContent).toContain('through 2026-08-14 Pacific');expect(element.textContent).toContain('medication use after this period is unverified');
+  expect(plot('Documented medication regimens over time').layout.xaxis.range[1]).toBe('2026-08-15 00:00:00');
+  expect(episodes[0].end).toBeNull();expect(episodes[0].ongoing).toBe(true);
+  await render(<Medications comparison={{...comparison,provenance:{period_start:start,period_end_exclusive:start}}} metrics={[]} today="2026-09-03"/>);
+  expect(element.textContent).toContain('documentation range is invalid');expect(element.querySelector('[data-plot]')).toBeNull();
+  await render(<Medications comparison={{...comparison,provenance:{period_start:start,period_end_exclusive:Date.parse('2026-10-15T00:00:00-07:00')/1000}}} metrics={[]} today="2026-09-03"/>);
+  expect(plot('Documented medication regimens over time').layout.xaxis.range[1]).toBe('2026-09-03 23:59:59');
+});

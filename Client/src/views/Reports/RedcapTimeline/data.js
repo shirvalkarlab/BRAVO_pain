@@ -1,6 +1,6 @@
 import {displayTarget, routeParticipant} from "utils/participantTargets";
 
-export const DEFAULT_METRICS = ["mood_vas", "nrs_intensity", "vas_intensity", "left_leg_vas_intensity", "back_vas_intensity", "mpq_sens", "mpq_aff", "mpq_standard_0_45", "firey", "tingly", "electrocuting"];
+export const DEFAULT_METRICS = ["mood_vas", "nrs_intensity", "vas_intensity", "left_leg_vas_intensity", "back_vas_intensity", "mpq_standard_sensory_0_33", "mpq_standard_affective_0_12", "mpq_standard_0_45", "firey", "tingly", "electrocuting"];
 const DAY = 86400000;
 const pacific = new Intl.DateTimeFormat("en-CA", {timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23"});
 

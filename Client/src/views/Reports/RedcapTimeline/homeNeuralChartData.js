@@ -27,6 +27,18 @@ export function neuralContactLabel(value) {
   return value.replace(/\b(\d+)\s*[–-]\s*(\d+)\b/g, '$1 and $2');
 }
 
+export function neuralScheduleLabel(provenance) {
+  if (!provenance) return '';
+  if (provenance.status === 'recorded' && provenance.metadata_available === true
+      && provenance.conflicting_settings === false && provenance.inherited_settings === false)
+    return 'Sensing labels follow the recorded schedule.';
+  const reasons = [];
+  if (provenance.conflicting_settings) reasons.push('exported sensing settings disagree; Prasad’s selected labels are retained');
+  if (provenance.inherited_settings) reasons.push('labels are inherited without a direct settings record for this interval');
+  if (!provenance.metadata_available) reasons.push('complete schedule provenance is unavailable');
+  return `Unverified sensing labels: ${reasons.join('; ') || 'schedule status is unresolved'}.`;
+}
+
 export function neuralSegmentDescription(segment, participant) {
   const source = neuralSourceLabel(segment.sensing_side,participant);
   const contacts = neuralContactLabel(segment.sensing_contacts);
@@ -37,7 +49,10 @@ export function neuralSegmentDescription(segment, participant) {
   const band = segment.power_band_label || (finite(segment.center_frequency_hz)
     ? `${segment.center_frequency_hz} Hz center · band width not recorded` : 'Power band not recorded');
   const mode = displayTargetText(participant,segment.mode) || 'Mode not established';
-  return {source, contacts, center, band, mode};
+  const schedule = neuralScheduleLabel(segment.sensing_provenance);
+  const unverified = schedule.startsWith('Unverified');
+  const label = value => unverified ? `${value} (unverified)` : value;
+  return {source:label(source), contacts:label(contacts), center:label(center), band:label(band), mode, schedule};
 }
 
 export function neuralSettingsLines(segment, side, participant) {
@@ -67,6 +82,10 @@ export const neuralHoverLines = lines => lines.map(line => (String(line).match(/
 
 export function homeNeuralPlot(panel, period, participant, maxGapSeconds = MAX_GUIDE_GAP_SECONDS) {
   const start = neuralTime(period.start), end = neuralTime(period.end);
+  const observational = period.display_basis === 'recorded_observations';
+  const powerLabel = observational ? 'Recorded neural power' : 'Biomarker';
+  const amplitudeLabel = observational ? 'Recorded channel amplitude' : 'Stimulation amplitude';
+  const independentCurrent = Array.isArray(panel.amplitude_series);
   const traces = [], descriptions = [];
   let observedPower = 0, observedAmplitude = 0, latestTime = null;
   for (const segment of panel.segments || []) {
@@ -80,7 +99,7 @@ export function homeNeuralPlot(panel, period, participant, maxGapSeconds = MAX_G
       .sort((p,q)=>p.time-q.time);
     // Empty settings boundaries remain available in the source selector; only
     // intervals with actual plotted observations belong in the visible key.
-    if (points.some(point => (finite(point.power) && !point.power_conflict) || (finite(point.amplitude) && !point.amplitude_conflict))) {
+    if (points.some(point => (finite(point.power) && !point.power_conflict) || (!independentCurrent && finite(point.amplitude) && !point.amplitude_conflict))) {
     descriptions.push({id:segment.id,start:a,end:b,...description,
       mappingStatus:displayTargetText(participant,segment.mapping_status),
       thresholdStatus:displayTargetText(participant,segment.threshold_status)});
@@ -90,11 +109,12 @@ export function homeNeuralPlot(panel, period, participant, maxGapSeconds = MAX_G
       .map(threshold=>`${threshold.label || 'Configured threshold'}: ${threshold.value} LSB`);
     const detail = neuralHoverLines([...neuralSettingsLines(segment,panel.side,participant),
       `Mode: ${description.mode}`,`Adaptive state: ${segment.adaptive_state || 'Not recorded'}`,
-      `Biomarker source: ${description.source}`,`Sensing contacts: ${description.contacts}`,description.center,description.band,
-      `Control mapping: ${displayTargetText(participant,segment.mapping_status) || 'Not established'}`,...thresholdLines,
+      `${observational ? 'Sensing source' : 'Biomarker source'}: ${description.source}`,`Sensing contacts: ${description.contacts}`,description.center,description.band,
+      `Control mapping: ${displayTargetText(participant,segment.mapping_status) || 'Not established'}`,
+      ...(description.schedule ? [description.schedule] : []),...thresholdLines,
       ...(segment.threshold_status ? [displayTargetText(participant,segment.threshold_status)] : []),
       'Click for complete settings']);
-    for (const metric of ['power','amplitude']) {
+    for (const metric of (independentCurrent ? ['power'] : ['power','amplitude'])) {
       const x = [], y = [], customdata = [];
       let previous = null, count = 0;
       for (const point of points) {
@@ -105,16 +125,16 @@ export function homeNeuralPlot(panel, period, participant, maxGapSeconds = MAX_G
         }
         const value = finite(point[metric]) && !point[`${metric}_conflict`] ? point[metric] : null;
         const power = finite(point.power) && !point.power_conflict ? `${point.power} LSB` : 'Not established';
-        const amplitude = finite(point.amplitude) && !point.amplitude_conflict ? `${point.amplitude} mA` : 'Not established';
+        const amplitude = !independentCurrent && finite(point.amplitude) && !point.amplitude_conflict ? `${point.amplitude} mA` : 'Not established';
         x.push(localTime(point.time)); y.push(value);
-        customdata.push([segment.id,`${escapeText(localTime(point.time))} · Pacific<br>Biomarker: ${escapeText(power)}<br>Stimulation amplitude: ${escapeText(amplitude)}<br>${detail}`]);
+        customdata.push([segment.id,`${escapeText(localTime(point.time))} · Pacific<br>${powerLabel}: ${escapeText(power)}<br>${independentCurrent ? 'Current shown separately at its own recorded times' : `${amplitudeLabel}: ${escapeText(amplitude)}`}<br>${detail}`]);
         if (value !== null) {count++;latestTime = latestTime === null ? point.time : Math.max(latestTime,point.time);}
         previous = point.time;
       }
       if (metric === 'power') observedPower += count;
       else observedAmplitude += count;
       if (!count) continue;
-      traces.push({type:'scatter',mode:'lines+markers',name:metric === 'power' ? `${description.source} biomarker` : `${neuralSourceLabel(panel.side,participant)} stimulation amplitude`,
+      traces.push({type:'scatter',mode:'lines+markers',name:metric === 'power' ? `${description.source} ${observational ? 'recorded neural power' : 'biomarker'}` : `${neuralSourceLabel(panel.side,participant)} ${observational ? 'recorded channel amplitude' : 'stimulation amplitude'}`,
         x,y,customdata,yaxis:metric === 'power' ? 'y' : 'y2',connectgaps:false,showlegend:false,
         line:{color:HOME_NEURAL_COLORS[metric],width:1.5},marker:{color:HOME_NEURAL_COLORS[metric],size:4},
         hovertemplate:'%{customdata[1]}<extra></extra>'});
@@ -129,6 +149,26 @@ export function homeNeuralPlot(panel, period, participant, maxGapSeconds = MAX_G
         customdata:[[segment.id,detail],[segment.id,detail]],
         hovertemplate:`${escapeText(label)}: %{y} LSB<br>%{customdata[1]}<extra></extra>`});
     }
+  }
+  if (independentCurrent && start !== null && end !== null) {
+    const points = panel.amplitude_series.map(point=>({...point,time:neuralTime(point.time)}))
+      .filter(point=>point.time !== null && point.time >= start && point.time < end).sort((p,q)=>p.time-q.time);
+    const x=[],y=[],customdata=[];
+    let previous=null;
+    for (const point of points) {
+      if (previous !== null && point.time-previous > maxGapSeconds) {x.push(null);y.push(null);customdata.push(null);}
+      const value=finite(point.amplitude) && !point.amplitude_conflict ? point.amplitude : null;
+      x.push(localTime(point.time));y.push(value);
+      customdata.push([null,neuralHoverLines([`${localTime(point.time)} · Pacific`,
+        `${neuralSourceLabel(panel.side,participant)} recorded current: ${value === null ? 'Unknown / conflicting' : `${value} mA`}`,
+        panel.amplitude_provenance || 'Recorded current on this lead; no power-to-current alignment inferred.'])]);
+      if (value !== null) {observedAmplitude++;latestTime=latestTime === null ? point.time : Math.max(latestTime,point.time);}
+      previous=point.time;
+    }
+    if (observedAmplitude) traces.push({type:'scatter',mode:'lines+markers',name:`${neuralSourceLabel(panel.side,participant)} recorded current`,
+      x,y,customdata,yaxis:'y2',connectgaps:false,showlegend:false,
+      line:{color:HOME_NEURAL_COLORS.amplitude,width:1.5},marker:{color:HOME_NEURAL_COLORS.amplitude,size:4},
+      hovertemplate:'%{customdata[1]}<extra></extra>'});
   }
   return {traces,descriptions,observedPower,observedAmplitude,latestTime};
 }

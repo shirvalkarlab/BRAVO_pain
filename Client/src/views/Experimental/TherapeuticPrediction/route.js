@@ -11,7 +11,9 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import BatchPrediction from "@mui/icons-material/BatchPrediction";
+import {
+  BatchPrediction, 
+} from "@mui/icons-material";
 
 import TherapeuticPrediction from "./index";
 

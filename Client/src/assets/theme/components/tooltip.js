@@ -13,20 +13,13 @@ Coded by www.creative-tim.com
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-// @mui material components
+// Tooltips (SPEC.md section 2.5): white, a 1 px hairline, the one soft overlay shadow, 12 px
+// text in the title ink at full opacity (17.40:1), left-aligned so a sentence reads as one.
 import Fade from "@mui/material/Fade";
 
-// Material Dashboard 2 React base styles
-import colors from "assets/theme/base/colors";
-import typography from "assets/theme/base/typography";
-import borders from "assets/theme/base/borders";
+import { T, TYPE, WEIGHT, FONT_FAMILY, RADIUS, SPACE, SHADOW } from "assets/theme/base/tokens";
 
-// Material Dashboard 2 React helper functions
 import pxToRem from "assets/theme/functions/pxToRem";
-
-const { black, light } = colors;
-const { size, fontWeightRegular } = typography;
-const { borderRadius } = borders;
 
 const tooltip = {
   defaultProps: {
@@ -36,19 +29,27 @@ const tooltip = {
 
   styleOverrides: {
     tooltip: {
-      maxWidth: pxToRem(200),
-      backgroundColor: black.main,
-      color: light.main,
-      fontSize: size.sm,
-      fontWeight: fontWeightRegular,
-      textAlign: "center",
-      borderRadius: borderRadius.md,
-      opacity: 0.7,
-      padding: `${pxToRem(5)} ${pxToRem(8)} ${pxToRem(4)}`,
+      maxWidth: pxToRem(280),
+      backgroundColor: T.surface,
+      color: T.ink,
+      border: `1px solid ${T.rule}`,
+      boxShadow: SHADOW.overlay,
+      fontFamily: FONT_FAMILY,
+      fontSize: pxToRem(TYPE.caption.fontSize),
+      lineHeight: TYPE.caption.lineHeight,
+      fontWeight: WEIGHT.regular,
+      textAlign: "left",
+      borderRadius: pxToRem(RADIUS.sm),
+      opacity: 1,
+      padding: `${pxToRem(SPACE.xs)} ${pxToRem(SPACE.xs)}`,
     },
 
     arrow: {
-      color: black.main,
+      color: T.surface,
+
+      "&::before": {
+        border: `1px solid ${T.rule}`,
+      },
     },
   },
 };

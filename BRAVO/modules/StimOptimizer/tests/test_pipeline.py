@@ -7,6 +7,10 @@ from StimOptimizer import pipeline
 from StimOptimizer.routines import plots as PLT
 
 
+# Explicit test-only bounds; no participant clinical configuration is implied.
+SYNTHETIC_CEILINGS = {side: (5.0, "synthetic algorithm fixture") for side in ("Left", "Right")}
+
+
 def _matrix():
     """Minimal two-hemisphere design matrix with a clear most-recent epoch."""
     n = 14
@@ -28,7 +32,7 @@ def _matrix():
 def test_incumbent_is_derived_from_the_most_recent_epoch():
     """A hardcoded incumbent went stale and inconsistent once; it must come from the data."""
     es = _matrix()
-    ctx = PLT.build_context(es, data_horizon="test", washin_min=1.0, n_batches=1, q=2)
+    ctx = PLT.build_context(es, data_horizon="test", washin_min=1.0, n_batches=1, q=2, safety_ceiling=(5.0, "synthetic algorithm fixture"))
     last = es.sort_values("t0").iloc[-1]
     assert ctx.meta["incumbent_epoch"] == float(last["epoch"])
     assert ctx.meta["incumbent_xy"] == [float(last["freq_hz"]), float(last["amp_mA_Left"])]
@@ -39,9 +43,9 @@ def test_incumbent_is_derived_from_the_most_recent_epoch():
 def test_right_hemisphere_reads_its_own_amplitude_column():
     es = _matrix()
     left = PLT.build_context(es, hemisphere="Left", data_horizon="t", washin_min=1.0,
-                            n_batches=1, q=2)
+                            n_batches=1, q=2, safety_ceiling=(5.0, "synthetic algorithm fixture"))
     right = PLT.build_context(es, hemisphere="Right", data_horizon="t", washin_min=1.0,
-                             n_batches=1, q=2)
+                             n_batches=1, q=2, safety_ceiling=(5.0, "synthetic algorithm fixture"))
     assert left.meta["amp_col"] == "amp_mA_Left"
     assert right.meta["amp_col"] == "amp_mA_Right"
     # the incumbent amplitude must follow the hemisphere, not stay on the left
@@ -53,13 +57,13 @@ def test_right_hemisphere_reads_its_own_amplitude_column():
 
 def test_unknown_hemisphere_is_refused():
     with pytest.raises(ValueError, match="hemisphere"):
-        PLT.build_context(_matrix(), hemisphere="Both")
+        PLT.build_context(_matrix(), hemisphere="Both", safety_ceiling=(5.0, "synthetic algorithm fixture"))
 
 
 def test_missing_hemisphere_column_is_refused_not_silently_substituted():
     es = _matrix().drop(columns=["amp_mA_Right"])
     with pytest.raises(KeyError, match="amp_mA_Right"):
-        PLT.build_context(es, hemisphere="Right")
+        PLT.build_context(es, hemisphere="Right", safety_ceiling=(5.0, "synthetic algorithm fixture"))
 
 
 def test_amp_grid_covers_the_delivered_escalation():
@@ -77,7 +81,7 @@ def test_pipeline_runs_both_hemispheres_and_flags_unresolved_optima():
     from StimOptimizer import pipeline
     rep = pipeline.run(_matrix(), sites=("left_leg",), hemispheres=("Left", "Right"),
                        outdir="/tmp/stimopt_test", render_figures=False,
-                       data_horizon="test", washin_min=1.0, n_batches=1, q=2)
+                       data_horizon="test", washin_min=1.0, n_batches=1, q=2, safety_ceiling_by_hemisphere=SYNTHETIC_CEILINGS)
     # both arms must be ATTEMPTED; any that cannot fit is recorded, never silently dropped
     assert set(rep.arms) | set(rep.manifest["skipped"]) == {"left_leg__Left", "left_leg__Right"}
     assert rep.arms, f"no arm fitted; skips were {rep.manifest['skipped']}"
@@ -91,7 +95,7 @@ def test_pipeline_skips_an_arm_it_cannot_fit_rather_than_dying():
     from StimOptimizer import pipeline
     rep = pipeline.run(_matrix(), sites=("left_leg", "back"), hemispheres=("Left",),
                        outdir="/tmp/stimopt_test", render_figures=False,
-                       data_horizon="test", washin_min=1.0, n_batches=1, q=2)
+                       data_horizon="test", washin_min=1.0, n_batches=1, q=2, safety_ceiling_by_hemisphere=SYNTHETIC_CEILINGS)
     assert "left_leg__Left" in rep.arms
     assert "back__Left" not in rep.arms          # no back_vas column in the fixture
     assert "back__Left" in rep.manifest["skipped"]
@@ -108,20 +112,14 @@ def _arm(mu_star, sd_star, incumbent_mu, incumbent_sd):
 
 
 def test_gate_propagates_the_incumbent_sd_not_just_the_candidate():
-    """Regression, 2026-08-30, with the numbers from the live RCS08 run (arm left_leg__Right).
-
-    The old gate tested `mu_star + k*sd_star < incumbent_mu`, i.e. `gain > k*sd_star`, which clears
-    the CANDIDATE's SD only. Gain 1.117 beats the candidate SD 0.989, so the old form reported the
-    optimum as resolved. Propagating the incumbent's SD as well gives
-    sd_diff = sqrt(0.989^2 + 0.923^2) = 1.353, which the gain does NOT clear.
-    """
+    """test gate propagates the incumbent sd not just the candidate."""
     import math
-    arm = _arm(mu_star=-0.6881, sd_star=0.9894, incumbent_mu=0.4285, incumbent_sd=0.9227)
-    gain = 0.4285 - (-0.6881)
-    assert gain == pytest.approx(1.1166, abs=1e-3)
-    assert gain > 0.9894                                   # old gate would have passed
-    sd_diff = math.sqrt(0.9894 ** 2 + 0.9227 ** 2)
-    assert sd_diff == pytest.approx(1.3527, abs=1e-3)
+    arm = _arm(mu_star=-0.6, sd_star=0.5, incumbent_mu=0.0, incumbent_sd=0.5)
+    gain = 0.0 - (-0.6)
+    assert gain == pytest.approx(0.6, abs=1e-3)
+    assert gain > 0.5                                   # old gate would have passed
+    sd_diff = math.sqrt(0.5 ** 2 + 0.5 ** 2)
+    assert sd_diff == pytest.approx(0.7071, abs=1e-3)
     assert gain < sd_diff                                  # difference is not resolved
     assert arm.surface_can_resolve_its_optimum() is False
 
@@ -162,7 +160,7 @@ def test_gate_returns_NONE_not_FALSE_when_the_difference_cannot_be_formed():
     cell, the second says the fit is broken and no amount of exposure helps until it is repaired.
     Reporting them identically sent a reader to gather data that could not have resolved anything.
 
-    The slice-level `stage1_openloop.SliceResult.resolves_its_optimum` already returned
+    The stratum-level `stage1_openloop.JointStratum.resolves_its_optimum` already returned
     `bool | None` for exactly this reason, and its docstring calls that the single most important
     correction in the module; this arm-level method now matches it.
     """

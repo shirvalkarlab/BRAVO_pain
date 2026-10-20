@@ -38,6 +38,9 @@ def saveIndefiniteStreams(streamList):
       Boolean indicating if new data is found (to be saved).
     """
 
+    # The recording starts at the `FirstPacketDateTime` its channels share, never plus the tick
+    # counter's fraction of a second (the PI, 2026-09-26: no time from the device clock; the field
+    # arrives here already converted to the tablet's clock, TabletClock.py).
     NewRecordings = []
     StreamDates = list()
     for stream in streamList:
@@ -61,9 +64,7 @@ def saveIndefiniteStreams(streamList):
                 if StreamGroupIndexes[i]:
                     Recording["Data"][:RecordingSize[n], n] = streamList[i]["Data"]
                     Recording["Missing"][:RecordingSize[n], n] = streamList[i]["Missing"]
-                    if streamList[i]["Ticks"][0] > 3276800:
-                        streamList[i]["Ticks"][0] -= 3276800
-                    Recording["StartTime"] = date + (streamList[i]["Ticks"][0]%1000)/1000
+                    Recording["StartTime"] = date
                     n += 1
         else:
             Recording["Data"] = np.zeros((RecordingSize[0], len(RecordingSize)))
@@ -73,9 +74,7 @@ def saveIndefiniteStreams(streamList):
                 if StreamGroupIndexes[i]:
                     Recording["Data"][:, n] = streamList[i]["Data"]
                     Recording["Missing"][:, n] = streamList[i]["Missing"]
-                    if streamList[i]["Ticks"][0] > 3276800:
-                        streamList[i]["Ticks"][0] -= 3276800
-                    Recording["StartTime"] = date + (streamList[i]["Ticks"][0]%1000)/1000
+                    Recording["StartTime"] = date
                     n += 1
             
         Recording["Duration"] = Recording["Data"].shape[0] / Recording["SamplingRate"]

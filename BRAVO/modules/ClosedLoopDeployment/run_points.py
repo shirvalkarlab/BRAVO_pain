@@ -1,29 +1,4 @@
-"""The stored per-run points behind the three-source comparison, and the pooled-by-side view the
-Closed-Loop page draws from them (redesign plan decisions 5 and 10, 2026-09-11).
-
-WHY A STORED TABLE. The page's three-source panel used to draw one tab per run, and the build behind
-it is truncated to the newest four runs once the write-back entries exist (adapter.py,
-`THREE_SOURCE_RUNS_ON_PAGE`). The PI wants two tabs -- right stimulator turned up, left stimulator
-turned up -- each pooling EVERY visit. Rebuilding every run on each page load measured 3.7 s with
-the tile cache warm; he chose instead to store each run's points once, beside the pooled table of
-decision 103, and read them back (his words: "keep option b").
-
-WHAT IS STORED. `three_source_response.comparison_rows` already flattens a run into one row per
-route, band and stimulation setting -- the compared band's settled values, the reasons a setting
-was refused, and every other band of the routes that cover the whole range. This module writes
-exactly that, for every run, plus the run's programmed centre and its start time, as one long
-table (kind `three_source_run_points`). Nothing is computed here that the comparison did not
-already compute; the table is a copy a page can group, never a second implementation.
-
-A TABLE FROM A TRUNCATED BUILD IS REFUSED, in `adapter.write_run_points`, for the reason decision
-103 gives: a stored partial answer looks complete and everything downstream trusts it.
-
-THE VIEW. `pooled_view_payload` groups the stored rows by the side that was turned up, then by the
-sensing contact on that side (never across contacts -- decision 74: two electrodes have no reason
-to share one dose-response), then by run, and attaches the stored pooled row per band centre so
-the page can draw the pooled straight-line slope (decision 9 of the plan) without pooling anything
-itself. It gates nothing and says so.
-"""
+'Stored per-run points and pooled display views.\n\nThe stored table copies comparison_rows output for every route, band, stimulation setting and run, including programmed centre and start time. Incomplete builds are refused. The view groups rows by actuated side, sensing contact and run, then attaches the stored pooled row per band centre. This layer does not recalculate or gate the source results.'
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
@@ -34,7 +9,7 @@ import pandas as pd
 KIND = "three_source_run_points"
 from . import post_ramp as _post_ramp
 
-RULE_VERSION = "v4_run_points_any_held_side_post_ramp_margin_" + _post_ramp.version_tag()   # v4: runs with the other side held at any current (decision 197)   # v3: the margin, on or off (2026-09-12)
+RULE_VERSION = "v5_run_points_both_legs_joined_recordings_post_ramp_margin_tablet_clock_" + _post_ramp.version_tag()   # v4: runs with the other side held at any current (decision 197)   # v3: the margin, on or off (2026-09-12)
 
 # The three routes, by the names the comparison uses (three_source_response.SOURCE_*). Spelled here
 # rather than imported so a reader of a stored table can match them without the module.
@@ -51,12 +26,6 @@ POOLED_VIEW_FIELDS = ("pooled_direction", "pooled_slope_per_mA", "pooled_slope_s
                       "p_curvature", "r2_linear", "r2_quadratic",
                       "quad_coef_per_mA2", "quad_lin_coef_per_mA", "quad_coef_stderr",
                       "post_peak_slope_per_mA", "post_peak_intercept", "post_peak_n_points")
-
-
-
-# Aditya canonical compatibility imports/constants.
-
-
 
 
 def _f(v):
@@ -195,7 +164,7 @@ def pooled_view_payload(points: Optional[pd.DataFrame], pooled: Optional[pd.Data
             "no stored per-run points yet; they are written the next time the comparison is built "
             "from every run")
         return out
-    out["from"] = "stored per-run points, every run of rising current on one side"
+    out["from"] = "stored per-run points, every run of stepped current on one side"
     df = points.copy()
     for side in ("Right", "Left"):
         sd = df[df["ramped_side"].astype(str).str.lower() == side.lower()]
@@ -241,6 +210,3 @@ def pooled_view_payload(points: Optional[pd.DataFrame], pooled: Optional[pd.Data
     out["n_runs"] = int(df["run"].nunique())
     out["n_rows"] = int(len(df))
     return out
-
-
-# Retained active Aditya interfaces.

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check the fixed BRAVO manual source mailbox
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=30s
+AccuracySec=1s
+Unit=bravo-manual-source.service
+
+[Install]
+WantedBy=timers.target

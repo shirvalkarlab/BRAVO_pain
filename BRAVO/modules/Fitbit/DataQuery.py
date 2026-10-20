@@ -5,8 +5,13 @@ import traceback
 import datetime
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
-FITBIT_CLIENT_ID = os.environ["FIBIT_CLIENT_ID"]
-FITBIT_CLIENT_SECRET = os.environ["FIBIT_CLIENT_SECRET"]
+FITBIT_CLIENT_ID = os.environ.get("FIBIT_CLIENT_ID", "")
+FITBIT_CLIENT_SECRET = os.environ.get("FIBIT_CLIENT_SECRET", "")
+
+def oauthConfigured():
+    """OAuth is optional; a fresh install must not require vendor credentials."""
+    return all(value.strip() for value in (FITBIT_CLIENT_ID, FITBIT_CLIENT_SECRET))
+
 
 FitbitDataTypes = {
     "active-zone-minutes": ["activities/active-zone-minutes", "activities-active-zone-minutes"], 
@@ -35,6 +40,8 @@ def fitbitTime(timestamp):
     return datetime.datetime.fromtimestamp(timestamp).strftime("%H:%M")
 
 def retrieveToken(code, verifier):
+    if not oauthConfigured():
+        return None
     try:
         response = requests.post("https://api.fitbit.com/oauth2/token", headers={
             "Authorization": "Basic " + base64.b64encode((FITBIT_CLIENT_ID+":"+FITBIT_CLIENT_SECRET).encode("utf-8")).decode(), 
@@ -56,6 +63,8 @@ def retrieveToken(code, verifier):
     return None
 
 def refreshToken(token):
+    if not oauthConfigured():
+        return None
     try:
         response = requests.post("https://api.fitbit.com/oauth2/token", headers={
             "Authorization": "Basic " + base64.b64encode((FITBIT_CLIENT_ID+":"+FITBIT_CLIENT_SECRET).encode("utf-8")).decode(), 

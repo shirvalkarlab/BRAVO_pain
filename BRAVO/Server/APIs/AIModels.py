@@ -41,6 +41,7 @@ from modules.HelperFunctions import sanitize_input, get_or_none, json_compliant_
 from modules import Database, DataCurator, DataAnalysis
 from modules.AnalysisPipelineScripts import ExtractSpectralFeaturesDuringStimulation, ExtractSpectralFeaturesDuringSurvey
 from modules.AIModels import ModelManager
+from modules.AIModels.BetaPeakDetection.model_assets import ModelUnavailable
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -77,6 +78,7 @@ class RequestPrediction(RestViews.APIView):
     * ``400`` - Malformed input
     * ``401`` - Unauthorized access
     * ``403`` - Insufficient permissions
+    * ``503`` - Optional trusted model assets unavailable
     
     **Example Usage:**
     
@@ -100,6 +102,8 @@ class RequestPrediction(RestViews.APIView):
             try:
                 result = ModelManager.Overview[request.data["AnalysisName"]]["Method"](request.data["Data"])
                 return Response(status=200, data=result)
+            except ModelUnavailable as e:
+                return Response(status=503, data={"message": str(e), "code": "model_unavailable"})
             except Exception as e:
                 print(e)
                 return Response(status=400, data={"message": "Error executing model: " + str(e)})

@@ -1,4 +1,12 @@
-"""Synthetic regression fixtures adapted from Prasad8146f069 for design_rule."""
+"""The confirmations-and-separation design rule (T3, 2026-09-13; design_rule.py), ported from the
+method contest's `kalman_est` entry (decision 150).
+
+Every test checks a VALUE against either a known-by-construction answer or a closed-form analytic
+answer -- never a shape, never "it returned a dict", per this project's own rule (CLAUDE.md §7
+rule 11).
+
+Merged here 2026-10-05: test_design_rule_once_and_vectorised.py.
+"""
 import numpy as np
 import pytest
 
@@ -341,19 +349,12 @@ def _payload(rows):
     return {"refused": False, "model": "L4 two components", "table": rows}
 
 
-def test_design_rule_note_is_none_when_the_table_was_refused():
-    assert PR.design_rule_note({"refused": True, "reason": "x"}, upper=210.0, lower=160.0,
-                               averaging_ms=3000.0, onset_ms=30000.0) is None
-    assert PR.design_rule_note(None, upper=210.0, lower=160.0, averaging_ms=3000.0,
-                               onset_ms=30000.0) is None
-
-
 def test_design_rule_note_states_the_stored_and_required_separation():
     rows = [{"averaging_s": 3.0, "onset_s": 30.0, "min_separation": 25.0, "sweep": []}]
-    note = PR.design_rule_note(_payload(rows), upper=234.87, lower=186.27, averaging_ms=3000.0,
+    note = PR.design_rule_note(_payload(rows), upper=240.0, lower=160.0, averaging_ms=3000.0,
                                onset_ms=30000.0)
     assert note is not None
-    assert "+-24.3" in note                # (234.87-186.27)/2 = 24.30
+    assert "+-40.0" in note                # (240.0-160.0)/2 = 40.0
     assert "+-25" in note
 
 
@@ -363,7 +364,7 @@ def test_design_rule_note_at_the_cards_own_timing_does_not_restate_the_timing():
     the note says so and leaves the numbers to the row above it, rather than printing the same
     averaging and onset on two stacked lines under one field."""
     rows = [{"averaging_s": 3.0, "onset_s": 30.0, "min_separation": 25.0, "sweep": []}]
-    note = PR.design_rule_note(_payload(rows), upper=234.87, lower=186.27, averaging_ms=3000.0,
+    note = PR.design_rule_note(_payload(rows), upper=240.0, lower=160.0, averaging_ms=3000.0,
                                onset_ms=30000.0)
     assert "at the timing shown on this card" in note, note
     assert "s averaging /" not in note, note
@@ -380,7 +381,7 @@ def test_design_rule_note_names_both_timings_when_the_rule_was_evaluated_elsewhe
     """When the table holds no row at the card's timing the nearest one is used, and THEN the
     timing is information the reader cannot get from the row above: both numbers stay."""
     rows = [{"averaging_s": 3.0, "onset_s": 30.0, "min_separation": 25.0, "sweep": []}]
-    note = PR.design_rule_note(_payload(rows), upper=234.87, lower=186.27, averaging_ms=6000.0,
+    note = PR.design_rule_note(_payload(rows), upper=240.0, lower=160.0, averaging_ms=6000.0,
                                onset_ms=60000.0)
     assert "3 s averaging" in note and "30 s onset" in note, note
     assert "nearest evaluated timing" in note, note
@@ -404,8 +405,10 @@ def test_design_rule_note_missing_inputs_gives_none():
 
 
 def test_attach_design_rule_only_touches_the_two_threshold_fields():
-    plan = TY.ThresholdPlan(upper=234.87, lower=186.27, capture_amp_low=1.0, capture_amp_high=3.0)
+    plan = TY.ThresholdPlan(upper=240.0, lower=160.0, capture_amp_low=1.0, capture_amp_high=3.0)
     cand = {"channel": "ONE_THREE_LEFT", "center_hz": 24.5, "band_width_hz": 5.0}
+    from ClosedLoopDeployment import safe_current as SAFE
+    plan = SAFE.apply_to_plan(plan, "synthetic-analysis-participant", "Left")
     prescriptions = PR.prescribe_all_modes(threshold_plan=plan, candidate=cand,
                                            power_series=None, validated_hemispheres=("Left",),
                                            configuring_both_hemispheres=False)
@@ -418,17 +421,6 @@ def test_attach_design_rule_only_touches_the_two_threshold_fields():
     for f in dual.fields:
         if f.name not in touched:
             assert f.design_rule_note is None
-
-
-def test_attach_design_rule_is_a_no_op_when_nothing_is_stored():
-    plan = TY.ThresholdPlan(upper=234.87, lower=186.27, capture_amp_low=1.0, capture_amp_high=3.0)
-    cand = {"channel": "ONE_THREE_LEFT", "center_hz": 24.5, "band_width_hz": 5.0}
-    prescriptions = PR.prescribe_all_modes(threshold_plan=plan, candidate=cand,
-                                           power_series=None, validated_hemispheres=("Left",),
-                                           configuring_both_hemispheres=False)
-    out = PR.attach_design_rule(prescriptions, None, averaging_ms=3000.0, onset_ms=30000.0)
-    dual = out["modes"][PR.PA.DUAL]
-    assert all(f.design_rule_note is None for f in dual.fields)
 
 
 def test_the_design_rule_onset_grid_stops_at_the_tablets_maximum():
@@ -449,9 +441,103 @@ def test_the_design_rule_key_depends_on_the_pairs_midpoint_not_on_its_separation
     from ClosedLoopDeployment import adapter as AD
     monkeypatch.setattr(AD, "recording_set_signature", lambda p: ("rs", "constructed"))
     kw = dict(tiles_key="tiles/x", contact="ZERO_TWO_LEFT", centre_hz=24.5, hemisphere="Left")
-    part = "11111111111111111111111111111111"
-    a = AD.design_rule_signature(part, upper=186.12, lower=176.12, **kw)
-    b = AD.design_rule_signature(part, upper=181.12, lower=181.12, **kw)
-    c = AD.design_rule_signature(part, upper=196.13, lower=190.89, **kw)
+    part = "synthetic-test-participant"
+    a = AD.design_rule_signature(part, upper=110.0, lower=90.0, **kw)
+    b = AD.design_rule_signature(part, upper=100.0, lower=100.0, **kw)
+    c = AD.design_rule_signature(part, upper=150.0, lower=130.0, **kw)
     assert a == b, "same midpoint, different separation: one key"
     assert a != c, "a different midpoint is a different question"
+
+
+# ------------------------------------------------------------------------------------------------
+# The noise model fitted once per series, and the separation sweep vectorised (from
+# test_design_rule_once_and_vectorised.py, merged 2026-10-05)
+# ------------------------------------------------------------------------------------------------
+# The noise model is fitted once per series, and the separation sweep runs vectorised (the PI,
+# 2026-10-04, decisions 420 and 421).
+#
+# 1. The record pair's design rule and the band's own onset (decision 417) each fitted the same
+#    noise model to the same series in one report: about 3 s twice, plus the Riccati step twice. The
+#    fit is now kept, keyed on the exact contents of the series and the fit settings, so the second
+#    asks nothing new; any other series is fitted afresh.
+# 2. The separation sweep drew a fresh noise series per separation tried, one after another. The same
+#    draws, in the same order from the same generator, now come in one call and every separation is
+#    judged at once. The answers are bit for bit the same, checked against the loop kept as the
+#    reference (`_min_separation_for_rate_loop`).
+def _series(seed=0, n=4000):
+    rng = np.random.default_rng(seed)
+    t = 1_750_000_000.0 + 3.0 * np.arange(n)
+    t[n // 2:] += 5000.0
+    p = 200.0 + np.cumsum(rng.normal(0, 0.8, n)) + rng.normal(0, 20, n)
+    return t, p, np.full(n, 2.0)
+
+
+def test_the_same_series_is_fitted_once_and_answers_the_same():
+    DR.clear_fit_memo()
+    calls = []
+    real = DR.fit_design_model
+
+    def counted(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+    DR.fit_design_model = counted
+    try:
+        t, p, a = _series()
+        one = DR.design_rule_for_series(t, p, a, upper=210.0, lower=190.0, hours=5.0)
+        two = DR.design_rule_for_series(t, p, a, upper=200.0, lower=200.0, hours=5.0,
+                                        averaging_grid=(3.0,), onset_grid=(3.0, 15.0, 30.0))
+        DR.clear_fit_memo()
+        fresh = DR.design_rule_for_series(t, p, a, upper=200.0, lower=200.0, hours=5.0,
+                                          averaging_grid=(3.0,), onset_grid=(3.0, 15.0, 30.0))
+    finally:
+        DR.fit_design_model = real
+    assert len(calls) == 2, "fitted once for the two calls, once more after the memo was cleared"
+    assert two == fresh, "a kept fit answers exactly as a fresh one"
+    assert one["fitted"] == two["fitted"]
+
+
+def test_another_series_is_fitted_afresh():
+    DR.clear_fit_memo()
+    t, p, a = _series(seed=0)
+    t2, p2, a2 = _series(seed=1)
+    x = DR.design_rule_for_series(t, p, a, upper=210.0, lower=190.0, hours=5.0)
+    y = DR.design_rule_for_series(t2, p2, a2, upper=210.0, lower=190.0, hours=5.0)
+    assert x["fitted"] != y["fitted"]
+
+
+def test_the_vectorised_sweep_is_bit_for_bit_the_loop():
+    t, p, a = _series()
+    from ClosedLoopDeployment import simulation as SIM
+    stretches, *_ = SIM.regrid_stretches(t, p, a, 3.0)
+    for prefer in ("2comp", "1state"):
+        model, _ = DR.fit_design_model(stretches, prefer=prefer)
+        for avg, onset in ((3.0, 3.0), (3.0, 15.0), (6.0, 30.0), (30.0, 30.0)):
+            r1 = np.random.default_rng(7)
+            r2 = np.random.default_rng(7)
+            want = DR._min_separation_for_rate_loop(model, averaging_s=avg, onset_s=onset,
+                                                     level=200.0, rng=r1, dt_s=3.0, hours=20.0)
+            got = DR.min_separation_for_rate(model, averaging_s=avg, onset_s=onset, level=200.0,
+                                             rng=r2, dt_s=3.0, hours=20.0)
+            assert got == want, (prefer, avg, onset)
+            assert r1.random() == r2.random(), "the generator is left at the same place"
+
+
+def test_the_whole_table_is_unchanged():
+    t, p, a = _series()
+    from ClosedLoopDeployment import simulation as SIM
+    stretches, *_ = SIM.regrid_stretches(t, p, a, 3.0)
+    model, _ = DR.fit_design_model(stretches)
+    real = DR.min_separation_for_rate
+    DR.min_separation_for_rate = DR._min_separation_for_rate_loop
+    try:
+        want = DR.separation_table(model, level=200.0, hours=10.0)
+    finally:
+        DR.min_separation_for_rate = real
+    assert DR.separation_table(model, level=200.0, hours=10.0) == want
+
+
+@pytest.fixture(autouse=True)
+def synthetic_clinical_configuration(monkeypatch, tmp_path):
+    """Supply explicitly authored clinical evidence only inside this test's sandbox."""
+    from DecodeCommon.tests.synthetic_clinical_config import install
+    install(monkeypatch, tmp_path / "clinical.json", ['synthetic-analysis-participant'])

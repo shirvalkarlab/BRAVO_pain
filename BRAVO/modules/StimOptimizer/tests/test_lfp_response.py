@@ -1,8 +1,14 @@
-"""Tests for the LFP-responds-to-stimulation gate (manual p. 35 requirement)."""
+"""Tests for the LFP-responds-to-stimulation gate (manual p. 35 requirement).
+
+Merged here 2026-10-05: test_no_log_power_readiness.py (each under its own heading below).
+"""
 import numpy as np
 import pytest
 
 from StimOptimizer.routines import lfp_response as LR
+import inspect
+from StimOptimizer.routines import lfp_evidence as LE
+from StimOptimizer.routines import stage_gate as SG
 
 
 def _synth(n_per=40, suppression=True, effect=0.8, noise=0.25, seed=0, n_eras=3,
@@ -16,34 +22,21 @@ def _synth(n_per=40, suppression=True, effect=0.8, noise=0.25, seed=0, n_eras=3,
     """
     rng = np.random.default_rng(seed)
     amp = np.repeat([1.5, 3.5], n_per)
-    base = np.log(100.0)
-    sign = -1.0 if suppression else +1.0
-    logp = base + sign * effect * (amp - 1.5) / 2.0 + rng.normal(0, noise, amp.size)
+    # Band power in DEVICE UNITS (decision 202, 2026-09-19; a log-scale construction until then):
+    # 100 units at the low arm; a suppression DIVIDES the level by (1 + effect) at the high arm
+    # (effect=1.0 halves it), an elevation multiplies by the same -- monotone in current and never
+    # zero -- with a MULTIPLICATIVE scatter whose coefficient of variation is `noise`, drawn from a
+    # gamma distribution so power stays strictly positive without any logarithm.
+    factor = 1.0 + effect * (amp - 1.5) / 2.0
+    level = 100.0 / factor if suppression else 100.0 * factor
+    k = 1.0 / (noise ** 2)
+    p = level * rng.gamma(shape=k, scale=1.0 / k, size=amp.size)
     if era_collinear:
         era = np.repeat(np.arange(n_eras), int(np.ceil(amp.size / n_eras)))[:amp.size]
     else:
         era = np.tile(np.arange(n_eras), int(np.ceil(amp.size / n_eras)))[:amp.size]
     clus = np.arange(amp.size) // 4
-    return np.exp(logp), amp, era, clus
-
-
-def test_device_band_power_is_a_sum_of_squares_over_the_band():
-    """Not a mean, not a log. The device thresholds this quantity."""
-    freqs = np.array([8.0, 10.0, 12.0, 14.0, 30.0])
-    mag = np.array([[1.0, 2.0, 3.0, 4.0, 99.0]])
-    # band 10-14 Hz selects bins at 10, 12, 14 -> 4 + 9 + 16 = 29
-    got = LR.device_band_power(mag, freqs, center_hz=12.0, band_width_hz=4.0)
-    assert got.shape == (1,) and got[0] == pytest.approx(29.0)
-
-
-def test_band_power_refuses_a_band_with_no_bins_and_bad_shapes():
-    freqs = np.array([8.0, 10.0, 12.0])
-    with pytest.raises(ValueError, match="no frequency bins"):
-        LR.device_band_power(np.ones((2, 3)), freqs, center_hz=60.0, band_width_hz=2.0)
-    with pytest.raises(ValueError, match="must be 2-D"):
-        LR.device_band_power(np.ones(3), freqs, center_hz=10.0, band_width_hz=4.0)
-    with pytest.raises(ValueError, match="freqs has"):
-        LR.device_band_power(np.ones((2, 5)), freqs, center_hz=10.0, band_width_hz=4.0)
+    return p, amp, era, clus
 
 
 def test_a_suppressing_band_passes_for_a_suppression_mode():
@@ -52,7 +45,7 @@ def test_a_suppressing_band_passes_for_a_suppression_mode():
     assert r.responds is True and r.direction_ok is True
     assert r.power_high < r.power_low
     assert r.captures_inverted is False
-    assert r.slope_log_per_mA < 0 and r.slope_p < 0.05
+    assert r.slope_per_mA < 0 and r.slope_p < 0.05
     assert "RESPONDS" in r.describe()
 
 
@@ -92,15 +85,9 @@ def test_thin_capture_arms_are_not_assessed():
     """Many amplitude levels but none with enough rows must not be forced into a verdict."""
     rng = np.random.default_rng(1)
     a = np.repeat(np.arange(1.0, 6.0, 0.25), 3)          # 3 rows per level
-    p = np.exp(np.log(100.0) - 0.3 * a + rng.normal(0, 0.1, a.size))
+    p = 100.0 - 30.0 * a + rng.normal(0, 10.0, a.size)
     r = LR.assess_response(p, a)
     assert r.responds is None and "rows" in r.reason
-
-
-def test_derived_threshold_uses_the_device_formula_on_the_captures():
-    p, a, era, cl = _synth(suppression=True, effect=1.0)
-    r = LR.assess_response(p, a, era=era, cluster=cl)
-    assert r.derived_threshold == pytest.approx(0.75 * (r.power_high - r.power_low) + r.power_low)
 
 
 def test_era_blocking_is_applied_and_its_absence_is_disclosed():
@@ -119,7 +106,7 @@ def test_unadjusted_slope_is_reported_beside_the_adjusted_one():
     """So the size of the time confound is visible rather than asserted away."""
     p, a, era, cl = _synth(suppression=True, effect=1.0)
     r = LR.assess_response(p, a, era=era, cluster=cl)
-    assert np.isfinite(r.slope_unadjusted) and np.isfinite(r.slope_log_per_mA)
+    assert np.isfinite(r.slope_unadjusted) and np.isfinite(r.slope_per_mA)
 
 
 def test_missing_cluster_variable_is_disclosed_as_anticonservative():
@@ -153,16 +140,18 @@ def test_era_collinear_with_amplitude_destroys_the_estimate_not_silently():
     result nested" was false. Its assertion was also merely nested_p > crossed_p, which two numbers
     both indistinguishable from zero satisfy vacuously. Parameters are now chosen where the
     pathology genuinely bites, and the assertions state the outcome rather than an ordering:
-    at effect=0.20 with noise=1.0 the crossed fit gives p about 0.004 (significant) while the
-    nested fit gives p about 0.34 (null) on the same underlying effect.
+    at effect=0.20 with noise=0.6 the crossed fit gives p about 0.0035 (significant) while the
+    nested fit gives p about 0.42 (null) on the same underlying effect. (Those were noise=1.0,
+    0.004 and 0.34 while the fixture and the fit were on the log scale; re-measured on the raw
+    device scale when decision 202 moved both, 2026-09-19.)
 
     The capture contrast survives both, because it compares the two amplitude arms directly and
     never conditions on era. That is precisely why the module's verdict does not rest on the slope.
     """
-    crossed = LR.assess_response(*_synth(n_per=200, effect=0.20, noise=1.0)[:2],
-                                 era=_synth(n_per=200, effect=0.20, noise=1.0)[2],
-                                 cluster=_synth(n_per=200, effect=0.20, noise=1.0)[3])
-    p, a, era, cl = _synth(n_per=200, effect=0.20, noise=1.0, era_collinear=True)
+    crossed = LR.assess_response(*_synth(n_per=200, effect=0.20, noise=0.6)[:2],
+                                 era=_synth(n_per=200, effect=0.20, noise=0.6)[2],
+                                 cluster=_synth(n_per=200, effect=0.20, noise=0.6)[3])
+    p, a, era, cl = _synth(n_per=200, effect=0.20, noise=0.6, era_collinear=True)
     nested = LR.assess_response(p, a, era=era, cluster=cl)
 
     assert crossed.slope_p < 0.01, (
@@ -172,3 +161,61 @@ def test_era_collinear_with_amplitude_destroys_the_estimate_not_silently():
         f"(got {nested.slope_p:.3g})")
     # The capture contrast is unaffected: it does not condition on era.
     assert nested.direction_ok is True
+
+
+# ================================================================================================
+# From test_no_log_power_readiness.py (merged here 2026-10-05).
+# Decision 202 (the PI, 2026-09-19): log power is used in no calculation. The Stim Optimizer's
+# readiness screen -- "falls with current once the time confound is removed", the current half of
+# decision 199's one-band rule -- fitted its era-blocked slope on np.log(power). It now fits raw device
+# power, and the slope is in device units per mA, the units the device thresholds in.
+# ================================================================================================
+
+
+def _linear_fixture(slope_per_mA=-20.0, n_per=24, noise=4.0, seed=0):
+    """Two capture arms whose band power is a STRAIGHT LINE in current, in device units, with era
+    crossed with current so blocking leaves the effect identifiable."""
+    rng = np.random.default_rng(seed)
+    amp = np.repeat([1.5, 3.5], n_per)
+    p = 200.0 + slope_per_mA * (amp - 1.5) + rng.normal(0, noise, amp.size)
+    era = np.tile(np.arange(3), int(np.ceil(amp.size / 3)))[: amp.size]
+    clus = np.arange(amp.size) // 4
+    return p, amp, era, clus
+
+
+def test_the_era_blocked_slope_is_in_device_units_per_mA_not_log_units():
+    p, a, era, cl = _linear_fixture(slope_per_mA=-20.0)
+    r = LR.assess_response(p, a, era=era, cluster=cl, mode_requires="suppression")
+    assert r.responds is True
+    # A slope of -20 device units per mA. On log power the same data give about -0.11 per mA,
+    # so this bound separates the two beyond any doubt.
+    assert -26.0 < r.slope_per_mA < -14.0, r.slope_per_mA
+    assert r.slope_p < 0.05
+    assert r.slope_ci[0] < r.slope_per_mA < r.slope_ci[1]
+    assert "device units per mA" in r.describe()
+
+
+def test_the_result_carries_no_log_field_at_all():
+    p, a, era, cl = _linear_fixture()
+    r = LR.assess_response(p, a, era=era, cluster=cl)
+    for name in ("slope_log_per_mA", "separation_d_on_log"):
+        assert not hasattr(r, name), name
+    assert "logarithm" not in r.describe()
+
+
+def test_the_readiness_source_takes_no_logarithm_of_power():
+    src = inspect.getsource(LR)
+    for token in ("np.log(", "np.log10(", "np.log1p(", "math.log("):
+        assert token not in src, token
+
+
+def test_the_serialised_band_row_and_the_one_band_rule_read_the_device_unit_slope():
+    p, a, era, cl = _linear_fixture(slope_per_mA=-20.0)
+    r = LR.assess_response(p, a, era=era, cluster=cl)
+    row = SG.verdict_row(24.5, r)
+    assert "slope_per_mA" in row and row["slope_per_mA"] == pytest.approx(r.slope_per_mA)
+    assert "slope_log_per_mA" not in row and "separation_d_on_log" not in row
+    assert LE.band_era_negative_significant(r) is True
+    rising, *_ = _linear_fixture(slope_per_mA=+20.0)
+    r2 = LR.assess_response(rising, a, era=era, cluster=cl)
+    assert LE.band_era_negative_significant(r2) is False

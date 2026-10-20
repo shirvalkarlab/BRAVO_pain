@@ -33,6 +33,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import os
+import re
 import tempfile
 
 #: The template workbook's "Stim Testing" tab, read directly with openpyxl on 2026-09-14
@@ -47,10 +48,8 @@ CLEAR_MAX_ROW = 2000
 
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Participant-specific provenance and examples are maintained outside source control.
-TEMPLATE_PATH = os.path.normpath(os.path.join(
-    _MODULE_DIR, "..", "..", "_pro_dump", "clinic_sheets", "RCS08",
-    "_Template_RCS08 Stage 2 - _Month_ 2025 Clinic Testing _MM___DD___YY_.xlsx"))
+#: Optional private workbook path; callers may also pass template_path explicitly.
+TEMPLATE_PATH = os.environ.get("BRAVO_CLINIC_SHEET_TEMPLATE", "")
 
 
 def _parse_date(visit_date):
@@ -64,8 +63,29 @@ def _parse_date(visit_date):
     return _dt.datetime.strptime(s, "%Y-%m-%d").date()
 
 
-def sheet_name_for(visit_date, participant_code="RCS08") -> str:
-    """Generic implementation; participant-specific examples are kept outside source control."""
+#: A study code: letters and digits together, no spaces, 2 to 16 characters (the page's own rule,
+#: `Client/src/views/Reports/paper/studyCode.js`, `CODE_SHAPE`).
+_CODE_SHAPE = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_-]{2,16}$")
+_LONG_ID = re.compile(r"^[0-9a-fA-F]{32}$")
+
+
+def participant_label(name, participant_uid=None) -> str:
+    """The name a visit sheet carries for its participant: the record's name only when it has the
+    shape of a study code ("STUDY01"), never a person's name and never the long id; otherwise a
+    neutral "participant <first 8 characters of the id>" (or "participant" with no id).
+
+    Why (2026-09-26): a participant ingested without automatic de-identification has the device's
+    patient first and last name as its record name, and the sheet is written into the lab's Drive
+    or downloaded under this name."""
+    s = str(name or "").strip()
+    uid = str(participant_uid or "").strip()
+    if _CODE_SHAPE.match(s) and not _LONG_ID.match(s) and (not uid or s.lower() != uid.lower()):
+        return s
+    return f"participant {uid[:8]}" if uid else "participant"
+
+
+def sheet_name_for(visit_date, participant_code="participant") -> str:
+    """Use the supplied study label and visit date; never assume a participant identity."""
     d = _parse_date(visit_date)
     return (f"{participant_code} Stage 2 - {d.strftime('%B')} {d.year} In-Clinic Testing "
             f"{d.strftime('%m_%d_%y')}")
@@ -135,7 +155,8 @@ def fill_workbook(template_path, sheet_rows, sheet_columns, visit_date, out_path
     return {"tab": tab, "row_start": data_start_row, "row_end": row - 1, "n_rows": len(sheet_rows)}
 
 
-def export(plan, participant_code, visit_date, *, drive=None, template_path=None) -> dict:
+def export(plan, participant_code, visit_date, *, drive=None, template_path=None,
+           participant_uid=None) -> dict:
     """Build the visit's clinic sheet from `plan["sheet_rows"]` / `plan["sheet_columns"]`
     (`titration_plan.plan_for_sides`'s own fields).
 
@@ -156,7 +177,8 @@ def export(plan, participant_code, visit_date, *, drive=None, template_path=None
     if not sheet_rows or not sheet_columns:
         return {"mode": "error", "reason": "the titration plan has no clinic-sheet rows to export"}
 
-    name = sheet_name_for(visit_date, participant_code)
+    # Named by a study code only, never a person's name (`participant_label`, 2026-09-26).
+    name = sheet_name_for(visit_date, participant_label(participant_code, participant_uid))
 
     if drive is not None:
         from . import google_sheets_client as gsc
@@ -181,9 +203,9 @@ def export(plan, participant_code, visit_date, *, drive=None, template_path=None
                 "n_rows": len(sheet_rows), "overwrote": overwrote}
 
     tmpl = template_path or TEMPLATE_PATH
-    if not os.path.isfile(tmpl):
+    if not tmpl or not os.path.isfile(tmpl):
         return {"mode": "error",
-                "reason": f"the clinic-sheet template is not on this server at {tmpl}"}
+                "reason": "configure BRAVO_CLINIC_SHEET_TEMPLATE or supply an existing private template_path"}
 
     from . import google_sheets_client as gsc
 

@@ -1,0 +1,30 @@
+{
+  "role": "target",
+  "hostname": "TARGET_HOSTNAME",
+  "lock": "/run/lock/bravo-aditya-data.lock",
+  "maintenance_marker": "/var/lib/bravo-aditya/maintenance-backup.json",
+  "env_file": "/etc/bravo-aditya/app.env",
+  "compose_file": "/opt/bravo-aditya/setup/app.compose.yml",
+  "image": "bravo-aditya-backend:REVIEWED_APP_REVISION",
+  "target_config": {
+    "source_participant_uid": "SOURCE_PARTICIPANT_UID",
+    "target_participant_uid": "TARGET_PARTICIPANT_UID",
+    "target_institute_uid": "TARGET_INSTITUTE_UID",
+    "participant_name": "PARTICIPANT_NAME",
+    "database_name": "bravo_aditya",
+    "database_user": "bravo_aditya",
+    "raw_root": "/data/bravo/raws",
+    "batches": "/run/bravo-private/daily-batches",
+    "receipts": "/data/bravo/daily-import-receipts",
+    "runtime_revision": "REVIEWED_APP_REVISION",
+    "clinic": {
+      "snapshots": "/run/bravo-private/clinic-sheets",
+      "receipts": "/data/bravo/daily-clinic-receipts"
+    },
+    "providers": {
+      "receipts": "/data/bravo/daily-provider-receipts",
+      "redcap_enabled": false,
+      "oura_enabled": false
+    }
+  }
+}

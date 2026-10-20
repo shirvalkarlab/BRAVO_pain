@@ -1,0 +1,286 @@
+/** Synthetic UI contract regression. No live participant response or empirical validation. */
+// Imported here rather than through a `src/setupTests.js`, because this repository has no such file
+// and adding one would change the test configuration for every suite in the application.
+import "@testing-library/jest-dom";
+import { render as rtlRender, screen, fireEvent } from "@testing-library/react";
+import { ThemeProvider } from "@mui/material/styles";
+
+import theme from "assets/theme";
+import { PlatformContextProvider } from "context";
+
+import PAL from "./palette";
+import DeviceRuleLedger from "./DeviceRuleLedger";
+import EvidenceTrianglePanel from "./EvidenceTrianglePanel";
+import ParameterTable, { ParameterDetails } from "./PrescriptionPanel";
+import WhatWouldChangeThis from "./WhatWouldChangeThis";
+import payload from "./__fixtures__/synthetic_blocked_rules.json";
+
+
+// `initialStates` is the reducer's whole initial value in this application — the provider supplies
+// no default — so it has to be passed or every MDTypography destructures `darkMode` off undefined.
+// Only the key these panels reach is set.
+const wrap = (ui) => (
+  <ThemeProvider theme={theme}>
+    <PlatformContextProvider initialStates={{ darkMode: false }}>
+      {ui}
+    </PlatformContextProvider>
+  </ThemeProvider>
+);
+
+function render(ui) {
+  const utils = rtlRender(wrap(ui));
+  // The rerender that Testing Library hands back replaces the WHOLE tree, so calling it with a bare
+  // panel would drop the two providers and fail inside the component library. Re-wrapping keeps a
+  // rerender equivalent to a prop change on a mounted page.
+  return { ...utils, rerender: (next) => utils.rerender(wrap(next)) };
+}
+
+const report = { data: payload, loading: false, err: null };
+const empty = { data: null, loading: false, err: null };
+
+// The table and its details, as the decision card draws them (decision 302: "Full parameter
+// recommendation" is no longer a card of its own). The pins below were updated on purpose to the
+// new words; every safeguard they check is the same one.
+function PrescriptionPanel({ report: r, mode, onMode }) {
+  return (<><ParameterTable report={r} mode={mode} onMode={onMode} /><ParameterDetails report={r} mode={mode} /></>);
+}
+
+describe("the saved payload is the state these panels were built for", () => {
+  it("still carries the shape the assertions below depend on", () => {
+    expect(payload.available).toBe(true);
+    expect(payload.verdict).toBe("blocked");
+    expect(payload.verdict_detail.device_eligible).toBe(false);
+    expect(payload.verdict_detail.all_edges_resolved).toBe(true);
+    expect(payload.coherence.coherent).toBe(false);
+    expect(payload.prescriptions.modes.dual.fields).toHaveLength(16);
+    expect(payload.prescriptions.modes.single.fields).toHaveLength(14);
+    expect(payload.prescriptions.modes.single_inverse.fields).toHaveLength(0);
+  });
+});
+
+describe("the prescription panel withholds every value while the device refuses", () => {
+  it("prints no parameter value and offers a planning view instead", () => {
+    render(<PrescriptionPanel report={report} mode={null} onMode={() => {}} />);
+
+    expect(screen.getByText(/16 values withheld/)).toBeInTheDocument();
+    // The two transition durations are the largest transcription hazard in the table, so they are
+    // the values checked for absence. Neither the raw milliseconds nor the minutes-and-seconds
+    // gloss may be on screen while the values are withheld.
+    expect(screen.queryByText(/90\u2009000/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/1 min 30 s/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/4000/)).not.toBeInTheDocument();
+    // No read-back checkbox exists at all while the table is withheld.
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+  });
+
+  it("watermarks the planning view and leaves every read-back box disabled", () => {
+    render(<PrescriptionPanel report={report} mode={null} onMode={() => {}} />);
+    fireEvent.click(screen.getByText(/Show the values for planning/));
+
+    // The banner and the diagonal watermark both say it.
+    expect(screen.getAllByText(/PLANNING ONLY/).length).toBe(2);
+    expect(screen.getByText(/do not program these/)).toBeInTheDocument();
+
+    const boxes = screen.getAllByRole("checkbox");
+    expect(boxes).toHaveLength(16);
+    expect(boxes.filter((b) => !b.disabled)).toHaveLength(0);
+  });
+
+  it("renders the minutes-and-seconds gloss beneath the value once the planning view is open", () => {
+    render(<PrescriptionPanel report={report} mode={null} onMode={() => {}} />);
+    fireEvent.click(screen.getByText(/Show the values for planning/));
+
+    // Both durations arrive as milliseconds and the programmer displays minutes and seconds, so the
+    // gloss is the safeguard against a two-order-of-magnitude entry error.
+    expect(screen.getByText("enter as 1 min 30 s")).toBeInTheDocument();
+    expect(screen.getByText("enter as 3 min 00 s")).toBeInTheDocument();
+    // Testing Library normalises the DOM text before comparing but does NOT normalise the string
+    // passed to the matcher, and this value is rendered with a thin space as its thousands
+    // separator, so the query has to use the ordinary space that normalisation produces. The thin
+    // space is deliberate in the component: a comma is a decimal separator in much of the world and
+    // could be transcribed as one.
+    expect(screen.getByText("90 000")).toBeInTheDocument();
+  });
+
+  it("leaves the Paused amplitude value blank, because that row's value is null on purpose", () => {
+    render(<PrescriptionPanel report={report} mode={null} onMode={() => {}} />);
+    fireEvent.click(screen.getByText(/Show the values for planning/));
+
+    expect(screen.getByText("Paused amplitude")).toBeInTheDocument();
+    expect(screen.getByText("to be chosen")).toBeInTheDocument();
+    // The device fact sheet carries 2.5 mA for this participant's paused amplitude. It must not be
+    // offered as a suggestion in a value column, because any number there gets typed.
+    expect(screen.queryByText("2.50")).not.toBeInTheDocument();
+  });
+
+  it("carries the two interacting fields, both values and the arithmetic, once the device allows them", () => {
+    // Since decision 302 the details sit in the decision card's Details fold and, like the table,
+    // withhold what quotes a value while the device refuses: on this refused fixture they print no
+    // coupling, and on the same fixture made permitted they print it whole.
+    render(<PrescriptionPanel report={report} mode={null} onMode={() => {}} />);
+    expect(screen.queryByText(/Upper onset duration = 2000 ms/)).not.toBeInTheDocument();
+    const allowed = JSON.parse(JSON.stringify(payload));
+    allowed.verdict_detail.device_eligible = true;
+    render(<PrescriptionPanel report={{ data: allowed }} mode={null} onMode={() => {}} />);
+    expect(screen.getByText(/Upper onset duration = 2000 ms, Averaging duration = 4000 ms; ceil\(2000 \/ 4000\) = 1 controller step/)).toBeInTheDocument();
+    expect(screen.getByText(/Not established by any supplied document/)).toBeInTheDocument();
+  });
+
+  it("re-renders a different field set per mode rather than swapping numbers", () => {
+    const { rerender } = render(
+      <PrescriptionPanel report={report} mode="dual" onMode={() => {}} />,
+    );
+    fireEvent.click(screen.getByText(/Show the values for planning/));
+    expect(screen.getByText(/Dual Threshold: 16 fields/)).toBeInTheDocument();
+    expect(screen.getByText("Upper onset duration")).toBeInTheDocument();
+
+    rerender(<PrescriptionPanel report={report} mode="single" onMode={() => {}} />);
+    // The planning view closes on a mode change, so its fourteen new values are withheld again
+    // until the reader opens it deliberately for this mode.
+    expect(screen.getByText(/14 values withheld/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Show the values for planning/));
+    expect(screen.getByText(/Single Threshold: 14 fields/)).toBeInTheDocument();
+    // The upper onset is a Dual Threshold field; in Single Threshold it must appear struck through
+    // under the not-applicable heading rather than as a live row, and never simply be omitted.
+    expect(screen.getByText(/Not in Single Threshold: /)).toBeInTheDocument();
+    expect(screen.getByText("Upper onset duration (ms)")).toBeInTheDocument();
+  });
+
+  it("presents Single Threshold Inverse as unprogrammable rather than as an empty table", () => {
+    render(<PrescriptionPanel report={report} mode="single_inverse" onMode={() => {}} />);
+
+    expect(screen.getByText(/cannot drive therapy/)).toBeInTheDocument();
+    // Matched once and only once: the note is the whole content of this branch, and rendering it
+    // again lower down the card would read as two separate findings about the mode.
+    expect(screen.getAllByText(/cannot drive therapy \(D18\)/)).toHaveLength(1);
+    expect(screen.queryByText(/values withheld/)).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+  });
+
+  it("keeps the module's recommendation visible while a non-recommended mode is selected", () => {
+    render(<PrescriptionPanel report={report} mode="single" onMode={() => {}} />);
+
+    expect(screen.getByText(/Threshold mode: Dual Threshold recommended/)).toBeInTheDocument();
+    expect(screen.getByText(/chronic pain varies over hours to days/)).toBeInTheDocument();
+    expect(screen.getByText(/which is not the recommended mode/)).toBeInTheDocument();
+  });
+});
+
+describe("the evidence panel separates the two coherence questions", () => {
+  it("says the edges agree with each other AND do not match the control law", () => {
+    render(<EvidenceTrianglePanel report={report} />);
+
+    // Plain names since the redesign of 2026-09-26 ("E1" is "Current → band power", "E2" is "Band
+    // power → pain", "control law" is what the selected mode needs); the finding is the same.
+    expect(screen.getByText(/Combining current → band power with band power → pain reproduces/))
+      .toBeInTheDocument();
+    expect(screen.getByText(/Current → band power and Band power → pain have the opposite sign to the one the selected mode needs/))
+      .toBeInTheDocument();
+    expect(screen.getByText(/they are in conflict with what the device would do with them/))
+      .toBeInTheDocument();
+  });
+
+  // The cells were renamed on 2026-09-11 at the PI's request (COHERENT / NOT COHERENT became
+  // SIGNS AGREE / SIGNS DISAGREE, `stateTracks.js`), and this test kept the old words and failed
+  // from then until 2026-09-23. It also only ever checked that the words were drawn, not which cell
+  // was lit; only the lit cell prints its explanation, so that is now checked too.
+  // Sentence case since the redesign of 2026-09-26 (SIGNS DISAGREE became "Signs disagree").
+  it("lights the 'Signs disagree' cell and still draws the other two", () => {
+    render(<EvidenceTrianglePanel report={report} />);
+    expect(screen.getByText("Signs disagree")).toBeInTheDocument();
+    expect(screen.getByText("Signs agree")).toBeInTheDocument();
+    expect(screen.getByText("Not established")).toBeInTheDocument();
+    // The lit cell is marked in the DOM (decision 302 dropped its explanation sentence, which the
+    // two answers under the table already say); the other two are drawn and unlit.
+    expect(screen.getByText("Signs disagree").closest("[data-lit]").getAttribute("data-lit")).toBe("true");
+    expect(screen.getByText("Signs agree").closest("[data-lit]").getAttribute("data-lit")).toBe("false");
+    expect(screen.queryByText(/^The three edge signs match the pattern/)).toBeNull();
+  });
+
+  it("prints each edge's own estimator sentence and no cluster-count asterisk", () => {
+    const { container } = render(<EvidenceTrianglePanel report={report} />);
+    expect(screen.getAllByText(/cluster-robust/).length).toBeGreaterThanOrEqual(3);
+    expect(container.textContent).not.toMatch(/resolved\*/);
+  });
+});
+
+describe("the rule ledger keeps the nine outcome kinds apart", () => {
+  it("renders all four advisory kinds and pins the recorded values", () => {
+    render(<DeviceRuleLedger report={report} />);
+
+    // The bucket headings are sentence case and plain since the redesign of 2026-09-26
+    // (VIOLATED -> Refuses, CANNOT BE EVALUATED -> Could not check, DEFERRED -> Counted under
+    // another rule, ADVISORY -> Recommended, not required); the counts they state are the same.
+    expect(screen.getByText(/Refuses \u00B7 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Could not check \u00B7 4/)).toBeInTheDocument();
+    expect(screen.getByText(/Counted under another rule \u00B7 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Recommended, not required: not met \u00B7 1/)).toBeInTheDocument();
+    // Both pinned values must be visible: the previous filter discarded them, and one of them
+    // records the programming mode in force, which is what makes the workflow reachable at all.
+    expect(screen.getByText(/Allowed, and shown because the value matters \u00B7 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Recommended, not required: could not be checked \u00B7 2/)).toBeInTheDocument();
+    expect(screen.getByText(/Recommended, not required: no automatic check exists \u00B7 3/)).toBeInTheDocument();
+  });
+
+  it("prints the three counts in the open: refuses, could not check, allowed (SPEC 2026-09-26 section 5.2)", () => {
+    render(<DeviceRuleLedger report={report} />);
+    const counts = screen.getByTestId("rule-counts").textContent;
+    expect(counts).toMatch(/Refuses \(1\)/);
+    expect(counts).toMatch(/Could not check \(4\)/);
+    expect(counts).toMatch(/Allowed \(\d+\)/);
+  });
+
+  it("names a different actor for the clinician's rules and the data-wiring rules", () => {
+    render(<DeviceRuleLedger report={report} />);
+
+    // D31 is the only one of the four a clinician can clear where they are standing; D29, D30 and
+    // D32 are unevaluable because their inputs were never routed into the module.
+    expect(screen.getAllByText("Clinician, at the A610")).toHaveLength(1);
+    expect(screen.getAllByText("Analysis — the inputs are not wired up")).toHaveLength(3);
+  });
+});
+
+describe("the what-would-change band ranks the outstanding work and names its owner", () => {
+  it("puts the violated rule first and separates device work from analysis work", () => {
+    const { container } = render(<WhatWouldChangeThis report={report} />);
+
+    expect(container.textContent).toMatch(/D19 is violated/);
+    // The count line's wording moved ("1 of them can be resolved at the programmer ... 3 cannot be
+    // resolved there at all" became the line below); the counts it states are the same.
+    expect(container.textContent).toMatch(/1 resolvable at the programmer/);
+    expect(container.textContent).toMatch(/3 need a change to the analysis/);
+    // The coherence row must name band selection rather than more measurement, because on this
+    // payload the three edges agree with each other.
+    // Sentence case since the redesign of 2026-09-26 (it was capitals).
+    expect(container.textContent)
+      .toMatch(/Band selection — not more measurement/);
+  });
+});
+
+describe("every panel survives an absent report rather than throwing", () => {
+  it("renders a withholding or not-evaluated state for each one", () => {
+    [DeviceRuleLedger, EvidenceTrianglePanel, WhatWouldChangeThis]
+      .forEach((Panel) => {
+        const { container, unmount } = render(<Panel report={empty} />);
+        expect(container.textContent.length).toBeGreaterThan(0);
+        unmount();
+      });
+    const { container } = render(
+      <PrescriptionPanel report={empty} mode={null} onMode={() => {}} />,
+    );
+    expect(container.textContent).toMatch(/No parameter table has been computed/);
+  });
+});
+
+describe("the palette keeps its semantic roles distinct", () => {
+  it("never pairs the pass role against a red fail role by hue alone", () => {
+    // The minimalist redesign (SPEC 2026-09-26 section 2.3): a pass is drawn in the near-black ink
+    // with ✓ and a refusal in red with ✕, so the two differ by lightness and by glyph, never by hue
+    // alone; there is no green in page text. A rule counted under another rule is grey, not a third
+    // hue that could be read as a failure.
+    expect(PAL.pass).toBe("#1A1A1A");
+    expect(PAL.fail).toBe("#B42318");
+    expect(PAL.deferred).toBe("#5E5E5E");
+    expect(PAL.pass).not.toBe(PAL.fail);
+  });
+});

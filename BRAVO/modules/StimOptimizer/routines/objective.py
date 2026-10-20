@@ -90,12 +90,6 @@ NATIVE_SCALE = {
 }
 
 
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
 def scale_factor(col: str) -> float:
     """Multiplier putting ``col`` on the common 0-10 reference. Unknown columns are assumed to be
     already on that scale, which is the safe default for a hand-built frame."""
@@ -204,8 +198,8 @@ DEFAULTS = dict(
     washin_h=60.0 / 3600.0,   # 60 s: PI reports a rapid responder; see OBJECTIVE_SPEC amendments
     c_dur=0.25,        # variance inflation scale for short exposures
     # `c_age` (0.25 x years², "the interim stand-in for nonstationarity") was removed on
-    # 2026-09-17, decision 194. The current joint model uses rate and both currents;
-    # it has neither an observation-age penalty nor a fitted time input.
+    # 2026-09-17, decision 194: a hold-out fit found it inert at every weight from 0 to 16x, and
+    # drift is now a fitted TIME INPUT to the objective model (stage1_openloop) instead.
     dur_ref_h=168.0,   # one week: exposures shorter than this have not reached steady state
     min_var=1e-3,      # numerical floor on observation variance
 )
@@ -296,11 +290,10 @@ def observation_variance(n, sd, dur_h, *, pooled_var, cfg=None) -> np.ndarray:
 
         sigma^2 = s^2/n + c_dur * max(0, 1 - dur/dur_ref)^2
 
-    The age term this once carried is gone (decision 194). The current joint model does not
-    fit observation age as an input. These weights describe precision and duration, not
-    adjustment for temporal confounding.
+    The age term this once carried is gone (decision 194); observation age enters the model as
+    a fitted time input, not as a variance penalty.
 
-    For example, a 155-report,
+    This is the whole mechanism by which "use all the data" is made safe: a 155-report,
     85-day epoch and a 1-report, 26-hour epoch both enter the fit, weighted by how much
     they can actually support.
     """
@@ -328,8 +321,7 @@ def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
         Epoch id of the current chronic setting. J_pain is referenced to its mean, so
         J = 0 at the incumbent by construction and negative means better than status quo.
     reference_time
-        Timestamp for the descriptive ``age_days`` column; defaults to the latest ``t0``.
-        Observation age does not change the variance or enter the joint model.
+        Timestamp against which observation age is measured; defaults to the latest ``t0``.
     pooled_var_override
         ``None`` (the default) means the pooled within-epoch variance is estimated from
         ``epoch_stats`` itself via ``pooled_within_epoch_var``, exactly as before this
@@ -376,7 +368,7 @@ def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
         # surface" -- a reason that says the record has no usable epochs when it has plenty and
         # the incumbent simply was not rated on this item. Name the actual cause.
         raise ValueError(
-            f"incumbent epoch {incumbent_epoch!r} has no finite {item} rating, so J cannot be "
+            f"the incumbent epoch {incumbent_epoch!r} carries no {item} rating, so J cannot be "
             "referenced to it; every other epoch's rating is unusable until the setting in force "
             f"has at least one {item} report")
 
@@ -413,6 +405,3 @@ def build_objective(epoch_stats: pd.DataFrame, *, incumbent_epoch, cfg=None,
     d["pooled_within_var_overridden"] = pooled_var_override is not None
     d["obs_var"] = observation_variance(d["n"], d[sd_col], d["dur_h"], pooled_var=pooled, cfg=cfg)
     return d
-
-
-# Retained active Aditya interfaces.

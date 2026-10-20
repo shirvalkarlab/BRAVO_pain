@@ -1,0 +1,390 @@
+{
+  "_fixture_provenance": {
+    "kind": "independently-authored-synthetic",
+    "purpose": "Frontend display-contract testing only; not measured participant data or scientific validation."
+  },
+  "available": true,
+  "sides": {
+    "Left": {
+      "side": "Left",
+      "rate_hz": 55,
+      "pulse_width_us": 60,
+      "ceiling_mA": 4.5,
+      "held_other_side": {
+        "current_mA": 2.5,
+        "above_ceiling": false
+      },
+      "ladder": {
+        "compact": "0 \u2192 0.5 \u2192 1.0 \u2192 0.5 \u2192 0 mA",
+        "steps_mA": [
+          0,
+          0.5,
+          1,
+          0.5,
+          0
+        ],
+        "n_steps": 5,
+        "n_distinct_currents": 3
+      },
+      "bands": {
+        "centres_hz": [
+          10.5,
+          20.5,
+          27.5
+        ],
+        "avoid_hz": [
+          27.5
+        ],
+        "avoid_reasons": {
+          "27.5": "synthetic harmonic warning"
+        },
+        "n_clear": 2,
+        "n_avoid": 1,
+        "harmonics_hz": {
+          "half_rate": 27.5
+        },
+        "guard_hz": 2.5,
+        "half_width_hz": 2.5
+      },
+      "hold": {
+        "seconds": 60
+      },
+      "sensing_contact": {
+        "display_short": "L 1\u207b3\u207a",
+        "rate_hz": 55,
+        "n_qualifying": 0,
+        "n_bands": 3
+      },
+      "conditions": [
+        "Record a rating at each step."
+      ],
+      "yield": {
+        "record_today": {
+          "note": "Synthetic example: two rated steps."
+        },
+        "sentence": "Synthetic example session."
+      }
+    },
+    "Right": {
+      "side": "Right",
+      "rate_hz": 55,
+      "pulse_width_us": 160,
+      "ceiling_mA": 4.5,
+      "held_other_side": {
+        "current_mA": 3,
+        "above_ceiling": false
+      },
+      "ladder": {
+        "compact": "0 \u2192 0.5 \u2192 1.0 \u2192 0.5 \u2192 0 mA",
+        "steps_mA": [
+          0,
+          0.5,
+          1,
+          0.5,
+          0
+        ],
+        "n_steps": 5,
+        "n_distinct_currents": 3
+      },
+      "bands": {
+        "centres_hz": [
+          10.5,
+          20.5,
+          27.5
+        ],
+        "avoid_hz": [
+          27.5
+        ],
+        "avoid_reasons": {
+          "27.5": "synthetic harmonic warning"
+        },
+        "n_clear": 2,
+        "n_avoid": 1,
+        "harmonics_hz": {
+          "half_rate": 27.5
+        },
+        "guard_hz": 2.5,
+        "half_width_hz": 2.5
+      },
+      "hold": {
+        "seconds": 60
+      },
+      "sensing_contact": {
+        "display_short": "R 1\u207b3\u207a",
+        "rate_hz": 55,
+        "n_qualifying": 0,
+        "n_bands": 3
+      },
+      "conditions": [
+        "Record a rating at each step."
+      ],
+      "yield": {
+        "record_today": {
+          "note": "Synthetic example: two rated steps."
+        },
+        "sentence": "Synthetic example session."
+      }
+    }
+  },
+  "step_timing": {
+    "ramp_s": 30,
+    "test_s": 60,
+    "total_s": 90
+  },
+  "session_time": {
+    "total_minutes": 18
+  },
+  "sheet_columns": [
+    "Contacts",
+    "Amp (mA)",
+    "Rate (Hz)",
+    "Notes"
+  ],
+  "sheet_rows": [
+    {
+      "block": "left_ladder",
+      "row_kind": "ramp",
+      "step": 1,
+      "Contacts": "left",
+      "Amp (mA)": 0,
+      "Rate (Hz)": 55
+    },
+    {
+      "block": "left_ladder",
+      "row_kind": "ramp",
+      "step": 2,
+      "Contacts": "left",
+      "Amp (mA)": 0.5,
+      "Rate (Hz)": 55
+    },
+    {
+      "block": "left_ladder",
+      "row_kind": "ramp",
+      "step": 3,
+      "Contacts": "left",
+      "Amp (mA)": 1,
+      "Rate (Hz)": 55
+    },
+    {
+      "block": "left_ladder",
+      "row_kind": "ramp",
+      "step": 4,
+      "Contacts": "left",
+      "Amp (mA)": 0.5,
+      "Rate (Hz)": 55
+    },
+    {
+      "block": "left_ladder",
+      "row_kind": "ramp",
+      "step": 5,
+      "Contacts": "left",
+      "Amp (mA)": 0,
+      "Rate (Hz)": 55
+    },
+    {
+      "block": "right_ladder",
+      "row_kind": "ramp",
+      "step": 1,
+      "Contacts": "right",
+      "Amp (mA)": 0,
+      "Rate (Hz)": 55
+    },
+    {
+      "block": "right_ladder",
+      "row_kind": "ramp",
+      "step": 2,
+      "Contacts": "right",
+      "Amp (mA)": 0.5,
+      "Rate (Hz)": 55
+    },
+    {
+      "block": "right_ladder",
+      "row_kind": "ramp",
+      "step": 3,
+      "Contacts": "right",
+      "Amp (mA)": 1,
+      "Rate (Hz)": 55
+    },
+    {
+      "block": "right_ladder",
+      "row_kind": "ramp",
+      "step": 4,
+      "Contacts": "right",
+      "Amp (mA)": 0.5,
+      "Rate (Hz)": 55
+    },
+    {
+      "block": "right_ladder",
+      "row_kind": "ramp",
+      "step": 5,
+      "Contacts": "right",
+      "Amp (mA)": 0,
+      "Rate (Hz)": 55
+    },
+    {
+      "block": "exploratory_left",
+      "row_kind": "ramp",
+      "step": 1,
+      "Contacts": "L C+1-2- / R C+1-2-",
+      "Notes": ""
+    },
+    {
+      "block": "exploratory_left",
+      "row_kind": "test",
+      "step": 1,
+      "Contacts": "L C+1-2- / R C+1-2-",
+      "Notes": ""
+    },
+    {
+      "block": "exploratory_left",
+      "row_kind": "ramp",
+      "step": 2,
+      "Contacts": "L C+1-2- / R C+1-2-",
+      "Notes": ""
+    },
+    {
+      "block": "exploratory_left",
+      "row_kind": "test",
+      "step": 2,
+      "Contacts": "L C+1-2- / R C+1-2-",
+      "Notes": ""
+    },
+    {
+      "block": "exploratory_left",
+      "row_kind": "ramp",
+      "step": 3,
+      "Contacts": "L C+1-2- / R C+1-2-",
+      "Notes": ""
+    },
+    {
+      "block": "exploratory_left",
+      "row_kind": "test",
+      "step": 3,
+      "Contacts": "L C+1-2- / R C+1-2-",
+      "Notes": ""
+    },
+    {
+      "block": "exploratory_left",
+      "row_kind": "ramp",
+      "step": 4,
+      "Contacts": "L C+1-2- / R C+1-2-",
+      "Notes": ""
+    },
+    {
+      "block": "exploratory_left",
+      "row_kind": "test",
+      "step": 4,
+      "Contacts": "L C+1-2- / R C+1-2-",
+      "Notes": ""
+    },
+    {
+      "block": "exploratory_left",
+      "row_kind": "ramp",
+      "step": 5,
+      "Contacts": "L C+1-2- / R C+1-2-",
+      "Notes": ""
+    },
+    {
+      "block": "exploratory_left",
+      "row_kind": "test",
+      "step": 5,
+      "Contacts": "L C+1-2- / R C+1-2-",
+      "Notes": ""
+    },
+    {
+      "block": "exploratory_left",
+      "row_kind": "hold",
+      "step": 1,
+      "Contacts": "L C+1-2- / R C+1-2-",
+      "Notes": "hold 1 of 3, stimulation off"
+    },
+    {
+      "block": "exploratory_left",
+      "row_kind": "hold",
+      "step": 2,
+      "Contacts": "L C+1-2- / R C+1-2-",
+      "Notes": "hold 2 of 3, stimulation on"
+    },
+    {
+      "block": "exploratory_left",
+      "row_kind": "hold",
+      "step": 3,
+      "Contacts": "L C+1-2- / R C+1-2-",
+      "Notes": "hold 3 of 3, stimulation off"
+    }
+  ],
+  "proposed": {
+    "Left": {
+      "side": "Left",
+      "stimulation": {
+        "contacts_short": "L C+1-2-",
+        "differs_from_in_force": true,
+        "in_force_rings": [
+          2
+        ]
+      },
+      "sensing_pair": {
+        "display_short": "L 0\u207b3\u207a",
+        "why": "contacts it flanks (1, 2) stimulate together"
+      },
+      "contact": {
+        "n_qualifying": 2,
+        "n_bands": 3,
+        "rate_hz": 125,
+        "n_responding": 0
+      },
+      "rate_hz": 125,
+      "rate_in_force_hz": 55,
+      "pulse_width_us": 60,
+      "ceiling_mA": 1,
+      "bands": {
+        "watch_hz": [
+          10.5,
+          20.5
+        ]
+      },
+      "first_exposure": {
+        "ever_powered": false,
+        "sentence": "Synthetic example at 0.0 mA only: the full rings have never carried current; L C+1a-2a- at 0.5 mA for 12 h.",
+        "stop_rule": "Stop at a side-effect score of 2 or more."
+      },
+      "purpose": "Two answers from one visit: sensing response and acute pain.",
+      "ladder": {
+        "compact": "0 \u2192 0.5 \u2192 1.0 \u2192 0.5 \u2192 0 mA",
+        "steps_mA": [
+          0,
+          0.5,
+          1,
+          0.5,
+          0
+        ],
+        "n_steps": 5,
+        "n_distinct_currents": 3
+      },
+      "acute_pain_holds": {
+        "holds": [
+          {
+            "state": "off",
+            "current_mA": 0
+          },
+          {
+            "state": "on",
+            "current_mA": 1
+          },
+          {
+            "state": "off",
+            "current_mA": 0
+          }
+        ],
+        "minutes_each": 3,
+        "rating_every_minutes": 1
+      },
+      "held_other_side": {
+        "current_mA": 2.5
+      },
+      "session_time": {
+        "total_minutes": 21
+      }
+    }
+  }
+}

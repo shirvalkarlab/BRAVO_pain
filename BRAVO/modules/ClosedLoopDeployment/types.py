@@ -12,14 +12,6 @@ from typing import Any
 # --------------------------------------------------------------------------------------------
 # Device eligibility (Phase 1)
 # --------------------------------------------------------------------------------------------
-
-# Aditya canonical compatibility imports/constants.
-import math
-
-from numbers import Complex, Number, Real
-
-
-
 @dataclass(frozen=True)
 class DeviceConstraint:
     """One rule from ``percept_device_constraints.md``.
@@ -35,6 +27,11 @@ class DeviceConstraint:
     severity: str                     # "blocking" | "advisory" | "unknown"
     human_text: str
     predicate: Any = None             # callable(candidate, participant) -> bool | None
+    #: At most four words naming what the rule requires, printed as a bullet on the Closed-Loop
+    #: decision card ("Unmet: <label>", "Unchecked: <label>"; decision 302, the PI 2026-09-26:
+    #: "in five words or less, why it's blocked"). Held on the rule so the page cannot drift from
+    #: it; a default so a synthetic rule in a test still constructs.
+    short_label: str = ""
 
     def __post_init__(self):
         if self.severity not in ("blocking", "advisory", "unknown"):
@@ -62,7 +59,13 @@ class EligibilityReport:
 
     def summary(self) -> str:
         if self.eligible:
-            return f"eligible ({self.checked} rules checked, {len(self.advisories)} advisory)"
+            # A rule that passed and is listed only so its value can be read (kind "recorded_value")
+            # is not an advisory; the page counts it as "Passed, value shown" (review finding,
+            # 2026-09-26: the summary called every such rule an advisory).
+            n_rec = sum(1 for a in self.advisories
+                        if isinstance(a, dict) and a.get("kind") == "recorded_value")
+            return (f"eligible ({self.checked} rules checked; {n_rec} passed with their value "
+                    f"shown, {len(self.advisories) - n_rec} advisory)")
         # `checked` still counts every rule in the table, and deferred rows are named separately, so
         # a reader can always reconcile the buckets against the size of the table.
         tail = f", {len(self.deferred)} deferred as duplicate" if self.deferred else ""
@@ -94,38 +97,62 @@ class EdgeEstimate:
     #: WHICH ESTIMATE THIS IS (review 2026-09-15, finding C1). E1 is one of two different
     #: quantities: "screening_historical" -- the setting-epoch slope over the whole clinical record,
     #: confounded with time, whose own note says it cannot be read as the causal effect of current
-    #: on power -- or "pooled_titration", the slope pooled across runs of rising current with one
+    #: on power -- or "pooled_titration", the slope pooled across runs of stepped current with one
     #: baseline each (decision 126). A page must draw the two differently; before this field it
     #: could only tell them apart by reading the prose in ``note``. None on E2 and E3.
     source: str | None = None
+    #: THE SAME EDGE READ AGAIN WITH A THIRD QUANTITY TAKEN OUT, or None when nobody asked for it
+    #: (panel D item 4, 2026-09-22). On E2 today that quantity is the stimulation current in force
+    #: when each sample was recorded: every band on this participant's left lead that rises with
+    #: pain also rests on that current, and the page had no number for it. It is a SEPARATE field
+    #: rather than a second estimate because it must never select a band, resolve an edge or move
+    #: a verdict -- the plain reading does all three, by the PI's ruling of 2026-09-22 (decision
+    #: 233, answer 2). Added with a default, so a caller that predates it is unaffected.
+    adjusted: dict | None = None
 
     @property
     def sign(self) -> int | None:
+        """+1, -1, 0 for an estimate of exactly zero, and None when there is no estimate. A NaN
+        estimate is "no estimate" too: until 2026-09-13 ``nan > 0`` being False made a NaN read
+        as -1, which mattered once the sign alone could resolve an edge."""
+        if self.estimate is None:
+            return None
         try:
-            valid = (isinstance(self.estimate, Number) and not isinstance(self.estimate, bool)
-                     and (not isinstance(self.estimate, Complex) or isinstance(self.estimate, Real))
-                     and math.isfinite(self.estimate))
-        except (TypeError, ValueError, OverflowError):
+            v = float(self.estimate)
+        except (TypeError, ValueError):
             return None
-        if not valid:
+        if v != v:
             return None
-        return 0 if self.estimate == 0 else (1 if self.estimate > 0 else -1)
+        return 0 if v == 0 else (1 if v > 0 else -1)
 
     @property
     def resolved(self) -> bool:
         """True when the edge HAS A DIRECTION: the point estimate is finite and not exactly zero,
         so ``sign`` is +1 or -1.
 
+        PI RULE, 2026-09-13, his words: "Established means mean only for flexibility." Three
+        readings were put to him and he chose "point sign decides, but flag as provisional": the
+        sign of the point estimate alone resolves an edge; the interval and the p-value stay on
+        the page as caveats and gate nothing; a report licensed on point signs while any interval
+        spans zero is flagged provisional (``DeploymentReport.provisional``).
+
         THE RULE THIS REPLACES, kept on the record: until 2026-09-13 an edge was resolved only when
-        its interval excluded zero, so an estimate of -4.45 with an interval of -18.6 to +9.7 was
-        treated as having no direction at all, and the sign-agreement test and ``is_licensed``
-        both read it as unknown. That rule now lives in ``statistically_established``, which every
+        its interval excluded zero; an estimate with an interval spanning zero was treated as
+        having no direction, and sign-agreement and ``is_licensed`` read it as unknown. That rule
+        now lives in ``statistically_established``, which every
         page and every ledger row still prints beside the sign.
 
         WHAT STILL BLOCKS. Decision 9 ("absence of evidence is not permission") is untouched: an
         edge with NO estimate (None or NaN) is unresolved, and an estimate of exactly zero has no
-        sign and is unresolved too. Only the interval stopped gating."""
-        return self.sign not in (None, 0)
+        sign and is unresolved too. Only the interval stopped gating.
+        """
+        if self.estimate is None:
+            return False
+        try:
+            v = float(self.estimate)
+        except (TypeError, ValueError):
+            return False
+        return bool(v == v and v not in (float("inf"), float("-inf")) and v != 0.0)
 
     @property
     def statistically_established(self) -> bool:
@@ -184,6 +211,10 @@ class ThresholdPlan:
     #: yet established, or not assessed. They WARN and gate nothing: the pipeline copies them into
     #: ``DeploymentReport.warnings``, never into ``blockers``. PI decision 2026-09-12, "b and c".
     warnings: list = field(default_factory=list)
+    #: The D27 artefact-ceiling sentences on the proposed capture (above 5 mA or 120 us), each
+    #: prefixed "Not evidence based - disregard: ". Kept for the record; they block nothing and warn
+    #: nothing (the PI, 2026-10-16, decision 478).
+    record_only: list = field(default_factory=list)
     #: The structured form of the two D26 verdicts: what each was judged on (the pooled titration
     #: slope, decision 124), its status, whether it is established, and the between-visit
     #: comparison the verdicts used to rest on, kept beside them as a number and labelled as the
@@ -199,6 +230,31 @@ class ThresholdPlan:
     capture_lower: float | None = None
     placement: dict = field(default_factory=dict)
     placement_note: str = ""
+    #: THE ADAPTIVE AMPLITUDE LIMITS THE CARD RECOMMENDS AND THE CONTROLLER RUNS WITH (decision
+    #: 306). The limits inherit the capture currents (D28), each held at or below the participant's
+    #: PI-stated safe ceiling for the stimulated side (``StimOptimizer/safety_ceiling.py``, the one
+    #: home; applied by ``safe_current.apply_to_plan``). ``capture_amp_low``/``capture_amp_high``
+    #: stay the currents the band power was MEASURED at, because the thresholds were read there.
+    #: None means no ceiling has been applied; read the pair through :meth:`amplitude_limits`.
+    amp_limit_low: float | None = None
+    amp_limit_high: float | None = None
+    safety_ceiling_mA: float | None = None
+    safety_ceiling_provenance: str = ""
+    # Bind the clinical ceiling to its exact subject, side and private configuration.
+    # Numeric limits from an old/unbound plan are not evidence of current authorization.
+    safety_participant_uid: str | None = None
+    safety_hemisphere: str | None = None
+    safety_config_digest: str | None = None
+    #: One plain sentence per limit when the ceiling lowered it, else None.
+    amp_limit_low_note: str | None = None
+    amp_limit_high_note: str | None = None
+
+    def amplitude_limits(self):
+        """``(low, high)``: the adaptive amplitude limits to program and to replay -- the capped
+        limits when a ceiling was applied, otherwise the two capture currents."""
+        lo = self.capture_amp_low if self.amp_limit_low is None else self.amp_limit_low
+        hi = self.capture_amp_high if self.amp_limit_high is None else self.amp_limit_high
+        return lo, hi
 
 
 @dataclass
@@ -254,6 +310,8 @@ class DeploymentReport:
     threshold: ThresholdPlan | None = None
     #: Decision 180: what the record-based placement did to ``threshold`` (or why it could not).
     threshold_placement: dict | None = None
+    #: The band's own onset (decision 417, `band_timing`), worked out by the record pair's step.
+    band_timing: dict | None = None
     replay: ReplayResult | None = None
     protocol: Protocol | None = None
     #: The programmable device parameters and the predicted duty cycle, from prescription.py.
@@ -300,6 +358,16 @@ class DeploymentReport:
         licensed, because the alternative — treating absence of evidence as permission — is the
         failure this module exists to prevent.
 
+        WHAT "EVERY EDGE RESOLVED" MEANS SINCE 2026-09-13. PI rule, his words: "Established means
+        mean only for flexibility." Of the three readings put to him he chose "point sign decides,
+        but flag as provisional". So an edge is resolved by the SIGN OF ITS POINT ESTIMATE alone
+        (``EdgeEstimate.resolved``); whether its interval excludes zero is carried beside it as
+        ``statistically_established`` and read by no gate. A report licensed while any interval
+        spans zero is ``provisional`` and the serialised verdict says so: "supported (point signs
+        only; N of 3 intervals span zero)". Until that date an edge whose interval spanned zero was
+        unresolved and the report unlicensed. The source rule now permits provisional licensing
+        when the point signs agree while retaining the uncertainty caveat.
+
         DECISION 9 STILL HOLDS: absence of evidence is not permission. An edge with NO estimate
         (None or NaN), or one of exactly zero, has no sign, is unresolved, and still blocks. A
         sign that contradicts the control law still blocks through ``coherence``. Only the
@@ -312,7 +380,8 @@ class DeploymentReport:
         defence. And the quantity those two verdicts now read -- the pooled titration slope, E1 --
         already gates through "every edge resolved" above: a slope whose interval spans zero leaves
         E1 unresolved and the report unlicensed, so a second block from the same number would be
-        the same fact charged twice."""
+        the same fact charged twice.
+        """
         if self.blockers:
             return False
         if self.eligibility is None or not self.eligibility.eligible:
@@ -320,6 +389,3 @@ class DeploymentReport:
         if not self.edges or not all(e.resolved for e in self.edges.values()):
             return False
         return bool(self.coherence is not None and self.coherence.coherent)
-
-
-# Retained active Aditya interfaces.

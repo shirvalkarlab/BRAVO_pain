@@ -1,0 +1,181 @@
+/** Synthetic UI contract regression. No live participant response or empirical validation. */
+import "@testing-library/jest-dom";
+import { render as rtlRender, screen, fireEvent } from "@testing-library/react";
+
+import theme from "assets/theme";
+import { wrap } from "testUtils/render";
+
+// The decision card reaches Plotly (to photograph the page's figures for the printed record) and
+// the session controller; both mocked exactly as the other tests on this page do.
+jest.mock("plotly.js-dist", () => ({
+  react: jest.fn(), purge: jest.fn(), restyle: jest.fn(), relayout: jest.fn(), newPlot: jest.fn(),
+  toImage: jest.fn(),
+}));
+jest.mock("database/session-control", () => ({ SessionController: { query: jest.fn() } }));
+
+// eslint-disable-next-line import/first
+import BandSweepGridPanel from "./BandSweepGridPanel";
+import DecisionCard from "./DecisionCard";
+import WhatWouldChangeThis from "./WhatWouldChangeThis";
+import ProvisionalNote from "./ProvisionalNote";
+import { ParameterDetails } from "./PrescriptionPanel";
+import payload from "./__fixtures__/synthetic_provisional_grid.json";
+
+// The Material Dashboard primitives read the MUI theme and the platform controller out of context
+// (see `panels.payload.test.js` for why both are needed), so every render goes through one wrapper.
+const render = (ui) => rtlRender(wrap(ui));
+
+const report = { data: payload, loading: false, err: null };
+const UID = payload.participant || "synthetic-participant";
+
+
+function countOf(text, phrase) {
+  const re = new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  return (text.match(re) || []).length;
+}
+
+describe("the synthetic fixture explicitly defines the states under test", () => {
+  it("carries the provisional verdict, nine lengths, a what_it_means and the threshold notes", () => {
+    expect(payload.available).toBe(true);
+    expect(payload.verdict).toBe("supported (point signs only; 2 of 3 intervals span zero)");
+    expect(payload.verdict_detail.provisional).toBe(true);
+    expect(payload.verdict_detail.n_edges_unestablished).toBe(2);
+    const sw = payload.band_sweep_grid.band_time_sweep.ONE_THREE_LEFT;
+    expect(new Set(sw.best_auc_rows.map((r) => r.chosen_as_best_of_n_windows))).toEqual(new Set([9]));
+    expect(new Set(sw.best_correlation_rows.map((r) => r.chosen_as_best_of_n_windows))).toEqual(new Set([9]));
+    const dual = payload.prescriptions.modes.dual.fields;
+    const upper = dual.find((f) => f.parameter === "Upper LFP threshold");
+    expect(upper.design_rule_note).toMatch(/^Noise-only design rule/);
+    expect(upper.occupancy_note).toMatch(/^At the 3 s averaging duration in force/);
+  });
+});
+
+describe("Choose a band (BandSweepGridPanel)", () => {
+  // Item 1, STALE-1. `aucTip` types "best of 10 lengths" while `corrTip` beside it reads the row's
+  // own `chosen_as_best_of_n_windows` (9 on every row of this fixture). Both hover texts must come
+  // from the data, and "10 lengths" must not be printable from a nine-length sweep.
+  it("item 1: the AUC hover says 'best of 9 lengths' and no hover says '10 lengths'", () => {
+    const { container } = render(
+      <BandSweepGridPanel grid={payload.band_sweep_grid} participantUid={UID}
+        committed={{ contact: "ONE_THREE_LEFT", centerHz: 12.5 }} onCandidateChosen={() => {}} />,
+    );
+    const titles = Array.from(container.querySelectorAll("div[title]")).map((el) => el.getAttribute("title"));
+    // The hover wording is plain since the redesign of 2026-09-26 ("AUC = " became "tells high pain
+    // from low: ", "r = " became "correlation "); the counts it states are the same.
+    const aucTitles = titles.filter((t) => /^tells high pain from low: /.test(t));
+    const corrTitles = titles.filter((t) => /^correlation /.test(t));
+    expect(aucTitles.length).toBeGreaterThan(0);
+    expect(corrTitles.length).toBeGreaterThan(0);
+    // The correlation side already reads the field, so it is the control: 9 on every row.
+    corrTitles.forEach((t) => expect(t).toMatch(/best of 9 lengths/));
+    // The AUC side must say the same number for the same rows. RED today: it prints 10.
+    aucTitles.forEach((t) => expect(t).toMatch(/best of 9 lengths/));
+    expect(titles.filter((t) => /10 lengths/.test(t))).toEqual([]);
+  });
+
+  // Item 5, STALE-2. The fold "Reading guide, limits" says "the strongest
+  // of ten lengths of signal". The Biomarkers copy of this sentence was corrected at decision 172;
+  // this copy was not. The count must come from the data (nine here), never a typed word.
+  it("item 5: the how-to-read fold does not say 'ten lengths' and states the count from the data", () => {
+    const { container } = render(
+      <BandSweepGridPanel grid={payload.band_sweep_grid} participantUid={UID}
+        committed={null} onCandidateChosen={() => {}} />,
+    );
+    fireEvent.click(screen.getByText(/Reading guide, limits/));
+    const text = container.textContent;
+    expect(text).not.toMatch(/ten lengths/i);
+    expect(text).toMatch(/\b(nine|9) lengths\b/i);
+  });
+});
+
+describe("the decision card's status line (DecisionCard; the sticky header until decision 302)", () => {
+  // Item 4, DUP-2, as ruled again on 2026-09-26: the provisional count was printed three times in
+  // one glance (the headline and two boxes). The decision card says "provisional" once, in its
+  // status line; the per-edge intervals are on the evidence card and, for the printed record, in
+  // the sign-off record inside the Details fold. Updated on purpose: the two boxes are gone.
+  it("item 4: says 'provisional' once in the open and prints no provisional box there", () => {
+    const { container } = render(
+      <DecisionCard deploymentReport={report} summary={{ data: null, loading: false }}
+        bandCandidate={{ contact: "ZERO_TWO_LEFT", contact_label: "L 0⁻2⁺", center_freq_hz: 24.5,
+          hemisphere: "Left" }} />,
+    );
+    const open = container.cloneNode(true);
+    open.querySelectorAll(".MuiCollapse-hidden").forEach((n) => n.remove());
+    expect(countOf(open.textContent, "provisional")).toBe(1);
+    expect(open.querySelectorAll(".cl-provisional")).toHaveLength(0);
+    expect(countOf(open.textContent, "of 3 intervals span zero")).toBe(0);
+  });
+});
+
+describe("How each value was derived, threshold rows (ParameterDetails, in the decision card's Details)", () => {
+  // Item 6, DUP-3. On the Upper/Lower LFP threshold rows the `design_rule_note` says "at this
+  // timing (3 s averaging / 30 s onset)" and the `occupancy_note` directly beneath opens with "At
+  // the 3 s averaging duration in force" -- the timing twice in two stacked lines under one field.
+  // The synthetic backend contract uses timing by reference in the design note and
+  // explicit averaging duration in the occupancy note.
+  it("item 6: the design-rule note beside the occupancy note does not restate 's averaging /'", () => {
+    const { container } = render(<ParameterDetails report={report} mode="dual" />);
+    // The notes sit in the decision card's Details fold since decision 302, one block per value.
+    expect(container.textContent).toMatch(/Upper LFP threshold/);
+    const notes = Array.from(container.querySelectorAll("*"))
+      .filter((el) => el.children.length === 0 && /^Noise-only design rule/.test(el.textContent || ""))
+      .map((el) => el.textContent);
+    expect(notes.length).toBeGreaterThanOrEqual(2);   // the upper and the lower row
+    const occupancy = Array.from(container.querySelectorAll("*"))
+      .filter((el) => el.children.length === 0 && /^At the 3 s averaging duration in force/.test(el.textContent || ""));
+    expect(occupancy.length).toBeGreaterThanOrEqual(2);
+    notes.forEach((n) => expect(n).not.toMatch(/s averaging \//));
+  });
+});
+
+describe("What would change this answer (WhatWouldChangeThis)", () => {
+  // The PI, 2026-09-15 evening, after the browser walk: this card printed "The verdict is
+  // provisional: 2 of 3 intervals span zero (E1, E2)" -- the header's count a fourth time on the
+  // page. This card's own contribution is WHICH edges and what would establish them; the count and
+  // the word "provisional" belong to the verdict header and its two boxes.
+  it("names the edges whose intervals span zero without restating the header's count", () => {
+    const { container } = render(<WhatWouldChangeThis report={{ data: payload, loading: false, err: null }} />);
+    const text = container.textContent;
+    expect(text).toMatch(/E1 and E2/);
+    expect(text).not.toMatch(/of 3 intervals span zero/);
+    expect(text).not.toMatch(/The verdict is provisional/);
+    // What establishes them stays on the card.
+    expect(text).toMatch(/titration session/i);
+  });
+});
+
+describe("Deploy-to-Percept review (the sign-off sheet) and its provisional box", () => {
+  // The PI, 2026-09-15 evening: the sheet printed the module's verbatim verdict ("supported (point
+  // signs only; 2 of 3 intervals span zero)") and, directly beneath it, the provisional box whose
+  // headline repeats the same count. The verdict line is the headline on that sheet; the box keeps
+  // the per-edge intervals and p, which are printed nowhere else on it.
+  it("the provisional box can drop its headline and keep the per-edge lines", () => {
+    const { container } = render(<ProvisionalNote deploymentReport={payload} headline={false} />);
+    const text = container.textContent;
+    expect(text).not.toMatch(/INTERVALS SPAN ZERO/);
+    expect(text).toMatch(/E1 sign/);
+    expect(text).toMatch(/E2 sign/);
+  });
+  it("the sign-off sheet passes the verdict line as the headline and the box without one", () => {
+    const fs = require("fs");
+    const src = fs.readFileSync(require.resolve("./DeploySignoffCard.js"), "utf8");
+    expect(src).toMatch(/<ProvisionalNote[^>]*headline=\{false\}/);
+  });
+});
+
+describe("How each value was derived, the checks under a number (panel D item 7)", () => {
+  // The design-rule, occupancy, start-of-stretch and robustness notes were printed one after
+  // another with nothing saying they are separate checks, each measured on this participant's own
+  // record, rather than one argument in steps. The panel asked for one heading, "Four independent
+  // checks on this number"; on the record no row carries four (the threshold rows carry two, the
+  // onset and start-up rows one each), so the heading counts the notes on its own row.
+  it("heads each row's notes with how many separate checks they are", () => {
+    const { container } = render(<ParameterDetails report={report} mode="dual" />);
+    const text = container.textContent;
+    expect(text.match(/Two separate checks on this number, each measured on this participant's own record/g) || [])
+      .toHaveLength(2);
+    expect(text.match(/A check on this number, measured on this participant's own record/g) || [])
+      .toHaveLength(3);
+    expect(text).not.toMatch(/Four independent checks/);
+  });
+});

@@ -1,0 +1,27 @@
+{
+  "role": "source",
+  "hostname": "SOURCE_HOSTNAME",
+  "lock": "/run/lock/bravo-aditya-export.lock",
+  "source_container": "EXISTING_SOURCE_CONTAINER",
+  "source_workdir": "/usr/src/BRAVO",
+  "source_timeout_seconds": 1800,
+  "observation_seconds": 5,
+  "source_config": {
+    "source_participant_uid": "SOURCE_PARTICIPANT_UID",
+    "participant_name": "PARTICIPANT_NAME",
+    "raw_root": "/usr/src/BRAVO/BRAVOStorage/raws"
+  },
+  "checkpoint": "/ISOLATED_ADITYA_PRIVATE_PATH/daily-source/checkpoint.json",
+  "baseline_manifest": "/ISOLATED_ADITYA_PRIVATE_PATH/source-export-initial/export.manifest",
+  "batches": "/ISOLATED_ADITYA_PRIVATE_PATH/daily-batches",
+  "owner_uid": 10001,
+  "owner_gid": 10001,
+  "clinic": {
+    "source_folder": "/SOURCE_APP/clinic_sheets/PARTICIPANT",
+    "source_participant_uid": "SOURCE_PARTICIPANT_UID",
+    "snapshots": "/ISOLATED_ADITYA_PRIVATE_PATH/clinic-sheets",
+    "baseline_manifest": "/ISOLATED_ADITYA_PRIVATE_PATH/clinic-sheets/ACCEPTED_INITIAL_SNAPSHOT_SHA/clinic.manifest",
+    "owner_uid": 10001,
+    "observation_seconds": 5
+  }
+}

@@ -1,10 +1,12 @@
-"""The Percept device rule table (D01-D51) and the eligibility evaluator that reads it.
+"""The Percept device rule table (D01-D53) and the eligibility evaluator that reads it.
 
 WHAT THIS FILE IS FOR
 =====================
 Every rule below was read out of ``percept_device_constraints.md``, which in turn quotes one of the
 Medtronic documents for the Percept neurostimulator family and records the page on which the
-sentence appears. Nothing here is inferred from general knowledge of the device. Each rule carries
+sentence appears (one exception: D53, the PI's own rule of 2026-10-18 about folded multiples of
+the stimulation rate, which rests on the documented 250 Hz sampling rate and says so). Nothing here
+is inferred from general knowledge of the device. Each rule carries
 the document tag and page so that a failed check can name the sentence it violates, which is what a
 clinician needs in order to argue with the result rather than merely accept it.
 
@@ -36,6 +38,12 @@ SEVERITY
     in a group with BrainSense configured. Both are read off the device, not out of a document, and
     section 12 of the constraints file says how.
 
+Note on D03, which is the rule most likely to be misread. D03 is severity ``blocking``, not
+``unknown``: the documents are perfectly clear about what it requires, so it is evaluable. For
+a participant in the required programming mode, the Adaptive workflow is reachable. The live
+predicate remains blocking for any participant programmed in another mode, and the report records the observed programming mode as its value so that a reader
+can see which regime the rest of the report is written in.
+
 HOW MISSING INPUT IS TREATED
 ============================
 A predicate returns True (the rule is satisfied), False (the rule is violated) or None (not
@@ -51,8 +59,11 @@ with the rule that reads it, so that a caller can see what is still undeclared.
 The report distinguishes the two ways a rule can end up unknown, because they need different
 actions. ``kind="value_not_read_off_programmer"`` means the rule's own value is missing from the
 documentation and has to be read off the device (D04, D31). ``kind="input_not_supplied"`` means the
-rule is fully documented but the caller did not state the fact it needs."""
+rule is fully documented but the caller did not state the fact it needs.
+"""
 from __future__ import annotations
+
+import math
 
 from . import types
 
@@ -121,7 +132,7 @@ from .session_report_facts import (CAPTURE_AMP_CEILING_MA as CAPTURE_ARTEFACT_AM
 try:
     from modules.StimOptimizer.routines import percept_adaptive as _PA
 except Exception:                                       # pragma: no cover - import shim
-    from modules.StimOptimizer.routines import percept_adaptive as _PA
+    from StimOptimizer.routines import percept_adaptive as _PA
 
 #: D44. The only published rate floor. It is written for movement disorders and its relevance to a
 #: pain participant is not established by the document, so it is a soft floor.
@@ -137,7 +148,29 @@ GENERAL_ENVELOPE = {
     "rate_hz": (2.0, 250.0),
 }
 
-# Participant-specific provenance and examples are maintained outside source control.
+#: D11. One unit of LFP Power is approximately this many microvolts squared. LFP Power is a linear
+#: sum of squared magnitude, so this conversion is a scaling and not a log transform.
+#:
+#: DO NOT USE THIS TO CONVERT THIS PROJECT'S BAND POWER, and note that nothing does. Corrected
+#: 2026-09-06 after the PI asked whether the closed-loop page's numbers were on the right scale.
+#: Three separate things were true and are worth keeping apart.
+#:
+#: FIRST, this number is a rule of thumb, not a calibration. It descends from
+#: ``Biomarkers.bravo_service.LSB_RULE_OF_THUMB``, whose own comment says it is "carried here only
+#: as the schema default". It is recorded here because the device programming guide quotes it, so it
+#: belongs in a ledger of what the device's documentation says -- which is what this file is for.
+#:
+#: SECOND, no production code has ever multiplied by it. The only thing in the repository that
+#: touches it is one test asserting its value. It is a documented device fact, not a working
+#: conversion, and reading it as the latter is the mistake that made the page's numbers wrong.
+#:
+#: THIRD, the conversion this project actually needs is a different quantity measured for a
+#: different signal-processing recipe, and it lives with the code that needs it:
+#: ``StimOptimizer.routines.lfp_evidence.DEVICE_UNITS_PER_INTEGRATED_BAND_POWER``. That one was
+#: established from paired recordings; calibration provenance and applicability must be read
+#: from the owning module rather than generalized from this rule-of-thumb constant. The lab's third constant, ``LSB_PER_UV2_TRANSFORM`` (the transform constant in effect), is a
+#: fourth quantity again -- calibrated for the Hann-windowed 256-point zero-padded transform route,
+#: not for integrating a power density.
 LFP_POWER_LSB_TO_UV2 = 0.01
 
 #: D46. Snapshot and event capacity, after which the oldest snapshots are overwritten silently.
@@ -219,7 +252,11 @@ THRESHOLD_MODE_TABLE = {
     },
 }
 
-# Participant-specific provenance and examples are maintained outside source control.
+#: D21. The selection range of the onset duration, per mode: 0-30 s in Dual Threshold on both timers
+#: (the clinician tablet, read 2026-09-15; the FDA SSED Table 2 prints 0-6 min, kept beside it and
+#: never applied), 0-30 s in Single Threshold (FDA Table 2, tablet). Until 2026-09-13 this file
+#: carried the ADAPT-PD trial's own setting (1.2-2 s dual, 200-500 ms single) as if it were the
+#: device's range. Trial values remain separately labelled; they are not the device envelope.
 ONSET_DURATION_RANGE_MS = {"dual": _PA.ONSET_RANGE_DUAL_MS, "single": _PA.ONSET_RANGE_SINGLE_MS}
 ONSET_DURATION_RANGE_MS_ADAPT_PD = {"dual": _PA.ADAPT_PD_ONSET_RANGE_MS[_PA.DUAL],
                                     "single": _PA.ADAPT_PD_ONSET_RANGE_MS[_PA.SINGLE]}
@@ -376,11 +413,14 @@ PARTICIPANT_KEYS = {
     "indication": "D01, D02. One of the five approved indications, or 'chronic_pain'.",
     "programming_mode": "D03. The mode the device is actually programmed in, which is a different "
                         "fact from the clinical indication.",
-    "n_neurostimulators": "D04. Currently unread for RCS08.",
-    "segmental_steering_in_use": "D29. Whether any segmented level is driven with unequal current "
-                                 "fractions. False means every level is a ring, so no vertically "
-                                 "aligned pair can disagree and the p.39 requirement cannot be "
-                                 "violated. Measured 98.50% ring on RCS08.",
+    "n_neurostimulators": (
+                          'D04. Number of implanted neurostimulators; unknown when not supplied.'
+                          ),
+    "segmental_steering_in_use": (
+                                 'D29. Whether any segmented level is driven with unequal current fractions. False means every '
+                                 'level is a ring, so no vertically aligned pair can disagree and the p.39 requirement cannot be '
+                                 'violated.'
+                                 ),
     "brainsense_min_rate_hz": "D31. NOT PUBLISHED by Medtronic and absent from all 1,154 session "
                               "reports, so this is usually None and the rule now resolves through "
                               "the measured pair table instead. Kept as a fallback for the day "
@@ -389,6 +429,13 @@ PARTICIPANT_KEYS = {
     "brainsense_max_pulse_width_us": "D31.",
     "lead_type": "D16. '1x4' or 'sensight'; decides the short-circuit limit.",
     "dual_lead_implant": "D39. Contralateral sensing is documented for dual lead implants only.",
+    "stim_rings_on_sensing_lead": "D52. The ring numbers the sensing lead stimulates on now, read off "
+                                  "the settings row in force (`adapter.programmed_settings_from_"
+                                  "epochs`). Listed here or the pipeline never routes it to the rule, "
+                                  "which then reads 'not supplied' and blocks (found live, "
+                                  "2026-09-22).",
+    "stim_contacts_on_sensing_lead": "D52. The same lead's programmed cathode as written, for the "
+                                     "report's observed line.",
     "adaptive_configured_both_hemispheres": "D40.",
     "accepts_cross_hemisphere_coupling": "D40.",
     "can_operate_neurostimulator": "D05.",
@@ -400,15 +447,6 @@ PARTICIPANT_KEYS = {
 # becomes None (not determinable) at exactly one place in the file.
 # ------------------------------------------------------------------------------------------------
 from . import device_facts as _DF
-
-
-# Aditya canonical compatibility imports/constants.
-import math
-
-
-
-
-TRANSITION_DURATION_RANGE_S = (0.25, 1800.0)
 
 def _num(d, key):
     """Return the field as a float, or None when it is absent or not a number.
@@ -543,9 +581,12 @@ def _p_d03(candidate, participant):
 
 
 def _p_d04(candidate, participant):
-    """The predicate is still live so that the rule resolves the moment the device record supplies the
+    """One neurostimulator; an unavailable count remains unknown.
+
+    The predicate is still live so that the rule resolves the moment the device record supplies the
     count. A bilateral implant delivered as two separate cans falls under the prohibition; a single
-    can driving two leads does not, so the field has to be a count and not a laterality."""
+    can driving two leads does not, so the field has to be a count and not a laterality.
+    """
     n = _num(participant, "n_neurostimulators")
     if n is None:
         return None
@@ -686,16 +727,15 @@ def _p_d16(candidate, participant):
     """
     tested = _flag(candidate, "impedance_tested")
     z = _num(candidate, "impedance_ohms")
-    low = _num(candidate, "impedance_min_ohms") if "impedance_min_ohms" in candidate else z
     lead = _text(participant, "lead_type")
-    if z is None or low is None or lead is None or tested is None:
+    if z is None or lead is None or tested is None:
         return None
     if not tested:
         return False
     short_limit = IMPEDANCE_SHORT_OHMS.get(lead.replace("-", "").replace("_", ""))
     if short_limit is None:
         return None
-    return short_limit <= low <= z <= IMPEDANCE_OPEN_OHMS
+    return short_limit <= z <= IMPEDANCE_OPEN_OHMS
 
 
 def _p_d17(candidate, participant):
@@ -746,22 +786,33 @@ def _p_d19(candidate, participant):
 
 
 def _p_d20(candidate, participant):
-    """Any timing parameters the caller declares must sit inside the DOCUMENTED selection range."""
+    """Any timing parameters the caller declares must sit inside the DOCUMENTED selection range.
+
+    Until 2026-09-13 this compared a declared value against the white paper's default and read a
+    difference as a failure, incorrectly treating adjusted configurations as advisory failures.
+    The defaults are defaults (WP Table 1 is titled "Default Settings"); the envelope is the FDA
+    approval summary's Table 2. A key with no documented range (detection blanking) is reported
+    and not judged; a declaration containing only such keys gives no verdict.
+    """
     mode = _mode(candidate)
     declared = candidate.get("declared_mode_timing") if isinstance(candidate, dict) else None
     if mode is None or not isinstance(declared, dict) or not declared:
         return None
-    unknown = False
-    for key in declared:
+    judged = 0
+    for key, value in declared.items():
         rng = TIMING_RANGE_BY_KEY.get(key)
         if key == "onset_ms_adaptive":
             rng = ONSET_DURATION_RANGE_MS.get(mode)
-        value = _finite_timing(declared, key)
         if rng is None or value is None:
-            unknown = True
-        elif not rng[0] <= value <= rng[1]:
+            continue
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
             return False
-    return None if unknown else True
+        judged += 1
+        if not (rng[0] <= v <= rng[1]):
+            return False
+    return True if judged else None
 
 
 def _p_d21(candidate, participant):
@@ -772,7 +823,7 @@ def _p_d21(candidate, participant):
     the clinician types, not a property of the band.
     """
     mode = _mode(candidate)
-    onset = _finite_timing(candidate, "onset_duration_ms")
+    onset = _num(candidate, "onset_duration_ms")
     if mode is None or onset is None:
         return None
     rng = ONSET_DURATION_RANGE_MS.get(mode)
@@ -858,18 +909,34 @@ def _p_d27(candidate, participant):
     derivation. For this participant the recorded pulse width is asymmetric between hemispheres,
     most commonly 60 us on the left and 160 us on the right, so right-hemisphere captures are
     artefact-suspect by this rule.
+
+    THE PULSE WIDTH THIS RULE NEEDS IS THE ONE USED AT THE CAPTURE, not necessarily whatever pulse
+    width the candidate is otherwise carrying. ``capture_pulse_width_us`` (from
+    ``device_facts.session_report_facts_for``, the newest capture on record) is read first for
+    exactly the reason ``capture_amp_high_mA`` is already preferred over the general ``amp_mA``
+    two lines below: a candidate's general pulse width can now be filled in from the device's
+    CURRENTLY programmed setting (``adapter.programmed_settings_from_epochs``), which is a
+    deployment fact and not a statement about what was running when the threshold was captured.
+    The two usually agree, but this rule must answer the capture question even on the day they do
+    not. ``pulse_width_us`` is kept as the fallback for a caller that has no capture record at all.
     """
     if not _is_adaptive(candidate):
         return True
-    # A supplied capture width belongs to the measurement being checked. Invalid
-    # capture values remain unknown; only absent values use the general width.
-    pw_key = ("capture_pulse_width_us"
-              if candidate.get("capture_pulse_width_us") is not None else "pulse_width_us")
-    pw = _num(candidate, pw_key)
+    pw = _num(candidate, "capture_pulse_width_us")
+    if pw is None:
+        pw = _num(candidate, "pulse_width_us")
     hi = _num(candidate, "capture_amp_high_mA")
     if hi is None:
         hi = _num(candidate, "amp_mA")
-    if pw is None or hi is None or not math.isfinite(pw) or not math.isfinite(hi):
+    # THE PULSE-WIDTH CEILING IS NOT APPLIED TO A STIMULATOR ON THE OTHER LEAD (the PI, 2026-10-14:
+    # "ignore 120 us limit", answering whether it applies when contralateral sensing drives that
+    # stimulator; decision 471). The sensing contacts are on the other lead, so this stimulator's
+    # pulse width is not what the artefact ceiling is about. The 5 mA amplitude ceiling still applies.
+    sens = _text(candidate, "sensing_hemisphere")
+    act = _text(candidate, "actuated_hemisphere")
+    if sens is not None and act is not None and sens != act:
+        return None if hi is None else hi <= CAPTURE_ARTEFACT_AMP_MA
+    if pw is None or hi is None:
         return None
     return hi <= CAPTURE_ARTEFACT_AMP_MA and pw <= CAPTURE_ARTEFACT_PW_US
 
@@ -918,9 +985,9 @@ def _p_d29(candidate, participant):
     steering. Activating 1a, 1b and 1c together at one identical current fraction is RING
     stimulation implemented on a segmented level, and the rule does not bear on it.
 
-    My first pass got this wrong in an instructive way: it saw segment NAMES in the contact list
-    and concluded steering was in use, then reported 600 records as violations. Seeing a segmented
-    contact is not evidence that the segment is being steered.
+    Seeing segment names in the contact list is not evidence of directional steering. Steering
+    within a single level is also distinct from this cross-level comparison. A ring-to-ring
+    bipolar montage can have equal magnitudes and opposite polarities without directional steering.
 
     So when the record or the investigator establishes that segmental steering is not in use, this
     rule is satisfied because its precondition is absent. That is deliberately expressed as a
@@ -932,7 +999,8 @@ def _p_d29(candidate, participant):
     resets amplitude to zero and clears the BrainSense configuration, and after the OptiStim step
     the captured thresholds survive while the amplitudes that produced them do not, which silently
     detaches a threshold from its calibration. That hazard is in the human text so that it appears
-    on the report next to this check."""
+    on the report next to this check.
+    """
     matched = _flag(candidate, "vertically_aligned_segments_matched")
     if matched is not None:
         return matched
@@ -972,7 +1040,15 @@ def _p_d30(candidate, participant):
 
 
 def _p_d31(candidate, participant):
-    """Rate and pulse width inside the BrainSense group envelope, whose values are unpublished."""
+    """Rate and pulse width inside the BrainSense group envelope, whose values are unpublished.
+
+    A group configured with BrainSense has a lower maximum pulse width, a lower maximum rate and a
+    HIGHER minimum rate than a group without it, and neither document prints any of the three
+    numbers. Severity is therefore 'unknown' and the rule blocks. The predicate still does the work
+    it can: it checks the general Percept envelope, so a rate of 300 Hz fails outright, and it
+    returns a real verdict as soon as the values are read off the A610 controls and recorded on the
+    participant. A proposed rate below the BrainSense minimum cannot be programmed.
+    """
     rate = _num(candidate, "rate_hz")
     pw = _num(candidate, "pulse_width_us")
     if rate is not None:
@@ -983,10 +1059,26 @@ def _p_d31(candidate, participant):
         lo, hi = GENERAL_ENVELOPE["pulse_width_us"]
         if not (lo <= pw <= hi):
             return False
-    # Participant-specific provenance and examples are maintained outside source control.
+    # ---------------------------------------------------------------------------------------
+    # THE EVIDENCE PATH, added 2026-09-05, which is why this rule no longer blocks.
+    #
+    # The rule was written to compare the candidate against the BrainSense parameter envelope,
+    # and that envelope is not published. The A610 guide says only that a BrainSense group has a
+    # lower maximum pulse width, a lower maximum rate and a HIGHER minimum rate than a group
+    # without it, and prints none of the three numbers. A sensing sample-rate field is not evidence
+    # of a stimulation limit; absent declared envelope values must not be fabricated.
+    #
+    # The answerable question is whether the device has ALREADY ACCEPTED this exact rate and
+    # pulse width in a BrainSense group on this hemisphere. A demonstrated configuration is
+    # better evidence than a limit comparison, because it is the device's own verdict rather than
+    # our reading of a document. If the pair has been programmed, the envelope admits it, whatever
+    # the undisclosed numbers are.
+    #
+    # The hemisphere is not optional. Pooling sides could license one hemisphere's configuration
+    # using evidence from the other hemisphere.
     hemi = _text(candidate, "sensing_hemisphere") or _text(candidate, "hemisphere")
     hemi = {"left": "Left", "right": "Right"}.get(hemi) if hemi else None
-    programmed = _DF.brainsense_pair_programmed(rate, pw, hemi)
+    programmed = _DF.brainsense_pair_programmed(rate, pw, hemi, participant_uid=participant.get("uid"))
     if programmed is True:
         return True
 
@@ -1086,8 +1178,7 @@ def _p_d39(candidate, participant):
     hemisphere's sensing data, and it states the intent: it is for situations where no configuration
     on the actuated lead is acceptable for sensing setup. It is documented for dual lead implants
     only. Treating such a pairing as equivalent to an ipsilateral one would hide that it is a
-    fallback, and the distinction is live on the present data, where two of the four configurations
-    the current screen licenses are contralateral.
+    fallback; its documented prerequisites must remain visible on the report.
     """
     sens = _text(candidate, "sensing_hemisphere")
     act = _text(candidate, "actuated_hemisphere")
@@ -1100,6 +1191,151 @@ def _p_d39(candidate, participant):
     if dual is None or acknowledged is None:
         return None
     return bool(dual and acknowledged)
+
+
+# Decision 217's rule, from its one home (`DecodeCommon.sensing_rule`, since 2026-09-26; it was
+# the Stim Optimizer's `lfp_evidence` helpers, imported at call time). DecodeCommon imports no
+# analysis module, so this table stays importable without them.
+try:
+    from modules.DecodeCommon import sensing_rule as _sensing_rule
+except ImportError:                                   # pragma: no cover - host spelling
+    from DecodeCommon import sensing_rule as _sensing_rule
+
+
+def _channel_side(channel):
+    up = str(channel or "").upper()
+    return "left" if up.endswith("_LEFT") else ("right" if up.endswith("_RIGHT") else None)
+
+
+def _p_d52(candidate, participant):
+    """The sensing pair must be the one the device allows with the contacts that stimulate now.
+
+    While a lead stimulates, BrainSense senses only on the two contacts immediately flanking the
+    stimulating contact(s) (decision 217). The contacts come from the settings row in force for the
+    sensing lead (`adapter.programmed_settings_from_epochs`); with no contacts on record, an
+    unreadable pair, or a channel on a different lead from the stated sensing side, the rule is not
+    determinable -- never a pass.
+    """
+    channel = candidate.get("channel") if isinstance(candidate, dict) else None
+    rings = (participant or {}).get("stim_rings_on_sensing_lead") if isinstance(participant, dict) else None
+    if not channel or not rings:
+        return None
+    if _sensing_rule.sensing_pair_rings(channel) is None:
+        return None
+    side, sens = _channel_side(channel), _text(candidate, "sensing_hemisphere")
+    if side and sens in ("left", "right") and side != sens:
+        return None
+    return bool(_sensing_rule.pair_flanks_stimulation(channel, {int(r) for r in rings}))
+
+
+# ------------------------------------------------------------------------------------------------
+# D53: no folded multiple of the stimulation rate in or near the band (the PI, 2026-10-18)
+# ------------------------------------------------------------------------------------------------
+#: D53 WARNS, IT DOES NOT REFUSE (the PI, 2026-10-18, decision 485: "Make that device rule D53,
+#: the stimulation multiples, make it a warning but not a blocker or not a refusal outright").
+#: Its severity is "advisory": a landing raises a warning with the same words (the rate, each
+#: landing and multiple, the nearest clearing rates) and never blocks eligibility. True (env
+#: `BRAVO_D53_REFUSES=1`) is the neutral setting: the refusal of decision 481.
+import os as _os
+FOLDED_RATE_REFUSES = _os.environ.get("BRAVO_D53_REFUSES", "0").strip() == "1"
+#: How close to a band edge a folded multiple may land before the band warns (the PI's 5 Hz).
+FOLDED_RATE_MARGIN_HZ = 5.0
+#: The rates the refusal suggests are searched on this grid inside the general envelope. OURS, not
+#: the device's: no Medtronic document prints the rate step. This is an analysis suggestion grid.
+FOLDED_RATE_STEP_HZ = 5.0
+#: How many clearing rates the warning names, nearest first.
+FOLDED_RATE_CLEARING_SHOWN = 4
+
+
+def _harmonic_landings(rate_hz, f_lo, f_hi):
+    """The landing arithmetic's one home, `Biomarkers.routines.analytics.harmonic_landings_hz`
+    (multiples 1 to 8 at the device's 250 samples a second), imported at call time so this table
+    stays importable without the Biomarkers routines."""
+    try:
+        from Biomarkers.routines import analytics as _an
+    except ImportError:                               # pragma: no cover - container spelling
+        from modules.Biomarkers.routines import analytics as _an
+    return _an.harmonic_landings_hz(float(rate_hz), float(f_lo), float(f_hi), fs=SAMPLE_RATE_HZ)
+
+
+def folded_rate_check(rate_hz, center_hz, band_width_hz, *, margin_hz=FOLDED_RATE_MARGIN_HZ,
+                      clearing=True):
+    """Where the multiples of ``rate_hz`` land within ``margin_hz`` of the band ``center_hz`` +-
+    ``band_width_hz``/2 (edges included), whether the band is clear, and -- when ``clearing`` -- the
+    nearest rates on the ``FOLDED_RATE_STEP_HZ`` grid inside the general envelope that would clear
+    it. None when the rate or the band is missing."""
+    try:
+        rate, c, w = float(rate_hz), float(center_hz), float(band_width_hz)
+        margin_hz = float(margin_hz)
+    except (TypeError, ValueError):
+        return None
+    if (not all(math.isfinite(v) for v in (rate, c, w, margin_hz))
+            or rate <= 0 or c < 0 or w <= 0 or margin_hz < 0):
+        return None
+    lo, hi = c - w / 2.0, c + w / 2.0
+    land = _harmonic_landings(rate, lo - margin_hz, hi + margin_hz)
+    out = {"rate_hz": rate, "band_hz": [lo, hi], "zone_hz": [lo - margin_hz, hi + margin_hz],
+           "landings": land, "clear": not land, "clearing_rates_hz": []}
+    if clearing and land:
+        r_lo, r_hi = GENERAL_ENVELOPE["rate_hz"]
+        grid = [k * FOLDED_RATE_STEP_HZ for k in range(1, int(r_hi // FOLDED_RATE_STEP_HZ) + 1)
+                if r_lo <= k * FOLDED_RATE_STEP_HZ <= r_hi]
+        clean = [g for g in grid
+                 if not _harmonic_landings(g, lo - margin_hz, hi + margin_hz)]
+        out["clearing_rates_hz"] = sorted(clean, key=lambda g: (abs(g - rate), g))[
+            :FOLDED_RATE_CLEARING_SHOWN]
+    return out
+
+
+def _p_d53(candidate, participant):
+    """No folded multiple of the stimulation rate may land inside the band or within 5 Hz of its
+    edges. Not determinable without the rate or the band; a sensing-only candidate is not checked
+    (it drives nothing)."""
+    if not _is_adaptive(candidate):
+        return True
+    edges = band_edges(candidate)
+    rate = _num(candidate, "rate_hz")
+    if edges is None or rate is None:
+        return None
+    chk = folded_rate_check(rate, _num(candidate, "center_hz"), _num(candidate, "band_width_hz"),
+                            clearing=False)
+    return None if chk is None else bool(chk["clear"])
+
+
+def _o_d53(c, p):
+    """The rate, the band, each landing (with its multiple) and the rates that would clear it."""
+    rate, cen, wid = _num(c, "rate_hz"), _num(c, "center_hz"), _num(c, "band_width_hz")
+    if rate is None or cen is None or wid is None:
+        return (f"stimulation rate {c.get('rate_hz')!r} Hz, band centre {c.get('center_hz')!r} Hz, "
+                f"width {c.get('band_width_hz')!r} Hz -- not enough to place the landings")
+    chk = folded_rate_check(rate, cen, wid)
+    if chk is None:
+        return "The stimulation rate or band is invalid; the folded landings cannot be determined."
+    lo, hi = chk["band_hz"]
+    head = f"at {rate:g} Hz stimulation, band {lo:g}-{hi:g} Hz"
+    if chk["clear"]:
+        near = _harmonic_landings(rate, 0.0, SAMPLE_RATE_HZ / 2.0)
+        if near:
+            d = min(near, key=lambda x: min(abs(x["lands_at_hz"] - lo), abs(x["lands_at_hz"] - hi)))
+            gap = min(abs(d["lands_at_hz"] - lo), abs(d["lands_at_hz"] - hi))
+            return (head + f": no multiple lands within {FOLDED_RATE_MARGIN_HZ:g} Hz of it; the "
+                    f"nearest lands at {d['lands_at_hz']:g} Hz (multiple {d['harmonic']}), "
+                    f"{gap:g} Hz from the band")
+        return head + ": no multiple lands below half the sampling rate"
+    lands = "; ".join(f"{d['lands_at_hz']:g} Hz (multiple {d['harmonic']}, {d['raw_hz']:g} Hz folded)"
+                      for d in chk["landings"])
+    clear = chk["clearing_rates_hz"]
+    hemi = {"left": "Left", "right": "Right"}.get(_text(c, "sensing_hemisphere") or "")
+    programmed, _ = _DF._programmed_pairs_for(p.get("uid")) if hemi else ({}, "")
+    seen = {r for (r, _pw) in (programmed.get(hemi) or {})}
+
+    def _rate(r):
+        return f"{r:g} Hz" + (" (run in a BrainSense group on this side before)" if r in seen else "")
+    tail = (f". Rates whose multiples all land at least {FOLDED_RATE_MARGIN_HZ:g} Hz from the band, "
+            f"nearest first: " + ", ".join(_rate(r) for r in clear)
+            if clear else f". No rate on a {FOLDED_RATE_STEP_HZ:g} Hz step clears this band; "
+                          f"choose another band")
+    return head + f": multiples land at {lands}" + tail
 
 
 def _p_d40(candidate, participant):
@@ -1317,7 +1553,7 @@ def _o_d16(c, p):
                  f"low-current mode and read {auto_ohm!r} ohms -- ruled a spurious fail at that "
                  f"measurement current by the principal investigator on 2026-09-12, not a real "
                  f"open circuit")
-    return f"minimum {c.get('impedance_min_ohms', c.get('impedance_ohms'))!r}, maximum {c.get('impedance_ohms')!r}; " + text
+    return text
 
 
 def _o_d17(c, p):
@@ -1375,13 +1611,17 @@ def _o_d26(c, p):
 
 
 def _o_d27(c, p):
-    pw_key = ("capture_pulse_width_us"
-              if c.get("capture_pulse_width_us") is not None else "pulse_width_us")
-    pw_label = "capture pulse width" if pw_key == "capture_pulse_width_us" else "pulse width (fallback)"
-    amp_key = "capture_amp_high_mA" if _num(c, "capture_amp_high_mA") is not None else "amp_mA"
-    amp_label = "capture high amplitude" if amp_key == "capture_amp_high_mA" else "amplitude (fallback)"
-    return (f"{amp_label} {c.get(amp_key)!r} mA against "
-            f"{CAPTURE_ARTEFACT_AMP_MA} mA and {pw_label} {c.get(pw_key)!r} us against "
+    if c.get("capture_pulse_width_us") is not None:
+        pw_label, pw_val = "capture pulse width", c.get("capture_pulse_width_us")
+    else:
+        pw_label, pw_val = "pulse width", c.get("pulse_width_us")
+    sens, act = _text(c, "sensing_hemisphere"), _text(c, "actuated_hemisphere")
+    if sens is not None and act is not None and sens != act:
+        return (f"capture high amplitude {c.get('capture_amp_high_mA', c.get('amp_mA'))!r} mA against "
+                f"{CAPTURE_ARTEFACT_AMP_MA} mA; {pw_label} {pw_val!r} us not checked, because this "
+                f"stimulator is on the other lead from the sensing contacts (decision 471)")
+    return (f"capture high amplitude {c.get('capture_amp_high_mA', c.get('amp_mA'))!r} mA against "
+            f"{CAPTURE_ARTEFACT_AMP_MA} mA and {pw_label} {pw_val!r} us against "
             f"{CAPTURE_ARTEFACT_PW_US} us")
 
 
@@ -1441,6 +1681,34 @@ def _o_d44(c, p):
     return f"rate {c.get('rate_hz')!r} Hz against a soft floor of {LOW_RATE_SOFT_FLOOR_HZ} Hz"
 
 
+def _o_d52(c, p):
+    """Which pair, which contacts stimulate, the pair they allow, and what the chosen pair needs."""
+    channel = c.get("channel")
+    rings = sorted(int(r) for r in (p.get("stim_rings_on_sensing_lead") or []))
+    pair = _sensing_rule.sensing_pair_rings(channel)
+    if pair is None or not rings:
+        return (f"sensing channel {channel!r}; stimulating contacts on this lead "
+                f"{p.get('stim_contacts_on_sensing_lead')!r} -- not enough to apply the rule")
+
+    def contacts(xs):
+        xs = sorted(xs)
+        return (f"contact {xs[0]}" if len(xs) == 1
+                else "contacts " + ", ".join(str(x) for x in xs[:-1]) + f" and {xs[-1]}")
+
+    allowed = _sensing_rule.flanking_pair(set(rings))
+    allowed_s = f"{allowed[0]}-{allowed[1]}" if allowed else "no pair (an end contact is stimulating)"
+    pair_s = f"{pair[0]}-{pair[1]}"
+    head = (f"sensing on {pair_s}; this lead stimulates on {contacts(rings)} (programmed cathode "
+            f"{p.get('stim_contacts_on_sensing_lead')}), where the device allows sensing on "
+            f"{allowed_s} only")
+    if allowed == pair:
+        return head + ", which is this pair"
+    need = _sensing_rule.stim_rings_for_sensing_pair(channel)
+    tail = (f"; sensing on {pair_s} needs stimulation on {contacts(need)}" if need
+            else f"; no stimulating contact lets the device sense on {pair_s}")
+    return head + tail
+
+
 #: Rule identifier to observed-value function. A rule absent from this mapping simply has no
 #: observed line in the report, which is the right outcome for the narrative rules.
 _OBSERVED = {
@@ -1448,7 +1716,7 @@ _OBSERVED = {
     "D10": _o_d10, "D11": _o_d11, "D12": _o_d12, "D13": _o_d13, "D15": _o_d15, "D16": _o_d16,
     "D17": _o_d17, "D18": _o_d18, "D19": _o_d19, "D24": _o_d24, "D26": _o_d26, "D27": _o_d27, "D28": _o_d28,
     "D30": _o_d30, "D31": _o_d31, "D32": _o_d32, "D34": _o_d34, "D38": _o_d38, "D39": _o_d39,
-    "D40": _o_d40, "D44": _o_d44,
+    "D40": _o_d40, "D44": _o_d44, "D52": _o_d52, "D53": _o_d53,
 }
 
 #: Rules whose observed value is recorded on the report even when the rule PASSES.
@@ -1463,7 +1731,11 @@ _OBSERVED = {
 #: which signs the data has not established rather than vanish from the ledger; and D30's pass is
 #: DERIVED from the device's active sensing group, so the reader must see which group and which rate
 #: the candidate was matched against.
-_RECORD_VALUE_ON_PASS = ("D03", "D04", "D16", "D19", "D30", "D31")
+#: D52 joined on 2026-09-22 for D30's reason: its pass is derived from the contacts programmed on
+#: the device, so the reader must see which contacts and which pair it was checked against.
+#: D53 joined on 2026-10-18: a pass names the rate and the nearest landing, so a reader sees how
+#: close the band sits to a folded multiple of the stimulation rate.
+_RECORD_VALUE_ON_PASS = ("D03", "D04", "D16", "D19", "D30", "D31", "D52", "D53")
 
 
 # ------------------------------------------------------------------------------------------------
@@ -1476,6 +1748,7 @@ RULES = (
         title="Chronic pain is not an approved indication for this device",
         source="WP", page="p. 37",
         severity="advisory",
+        short_label="Approved indication for device",
         human_text=(
             "Medtronic DBS Therapy is approved for Parkinson's disease, essential tremor, dystonia, "
             "obsessive-compulsive disorder and epilepsy. Chronic pain is not among them, so "
@@ -1491,6 +1764,7 @@ RULES = (
         title="Adaptive Therapy is labelled for the Parkinson's disease indication only",
         source="WP + A610", page="WP p. 1, WP p. 13, A610 p. 35",
         severity="advisory",
+        short_label="Adaptive labelled for indication",
         human_text=(
             "The white paper's cover page and body both restrict BrainSense Adaptive DBS to the "
             "Parkinson's disease indication, and the programming guide describes it as a therapy "
@@ -1507,17 +1781,18 @@ RULES = (
               "Adaptive Therapy setup",
         source="WP", page="p. 9, p. 13 (workflow steps at A610 pp. 41-42)",
         severity="blocking",
+        short_label="Programmed in Parkinson's mode",
         human_text=(
-            "Non-Parkinson's patients are defaulted to Dual Threshold mode, cannot choose the "
-            "threshold mode, and are not allowed to continue the workflow past the threshold "
-            "capture step. The device will still record LFP power, still let a clinician capture "
-            "two thresholds against two stimulation amplitudes, and still display the Timeline and "
-            "LFP Chart; it will not automatically move amplitude. A recommendation made for such a "
-            "participant is therefore a prepared configuration and not an executable one. For "
-            "participant RCS08 this rule PASSES because that participant is programmed in "
-            "Parkinson's mode and the Adaptive workflow is reachable, and the observed programming "
-            "mode is recorded on the report so that a reader can see which regime it describes. It "
-            "is kept blocking because it fails again for a participant programmed otherwise."
+            (
+            "Non-Parkinson's patients are defaulted to Dual Threshold mode, cannot choose the threshold mode, "
+            'and are not allowed to continue the workflow past the threshold capture step. The device will '
+            'still record LFP power, still let a clinician capture two thresholds against two stimulation '
+            'amplitudes, and still display the Timeline and LFP Chart; it will not automatically move '
+            'amplitude. A recommendation made for such a participant is therefore a prepared configuration '
+            'and not an executable one. The observed programming mode is recorded on the report so the reader '
+            'can see which regime it describes. The rule remains blocking for participants programmed outside '
+            'the required mode.'
+            )
         ),
         predicate=_p_d03,
     ),
@@ -1526,6 +1801,7 @@ RULES = (
         title="A single neurostimulator is required",
         source="A610", page="pp. 35-36",
         severity="unknown",
+        short_label="Single neurostimulator implanted",
         human_text=(
             "Adaptive Therapy has only been studied in patients with a single Percept "
             "neurostimulator and should not be configured in patients who have two, because "
@@ -1543,6 +1819,7 @@ RULES = (
         title="General DBS contraindications",
         source="WP", page="p. 37",
         severity="advisory",
+        short_label="No general DBS contraindication",
         human_text=(
             "DBS Therapy is contraindicated for patients unable to properly operate the "
             "neurostimulator. Diathermy, transcranial magnetic stimulation and certain MRI "
@@ -1558,6 +1835,7 @@ RULES = (
         title="Tissue-damage warning attached to the parameters this module recommends",
         source="WP", page="p. 38",
         severity="advisory",
+        short_label="Tissue-damage warning heeded",
         human_text=(
             "There is a potential risk of brain tissue damage using stimulation parameter settings "
             "of high amplitudes and wide pulse widths. This module's output is exactly a pair of "
@@ -1572,6 +1850,7 @@ RULES = (
         title="Rebound on abrupt cessation constrains the lower adaptive limit",
         source="WP + A610-MD", page="WP p. 38, A610-MD p. 115",
         severity="advisory",
+        short_label="Lower adaptive limit safe",
         human_text=(
             "Abrupt cessation of stimulation should be avoided because symptoms may return with "
             "intensity greater than before implant. The consequence for this module is that the "
@@ -1588,6 +1867,7 @@ RULES = (
         title="Adaptive Therapy is confined to the alpha-beta range, 8 to 30 Hz",
         source="A610 + WP", page="A610 p. 37, WP p. 14",
         severity="blocking",
+        short_label="Band inside 8–30 Hz",
         human_text=(
             "Adaptive Therapy is available only for electrode configurations with a signal of "
             "interest inside the alpha-beta range of 8 to 30 Hz; a sensing-only configuration uses "
@@ -1613,6 +1893,7 @@ RULES = (
         #: than stopping the workflow. It is the one rule in this table that was deliberately
         #: softened, and the reason is recorded here so it is not silently hardened again.
         severity="advisory",
+        short_label="Signal above 1.2 µVp",
         human_text=(
             "To capture LFP thresholds and set up Adaptive Therapy the programming guide recommends "
             "an electrode configuration whose alpha-beta band LFP amplitude is greater than "
@@ -1631,6 +1912,7 @@ RULES = (
         title="The band of interest is approximately 5 Hz wide",
         source="WP", page="p. 8",
         severity="advisory",
+        short_label="Band 5 Hz wide",
         human_text=(
             "The user selects a frequency band of interest approximately 5 Hz wide to track "
             "chronically. The document prints no adjustable range, so a width away from 5 Hz is "
@@ -1645,6 +1927,7 @@ RULES = (
         title="LFP Power is a linear sum of squared magnitude, not a log quantity",
         source="A610 + WP", page="A610 p. 41, WP p. 9",
         severity="blocking",
+        short_label="Power read as linear",
         human_text=(
             "LFP Power is calculated as the sum of the squared LFP magnitude at each frequency in "
             "the selected band, similar to an area under the curve. It is presented in least "
@@ -1663,6 +1946,7 @@ RULES = (
         title="Power values are not comparable across centre frequencies or threshold modes",
         source="WP", page="p. 9",
         severity="blocking",
+        short_label="Power compared like-for-like",
         human_text=(
             "LFP power values from different centre frequencies should not be directly compared, "
             "and because the FFT size differs between Single Threshold and the other two modes, "
@@ -1678,6 +1962,7 @@ RULES = (
         title="Sampling at 250 Hz with a second, user-configurable high-pass at 1 or 10 Hz",
         source="WP", page="p. 19, p. 11",
         severity="blocking",
+        short_label="Sampling and filter settings",
         human_text=(
             "All recorded data is sampled at 250 Hz and passes two low-pass filters at 100 Hz and "
             "two high-pass filters, one fixed at 1 Hz and a second, user-configurable one at either "
@@ -1697,6 +1982,7 @@ RULES = (
         title="Power averaging is a unique, non-overlapping average",
         source="WP", page="p. 12",
         severity="advisory",
+        short_label="Averaging windows non-overlapping",
         human_text=(
             "The power averaging duration is not a moving average; each average contains a unique, "
             "non-overlapping set of data. Consecutive power samples therefore share no raw data, "
@@ -1711,6 +1997,7 @@ RULES = (
         title="Only a BrainSense Setup channel can become a control signal",
         source="WP", page="p. 18, Table 1",
         severity="blocking",
+        short_label="A BrainSense Setup channel",
         human_text=(
             "BrainSense Setup's signal check offers 3 channels per hemisphere on both 1x4 and "
             "SenSight leads, while Electrode Survey offers 6 or 15, Electrode Identifier 4 or 10, "
@@ -1727,25 +2014,24 @@ RULES = (
         title="Impedance gates the sensing channel, and the test is a precondition",
         source="WP + A610", page="WP p. 8, A610 p. 36, A610 p. 47",
         severity="blocking",
+        short_label="Sensing impedance in range",
         human_text=(
-            "The device excludes sense channels with potential shorts, below 250 ohms for 1x4 leads "
-            "or 350 ohms for SenSight leads, and potential opens above 10 kilohms. An impedance "
-            "test is required before BrainSense setup can proceed. The test itself runs at 80 "
-            "microseconds and 100 Hz at 0.1, 0.4 or 1.0 mA, rising to 450 microseconds if impedance "
-            "measures higher than normal. An untested channel fails this rule even when a stored "
-            "impedance value happens to be in range, because the stored value may predate the "
-            "current lead state.\n\n"
-            "PI DECISION, 2026-09-12: the device's DEFAULT impedance test steps a low measurement "
-            "current up automatically, and at that low current a healthy lead can read above the "
-            "10 kilohm open limit even though the same lead reads normal at a fixed, higher "
-            "measurement current. Measured on RCS08's own record: 351 of 544 recordings run in "
-            "the automatic mode read the Left lead's worst pair above 10,000 ohms, against 0 of "
-            "18 recordings run at a fixed current. A high reading produced only by the automatic "
-            "mode must not, by itself, fail this rule. This predicate is therefore evaluated "
-            "against the NEWEST recording run at a FIXED measurement current, when one exists on "
-            "record, and only falls back to the newest recording of any kind when no fixed-current "
-            "recording exists -- this is a deliberate reading of the data, not an oversight, and "
-            "should not be reverted without a further PI decision."
+            (
+            'The device excludes sense channels with potential shorts, below 250 ohms for 1x4 leads or 350 '
+            'ohms for SenSight leads, and potential opens above 10 kilohms. An impedance test is required '
+            'before BrainSense setup can proceed. The test itself runs at 80 microseconds and 100 Hz at 0.1, '
+            '0.4 or 1.0 mA, rising to 450 microseconds if impedance measures higher than normal. An untested '
+            'channel fails this rule even when a stored impedance value happens to be in range, because the '
+            'stored value may predate the current lead state.\n\n'
+            "PI DECISION, 2026-09-12: the device's DEFAULT impedance test steps a low measurement current up "
+            'automatically, and at that low current a healthy lead can read above the 10 kilohm open limit '
+            'even though the same lead reads normal at a fixed, higher measurement current. A high reading '
+            'produced only by the automatic mode must not, by itself, fail this rule. This predicate is '
+            'therefore evaluated against the NEWEST recording run at a FIXED measurement current, when one '
+            'exists on record, and only falls back to the newest recording of any kind when no fixed-current '
+            'recording exists -- this is a deliberate reading of the data, not an oversight, and should not '
+            'be reverted without a further PI decision.'
+            )
         ),
         predicate=_p_d16,
     ),
@@ -1754,6 +2040,7 @@ RULES = (
         title="Artefact classes the device itself detects",
         source="WP + A610", page="WP pp. 19-20, A610 p. 72",
         severity="blocking",
+        short_label="No device-detected artefact",
         human_text=(
             "The clinician application flags cardiac artefact, which appears as a large-amplitude 1 "
             "to 2 Hz signal, and motion artefact, which appears as large non-periodic amplitude "
@@ -1773,6 +2060,7 @@ RULES = (
         title="Three threshold modes exist and only two can drive therapy",
         source="A610 + WP", page="A610 p. 39, WP p. 13, WP p. 14",
         severity="blocking",
+        short_label="Mode can drive therapy",
         human_text=(
             "Adaptive Therapy can be configured in Dual Threshold or Single Threshold mode. Single "
             "Threshold Inverse is available only in a Sensing Only configuration. Naming Single "
@@ -1786,21 +2074,23 @@ RULES = (
         title="The control polarity of the two therapy-driving modes is fixed and cannot be inverted",
         source="A610 + WP", page="A610 p. 38, WP p. 14",
         severity="blocking",
+        short_label="Signs suit control law",
         human_text=(
-            "In both Dual and Single Threshold the amplitude ramps UP when the LFP passes above "
-            "threshold, and the white paper states the precondition as a requirement on the signal: "
-            "when stimulation is high, the LFP must be suppressed compared with when stimulation is "
-            "low. The one mode with the opposite relationship, Single Threshold Inverse, is the one "
-            "that cannot deliver therapy. For a pain biomarker this is a hard sign constraint and it "
-            "is separate from the amplitude-response requirement: band power must FALL as amplitude "
-            "rises and RISE as pain rises. A band whose power falls as pain rises cannot drive "
-            "Adaptive Therapy in either direction, and no choice of thresholds repairs it. "
-            "PI decision, 2026-09-12: the two signs this rule reads are the POINT signs of the "
-            "current-to-power and power-to-pain edges, supplied whether or not each edge's "
-            "interval excludes zero; until then a sign was supplied only when its edge was "
-            "resolved, which left this rule unevaluable on RCS08 while all three point signs "
-            "already matched the required pattern. This row's observed text names any sign that "
-            "is not statistically established, with that edge's interval and p-value."
+            (
+            'In both Dual and Single Threshold the amplitude ramps UP when the LFP passes above threshold, '
+            'and the white paper states the precondition as a requirement on the signal: when stimulation is '
+            'high, the LFP must be suppressed compared with when stimulation is low. The one mode with the '
+            'opposite relationship, Single Threshold Inverse, is the one that cannot deliver therapy. For a '
+            'pain biomarker this is a hard sign constraint and it is separate from the amplitude-response '
+            'requirement: band power must FALL as amplitude rises and RISE as pain rises. A band whose power '
+            'falls as pain rises cannot drive Adaptive Therapy in either direction, and no choice of '
+            'thresholds repairs it. PI decision, 2026-09-12: the two signs this rule reads are the POINT '
+            "signs of the current-to-power and power-to-pain edges, supplied whether or not each edge's "
+            'interval excludes zero; until then a sign was supplied only when its edge was resolved. The '
+            "current policy separates point-sign agreement from statistical establishment. This row's "
+            "observed text names any sign that is not statistically established, with that edge's interval "
+            'and p-value.'
+            )
         ),
         predicate=_p_d19,
     ),
@@ -1809,6 +2099,7 @@ RULES = (
         title="Per-mode timing defaults, and the documented range each may be set within",
         source="WP + A610 + FDA", page="WP p. 14 Table 1 ('Default Settings'), A610 p. 38, p. 42; FDA SSED P960009/S478 Table 2 p. 8; Tip Cards p. 8",
         severity="advisory",
+        short_label="Timing within documented ranges",
         human_text=(
             "The two therapy-driving modes differ throughout in their DEFAULTS: FFT size 256 "
             "against 64 points, adaptive update rate 5 Hz against 20 Hz, averaging 1200 ms against "
@@ -1832,16 +2123,18 @@ RULES = (
         title="Onset duration inside its selection range: 0-30 s (Dual, both timers), 0-30 s (Single)",
         source="Clinician tablet + FDA + ADAPT-PD", page="A610 Adaptive Therapy setup screens, read 2026-09-15; FDA SSED P960009/S478 Table 2 p. 8; Stanslaski et al. 2024 for the trial's own settings",
         severity="advisory",
+        short_label="Onset duration 0–30 s",
         human_text=(
-            "The clinician tablet offers the onset duration from 0.00 ms to 30.00 s on both Dual "
-            "Threshold timers and in Single Threshold mode (read directly by the PI, 2026-09-15). "
-            "The FDA approval summary prints 0 to 6 min for Dual Threshold; neither Medtronic manual "
-            "on this machine prints a range, so the tablet's 30 s is the value applied and the FDA "
-            "figure is recorded as a discrepancy. The ADAPT-PD "
-            "trial let its clinicians set 1.2 to 2 seconds (Dual) and 200 to 500 milliseconds "
-            "(Single); until 2026-09-13 this rule treated the trial's setting as the device's "
-            "range, under which the 30 s onset RCS08's device runs would have read as out of "
-            "range. A value outside the documented range cannot be entered on the tablet."
+            (
+            'The clinician tablet offers the onset duration from 0.00 ms to 30.00 s on both Dual Threshold '
+            'timers and in Single Threshold mode (read directly by the PI, 2026-09-15). The FDA approval '
+            'summary prints 0 to 6 min for Dual Threshold; neither Medtronic manual on this machine prints a '
+            "range, so the tablet's 30 s is the value applied and the FDA figure is recorded as a "
+            'discrepancy. The ADAPT-PD trial let its clinicians set 1.2 to 2 seconds (Dual) and 200 to 500 '
+            "milliseconds (Single); until 2026-09-13 this rule treated the trial's setting as the device's "
+            'range, which could wrongly reject adjusted values within the device envelope. A value outside '
+            'the documented range cannot be entered on the tablet.'
+            )
         ),
         predicate=_p_d21,
     ),
@@ -1850,6 +2143,7 @@ RULES = (
         title="Adaptive amplitude behaviour differs between the two therapy-driving modes",
         source="ADAPT-PD + WP", page="Stanslaski et al. 2024, WP p. 13",
         severity="advisory",
+        short_label="Mode amplitude behaviour understood",
         human_text=(
             "In single threshold mode the device adjusted amplitude over 250 ms between the upper "
             "and lower stimulation limits, producing a trapezoidal pattern that reaches the limits. "
@@ -1866,6 +2160,7 @@ RULES = (
         title="One threshold mode per group",
         source="A610", page="p. 39",
         severity="advisory",
+        short_label="One mode per group",
         human_text=(
             "The same threshold mode is used for all adaptive programs in a group. This is surfaced "
             "rather than enforced because this evaluator is handed a single candidate configuration "
@@ -1881,6 +2176,7 @@ RULES = (
         title="Dual Threshold capture requires two therapeutic amplitudes in a defined order",
         source="A610 + WP", page="A610 p. 40 Table 5, WP p. 15",
         severity="blocking",
+        short_label="Two capture currents ordered",
         human_text=(
             "Set the amplitude to the lower limit of therapeutic benefit and capture the Upper LFP "
             "Threshold there, then increase to the upper limit of therapeutic benefit and capture "
@@ -1898,6 +2194,7 @@ RULES = (
         title="Single Threshold capture uses one therapeutic amplitude and a forced zero",
         source="A610 + WP", page="A610 p. 40, WP p. 15",
         severity="advisory",
+        short_label="Single-threshold capture valid",
         human_text=(
             "In Single Threshold mode the clinician increases to the upper limit of therapeutic "
             "benefit and captures, and the application then automatically captures a second LFP "
@@ -1915,6 +2212,7 @@ RULES = (
         title="Capture failure modes are named by the device and can be predicted in advance",
         source="WP + A610", page="WP p. 15, A610 p. 73",
         severity="advisory",
+        short_label="Capture failures ruled out",
         human_text=(
             "The thresholds the system gathers can be too close together or inverted, in which case "
             "the application prompts for recapture or manual adjustment, and a RECAPTURE THRESHOLDS "
@@ -1930,10 +2228,16 @@ RULES = (
     ),
     types.DeviceConstraint(
         rule_id="D27",
-        title="Stimulation artefact contaminates the capture above 5 mA or 120 us",
+        title=("Stimulation artefact contaminates the capture above 5 mA or 120 us "
+               "(not evidence based - disregard)"),
         source="A610", page="p. 73",
-        severity="blocking",
+        # RECORD ONLY (the PI, 2026-10-16, decision 478: "not evidence based - disregard"). Kept in
+        # the ledger with its text and that note; no machine check, so it never refuses, never goes
+        # unchecked and never warns. Its check `_p_d27` and observer `_o_d27` stay in this file.
+        severity="advisory",
+        short_label="Stimulation below artefact limits",
         human_text=(
+            "Not evidence based - disregard. "
             "If the stimulation level is above 5 mA or 120 microseconds, the artefact of "
             "stimulation may make the LFP appear elevated when the Lower LFP Threshold is captured. "
             "This is a measurement-validity ceiling on the capture procedure and it is distinct "
@@ -1944,13 +2248,14 @@ RULES = (
             "asymmetric between hemispheres, most commonly 60 microseconds on the left and 160 on "
             "the right, so right-hemisphere captures fail this rule as programmed today."
         ),
-        predicate=_p_d27,
+        predicate=None,
     ),
     types.DeviceConstraint(
         rule_id="D28",
         title="Adaptive Amplitude Limits inherit the capture amplitudes",
         source="A610 + WP + ADAPT-PD", page="A610 p. 41, WP p. 15, Stanslaski et al. 2024",
         severity="blocking",
+        short_label="Limits match capture currents",
         human_text=(
             "The Adaptive Amplitude Limits default to the stimulation amplitudes used when "
             "capturing the LFP thresholds, and they are adjustable. When BrainSense status changes "
@@ -1969,6 +2274,7 @@ RULES = (
         title="Configuration changes destroy calibration, and aligned segments must match",
         source="A610", page="p. 37, p. 39",
         severity="blocking",
+        short_label="Calibration kept after changes",
         human_text=(
             "Changing the electrode configuration resets amplitude to zero and clears the captured "
             "thresholds and the BrainSense configuration. Later in the workflow, changing it may "
@@ -1988,6 +2294,7 @@ RULES = (
         title="Pulse width and rate become unadjustable once BrainSense is set up",
         source="A610", page="p. 34 footnote a, p. 44",
         severity="blocking",
+        short_label="Rate and width locked",
         human_text=(
             "Pulse width and rate cannot be adjusted once BrainSense has been set up for either "
             "hemisphere. Re-enabling those patient limits requires removing BrainSense from the "
@@ -2013,6 +2320,7 @@ RULES = (
         title="A BrainSense group has a narrower parameter envelope whose values are unpublished",
         source="A610", page="p. 34, p. 35; general envelope at A610-MD p. 119",
         severity="unknown",
+        short_label="BrainSense rate floor known",
         human_text=(
             "For a group configured with BrainSense the maximum pulse width and maximum rate are "
             "lower, and the minimum rate is HIGHER, than for a group without BrainSense, and the "
@@ -2035,6 +2343,7 @@ RULES = (
         title="Feature exclusions for BrainSense and Adaptive groups",
         source="A610", page="p. 34, p. 35",
         severity="blocking",
+        short_label="No excluded features used",
         human_text=(
             "BrainSense cannot be configured in a hemisphere that includes a pocket adaptor. "
             "BrainSense and Multiple Rates cannot be used in a single group simultaneously. "
@@ -2053,6 +2362,7 @@ RULES = (
         title="What the patient can still do under Adaptive Therapy",
         source="A610 + WP", page="A610 p. 35, p. 43, WP p. 13",
         severity="advisory",
+        short_label="Patient controls understood",
         human_text=(
             "Under Adaptive Therapy the patient can turn stimulation on and off, pause and resume "
             "Adaptive Therapy, and switch groups. The patient cannot directly increase or decrease "
@@ -2069,6 +2379,7 @@ RULES = (
         title="The Paused Amplitude is a required safety parameter",
         source="A610", page="p. 35, p. 43",
         severity="blocking",
+        short_label="Paused amplitude set",
         human_text=(
             "Setting the Paused Amplitude is necessary to ensure that patients can pause Adaptive "
             "Therapy because of stimulation-related side effects or a loop that is not performing. "
@@ -2086,6 +2397,7 @@ RULES = (
         title="Automatic suspensions of BrainSense and Adaptive Therapy",
         source="A610 + WP", page="A610 pp. 35-36, WP p. 13",
         severity="advisory",
+        short_label="Automatic suspensions understood",
         human_text=(
             "BrainSense is automatically disabled in MRI mode and during a recharging session, and "
             "re-enabled afterwards. No LFP data is recorded during an impedance test and Adaptive "
@@ -2104,6 +2416,7 @@ RULES = (
         title="The recharge interval calculator cannot model Adaptive Therapy",
         source="WP", page="p. 19",
         severity="advisory",
+        short_label="Recharge estimate not modelled",
         human_text=(
             "Because Adaptive Therapy cannot be predicted, the recharge interval calculator "
             "requires Adaptive Therapy to be paused in order to be used. Any recharge-interval "
@@ -2118,6 +2431,7 @@ RULES = (
         title="Electromagnetic interference can move the stimulation amplitude",
         source="A610", page="p. 35",
         severity="advisory",
+        short_label="Interference risk understood",
         human_text=(
             "Electromagnetic interference may be misinterpreted as LFP signal during sensing and "
             "cause an increase or decrease in stimulation amplitude, although the amplitude stays "
@@ -2136,6 +2450,7 @@ RULES = (
         title="BrainSense and Adaptive Therapy are hemisphere-specific",
         source="A610", page="p. 44",
         severity="blocking",
+        short_label="Sensing on treated side",
         human_text=(
             "Adaptive Therapy is a hemisphere-specific feature, and disabling it for a whole group "
             "means repeating the process for the other hemisphere; the same is true of BrainSense. "
@@ -2150,19 +2465,19 @@ RULES = (
         title="Contralateral sensing is supported, as a documented fallback",
         source="A610", page="p. 37, p. 39",
         severity="blocking",
+        short_label="Opposite-side sensing acknowledged",
         human_text=(
-            "For dual lead implants only, when the hemisphere contralateral to the selected one has "
-            "been set up for BrainSense it appears on the Signal Test screen as a sensing option, "
-            "and selecting it uses that hemisphere's sensing data to drive Adaptive Therapy for the "
-            "selected hemisphere. The guide states the intent plainly: it is for situations where "
-            "configurations on the currently selected lead are not acceptable for sensing setup, "
-            "for example when electrode 0, electrode 3 or bipolar stimulation is desired. In Dual "
-            "Threshold mode amplitude is driven from the same hemisphere unless a contralateral "
-            "sensing configuration is set up. So a contralateral pairing must be marked as the "
-            "fallback it is rather than treated as equivalent to an ipsilateral one, and it "
-            "requires a dual lead implant. The distinction is live on the present data: the current "
-            "screen holds 25 ipsilateral and 25 contralateral pairings among its 50 usable cells, "
-            "and two of the four configurations it licenses are contralateral."
+            (
+            'For dual lead implants only, when the hemisphere contralateral to the selected one has been set '
+            'up for BrainSense it appears on the Signal Test screen as a sensing option, and selecting it '
+            "uses that hemisphere's sensing data to drive Adaptive Therapy for the selected hemisphere. The "
+            'guide states the intent plainly: it is for situations where configurations on the currently '
+            'selected lead are not acceptable for sensing setup, for example when electrode 0, electrode 3 or '
+            'bipolar stimulation is desired. In Dual Threshold mode amplitude is driven from the same '
+            'hemisphere unless a contralateral sensing configuration is set up. So a contralateral pairing '
+            'must be marked as the fallback it is rather than treated as equivalent to an ipsilateral one, '
+            'and it requires a dual lead implant.'
+            )
         ),
         predicate=_p_d39,
     ),
@@ -2171,6 +2486,7 @@ RULES = (
         title="Single Threshold mode couples the hemispheres",
         source="A610", page="p. 39",
         severity="blocking",
+        short_label="Hemisphere coupling acknowledged",
         human_text=(
             "If both hemispheres have an Adaptive Therapy program configured in Single Threshold "
             "mode, sensing LFP data from EITHER hemisphere will drive Adaptive Therapy. That "
@@ -2192,6 +2508,7 @@ RULES = (
         title="Charge density above 30 microcoulombs per square centimetre per phase",
         source="A610 (limit) and SL (lead area)", page="A610 p. 22, SL p. 10",
         severity="advisory",
+        short_label="Charge density within limit",
         human_text=(
             "A survey of the literature on electrical stimulation of neural tissue suggests damage "
             "may occur above 30 microcoulombs per square centimetre per phase, and the Medtronic "
@@ -2211,6 +2528,7 @@ RULES = (
         title="Out-of-range delivery is a silent underdelivery failure mode",
         source="A610", page="p. 22",
         severity="advisory",
+        short_label="No out-of-range delivery",
         human_text=(
             "Certain combinations of amplitude, pulse width and rate are too high for the system to "
             "provide in its current state, producing an alert that stimulation is not being "
@@ -2226,6 +2544,7 @@ RULES = (
         title="Lead electrical specifications, including a lead-length amplitude ceiling",
         source="SL", page="p. 10",
         severity="advisory",
+        short_label="Within lead electrical limits",
         human_text=(
             "SenSight models B33005 and B33015 have an expected lifetime of 5 years, a maximum "
             "conductor resistance of 100 ohms at all lengths, lengths of 33 and 42 cm, surface "
@@ -2243,6 +2562,7 @@ RULES = (
         title="Rates below 30 Hz should not be programmed",
         source="A610-MD", page="p. 115",
         severity="advisory",
+        short_label="Rate ≥30 Hz",
         human_text=(
             "The use of rates below 30 Hz may drive tremor, that is, cause it to occur at the same "
             "frequency as the programmed frequency, and for that reason rates should not be "
@@ -2258,6 +2578,7 @@ RULES = (
         title="Battery cost of the two adaptive modes",
         source="WP", page="p. 19",
         severity="advisory",
+        short_label="Battery cost acceptable",
         human_text=(
             "In the ADAPT-PD study, using Percept PC devices, Dual Threshold patients showed a "
             "median longevity improvement against conventional DBS of 5 percent per year while "
@@ -2276,6 +2597,7 @@ RULES = (
         title="Snapshot and event capacity, with silent overwrite",
         source="WP", page="p. 11",
         severity="advisory",
+        short_label="Snapshot storage not overwritten",
         human_text=(
             "Percept RC records up to 200 LFP snapshots, for example 100 per hemisphere if "
             "bilateral, and stores up to 800 non-LFP events, and when the maximum is exceeded the "
@@ -2293,6 +2615,7 @@ RULES = (
         title="Streaming export limits and the tablet's screen timeout",
         source="WP", page="p. 12",
         severity="advisory",
+        short_label="Streaming export limits respected",
         human_text=(
             "A610 version 5.0 supports exporting files with up to 8 hours of streaming data. There "
             "is no maximum streaming duration, but long sessions fill tablet memory, lengthen JSON "
@@ -2308,6 +2631,7 @@ RULES = (
         title="Turning stimulation on or off while streaming creates a seven-second hole",
         source="WP", page="p. 20",
         severity="advisory",
+        short_label="No switching while streaming",
         human_text=(
             "With A610 v5.0, turning stimulation on or off while streaming causes a 7 second "
             "initialising period during which data is not available in the JSON export. The "
@@ -2323,6 +2647,7 @@ RULES = (
         title="Home streaming cadence as instructed to this participant",
         source="PTG", page="p. 16",
         severity="advisory",
+        short_label="Home streaming cadence followed",
         human_text=(
             "The patient guide instructs the patient to keep the communicator within three feet, "
             "notes that the screen stays on for 60 minutes and must then be touched, states that "
@@ -2341,6 +2666,7 @@ RULES = (
         title="The manufacturer prescribes a specific titration, and it is short",
         source="A610", page="p. 45, p. 72",
         severity="advisory",
+        short_label="Manufacturer titration followed",
         human_text=(
             "Under the heading for using LFP streaming data to view real-time effects of "
             "stimulation, the guide says to pause Adaptive Therapy if configured, set amplitude to "
@@ -2362,6 +2688,7 @@ RULES = (
         title="The device names its own closed-loop failure modes and their remedies",
         source="A610", page="pp. 73-74 (Timeline observable at p. 39, p. 56)",
         severity="advisory",
+        short_label="Device failure modes known",
         human_text=(
             "The troubleshooting table enumerates four adaptive failure states and what to change "
             "for each. For stimulation chronically too low: raise the maximum amplitude limit if "
@@ -2380,11 +2707,81 @@ RULES = (
         ),
         predicate=None,
     ),
+    types.DeviceConstraint(
+        rule_id="D52",
+        title="The sensing pair must flank the contacts that stimulate",
+        source="A610 + WP + BrainSense Tip Cards", page="A610 p. 36; WP p. 8; Tip Cards pp. 7-8",
+        severity="blocking",
+        short_label="Sensing pair flanks stimulation",
+        human_text=(
+            "While a lead stimulates, BrainSense can sense only on the two contacts immediately "
+            "flanking the stimulating contact or contacts: stimulating on contact 1 allows sensing "
+            "on 0-2, on contact 2 allows 1-3, on contacts 1 and 2 together allows 0-3, and "
+            "stimulating on an end contact (0 or 3) allows no sensing pair on that lead. So a band "
+            "can drive adaptive therapy only on the pair the contacts in force allow; any other "
+            "pair needs the stimulating contacts changed first, which is a programming decision "
+            "of its own and not a detail of this configuration. The contacts are read from the "
+            "settings in force on the sensing lead. The Stim Optimizer's readiness card applies "
+            "the same rule (decision 217); this page did not until 2026-09-22, and said the "
+            "device permitted L 0-2+ while the left lead stimulated on contact 2."
+        ),
+        predicate=_p_d52,
+    ),
+    types.DeviceConstraint(
+        rule_id="D53",
+        title="No folded multiple of the stimulation rate in or near the band",
+        source="BRAVO rule (the PI, 2026-10-18); sampling rate from D13",
+        page="A610 sampling 250 Hz (D13); landing arithmetic analytics.harmonic_landings_hz",
+        severity=("blocking" if FOLDED_RATE_REFUSES else "advisory"),
+        short_label="Clear of stimulation multiples",
+        human_text=(
+            "The device samples at 250 Hz, so a whole multiple of the stimulation rate above 125 Hz "
+            "reappears at a lower frequency; at 55 Hz the multiples land at 25, 30, 55, 60, 80, 85, "
+            "110 and 115 Hz (multiples 1 to 8). A band that carries a folded multiple of the "
+            "stimulation rate may reflect stimulation interference, so a "
+            "band is warned about when any multiple lands inside it or within 5 Hz of its edges, "
+            "at the rate in force or the rate proposed on the page's stimulation program. A "
+            "different rate whose multiples all land at least 5 Hz from the band clears it; the "
+            "warning lists the nearest such rates (on a 5 Hz step, inside the device's 2 to 250 "
+            "Hz envelope, which is necessary and not sufficient: D31 still decides whether a "
+            "BrainSense group accepts the rate). A warning only, never a refusal (the PI, "
+            "2026-10-18, decision 485); for a few hours that day it refused (decision 481), and "
+            "before that it warned (decision 220)."
+        ),
+        predicate=_p_d53,
+    ),
 )
 
 
 #: Rule identifier to rule, for callers that want one rule rather than the whole table.
 RULES_BY_ID = {rule.rule_id: rule for rule in RULES}
+
+
+#: WHAT CLEARS A BLOCKING RULE THAT FAILS, one of four words, carried on every row as
+#: ``resolved_by`` so the page can name who acts on a refusal. The evaluator gives every blocking
+#: rule that fails the same kind ("failed"), and the Closed-Loop page used to map that one kind to
+#: one actor, "measurement, a property of the recording", for every refusal; D52 (the sensing pair
+#: must flank the stimulating contacts) is cleared at the programmer by a change of contacts, not by
+#: measuring anything (review finding, 2026-09-26).
+#:
+#: * ``configuration``: a change of settings at the programmer (contacts, mode, currents, pulse
+#:   width, group features, the capture procedure).
+#: * ``band``: another band or sensing pair; more measurement on this one does not clear it.
+#: * ``recording``: a property of the lead or of the recording (impedance, a device-detected
+#:   artefact); a new measurement that meets the rule clears it.
+#: * ``analysis``: how this platform computed the numbers; nothing at the programmer clears it.
+#:
+#: Rules that cannot be evaluated keep the actor of their own kind (a value not read off the
+#: programmer, an input not supplied, a check that raised), whatever is written here.
+#: ``tests/test_resolved_by.py`` fails if a blocking rule is missing from this table.
+RESOLVED_BY = {
+    "D03": "configuration", "D08": "band", "D11": "analysis", "D12": "analysis",
+    "D13": "configuration", "D15": "band", "D16": "recording", "D17": "recording",
+    "D18": "configuration", "D19": "band", "D24": "configuration", "D27": "configuration",
+    "D28": "configuration", "D29": "configuration", "D30": "configuration", "D32": "configuration",
+    "D34": "configuration", "D38": "configuration", "D39": "configuration", "D40": "configuration",
+    "D52": "configuration", "D53": "configuration",
+}
 
 
 # ------------------------------------------------------------------------------------------------
@@ -2421,6 +2818,10 @@ def _entry(rule, kind, why, observed):
         "why": why,
         "page": rule.page,
         "title": rule.title,
+        # The rule in at most four words, for the decision card's bullets (decision 302).
+        "short_label": rule.short_label,
+        # What clears a failure of this rule (RESOLVED_BY); "" for a rule that names none.
+        "resolved_by": RESOLVED_BY.get(rule.rule_id, ""),
         "source": rule.source,
         "kind": kind,
         "observed": observed,
@@ -2634,6 +3035,12 @@ def check_eligibility(candidate, participant, rules=None) -> types.EligibilityRe
                     rule, "advisory_not_determinable",
                     f"{rule.title}: could not be determined from the inputs given, so it is "
                     f"reported rather than resolved. {rule.human_text}", observed))
+            elif rule.rule_id in _RECORD_VALUE_ON_PASS and observed:
+                # an advisory whose pass a reader must see (D53 since decision 485), as below
+                report.advisories.append(_entry(
+                    rule, "recorded_value",
+                    f"{rule.title}: satisfied, and the value is recorded here because the meaning "
+                    f"of the rest of this report depends on it.", observed))
             continue
 
         # Blocking and unknown rules from here down. Both can disqualify; they differ in what a
@@ -2705,13 +3112,3 @@ def severity_counts(rules=None):
     for rule in table:
         counts[rule.severity] += 1
     return counts
-
-
-# Retained active Aditya interfaces.
-def _finite_timing(candidate, key):
-    """Use the existing numeric input convention, keeping nonfinite/overflow values unknown."""
-    try:
-        value = _num(candidate, key)
-    except OverflowError:
-        return None
-    return value if value is not None and math.isfinite(value) else None

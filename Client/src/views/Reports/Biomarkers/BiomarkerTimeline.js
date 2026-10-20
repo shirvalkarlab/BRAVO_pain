@@ -5,71 +5,56 @@
  * with a long horizontal legend. Self-contained via plotly.js-dist.
  */
 
-import { currentTarget, currentTargetText } from "utils/participantTargets";
 import { useEffect, useRef, useState } from "react";
 import Plotly from "plotly.js-dist";
 
 import MDBox from "components/MDBox";
+import { T, TYPE, RADIUS } from "assets/theme/base/tokens";
+import { SIDE, CONTEXT, CATEGORICAL, SEQUENTIAL } from "assets/theme/base/dataColors";
+import { FONT_FAMILY, MONTH_GRID } from "views/Reports/figureStyle";
+import { BIN_HI } from "./binarizationModel";
 
-// Okabe-Ito colorblind-safe palette, aligned with BiomarkerAnalytics.js. Pain uses vermillion
-// (the HI color) so a viewer reading the histogram and the timeline together gets the same
-// color identity for "pain" across panels.
+// Colours from the shared tokens and data colours (the redesign of 2026-09-26, SPEC.md sections 2
+// and 3.1). This older timeline is drawn only when the acquisition timeline has no records.
 const C = {
-  td: "#0072B2",        // time-domain biomarker (blue)
-  lfp: "#009E73",       // power-domain band power (green) -- legacy fallback only
-  threshold: "#7E8794", // learned threshold
-  pain: "#D55E00",      // NRS / pain (vermillion = HI)
-  stim: "#E69F00",      // stim amplitude (orange)
-  programmed: "#1A1A1A",// device's currently-programmed adaptive trigger (near-black solid, neutral
-                        // so it doesn't collide with the violet/green hemisphere signal families)
+  td: SIDE.left,         // time-domain biomarker
+  lfp: CATEGORICAL[2],   // power-domain band power -- legacy fallback only
+  threshold: CONTEXT,    // learned threshold
+  pain: BIN_HI,          // pain (vermillion, as on the histogram)
+  stim: CATEGORICAL[3],  // stim amplitude
+  programmed: T.ink,     // the device's programmed adaptive trigger
 };
 
-// HEMISPHERE COLOR FAMILIES. Every power row is colored by hemisphere:
-// violet = Left, green = Right. Reviewed anatomy is applied only to display labels. Within a
-// family the chronic 24/7 log is a deeper/saturated shade and the per-session streaming contacts are
-// a lighter shade of the same hue, so hemisphere AND modality both read straight off the trace color.
+// The side colours on every page: left blue, right orange; the chronic log solid, the streaming
+// contacts a lighter tint of the same colour. The accent (region label text) is ink.
 const HEMI = {
-  Left:  { chronic: "#4B2E83", stream: "#9F7BD0", accent: "#5E3C99", region: "" },
-  Right: { chronic: "#0B6B2E", stream: "#5AB48A", accent: "#117733", region: "" },
+  Left:  { chronic: SIDE.left, stream: CATEGORICAL[4], accent: T.ink },
+  Right: { chronic: SIDE.right, stream: CATEGORICAL[1], accent: T.ink },
 };
 function hemiColor(hemi, isChronic) {
   const h = HEMI[hemi];
-  if (!h) return isChronic ? "#117733" : C.lfp;        // non-lateralized fallback
+  if (!h) return C.lfp;                                  // non-lateralized fallback
   return isChronic ? h.chronic : h.stream;
 }
 
-// CATEGORICAL center-frequency palette. The Percept programs a handful of discrete sensing bands; a
-// gradient (viridis) makes neighbours like 23.4 vs 26.4 Hz nearly indistinguishable, so each band
-// gets its OWN distinct, colorblind-aware hue. FIXED map (stable color per frequency across patients
-// and sessions) so the same band always reads the same color. Frequencies are snapped to a Percept
-// FFT bin (~0.977 Hz) by the backend; any value not in the map falls back through the ordered list.
+// Sensing centre frequency, an ordered quantity, on the SEQUENTIAL (cividis) scale in five steps
+// from the lowest band the device senses to 30 Hz (the palest stops vanish on white).
 const FREQ_BIN_HZ = 250 / 256;
-const FREQ_PALETTE = {
-  3.9: "#882255", 4.9: "#AA4499", 5.9: "#CC6677", 6.8: "#993377",
-  7.8: "#332288", 8.8: "#0072B2", 9.8: "#56B4E9", 10.7: "#009E73",
-  11.7: "#94C973", 12.7: "#E69F00", 13.7: "#F0A860", 14.6: "#B8860B",
-  15.6: "#7E6E1F", 16.6: "#A6761D", 17.6: "#666633",
-  18.6: "#44AA99", 19.5: "#117733", 20.5: "#88CCEE", 21.5: "#6699CC",
-  22.5: "#4477AA", 23.4: "#D55E00", 24.4: "#BB5566", 25.4: "#AA3377", 26.4: "#CC79A7",
-};
-const FREQ_FALLBACK = ["#332288", "#0072B2", "#56B4E9", "#009E73", "#94C973",
-                       "#E69F00", "#D55E00", "#CC79A7", "#44AA99", "#882255"];
 function snapFreq(hz) {
   if (hz == null || !Number.isFinite(hz)) return null;
   return Math.round((Math.round(hz / FREQ_BIN_HZ) * FREQ_BIN_HZ) * 10) / 10;
 }
 function freqColor(hz) {
   const b = snapFreq(hz);
-  if (b == null) return "#BDBDBD";
-  if (FREQ_PALETTE[b] != null) return FREQ_PALETTE[b];
-  // deterministic fallback for an unmapped band: index by rounded Hz into the fallback list
-  return FREQ_FALLBACK[Math.abs(Math.round(b)) % FREQ_FALLBACK.length];
+  if (b == null) return CONTEXT;
+  const t = Math.max(0, Math.min(1, (b - 3.9) / (30 - 3.9)));
+  return SEQUENTIAL[Math.round(t * 4)];
 }
-// Luminance-aware text color so the inline "X Hz" label is readable on its swatch.
+// Luminance-aware text colour so the inline "X Hz" label is readable on its swatch.
 function textOn(hexcol) {
   const h = hexcol.replace("#", "");
   const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
-  return (0.299 * r + 0.587 * g + 0.114 * b) > 150 ? "#111111" : "#FFFFFF";
+  return (0.299 * r + 0.587 * g + 0.114 * b) > 150 ? T.ink : T.onFill;
 }
 // Hz formatter for ribbon / legend labels (drop trailing zero: 9.8, 26.4, 10).
 function fmtHz(hz) {
@@ -85,7 +70,7 @@ function fmtHz(hz) {
 const SUP = { "-": "\u207B", "+": "\u207A" };
 function fmtContact(label) {
   if (label == null) return "";
-  const s = currentTargetText(String(label));
+  const s = String(label);
   if (s.indexOf("\u207B") >= 0 || s.indexOf("\u207A") >= 0) return s; // already has polarity
   return s.replace(/(\d+)\s*-\s*(\d+)/, (_, a, b) => `${a}${SUP["-"]}${b}${SUP["+"]}`);
 }
@@ -145,6 +130,14 @@ function movingAverage(y, win = 3) {
   });
 }
 
+/** The lead's stored name for one side, from the per-recording regions the server sends.
+ *  Never infer anatomy from the device's built-in region list. Empty when the payload carries none. */
+export function regionForSide(recordedPowers, hemi) {
+  const want = String(hemi || "").toUpperCase();
+  const hit = (recordedPowers || []).find((p) => p && p.region && String(p.raw || "").toUpperCase().endsWith(want));
+  return hit ? hit.region : "";
+}
+
 function BiomarkerTimeline({ data, height }) {
   const ref = useRef(null);
   // LINK AXES: when true (default) every row shares one time axis, so panning/box-zooming any row
@@ -152,14 +145,14 @@ function BiomarkerTimeline({ data, height }) {
   // row zooms independently. Implemented with Plotly per-row x-axes + `matches`.
   const [linked, setLinked] = useState(true);
 
+  // Purge ONLY on true unmount, mirroring BiomarkerAnalytics.js's Fig component. The main effect
+  // below used to call Plotly.purge in ITS OWN cleanup, which ran on every [data, height, linked]
+  // change -- destroying and rebuilding the whole plot from scratch on every update instead of
+  // letting Plotly.react patch it in place, resetting the user's zoom/pan every time.
+  useEffect(() => () => { if (ref.current) Plotly.purge(ref.current); }, []);
+
   useEffect(() => {
-    const gd = ref.current;
-    // An absent/malformed result must not leave the preceding result visible.
-    if (!data || !Array.isArray(data.timeline) || data.timeline.length === 0 ||
-        data.timeline.some((row) => !row || typeof row !== "object" || Array.isArray(row))) {
-      Plotly.purge(gd);
-      return;
-    }
+    if (!ref.current || !data || !data.timeline || data.timeline.length === 0) return;
 
     const recs = data.timeline;
     const cols = new Set(data.channels || Object.keys(recs[0]));
@@ -176,13 +169,13 @@ function BiomarkerTimeline({ data, height }) {
       // carries an above-cap band, don't print a misleading >50 Hz frequency in the title.
       const fhz = b && typeof b[4] === "number" ? b[4] : null;
       const title = (fhz != null && fhz < 50)
-        ? `Time-domain biomarker — ${fhz.toFixed(1)} Hz`
-        : "Time-domain biomarker (PSD)";
+        ? `Time domain (TD) biomarker — ${fhz.toFixed(1)} Hz`
+        : "Time domain (TD) biomarker";
       rows.push({
         title,
-        unit: "PSD power",
+        unit: "TD band power",
         hemi: null,
-        traces: [{ name: "PSD biomarker", y: col("td_biomarker_value"), color: C.td }],
+        traces: [{ name: "TD biomarker", y: col("td_biomarker_value"), color: C.td }],
       });
     }
     // POWER-DOMAIN ROWS. Each sensing contact gets its OWN row (no cross-channel pooling — you
@@ -331,10 +324,6 @@ function BiomarkerTimeline({ data, height }) {
     if (stimCol) rows.push({ title: "Stimulation", unit: "mA", hemi: null,
       traces: [{ name: "Amplitude", y: col(stimCol), color: C.stim }] });
 
-    if (rows.length === 0) {
-      Plotly.purge(gd);
-      return;
-    }
     const n = Math.max(rows.length, 1);
     // Pixel-based row heights with a VARIABLE inter-row gap: each row is a fixed pixel band, and the
     // first row of a hemisphere block gets a larger gap above it to seat its big "LEFT/RIGHT
@@ -378,11 +367,13 @@ function BiomarkerTimeline({ data, height }) {
     const layout = {
       height: height || totalFoot * unit * 0 + ROW_PX * n + (nStarts * 34) + 70,
       margin: { l: 82, r: usedFreqs.length ? 172 : 104, t: 20, b: 42 },
-      // Stable for this participant's mounted plot; ordinary updates preserve zoom/pan.
+      // Stable across data updates (mirrors BiomarkerAnalytics.js's Fig component) so a re-render
+      // triggered by an unrelated parent state change doesn't reset the user's zoom/pan the way an
+      // unstable/absent uirevision would.
       uirevision: "biomarker-timeline",
       hovermode: "x unified",
       showlegend: false,                          // hemisphere color + direct edge labels replace the legend
-      font: { family: "Roboto, Helvetica, Arial, sans-serif", size: 13, color: "#344767" },
+      font: { family: FONT_FAMILY, size: 12, color: T.ink },
       annotations: [],
       shapes: [],
     };
@@ -405,7 +396,7 @@ function BiomarkerTimeline({ data, height }) {
       const sigTop = top;             // signal y-axis occupies the band ABOVE the ribbon
       const sigBot = bottom + ribH;
       const hemi = row.hemi || null;
-      const accent = hemi && HEMI[hemi] ? HEMI[hemi].accent : "#344767";
+      const accent = hemi && HEMI[hemi] ? HEMI[hemi].accent : T.ink;
 
       // ROBUST y-window: scale to the signal's 0.5–99.5 percentile so the bulk of the trace fills the
       // row instead of being crushed by rare spikes; ALWAYS widen to include any reference level so
@@ -441,7 +432,7 @@ function BiomarkerTimeline({ data, height }) {
       // are never tinted.
       if (row.emptyReason) {
         layout.shapes.push({ type: "rect", xref: `${xk} domain`, yref: `${yk} domain`,
-          x0: 0, x1: 1, y0: 0, y1: 1, fillcolor: "#FBFBF4", line: { width: 0 }, layer: "below" });
+          x0: 0, x1: 1, y0: 0, y1: 1, fillcolor: T.page, line: { width: 0 }, layer: "below" });
       }
       layout[yaxisKey] = { domain: [sigBot, sigTop], title: { text: row.unit, font: { size: 12 }, standoff: 4 },
         zeroline: false, showgrid: false, automargin: true, nticks: 3, tickfont: { size: 12 },
@@ -454,11 +445,11 @@ function BiomarkerTimeline({ data, height }) {
       // Pin the range to the global x-extent so freq ribbons span the full axis.
       layout[xaxisKey] = {
         domain: [0, 1], type: "date", anchor: yk,
-        showgrid: true, gridcolor: "#C9CCD6", gridwidth: 1,
+        showgrid: true, gridcolor: MONTH_GRID, gridwidth: 1,
         showticklabels: di === n - 1,  // dates only on the bottom row; grid carries the time reference
-        ticks: "", showline: false, tickfont: { size: 13 },
+        ticks: "", showline: false, tickfont: { size: 12 },
         ...(haveGlobalX ? { range: [gMin, gMax] } : {}),
-        ...(di === n - 1 ? { title: { text: "Time", font: { size: 13 } } } : {}),
+        ...(di === n - 1 ? { title: { text: "Time", font: { size: 12 } } } : {}),
         ...(axisNum !== 1 && linked ? { matches: "x" } : {}),
       };
 
@@ -468,7 +459,7 @@ function BiomarkerTimeline({ data, height }) {
       if (hasRibbon[di] && haveGlobalX) {
         const ribTop = bottom + ribH, ribBot = bottom;
         layout.shapes.push({ type: "rect", xref: xk, yref: "paper",
-          x0: gMin, x1: gMax, y0: ribBot, y1: ribTop, fillcolor: "#ECECEC", line: { width: 0 }, layer: "above" });
+          x0: gMin, x1: gMax, y0: ribBot, y1: ribTop, fillcolor: T.fillMuted, line: { width: 0 }, layer: "above" });
         (row.freqEpochs || []).forEach((e) => {
           const col = freqColor(e.hz);
           layout.shapes.push({ type: "rect", xref: xk, yref: "paper",
@@ -476,11 +467,11 @@ function BiomarkerTimeline({ data, height }) {
             line: { color: "white", width: 0.8 }, layer: "above" });
           layout.annotations.push({ xref: xk, yref: "paper", x: new Date((+e.t0 + +e.t1) / 2),
             y: (ribBot + ribTop) / 2, xanchor: "center", yanchor: "middle",
-            text: `<b>${fmtHz(e.hz)} Hz</b>`, showarrow: false, font: { size: 13.5, color: textOn(col) } });
+            text: `<b>${fmtHz(e.hz)} Hz</b>`, showarrow: false, font: { size: 12, color: textOn(col) } });
         });
         layout.annotations.push({ xref: `${xk} domain`, yref: "paper", x: -0.006, y: (ribBot + ribTop) / 2,
           xanchor: "right", yanchor: "middle", text: "<b>freq</b>", showarrow: false,
-          font: { size: 12, color: "#555" } });
+          font: { size: 12, color: T.ink3 } });
       }
 
       row.traces.forEach((tr) => {
@@ -538,7 +529,7 @@ function BiomarkerTimeline({ data, height }) {
         }
         layout.annotations.push({
           xref: "paper", x: 1.007, yref: yk, y: labelY, xanchor: "left", yanchor: "middle",
-          text: rl.label, showarrow: false, font: { size: 9.5, color: rl.color },
+          text: rl.label, showarrow: false, font: { size: 12, color: T.ink3 },
         });
         lastLabelY = labelY;
       });
@@ -550,7 +541,7 @@ function BiomarkerTimeline({ data, height }) {
           xref: `${xk} domain`, x: 0.013, yref: `${yk} domain`, y: 0.92,
           xanchor: "left", yanchor: "top",
           text: `▲ peak ${fmtVal(peak)} (off scale)`, showarrow: false,
-          font: { size: 9.5, color: "#B06A00" },
+          font: { size: 12, color: T.caution },
         });
       }
 
@@ -561,7 +552,7 @@ function BiomarkerTimeline({ data, height }) {
           xref: `${xk} domain`, x: 0.5, yref: `${yk} domain`, y: 0.5,
           xanchor: "center", yanchor: "middle",
           text: `no analyzable pain-aligned data — ${row.emptyReason}`,
-          showarrow: false, font: { size: 10, color: "#9098A8", style: "italic" },
+          showarrow: false, font: { size: 12, color: T.ink3 },
         });
       }
 
@@ -572,14 +563,14 @@ function BiomarkerTimeline({ data, height }) {
       layout.annotations.push({
         xref: `${xk} domain`, yref: `${yk} domain`, x: 0.004, y: 0.97,
         xanchor: "left", yanchor: "top", text: `<b>${row.title}</b>`,
-        showarrow: false, font: { size: 19, color: accent },
+        showarrow: false, font: { size: 18, color: accent },
         bgcolor: "rgba(255,255,255,0.80)",
       });
       if (row.srcText) {
         layout.annotations.push({
           xref: `${xk} domain`, yref: `${yk} domain`, x: 0.006, y: 0.97,
           xanchor: "left", yanchor: "top", yshift: -22, text: row.srcText,
-          showarrow: false, font: { size: 11, color: "#6B7280" },
+          showarrow: false, font: { size: 12, color: T.ink3 },
           bgcolor: "rgba(255,255,255,0.70)",
         });
       }
@@ -588,8 +579,9 @@ function BiomarkerTimeline({ data, height }) {
         layout.annotations.push({
           xref: `${xk} domain`, yref: "paper", x: 0, y: top + 0.012,
           xanchor: "left", yanchor: "bottom",
-          text: `<b>${currentTarget(hemi, `${hemi.toUpperCase()} HEMISPHERE`)}</b>`,
-          showarrow: false, font: { size: 21, color: accent },
+          // Sentence case at the section-title size (SPEC.md section 2.4; taste audit E8).
+          text: `<b>${String(hemi).charAt(0).toUpperCase()}${String(hemi).slice(1).toLowerCase()} hemisphere</b>${regionForSide(data && data.recorded_powers, hemi) ? `  ·  ${regionForSide(data.recorded_powers, hemi)}` : ""}`,
+          showarrow: false, font: { size: 18, color: accent },
         });
       }
       if (hemi) prevHemi = hemi;
@@ -601,7 +593,7 @@ function BiomarkerTimeline({ data, height }) {
       const lx0 = 1.015, sw = 0.02, txtX = lx0 + 0.052, ly0 = 0.84, dh = 0.085;
       layout.annotations.push({ xref: "paper", yref: "paper", x: lx0, y: ly0 + dh * 0.8,
         xanchor: "left", yanchor: "bottom", text: "<b>Sensing center freq</b>", showarrow: false,
-        font: { size: 13, color: "#344767" } });
+        font: { size: 12, color: T.ink } });
       usedFreqs.forEach((f, i) => {
         const yy = ly0 - i * dh;
         layout.shapes.push({ type: "rect", xref: "paper", yref: "paper",
@@ -609,28 +601,28 @@ function BiomarkerTimeline({ data, height }) {
           line: { color: "white", width: 1 } });
         layout.annotations.push({ xref: "paper", yref: "paper", x: txtX, y: yy,
           xanchor: "left", yanchor: "middle", text: `<b>${fmtHz(f)}</b> Hz`, showarrow: false,
-          font: { size: 14, color: "#344767" } });
+          font: { size: 14, color: T.ink } });
       });
       // SOURCE KEY beneath the frequency legend: how to read a contact row's two modalities — the
       // continuous chronic 24/7 line vs the on-demand streaming diamonds.
       const ky = ly0 - usedFreqs.length * dh - 0.04;
       layout.annotations.push({ xref: "paper", yref: "paper", x: lx0, y: ky + dh * 0.8,
         xanchor: "left", yanchor: "bottom", text: "<b>Source</b>", showarrow: false,
-        font: { size: 13, color: "#344767" } });
+        font: { size: 12, color: T.ink } });
       layout.shapes.push({ type: "line", xref: "paper", yref: "paper",
-        x0: lx0, x1: lx0 + 2 * sw, y0: ky, y1: ky, line: { color: "#555", width: 2 } });
+        x0: lx0, x1: lx0 + 2 * sw, y0: ky, y1: ky, line: { color: T.ink3, width: 2 } });
       layout.annotations.push({ xref: "paper", yref: "paper", x: txtX, y: ky,
         xanchor: "left", yanchor: "middle", text: "chronic 24/7", showarrow: false,
-        font: { size: 13, color: "#344767" } });
+        font: { size: 12, color: T.ink } });
       layout.annotations.push({ xref: "paper", yref: "paper", x: lx0 + sw, y: ky - dh,
         xanchor: "center", yanchor: "middle", text: "◆", showarrow: false,
-        font: { size: 14, color: "#555" } });
+        font: { size: 14, color: T.ink3 } });
       layout.annotations.push({ xref: "paper", yref: "paper", x: txtX, y: ky - dh,
         xanchor: "left", yanchor: "middle", text: "streaming", showarrow: false,
-        font: { size: 13, color: "#344767" } });
+        font: { size: 12, color: T.ink } });
     }
 
-    Plotly.react(gd, traces, layout, {
+    Plotly.react(ref.current, traces, layout, {
       responsive: true, displaylogo: false,
       modeBarButtonsToRemove: ["select2d", "lasso2d", "toggleSpikelines"],
       toImageButtonOptions: { format: "png", scale: 2 },
@@ -643,6 +635,7 @@ function BiomarkerTimeline({ data, height }) {
     // on every row shares the x-window so all rescale together; off, only the zoomed row's x changes
     // (its own range keys appear in the event) and just that row rescales. Double-click autoranges x,
     // which we map back to the full-extent y-window.
+    const gd = ref.current;
     const robustWindow = (pts, refYs, lo, hi) => {
       const vis = (lo == null || hi == null) ? pts : pts.filter((p) => p.t >= lo && p.t <= hi);
       const vals = vis.map((p) => p.v);
@@ -679,30 +672,28 @@ function BiomarkerTimeline({ data, height }) {
     gd.on("plotly_relayout", onRelayout);
 
     return () => {
-      // Keep other consumers' listeners and Plotly's state across ordinary updates.
-      gd.removeListener("plotly_relayout", onRelayout);
+      // Only detach the listener this run attached -- NOT Plotly.purge, which now lives in the
+      // dedicated unmount-only effect above. Purging here on every [data, height, linked] change
+      // is exactly what defeated Plotly.react's in-place patching and reset the user's zoom/pan.
+      if (ref.current) {
+        try { ref.current.removeAllListeners && ref.current.removeAllListeners("plotly_relayout"); } catch (e) { /* noop */ }
+      }
     };
   }, [data, height, linked]);
-
-  useEffect(() => {
-    // React clears ref.current before passive unmount cleanup: retain the actual node.
-    const gd = ref.current;
-    return () => { Plotly.purge(gd); };
-  }, []);
 
   return (
     <MDBox p={1}>
       <div ref={ref} style={{ width: "100%" }} />
       <MDBox display="flex" alignItems="center" justifyContent="center" mt={1} mb={0.5}>
         <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
-                        fontSize: 13, color: linked ? "#117733" : "#344767", userSelect: "none",
-                        border: `1.5px solid ${linked ? "#117733" : "#C9CCD6"}`, borderRadius: 6,
-                        padding: "5px 12px", background: linked ? "#F1F8F2" : "#FAFAFB",
+                        ...TYPE.body, color: linked ? T.accent : T.ink, userSelect: "none",
+                        border: `1px solid ${linked ? T.accent : T.ink3}`, borderRadius: RADIUS.sm,
+                        padding: "5px 12px", background: linked ? T.accentTint : T.surface,
                         transition: "all 0.15s" }}>
           <input type="checkbox" checked={linked} onChange={(e) => setLinked(e.target.checked)}
-                 style={{ width: 15, height: 15, accentColor: "#117733", cursor: "pointer" }} />
-          <b>🔗 LINK AXES</b>
-          <span style={{ color: "#7E8794", fontWeight: 400 }}>
+                 style={{ width: 15, height: 15, accentColor: T.accent, cursor: "pointer" }} />
+          <b>Link axes</b>
+          <span style={{ color: T.ink3, fontWeight: 400 }}>
             {linked ? "— pan / zoom moves all rows together" : "— each row zooms independently"}
           </span>
         </label>

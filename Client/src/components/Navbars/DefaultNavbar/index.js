@@ -40,6 +40,7 @@ import MuiLink from "@mui/material/Link";
 
 import ChangeCircleIcon from '@mui/icons-material/ChangeCircle';
 import LoginIcon from '@mui/icons-material/Login';
+import GroupAddIcon from '@mui/icons-material/GroupAdd';
 import NoteAltIcon from "@mui/icons-material/NoteAlt";
 
 import MDBox from "components/MDBox";
@@ -167,7 +168,7 @@ function DefaultNavbar({ transparent, light, action }) {
           pl={{ xs: 0, lg: 1 }}
         >
           <MDTypography variant="button" fontWeight="bold" color={light ? "white" : "dark"}>
-            {"UF BRAVO Platform"}
+            {"UF/UCSF BRAVO"}
           </MDTypography>
         </MDBox>
         <MDBox color="inherit" display={{ xs: "none", lg: "flex" }} m={0} p={0}>
@@ -190,6 +191,12 @@ function DefaultNavbar({ transparent, light, action }) {
             icon={<LoginIcon/>}
             name={dictionary.SimplifiedNavbar.Login[language]}
             route="/login"
+            light={light}
+          />
+          <DefaultNavbarLink
+            icon={<GroupAddIcon/>}
+            name={dictionary.SimplifiedNavbar.Register[language]}
+            route="/register"
             light={light}
           />
           {renderLanguageSelectionMenu()}
@@ -223,16 +230,21 @@ function DefaultNavbar({ transparent, light, action }) {
               </MDButton>
             </MDBox>
           ))}
+        {/* An icon-only control: a real button with a name (TASTE_AUDIT.md C7). */}
         <MDBox
+          component="button"
+          type="button"
+          aria-label={mobileNavbar ? "Close the menu" : "Open the menu"}
+          aria-expanded={mobileNavbar ? "true" : "false"}
           display={{ xs: "inline-block", lg: "none" }}
           lineHeight={0}
           py={1.5}
           pl={1.5}
           color="inherit"
-          sx={{ cursor: "pointer" }}
+          sx={{ cursor: "pointer", background: "none", border: 0 }}
           onClick={openMobileNavbar}
         >
-          <Icon fontSize="default">{mobileNavbar ? "close" : "menu"}</Icon>
+          <Icon fontSize="default" aria-hidden="true">{mobileNavbar ? "close" : "menu"}</Icon>
         </MDBox>
       </MDBox>
       {mobileView && <DefaultNavbarMobile open={mobileNavbar} close={closeMobileNavbar} />}

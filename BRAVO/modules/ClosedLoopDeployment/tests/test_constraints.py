@@ -8,6 +8,8 @@ that the device is never going to apply.
 
 Every candidate here is built by mutating ``passing_candidate()``, so a test named after one rule
 fails only on that rule and the assertion can say so exactly.
+
+Merged here 2026-10-05: test_resolved_by.py.
 """
 from __future__ import annotations
 
@@ -24,9 +26,8 @@ def passing_candidate(**overrides):
     """A configuration that satisfies every blocking rule and resolves both unknowns.
 
     It declares considerably more than the band description, because the evaluator treats an
-    undeclared fact as not determinable and therefore blocking. The values are the ones this
-    project has actually adopted where such a value exists: a 5 Hz band inside the alpha-beta
-    window, 60 microsecond pulse width (the left hemisphere's programmed value), capture amplitudes
+    undeclared fact as not determinable and therefore blocking. The values are synthetic, permissive examples: a 5 Hz band inside the alpha-beta
+    window, 60 microsecond pulse width, capture amplitudes
     inside the 5 mA artefact ceiling, and a right-sensing, left-actuating contralateral pairing of
     the kind the current deployability screen produces.
     """
@@ -44,7 +45,8 @@ def passing_candidate(**overrides):
         "impedance_tested": True,
         "artifact_flags": [],
         # Stimulation parameters.
-        "rate_hz": 110.0,
+        # Synthetic rate with no folded multiple inside this test band.
+        "rate_hz": 125.0,
         "pulse_width_us": 60.0,
         "amp_mA": 3.0,
         # Sensing and control.
@@ -94,17 +96,18 @@ def resolved_participant(**overrides):
         "dual_lead_implant": True,
         "adaptive_configured_both_hemispheres": False,
         "can_operate_neurostimulator": True,
+        # D52 (2026-09-22, decision 247): the sensing lead's stimulating contacts, read off the
+        # settings in force. The fixture candidate senses on R 0-3+, which the device allows only
+        # while contacts 1 and 2 stimulate together -- as this synthetic example declares.
+        "stim_rings_on_sensing_lead": [1, 2],
+        "stim_contacts_on_sensing_lead": "1a-1b-1c-2a-2b-2c",
     }
     participant.update(overrides)
     return participant
 
 
-def rcs08_participant(**overrides):
-    """The participant record as it actually stands today: D04 and D31 unread.
-
-    This is the record the module has to behave correctly on right now, and the correct behaviour is
-    to refuse to license anything.
-    """
+def unresolved_participant(**overrides):
+    """A synthetic record with device capability fields deliberately unavailable."""
     participant = resolved_participant(**overrides)
     participant["n_neurostimulators"] = None
     participant["brainsense_min_rate_hz"] = None
@@ -121,11 +124,19 @@ def ids(rows):
 # ------------------------------------------------------------------------------------------------
 # The table itself.
 # ------------------------------------------------------------------------------------------------
-def test_table_encodes_all_fifty_one_rules_exactly_once():
-    """D01 to D51 with no gaps and no duplicates, because a skipped rule is an invisible rule."""
+def test_table_encodes_all_fifty_three_rules_exactly_once():
+    """D01 to D53 with no gaps and no duplicates, because a skipped rule is an invisible rule.
+
+    Was fifty-two until 2026-10-18, when D53 (no folded multiple of the stimulation rate in or
+    within 5 Hz of the band) joined at the PI's ruling; the name moved with the table again.
+
+    Was fifty-one until 2026-09-22, when D52 (the sensing pair must flank the stimulating contacts,
+    decision 247) joined at the PI's request after the page said the device permitted L 0-2+ while
+    the left lead stimulated on contact 2. The name moved with the table on purpose: a test named
+    for fifty-one rules over a table of fifty-two would assert something untrue."""
     got = [rule.rule_id for rule in constraints.RULES]
-    assert got == [f"D{n:02d}" for n in range(1, 52)]
-    assert len(set(got)) == 51
+    assert got == [f"D{n:02d}" for n in range(1, 54)]
+    assert len(set(got)) == 53
 
 
 def test_every_rule_carries_its_citation_and_a_plain_english_reason():
@@ -139,7 +150,15 @@ def test_every_rule_carries_its_citation_and_a_plain_english_reason():
 
 
 def test_severity_counts_are_the_documented_split():
-    """20 blocking, 29 advisory, 2 unknown. The two unknowns are the point of the split.
+    """20 blocking, 31 advisory, 2 unknown. The two unknowns are the point of the split.
+
+    D53 (folded multiples of the stimulation rate) joined on 2026-10-18 as blocking (decision 481)
+    and was made advisory the same day (decision 485, the PI: "a warning but not a blocker"), so the
+    blocking count is back at 20 and the advisory count one up.
+
+    Was 20/29/2 until 2026-09-22, when D52 joined as blocking (decision 247): a configuration whose
+    sensing pair the stimulating contacts do not allow cannot be programmed, so it is a refusal,
+    not advice.
 
     Was 21/28/2 until 2026-09-04, when D09 was moved from blocking to advisory on PI decision. The
     guide RECOMMENDS the 1.2 uVp amplitude and states it two ways (1.2 against 1.1) without
@@ -148,7 +167,7 @@ def test_severity_counts_are_the_documented_split():
     check that the change was deliberate and recorded.
     """
     counts = constraints.severity_counts()
-    assert counts == {"blocking": 20, "advisory": 29, "unknown": 2}
+    assert counts == {"blocking": 20, "advisory": 31, "unknown": 2}   # D27 (478), D53 (485) advisory
     unknown_ids = {rule.rule_id for rule in constraints.RULES if rule.severity == "unknown"}
     assert unknown_ids == {"D04", "D31"}
 
@@ -172,7 +191,7 @@ def test_fully_declared_candidate_is_eligible():
     assert report.failures == [], [r["rule_id"] for r in report.failures]
     assert report.unknowns == [], [r["rule_id"] for r in report.unknowns]
     assert report.eligible is True
-    assert report.checked == 51
+    assert report.checked == 53
     assert isinstance(report, types.EligibilityReport)
 
 
@@ -184,7 +203,16 @@ def test_passing_report_records_the_programming_regime_it_was_written_in():
     """
     report = check(passing_candidate(), resolved_participant())
     recorded = [row for row in report.advisories if row["kind"] == "recorded_value"]
-    assert ids(recorded) == {"D03", "D04", "D16", "D19", "D30", "D31"}
+    # D16 joined this set on 2026-09-12: a passing impedance check is recorded with its reading and
+    # the measurement current it came from, because a pass at a fixed current can sit beside a
+    # spurious fail at the device's automatic low-current mode and a reader must see both.
+    # D19 and D30 joined on 2026-09-12: D19 now passes on a POINT sign (PI decision), so its pass
+    # must show which signs are not established; D30's pass is derived from the device's active
+    # sensing group, so its pass must show which group and rate it was matched against.
+    # D52 joined on 2026-09-22 for D30's reason: its pass is derived from the contacts programmed on
+    # the device, so it must show which contacts and which pair it was checked against.
+    # D53 joined on 2026-10-18: its pass names the rate and the nearest folded multiple.
+    assert ids(recorded) == {"D03", "D04", "D16", "D19", "D30", "D31", "D52", "D53"}
     d03 = next(row for row in recorded if row["rule_id"] == "D03")
     assert "parkinsons" in d03["observed"]
 
@@ -264,8 +292,7 @@ def test_d08_window_widens_for_a_sensing_only_candidate():
 # D09 and its documented discrepancy.
 # ------------------------------------------------------------------------------------------------
 def test_d09_reports_a_shortfall_without_blocking():
-    """D09 is ADVISORY as of 2026-09-04. A signal below the capture gate is surfaced for review,
-    and it does NOT make the configuration ineligible."""
+    'D09 is ADVISORY as of 2026-09-04. A signal below the capture gate is surfaced for review,.'
     below = check(passing_candidate(lfp_amplitude_uvp=0.9), resolved_participant())
     assert "D09" not in ids(below.failures), "D09 must no longer block"
     assert "D09" in ids(below.advisories), "but the shortfall must still be reported"
@@ -298,19 +325,14 @@ def test_d09_uses_the_conservative_of_the_two_documented_floors():
 # ------------------------------------------------------------------------------------------------
 # The two unknowns.
 # ------------------------------------------------------------------------------------------------
-def test_the_two_unknown_rules_block_on_the_record_as_it_stands():
-    """With D04 and D31 unread, a candidate that satisfies every other rule is still not eligible.
-
-    This is the situation today, and the required behaviour is refusal. The two unknowns are also
-    the ONLY blockers on this candidate, which is what makes the report actionable: read two values
-    off the device and the configuration is licensable.
-    """
-    report = check(passing_candidate(), rcs08_participant())
+def test_the_remaining_unknown_blocks_on_the_record_as_it_stands():
+    """Missing pulse-generator limits and participant pair evidence both remain unknown."""
+    report = check(passing_candidate(), unresolved_participant())
     assert report.failures == [], [r["rule_id"] for r in report.failures]
     assert ids(report.unknowns) == {"D04", "D31"}
     assert all(row["kind"] == "value_not_read_off_programmer" for row in report.unknowns)
     assert report.eligible is False
-    assert report.checked == 51
+    assert report.checked == 53
 
 
 def test_the_two_unknowns_are_distinguishable_from_an_undeclared_input():
@@ -318,11 +340,11 @@ def test_the_two_unknowns_are_distinguishable_from_an_undeclared_input():
 
     They need different actions, so the report labels them differently rather than pooling them.
     """
-    report = check(passing_candidate(paused_amplitude_mA=None), rcs08_participant())
+    report = check(passing_candidate(paused_amplitude_mA=None), unresolved_participant())
     by_kind = {row["rule_id"]: row["kind"] for row in report.unknowns}
     assert by_kind["D04"] == "value_not_read_off_programmer"
-    assert by_kind["D31"] == "value_not_read_off_programmer"
     assert by_kind["D34"] == "input_not_supplied"
+    assert by_kind["D31"] == "value_not_read_off_programmer"
 
 
 def test_d31_still_fails_outright_when_the_general_envelope_is_breached():
@@ -331,17 +353,17 @@ def test_d31_still_fails_outright_when_the_general_envelope_is_breached():
     A rate of 300 Hz is outside the general envelope, so D31 can return a real failure even while
     its own narrowing figures remain unread.
     """
-    report = check(passing_candidate(rate_hz=300.0), rcs08_participant())
+    report = check(passing_candidate(rate_hz=300.0), unresolved_participant())
     assert "D31" in ids(report.failures)
     assert "D31" not in ids(report.unknowns)
+    # and the demonstrated-pair evidence path (a named sensing side) must not rescue a physically
+    # impossible rate either (was test_d31_still_fails_a_rate_outside_the_general_envelope)
+    cand = passing_candidate(rate_hz=300.0, sensing_hemisphere="Left")
+    assert constraints.RULES_BY_ID["D31"].predicate(cand, unresolved_participant()) is False
 
 
 def test_d31_bites_on_the_incumbent_55_hz_rate_if_the_minimum_turns_out_higher():
-    """The concrete question for this participant, encoded so the answer is mechanical.
-
-    One of the four configurations the current screen licenses runs at 55 Hz. If the BrainSense
-    minimum rate is read off the device as 60 Hz, that configuration cannot be programmed at all.
-    """
+    'Regression for d31 bites on the incumbent 55 hz rate if the minimum turns out higher.'
     participant = resolved_participant(brainsense_min_rate_hz=60.0)
     report = check(passing_candidate(rate_hz=55.0), participant)
     assert "D31" in ids(report.failures)
@@ -361,9 +383,9 @@ def test_empty_inputs_produce_no_passes_at_all():
     """
     report = check({}, {})
     assert report.failures == []
-    assert len(report.unknowns) == 22          # 20 blocking + 2 unknown (D09 now advisory)
-    assert len(report.advisories) == 29        # 28 + D09, softened 2026-09-04
-    assert report.checked == 51
+    assert len(report.unknowns) == 22          # 20 blocking + 2 unknown (D09, D27, D53 advisory; D52 blocking)
+    assert len(report.advisories) == 31        # 28 + D09 (softened 2026-09-04) + D27 (record only, 478) + D53 (warning only, 485)
+    assert report.checked == 53
     assert report.eligible is False
 
 
@@ -404,7 +426,8 @@ def test_check_eligibility_returns_every_failure_rather_than_the_first():
         impedance_ohms=100.0,                  # D16: below the SenSight short-circuit limit
         artifact_flags=["cardiac"],            # D17: artefact flagged by the device
         power_slope_vs_amplitude_sign=1,       # D19: wrong sign for the fixed control polarity
-        pulse_width_us=160.0,                  # D27: above the 120 us artefact ceiling
+        pulse_width_us=160.0,                  # D27: record only since decision 478, never refuses
+        actuated_hemisphere="Right",
         frequency_search_closed=False,         # D30: rate would freeze mid-search
         has_pocket_adaptor=True,               # D32: BrainSense cannot be configured there
         paused_amplitude_mA=0.0,               # D34: a pause must not mean cessation
@@ -414,10 +437,11 @@ def test_check_eligibility_returns_every_failure_rather_than_the_first():
     # D09 is deliberately absent: it was softened to advisory on 2026-09-04, so a sub-gate
     # amplitude is reported rather than counted as a failure.
     expected = {"D08", "D11", "D12", "D13", "D15", "D16", "D17",
-                "D19", "D27", "D30", "D32", "D34"}
+                "D19", "D30", "D32", "D34"}
     assert expected.issubset(ids(report.failures))
+    assert "D27" not in ids(report.failures) | ids(report.unknowns)
     assert len(report.failures) >= len(expected)
-    assert report.checked == 51                # nothing was skipped on the way past the failures
+    assert report.checked == 53                # nothing was skipped on the way past the failures
     assert report.eligible is False
     assert "NOT eligible" in report.summary()
 
@@ -434,14 +458,6 @@ def test_every_failure_row_carries_the_page_that_forbids_it():
 # ------------------------------------------------------------------------------------------------
 # The rules the task singles out as the ones that actually bite.
 # ------------------------------------------------------------------------------------------------
-def test_d30_makes_the_frequency_search_and_the_closed_loop_sequential():
-    """Rate and pulse width freeze when BrainSense is set up, so the search must close first."""
-    open_search = check(passing_candidate(frequency_search_closed=False), resolved_participant())
-    assert ids(open_search.failures) == {"D30"}
-    assert open_search.eligible is False
-
-    closed = check(passing_candidate(frequency_search_closed=True), resolved_participant())
-    assert "D30" not in ids(closed.failures)
 
 
 def test_d40_couples_the_hemispheres_in_single_threshold_mode():
@@ -487,26 +503,84 @@ def test_single_threshold_mode_raises_the_forced_zero_advisory():
 
 
 def test_d03_blocks_a_participant_not_programmed_in_parkinsons_mode():
-    """This is why D03 is kept as a live blocking rule rather than compiled away into a note."""
+    'See the implementation and synthetic regression tests for this contract.'
     report = check(passing_candidate(), resolved_participant(programming_mode="dual_default"))
     assert "D03" in ids(report.failures)
     assert report.eligible is False
     assert "D03" not in ids(report.advisories)      # a failure is not also a recorded value
 
 
-def test_d27_flags_the_right_hemispheres_160_us_pulse_width():
-    """This participant's right hemisphere is programmed at 160 us, above the 120 us ceiling.
+def test_d27_never_refuses_and_stays_in_the_ledger_marked_not_evidence_based():
+    """The PI, 2026-10-16 (decision 478): D27 is "not evidence based - disregard". It stays in the
+    ledger with its text and that note, for the record only: no machine check, so it never refuses,
+    never goes unchecked and never warns -- at 160 us on the sensing lead, or above 5 mA."""
+    rule = constraints.RULES_BY_ID["D27"]
+    assert rule.severity == "advisory" and rule.predicate is None
+    assert "not evidence based - disregard" in rule.title
+    assert rule.human_text.startswith("Not evidence based - disregard.")
+    for cand in (passing_candidate(pulse_width_us=160.0, actuated_hemisphere="Right"),
+                 passing_candidate(capture_amp_high_mA=5.5, adaptive_max_mA=5.5)):
+        report = check(cand, resolved_participant())
+        assert "D27" not in ids(report.failures) | ids(report.unknowns)
+        rows = [r for r in report.advisories if r["rule_id"] == "D27"]
+        assert [r["kind"] for r in rows] == ["advisory_no_predicate"]
+        assert "not evidence based - disregard" in rows[0]["why"]
 
-    The consequence is specific: the Lower LFP Threshold captured there is artefact-suspect and must
-    not be read as a physiological measurement.
+
+def test_d27_prefers_the_capture_pulse_width_over_the_candidates_general_pulse_width():
+    """D27 asks about the pulse width AT THE CAPTURE, not whatever the candidate carries generally.
+
+    The candidate's general ``pulse_width_us`` can now be filled in from the device's currently
+    programmed setting (``adapter.programmed_settings_from_epochs``), which need not be the pulse
+    width that was running when the Lower LFP Threshold was captured. ``capture_pulse_width_us``
+    must win whenever it is present, and the observer text must say which field it read.
     """
-    report = check(passing_candidate(pulse_width_us=160.0), resolved_participant())
-    assert "D27" in ids(report.failures)
-    assert "160" in next(row for row in report.failures if row["rule_id"] == "D27")["observed"]
+    # capture_pulse_width_us (60, compliant) must win over pulse_width_us (160, over the ceiling):
+    # the rule must pass, and its own predicate/observer must have read the capture field.
+    compliant = passing_candidate(capture_pulse_width_us=60.0, pulse_width_us=160.0)
+    assert constraints._p_d27(compliant, resolved_participant()) is True
+    observed = constraints._o_d27(compliant, resolved_participant())
+    assert "capture pulse width" in observed
+    assert "60.0" in observed
 
-    over_amplitude = check(passing_candidate(capture_amp_high_mA=5.5, adaptive_max_mA=5.5),
-                           resolved_participant())
-    assert "D27" in ids(over_amplitude.failures)
+    # And the reverse: capture_pulse_width_us (160, over the ceiling) must win over a compliant
+    # general pulse_width_us (60). The check is kept for the record (decision 478); nothing refuses.
+    over_ceiling = passing_candidate(capture_pulse_width_us=160.0, pulse_width_us=60.0,
+                                     actuated_hemisphere="Right")
+    assert constraints._p_d27(over_ceiling, resolved_participant()) is False
+    observed = constraints._o_d27(over_ceiling, resolved_participant())
+    assert "capture pulse width" in observed
+    assert "160.0" in observed
+
+
+def test_d27_falls_back_to_the_general_pulse_width_when_no_capture_pulse_width_is_recorded():
+    """With no capture record, D27's kept check function reads `pulse_width_us` (decision 478: the
+    function is kept for the record; the rule no longer calls it)."""
+    no_capture_field = passing_candidate(pulse_width_us=160.0, actuated_hemisphere="Right")
+    assert "capture_pulse_width_us" not in no_capture_field
+    assert constraints._p_d27(no_capture_field, resolved_participant()) is False
+    observed = constraints._o_d27(no_capture_field, resolved_participant())
+    assert "capture pulse width" not in observed
+    assert "pulse width" in observed
+    assert "160.0" in observed
+
+
+def test_d27_pulse_width_is_not_applied_to_a_stimulator_on_the_other_lead():
+    """The PI, 2026-10-14 (decision 471): when the other side's sensing drives a stimulator
+    (contralateral), the sensing contacts are on the other lead, so that stimulator's pulse width is
+    not what the 120 us artefact ceiling is about. The 5 mA amplitude ceiling still applies."""
+    contra = passing_candidate(capture_pulse_width_us=160.0, sensing_hemisphere="Right",
+                               actuated_hemisphere="Left")
+    assert constraints._p_d27(contra, resolved_participant()) is True
+    assert "not checked, because this stimulator is on the other lead" in constraints._o_d27(
+        contra, resolved_participant())
+    assert "D27" not in ids(check(contra, resolved_participant()).failures)
+    same_side = dict(contra, actuated_hemisphere="Right")
+    assert constraints._p_d27(same_side, resolved_participant()) is False
+    over_amplitude = dict(contra, capture_amp_high_mA=5.5)
+    assert constraints._p_d27(over_amplitude, resolved_participant()) is False
+    no_amplitude = {k: v for k, v in contra.items() if k not in ("capture_amp_high_mA", "amp_mA")}
+    assert constraints._p_d27(no_amplitude, resolved_participant()) is None
 
 
 def test_d19_rejects_a_biomarker_whose_power_falls_as_pain_rises():
@@ -747,6 +821,55 @@ def test_the_deferral_graph_is_acyclic_and_points_at_real_rules():
     CN._validate_deferral_graph()
 
 
+
+# ------------------------------------------------------------------------------------------------
+# The 2026-09-05 closures: D31 on measured evidence, D29 on ring stimulation, D32 on the
+# participant dict. Each of these replaced a rule that could not be satisfied by any attainable
+# input, so each test pins the specific thing that changed.
+# ------------------------------------------------------------------------------------------------
+def _synthetic_pairs(monkeypatch):
+    from ClosedLoopDeployment import device_facts as DF
+    table = {"Left": {(55.0, 60.0): 2}, "Right": {(55.0, 160.0): 1}}
+    monkeypatch.setattr(DF, "_programmed_pairs_for",
+                        lambda uid: (table, "synthetic observation") if uid == "synthetic-a" else ({}, ""))
+    return DF, dict(unresolved_participant(), uid="synthetic-a")
+
+
+def test_d31_passes_on_a_pair_the_device_has_actually_accepted(monkeypatch):
+    DF, participant = _synthetic_pairs(monkeypatch)
+    assert DF.brainsense_pair_programmed(55, 60, "Left", participant_uid=participant["uid"]) is True
+    cand = passing_candidate(rate_hz=55.0, pulse_width_us=60.0, sensing_hemisphere="Left")
+    report = check(cand, participant)
+    assert "D31" not in ids(report.unknowns)
+    assert "D31" not in ids(report.failures)
+
+
+def test_d31_never_reports_a_never_programmed_pair_as_forbidden(monkeypatch):
+    DF, participant = _synthetic_pairs(monkeypatch)
+    assert DF.brainsense_pair_programmed(55, 60, "Right", participant_uid=participant["uid"]) is False
+    assert DF.brainsense_pair_programmed(55, 160, "Right", participant_uid=participant["uid"]) is True
+    cand = passing_candidate(rate_hz=55.0, pulse_width_us=60.0, sensing_hemisphere="Right")
+    assert constraints.RULES_BY_ID["D31"].predicate(cand, participant) is None
+
+
+def test_d29_is_satisfied_when_no_segment_is_steered():
+    'Ring stimulation makes the p.39 requirement unreachable, so the rule is satisfied.'
+    part = dict(unresolved_participant())
+    part["segmental_steering_in_use"] = False
+    cand = dict(passing_candidate())
+    cand.pop("vertically_aligned_segments_matched", None)
+    assert constraints.RULES_BY_ID["D29"].predicate(cand, part) is True
+
+    # an explicit per-candidate finding of a MISMATCH must still fail, closure notwithstanding
+    cand["vertically_aligned_segments_matched"] = False
+    assert constraints.RULES_BY_ID["D29"].predicate(cand, part) is False
+
+    # and with steering in use and nothing measured, it must go back to not-determinable
+    part["segmental_steering_in_use"] = True
+    cand.pop("vertically_aligned_segments_matched")
+    assert constraints.RULES_BY_ID["D29"].predicate(cand, part) is None
+
+
 def test_d32_reads_the_pocket_adaptor_from_the_participant_dict():
     """The fact is a property of the implanted hardware, so it arrives on the participant.
 
@@ -754,7 +877,7 @@ def test_d32_reads_the_pocket_adaptor_from_the_participant_dict():
     rule reported not-determinable on a fact that had been given. A fact one dictionary away from
     the rule that needs it is indistinguishable from a fact never supplied.
     """
-    part = dict(rcs08_participant())
+    part = dict(unresolved_participant())
     part["has_pocket_adaptor"] = False
     cand = dict(passing_candidate())
     cand.pop("has_pocket_adaptor", None)
@@ -770,108 +893,71 @@ def test_d30_asks_a_per_attempt_question_not_a_permanent_one():
     cand = dict(passing_candidate())
     cand.pop("frequency_search_closed", None)
     cand.pop("rate_committed_for_this_attempt", None)
-    assert constraints.RULES_BY_ID["D30"].predicate(cand, rcs08_participant()) is None
+    assert constraints.RULES_BY_ID["D30"].predicate(cand, unresolved_participant()) is None
 
     cand["rate_committed_for_this_attempt"] = True
-    assert constraints.RULES_BY_ID["D30"].predicate(cand, rcs08_participant()) is True
+    assert constraints.RULES_BY_ID["D30"].predicate(cand, unresolved_participant()) is True
 
     # the retired key keeps working so an un-updated caller does not silently regress
     cand.pop("rate_committed_for_this_attempt")
     cand["frequency_search_closed"] = True
-    assert constraints.RULES_BY_ID["D30"].predicate(cand, rcs08_participant()) is True
+    assert constraints.RULES_BY_ID["D30"].predicate(cand, unresolved_participant()) is True
+
+# ------------------------------------------------------------------------------------------------
+# Who can clear a refusal (from test_resolved_by.py, merged 2026-10-05)
+# ------------------------------------------------------------------------------------------------
+# Who can clear a device-rule refusal, carried on every row the evaluator emits, and the rule
+# table's one-line summary counting its rows by what they are (review findings, 2026-09-26).
+#
+# Every refusal used to read "measurement, a property of the recording" on the Closed-Loop page,
+# because the evaluator gives every blocking rule that fails the same kind ("failed") and the page
+# mapped that one kind to one actor. D52 (the sensing pair must flank the stimulating contacts) is
+# cleared at the programmer by a change of contacts, not by measuring anything. Each blocking rule
+# now says which of four things clears it, in ``constraints.RESOLVED_BY``, and the row carries it.
 
 
-@pytest.mark.parametrize("candidate, expected", [
-    ({"rate_committed_for_this_attempt": True}, "True"),
-    ({"frequency_search_closed": False}, "False"),
-    ({}, "None"),
-])
-def test_d30_observer_reports_the_same_per_attempt_fact(candidate, expected):
-    observed = constraints._o_d30(candidate, {})
-    assert "candidate rate" in observed and "newest active sensing group" in observed
-    assert ("committed for this attempt: " + expected in observed
-            or "retired flag frequency_search_closed: " + expected in observed)
+KINDS = {"configuration", "band", "recording", "analysis"}
 
 
-def test_sensing_only_group_does_not_inherit_adaptive_only_exclusions():
-    candidate = passing_candidate(intent='sensing_only')
-    candidate.update(cycling_in_group=True, patient_limits_configured=True)
-    assert constraints._p_d32(candidate, {}) is True
+def test_every_blocking_rule_says_what_clears_it():
+    blocking = [r.rule_id for r in constraints.RULES if r.severity == "blocking"]
+    missing = [rid for rid in blocking if constraints.RESOLVED_BY.get(rid) not in KINDS]
+    assert missing == []
 
 
-@pytest.mark.parametrize("general_pw,capture_pw,failed", [(60.0, 160.0, True), (160.0, 60.0, False)])
-def test_d27_checks_capture_width_instead_of_general_programmed_width(general_pw, capture_pw, failed):
-    candidate = passing_candidate(pulse_width_us=general_pw, capture_pulse_width_us=capture_pw)
-    report = check(candidate, resolved_participant())
-    assert ("D27" in ids(report.failures)) is failed
-    assert "D27" not in ids(report.unknowns)
-    observed = constraints._o_d27(candidate, {})
-    assert f"capture pulse width {capture_pw!r} us" in observed
-    assert f"pulse width {general_pw!r} us" not in observed
-    if failed:
-        assert next(row for row in report.failures if row["rule_id"] == "D27")["observed"] == observed
+def test_the_map_names_only_real_rules_and_only_the_four_kinds():
+    assert set(constraints.RESOLVED_BY) <= set(constraints.RULES_BY_ID)
+    assert set(constraints.RESOLVED_BY.values()) <= KINDS
 
 
-@pytest.mark.parametrize("capture_pw", ["invalid", True, float("nan"), float("inf"), float("-inf")])
-def test_d27_invalid_capture_width_is_unknown_despite_valid_general_width(capture_pw):
-    candidate = passing_candidate(capture_pulse_width_us=capture_pw)
-    report = check(candidate, resolved_participant())
-    row = next(row for row in report.unknowns if row["rule_id"] == "D27")
-    assert "D27" not in ids(report.failures)
-    assert f"capture pulse width {capture_pw!r} us" in row["observed"]
-    assert "fallback" not in row["observed"]
+def test_a_sensing_pair_refusal_is_cleared_at_the_programmer_not_by_measurement():
+    assert constraints.RESOLVED_BY["D52"] == "configuration"
+    assert constraints.RESOLVED_BY["D27"] == "configuration"
+    assert constraints.RESOLVED_BY["D16"] == "recording"
+    assert constraints.RESOLVED_BY["D17"] == "recording"
+    assert constraints.RESOLVED_BY["D19"] == "band"
+    assert constraints.RESOLVED_BY["D11"] == "analysis"
 
 
-@pytest.mark.parametrize("capture_fields", [{}, {"capture_pulse_width_us": None}])
-@pytest.mark.parametrize("general_pw,expected", [(60.0, True), (160.0, False), (None, None)])
-def test_d27_missing_capture_width_preserves_general_fallback(capture_fields, general_pw, expected):
-    candidate = passing_candidate(pulse_width_us=general_pw, **capture_fields)
-    assert constraints._p_d27(candidate, {}) is expected
-    assert f"pulse width (fallback) {general_pw!r} us" in constraints._o_d27(candidate, {})
+def test_every_failed_row_carries_what_clears_it():
+    # D16 fails: impedance below the SenSight short-circuit limit (D27 no longer refuses, decision 478)
+    cand = passing_candidate(impedance_ohms=100.0)
+    rep = constraints.check_eligibility(cand, resolved_participant())
+    d16 = [r for r in rep.failures if r["rule_id"] == "D16"]
+    assert d16 and d16[0]["resolved_by"] == "recording"
+    for row in rep.failures + rep.unknowns + rep.advisories + list(rep.deferred or []):
+        assert row["resolved_by"] == constraints.RESOLVED_BY.get(row["rule_id"], "")
 
 
-@pytest.mark.parametrize("width,amplitude,expected", [
-    (120.0, 5.0, True), (120.001, 5.0, False), (120.0, 5.001, False),
-    (None, 3.0, None), (120.0, None, None), (120.0, float("nan"), None),
-    (120.0, float("inf"), None), (float("-inf"), 3.0, None),
-])
-def test_d27_capture_boundaries_and_nonfinite_measurements(width, amplitude, expected):
-    candidate = passing_candidate(capture_pulse_width_us=width, pulse_width_us=None,
-                                  capture_amp_high_mA=amplitude, amp_mA=None)
-    assert constraints._p_d27(candidate, {}) is expected
-
-
-def test_d27_retains_amplitude_fallback_and_sensing_only_behavior():
-    candidate = passing_candidate(capture_pulse_width_us=120.0, capture_amp_high_mA=None, amp_mA=5.0)
-    assert constraints._p_d27(candidate, {}) is True
-    candidate["amp_mA"] = 5.001
-    assert constraints._p_d27(candidate, {}) is False
-    candidate.update(intent="sensing_only", capture_pulse_width_us="invalid")
-    assert constraints._p_d27(candidate, {}) is True
-
-
-@pytest.mark.parametrize("general_pw,capture_pw,failed", [(60.0, 160.0, True), (160.0, 60.0, False)])
-def test_session_report_capture_width_reaches_d27_with_provenance(general_pw, capture_pw, failed):
-    from ClosedLoopDeployment import device_facts
-
-    facts, provenance = device_facts.session_report_facts_for(
-        "SYNTHETIC", hemisphere="Right", summary={
-            "n_files": 1,
-            "capture_newest": {"Right": {"lower_mA": 2.0, "upper_mA": 3.5, "pw_us": capture_pw}},
-        })
-    assert facts["capture_pulse_width_us"] == capture_pw
-    assert "newest capture" in provenance["capture_pulse_width_us"]
-    candidate = passing_candidate(pulse_width_us=general_pw, **facts)
-    report = check(candidate, resolved_participant())
-    assert ("D27" in ids(report.failures)) is failed
-    assert "D27" not in ids(report.unknowns)
-
-
-@pytest.mark.parametrize("capture_amplitude", [None, "invalid", True])
-def test_d27_observation_reports_the_amplitude_fallback_used(capture_amplitude):
-    candidate = passing_candidate(capture_amp_high_mA=capture_amplitude, amp_mA=5.001,
-                                  capture_pulse_width_us=120.0)
-    report = check(candidate, resolved_participant())
-    row = next(row for row in report.failures if row["rule_id"] == "D27")
-    assert "amplitude (fallback) 5.001 mA" in row["observed"]
-    assert "capture pulse width 120.0 us" in row["observed"]
+@pytest.mark.parametrize("advisories,summary", [
+    # a passed rule shown with its value is not called an advisory
+    ([{"rule_id": "D52", "kind": "recorded_value"}, {"rule_id": "D03", "kind": "recorded_value"},
+      {"rule_id": "D09", "kind": "advisory_failed"}],
+     "eligible (52 rules checked; 2 passed with their value shown, 1 advisory)"),
+    # and a zero count of passed values is still named
+    ([{"rule_id": "D09", "kind": "advisory_failed"}],
+     "eligible (52 rules checked; 0 passed with their value shown, 1 advisory)"),
+], ids=["two_passed_values", "zero_passed_values"])
+def test_the_eligible_summary_counts_passed_values_apart_from_advisories(advisories, summary):
+    s = types.EligibilityReport(eligible=True, checked=52, advisories=advisories).summary()
+    assert s == summary

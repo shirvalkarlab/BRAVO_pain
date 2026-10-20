@@ -1,6 +1,12 @@
 """Closed-loop deployment: is there a control signal, and may it be programmed.
 
-Read ``types.py`` first: every cross-file value is a dataclass declared there."""
+A separate module from ``modules.Biomarkers`` because the estimands, the units and the audience all
+differ, and because the biomarker module's outputs are this module's INPUTS. Biomarkers asks whether
+a band tracks pain. This module asks whether that band can drive a device: distinct estimands
+that must remain separate so disagreements remain visible.
+
+Read ``types.py`` first: every cross-file value is a dataclass declared there.
+"""
 
 # ONE MODULE OBJECT UNDER BOTH IMPORT SPELLINGS (`modules.ClosedLoopDeployment` in the container, `ClosedLoopDeployment` on the
 # host suite). Without this, a process with both roots on the path -- every gunicorn worker --

@@ -1,38 +1,59 @@
-"""Calendar dates for already-normalized instants and legacy local PRO wall times.
+"""The one place the participant's clock is named, and the one rule for "which calendar day".
 
-This helper changes grouping dates only. It never replaces an input timestamp,
-clock recovery coordinate, or the absolute-time identity used to match a report.
+Pain-report timestamps use the configured California wall clock and are converted
+to UTC for instant comparisons. Calendar-day joins must instead use the local day:
+a UTC day boundary can assign late-afternoon and evening reports to the next day.
+The chronic detector's sample-to-rating join and daily pain cut use the same rule.
+
+`bravo_service` imports Django's models at import time, so `adapter.py` and `pipeline.py` (which
+the host suite imports without Django) cannot take the zone from there. Both take it from here,
+and `bravo_service` binds it under the name it always used (`_PRO_LOCAL_TZ`), so there is one
+definition and no import from the service into the adapter.
+
+`local_calendar_day` is the rule. Every "calendar day" the Biomarkers page derives from a UTC
+instant -- the chronic join, the legacy same-day session join, the daily series behind the pain
+cut, the per-day binarization preview and day counts, the timeline's date column -- goes through
+it, so reversing the rule (should the PI want the UTC day back) is a change to this one function.
 """
-import numpy as np
+from __future__ import annotations
+
+import datetime as _dt
+
 import pandas as pd
 
+#: The participant's clock. REDCap records the survey time as local wall-clock with no offset; the
+#: study is entirely in California, so this is the zone the naive strings are localized to before
+#: they are converted to UTC, and the zone the calendar day is read in.
 PRO_LOCAL_TZ = "America/Los_Angeles"
 
 
-def local_calendar_day(when, *, naive_is_local=False):
-    """Return Pacific date(s), keeping missing values missing.
+def local_calendar_day(when):
+    """The California calendar date of a UTC instant (or of each instant in a Series / Index /
+    list). A tz-naive input is read as UTC, which is what every instant in this module is once
+    `_pro_timestamps_utc` and `adapter._to_datetime` have done their work; a tz-aware input is
+    converted from its own zone. NaT stays NaT (a scalar NaT comes back as `None`, so it can be
+    compared against a date the way the old `ts.date() if not pd.isna(ts) else None` was).
 
-    Canonical PRO and decoded device timestamps use naive UTC or aware instants.
-    Only the raw PRO library fallback sets ``naive_is_local=True``: its naive
-    dates retain their original local wall-date meaning. Aware values always
-    convert from their explicit zone. Series preserve their index; sequences
-    return an Index. Input timestamps are never changed.
+    Returns `datetime.date` objects: a Series of them for a Series, a plain Index of them for an
+    Index or list, one for a scalar.
     """
     if isinstance(when, pd.Series):
-        if naive_is_local:
-            return when.map(lambda value: local_calendar_day(value, naive_is_local=True))
-        return pd.to_datetime(when, errors="coerce", utc=True).dt.tz_convert(PRO_LOCAL_TZ).dt.date
-    if isinstance(when, (pd.Index, list, tuple, np.ndarray)):
-        if naive_is_local:
-            return pd.Index([local_calendar_day(value, naive_is_local=True) for value in when],
-                            dtype=object)
-        days = pd.DatetimeIndex(pd.to_datetime(when, errors="coerce", utc=True)).tz_convert(PRO_LOCAL_TZ).date
-        return pd.Index([None if pd.isna(day) else day for day in days], dtype=object)
+        ts = pd.to_datetime(when, errors="coerce")
+        aware = ts.dt.tz_localize("UTC") if ts.dt.tz is None else ts
+        return aware.dt.tz_convert(PRO_LOCAL_TZ).dt.date
+    if isinstance(when, (pd.Index, list, tuple)):
+        idx = pd.DatetimeIndex(pd.to_datetime(list(when), errors="coerce"))
+        aware = idx.tz_localize("UTC") if idx.tz is None else idx
+        days = aware.tz_convert(PRO_LOCAL_TZ).date
+        return pd.Index([None if pd.isna(d) else d for d in days], dtype=object)
     ts = pd.to_datetime(when, errors="coerce")
     if ts is None or pd.isna(ts):
         return None
-    if ts.tzinfo is None:
-        if naive_is_local:
-            return ts.date()
-        ts = ts.tz_localize("UTC")
-    return ts.tz_convert(PRO_LOCAL_TZ).date()
+    ts = pd.Timestamp(ts)
+    aware = ts.tz_localize("UTC") if ts.tzinfo is None else ts
+    return aware.tz_convert(PRO_LOCAL_TZ).date()
+
+
+def is_calendar_date(value):
+    """True for a plain `datetime.date` (not a datetime), the type `local_calendar_day` returns."""
+    return isinstance(value, _dt.date) and not isinstance(value, _dt.datetime)

@@ -11,20 +11,15 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import { currentTargetText } from "utils/participantTargets";
 import { useEffect, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 import {
-  Alert,
   Autocomplete,
   Card,
-  FormControlLabel,
   Grid,
   Stack,
   Switch,
-  ToggleButton,
-  ToggleButtonGroup,
   SpeedDial,
   SpeedDialAction,
   SpeedDialIcon
@@ -44,7 +39,6 @@ import CachedIcon from '@mui/icons-material/Cached';
 // core components
 import GenericTimeline from "./GenericTimeline";
 import StatisticalTable from "./StatisticalTable";
-import { channelsForView, defaultViewChannels, timelineViews } from "graphing-utility/timelineViews";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
 
@@ -54,19 +48,14 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
 
  function ChronicTimeline() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const requestedSource = searchParams.get("source");
-  const initialView = timelineViews.some(view => view.value === requestedSource) ? requestedSource : "combined";
-  const [dataView, setDataView] = useState(initialView);
   const [controller, dispatch] = usePlatformContext();
   const { language } = controller;
   const { participant_uid } = useParams();
 
   const [data, setData] = useState(false);
   const [annotations, setAnnotations] = useState([]);
-  const [showEventOverlays, setShowEventOverlays] = useState(initialView === "combined");
 
-  const [availableChannels, setAvailableChannels] = useState({active: [], options: []});
+  const [availableChannels, setAvailableChannels] = useState({active: null, options: []});
 
   const [circadianState, setCircadianState] = useState({eventCount: false, amplitude: false});
   const [showAdaptiveMode, setShowAdaptiveMode] = useState(false);
@@ -88,47 +77,38 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
     } 
     setContextState(dispatch, "report", "GeneralReports");
     
-    let cancelled = false;
-    setData(false);
-    setDataView(initialView);
-    setShowEventOverlays(initialView === "combined");
-    setAvailableChannels({active: [], options: []});
     setAlert(<LoadingProgress/>);
     SessionController.query("/api/queryChronicTimeline", {
       ParticipantId: participant_uid, 
       RequestType: "RequestAll"
     }).then((response) => {
-      if (cancelled) return;
       if (response.data.Timelines.length == 0) {
+        SessionController.query("/api/queryChronicTimeline", {
+          ParticipantId: participant_uid, 
+          RequestType: "DeleteCache"
+        });
         setAlert(null);
         return;
       }
 
-      setAvailableChannels({
-        active: defaultViewChannels(response.data.Timelines, initialView),
-        options: channelsForView(response.data.Timelines, initialView),
-      });
+      let availableChannels = [];
+      for (let i in response.data.Timelines) {
+        for (let j in response.data.Timelines[i].ChannelNames) {
+          if (!availableChannels.includes(response.data.Timelines[i].ChannelNames[j])) {
+            availableChannels.push(response.data.Timelines[i].ChannelNames[j]);
+          }
+        }
+      }
+
+      setAvailableChannels({active: [], options: availableChannels});
       setData(response.data.Timelines);
       setAnnotations(response.data.Annotations);
       setAlert(null);
     }).catch((error) => {
-      if (!cancelled) SessionController.displayError(error, setAlert);
+      SessionController.displayError(error, setAlert);
     });
-    return () => { cancelled = true; };
 
-  }, [participant_uid, initialView]);
-
-  const changeDataView = (event, view) => {
-    if (!view || view === dataView) return;
-    const options = channelsForView(data, view);
-    const retained = availableChannels.active.filter(channel => options.includes(channel));
-    const defaults = defaultViewChannels(data, view);
-    const active = view === "combined" ? [...new Set([...retained, ...defaults])]
-      : retained.length ? retained : defaults;
-    setDataView(view);
-    setAvailableChannels({active, options});
-    if (view !== "combined") setShowEventOverlays(false);
-  };
+  }, [participant_uid]);
   
   const updateAnnotationColor = (data) => {
     setAnnotationState({...data})
@@ -258,7 +238,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                         <Grid item xs={12}>
                           <MDBox p={2} display={"flex"} flexDirection={"row"} justifyContent={"space-between"}>
                             <MDTypography variant={"h6"} fontSize={24}>
-                              {"Multimodal Timeline"}
+                              {"Generic Chronic Timeline View"}
                             </MDTypography>
                             <MDBox>
                               <MDButton size="large" variant="contained" color="primary" style={{marginBottom: 3}} onClick={() => exportCurrentStream()}>
@@ -279,24 +259,10 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                         </Grid>
                         <Grid item xs={12}>
                           <MDBox p={2}>
-                            {data.filter(item => item.Status === "review_required").map(item => (
-                              <Alert key={item.FormId || item.FormName} severity="warning" sx={{ mb: 2 }}>
-                                {item.FormName}: {item.Message}
-                              </Alert>
-                            ))}
-                            <ToggleButtonGroup exclusive value={dataView} onChange={changeDataView}
-                              aria-label="Data view" sx={{mb: 2, flexWrap: "wrap"}}>
-                              {timelineViews.map(view => <ToggleButton key={view.value} value={view.value}
-                                disabled={channelsForView(data, view.value).length === 0}
-                                title={channelsForView(data, view.value).length ? view.label : `No data available for ${view.label.toLowerCase()}`}>
-                                {view.label}
-                              </ToggleButton>)}
-                            </ToggleButtonGroup>
                             <Autocomplete
                               multiple
                               value={availableChannels.active}
                               options={availableChannels.options}
-                              getOptionLabel={currentTargetText}
                               onChange={(event, value) => setAvailableChannels({...availableChannels, active: value})}
                               renderInput={(params) => (
                                 <FormField
@@ -306,22 +272,10 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                                 />
                               )}
                             />
-                            <FormControlLabel
-                              control={<Switch checked={showEventOverlays} onChange={(event) => setShowEventOverlays(event.target.checked)} />}
-                              label="Show event overlays"
-                            />
-                            <MDTypography variant="caption" display="block">
-                              Show or hide recorded events such as High Pain across the selected charts.
-                            </MDTypography>
                           </MDBox>
                         </Grid>
                         <Grid item xs={12} lg={12}>
-                          {availableChannels.active.length === 0 && <MDBox p={2}>
-                            <MDTypography variant="body2" role="status">{availableChannels.options.length
-                              ? "Choose one or more channels above to display them on the timeline."
-                              : "No channels are available for this data view. Choose another view."}</MDTypography>
-                          </MDBox>}
-                          {availableChannels.active.length > 0 && <GenericTimeline data={data} height={150} availableChannels={availableChannels} annotations={annotations} showEventOverlays={showEventOverlays} handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} updateColor={updateAnnotationColor} figureTitle={"ChronicTimeline"}/>}
+                          <GenericTimeline data={data} height={150} availableChannels={availableChannels} annotations={annotations} handleAddEvent={handleAddEvent} handleDeleteEvent={handleDeleteEvent} updateColor={updateAnnotationColor} figureTitle={"ChronicTimeline"}/>
                         </Grid>
                       </>
                     ) : (

@@ -11,7 +11,6 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import { rawTraceName } from "graphing-utility/participantTraceDisplay";
 import { useCallback, useState, useEffect, useMemo } from "react";
 import { useResizeDetector } from 'react-resize-detector';
 
@@ -150,7 +149,7 @@ function TimeseriesPlayback({dataToRender}) {
 
   const plotly_onClick = (data) => {
     setEventInfo((eventInfo) => {
-      eventInfo.channel_name = rawTraceName(data.points[0].data);
+      eventInfo.channel_name = data.points[0].data.name;
       eventInfo.channel = data.points[0].data.id;
       eventInfo.current_alignment = data.points[0].data.current_alignment;
       eventInfo.time = new Date(data.points[0].x).getTime();
@@ -194,7 +193,7 @@ function TimeseriesPlayback({dataToRender}) {
       </Menu>
 
       <Dialog open={coloraxis.show} onClose={() => setColorAxis({...coloraxis, show: false})}>
-        <MDBox px={2} pt={2} sx={{width: 500, maxWidth: "100%", minWidth: 0}}>
+        <MDBox px={2} pt={2} sx={{minWidth: 500}}>
         <MDTypography variant="h5">
             {"Set Colorbar Axis Range (View Only)"} 
         </MDTypography>

@@ -154,7 +154,7 @@ test('one paired contact configuration state deduplicates reordered equivalent s
   const first=event(2,{'Stimulation contacts':'Case+, 1−'},{'Stimulation contacts':'Case+, 10a−'});
   const second=event(4,{'Stimulation contacts':'1c−, 1a−, Case+, 1b−'},{'Stimulation contacts':'10a−, Case+'});
   const changed=event(6,{'Stimulation contacts':'Case+, 2−'},{'Stimulation contacts':'Case+, 10a−'});
-  const result=neuralPlot([first,second,changed],metric('contacts'),range,'RCS08');
+  const result=neuralPlot([first,second,changed].map(record=>({...record,lead_geometry:true})),metric('contacts'),range,'SYNTHETIC_A1');
   expect(result.categories).toEqual(['C1','C2']);
   expect(result.traces).toHaveLength(2);
   expect(result.traces[1].y).toEqual([0,0,1]);
@@ -182,7 +182,26 @@ test('only the known numeric subset is plotted while an unknown side remains unr
 
 test('contact configuration identifiers remain stable when a later date window is selected',()=>{
   const events=[event(1,{'Stimulation contacts':'C+1-'}),event(3,{'Stimulation contacts':'C+2-'}),event(5,{'Stimulation contacts':'C+3-'})];
-  const whole=neuralPlot(events,metric('contacts'),{start:'2025-01-01',end:'2025-01-08'},'RCS08');
-  const later=neuralPlot(events,metric('contacts'),{start:'2025-01-05',end:'2025-01-08'},'RCS08');
+  const whole=neuralPlot(events,metric('contacts'),{start:'2025-01-01',end:'2025-01-08'},'SYNTHETIC_A1');
+  const later=neuralPlot(events,metric('contacts'),{start:'2025-01-05',end:'2025-01-08'},'SYNTHETIC_A1');
   expect(whole.categories).toEqual(['C1','C2','C3']);expect(later.categories).toEqual(['C2','C3']);expect(later.configurations.map(c=>c.number)).toEqual([2,3]);
+});
+
+test('unreviewed setting snapshots render markers only and never imply carried-forward delivery',()=>{
+ const snapshots=[event(3,{Amplitude:'1 mA'},{},{kind:'settings_observation',evidence:'Tablet snapshot; home use unestablished'}),event(6,{Amplitude:'2 mA'},{},{kind:'settings_observation'})];
+ const plot=neuralPlot(snapshots,metric('amplitude'),range,'synthetic',[{start:time(2),end:time(8),reason:'Home settings unknown'}]);
+ expect(plot.traces.filter(trace=>trace.mode==='lines').every(trace=>trace.x.length===0)).toBe(true);
+ expect(plot.traces.filter(trace=>trace.mode==='markers').flatMap(trace=>trace.y)).toEqual([1,2]);
+ expect(plot.shapes).toHaveLength(0);
+});
+
+
+test('an intervening snapshot does not replace or truncate a reviewed home assignment',()=>{
+ const home=event(3,{Amplitude:'1 mA'});
+ const snapshot=event(5,{Amplitude:'9 mA'},{},{kind:'settings_observation'});
+ const result=neuralPlot([home,snapshot],metric('amplitude'),range,'synthetic');
+ const lines=result.traces.filter(trace=>trace.mode==='lines');
+ expect(lines.flatMap(trace=>trace.y).filter(value=>value!==null)).toEqual([1,1]);
+ expect(lines[0].x[1]).toBe('2025-01-08 23:59:59');
+ expect(result.traces.find(trace=>trace.mode==='markers').y).toEqual([1,9]);
 });

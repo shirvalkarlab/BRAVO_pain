@@ -24,6 +24,7 @@ import shutil
 from filelock import Timeout, FileLock
 
 from Server import models
+from modules.DecodeCommon import data_start as _data_start
 from modules.MedtronicPercept import BrainSenseStream
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
@@ -51,11 +52,10 @@ def queryAnnotations(participant_uid, type=None, start_time=0, duration=0):
         QueryDict["date__lte"] = start_time+duration
     return [i.get_info() for i in models.Annotation.find_all(**QueryDict)]
 
-def queryDBSEvents(participant_uid, type=None, source_files=None, start_time=0, duration=0, data=False):
-    if source_files is None:
-        from modules.AnalysisData import eligible_source_files
+def queryDBSEvents(participant_uid, type=None, source_files=[], start_time=0, duration=0, data=False):
+    if len(source_files) == 0:
         Participant = models.Participant.find(uid=participant_uid)
-        SourceFiles = eligible_source_files(Participant)
+        SourceFiles = models.SourceFile.find_all(owner=Participant)
     else:
         SourceFiles = source_files
 
@@ -65,12 +65,12 @@ def queryDBSEvents(participant_uid, type=None, source_files=None, start_time=0, 
     if start_time > 0 and duration > 0:
         QueryDict["date__gte"] = start_time
         QueryDict["date__lte"] = start_time+duration
+    # From the implant date on (the PI, 2026-09-24): events before it are the device on the bench.
+    DataStart = _data_start.data_start_s(participant_uid)
+    if DataStart > 0:
+        QueryDict["date__gte"] = max(float(QueryDict.get("date__gte", 0)), DataStart)
     
-    events = models.DBSEvent.find_all(**QueryDict)
-    if data:
-        from django.db.models import Prefetch
-        events = events.prefetch_related(Prefetch("data", queryset=models.Recording.objects.select_related("source")))
-    return [i.get_info(data=data) for i in events]
+    return [i.get_info(data=data) for i in models.DBSEvent.find_all(**QueryDict)]
         
 def addAnnotation(participant_uid, type, name, date, duration=0):
     if not type in ["RecordingCustomEvent", "ChronicCustomEvent"]:
@@ -79,10 +79,10 @@ def addAnnotation(participant_uid, type, name, date, duration=0):
     Annotation = models.Annotation(name=name, date=date, duration=duration, type=type, owner=Participant)
     Annotation.save()
     if Annotation.type == "ChronicCustomEvent":
-        models.SourceFile.purge(type="CachedResult", metadata__URL="/queryChronicNeuralActivity", metadata__Participant=participant_uid)
+        models.SourceFile.purge(type="CachedResult", metadata__contains={"URL": "/queryChronicNeuralActivity", "Participant": participant_uid})
     elif Annotation.type == "RecordingCustomEvent":
-        models.SourceFile.purge(type="CachedResult", metadata__URL="/queryTimeseriesAnalysis", metadata__Participant=participant_uid)
-        models.SourceFile.purge(type="CachedResult", metadata__URL="/queryTherapeuticEffectAnalysis", metadata__Participant=participant_uid)
+        models.SourceFile.purge(type="CachedResult", metadata__contains={"URL": "/queryTimeseriesAnalysis", "Participant": participant_uid})
+        models.SourceFile.purge(type="CachedResult", metadata__contains={"URL": "/queryTherapeuticEffectAnalysis", "Participant": participant_uid})
     return Annotation
 
 def deleteAnnotation(participant_uid, annotation_uid):
@@ -90,8 +90,8 @@ def deleteAnnotation(participant_uid, annotation_uid):
     Annotation = models.Annotation.find(uid=annotation_uid, owner=Participant)
     if Annotation:
         if Annotation.type == "ChronicCustomEvent":
-            models.SourceFile.purge(type="CachedResult", metadata__URL="/queryChronicNeuralActivity", metadata__Participant=participant_uid)
+            models.SourceFile.purge(type="CachedResult", metadata__contains={"URL": "/queryChronicNeuralActivity", "Participant": participant_uid})
         elif Annotation.type == "RecordingCustomEvent":
-            models.SourceFile.purge(type="CachedResult", metadata__URL="/queryTimeseriesAnalysis", metadata__Participant=participant_uid)
-            models.SourceFile.purge(type="CachedResult", metadata__URL="/queryTherapeuticEffectAnalysis", metadata__Participant=participant_uid)
+            models.SourceFile.purge(type="CachedResult", metadata__contains={"URL": "/queryTimeseriesAnalysis", "Participant": participant_uid})
+            models.SourceFile.purge(type="CachedResult", metadata__contains={"URL": "/queryTherapeuticEffectAnalysis", "Participant": participant_uid})
         Annotation.delete()

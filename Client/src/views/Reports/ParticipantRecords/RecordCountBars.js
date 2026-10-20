@@ -8,7 +8,18 @@
 
  =========================================================
 */
-/** Per-metric availability in the selected, already processed report set. */
+/**
+ * RecordCountBars
+ * ---------------
+ * A per-metric data-availability bar chart shown ABOVE the record timeline. For each score-type
+ * question in the form's FieldMapping it counts how many of the participant's records carry a
+ * non-null value for that metric, and draws one bar per metric. This makes "how much data exists
+ * for each individual metric" obvious at a glance (e.g. NRS 678 vs Tingly 187), which the timeline
+ * itself does not convey.
+ *
+ * Counts are computed from exactly the same (dataToRender, form) props the timeline uses, so the
+ * numbers always agree with what the timeline plots.
+ */
 import { useEffect, useRef } from "react";
 import Plotly from "plotly.js-dist";
 
@@ -16,35 +27,47 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import Card from "@mui/material/Card";
 
-export function isNumericValue(value) {
-  return (typeof value === "number" || (typeof value === "string" && value.trim() !== ""))
-    && Number.isFinite(Number(value));
-}
-
-export function recordAvailability(dataToRender, form) {
-  const records = Array.isArray(dataToRender) ? dataToRender : [];
-  const fields = Object.entries(form || {}).flatMap(([page, definition]) =>
-    Object.entries(definition?.questions || {}).map(([index, question]) => ({ ...question, page, index })));
-  const metrics = fields.filter((q) => q.text !== "Time" &&
-    ["score", "redcapForm", "cumulativeScore"].includes(q.type));
-  return { total: records.length, metrics: metrics.map((metric) => {
-    // Derived totals are available only when every named component has a numeric value.
-    const components = metric.type === "cumulativeScore"
-      ? (metric.list || []).map((label) => fields.find((field) => field.text === label)) : [metric];
-    const count = records.filter((record) => components.length > 0 && components.every((field) =>
-      field && isNumericValue(record?.Result?.[field.page]?.[field.index]))).length;
-    return { label: metric.text, count };
-  }) };
+// A value "exists" if it is neither null/undefined nor an empty string, and (when numeric) finite.
+function isPresent(v) {
+  if (v === null || v === undefined) return false;
+  if (typeof v === "string") return v.trim() !== "";
+  if (typeof v === "number") return Number.isFinite(v);
+  return true;
 }
 
 function RecordCountBars({ dataToRender, form }) {
   const ref = useRef(null);
 
   useEffect(() => {
-    const node = ref.current;
-    const { total, metrics } = recordAvailability(dataToRender, form);
-    const counts = metrics.map((metric) => metric.count);
-    const labels = metrics.map((metric) => metric.label);
+    if (!ref.current) return;
+    const records = Array.isArray(dataToRender) ? dataToRender : [];
+
+    // Collect score-type questions (skip the hidden "Time" marker), preserving FieldMapping order.
+    const metrics = [];
+    for (const page in form) {
+      const questions = (form[page] && form[page].questions) || [];
+      for (const i in questions) {
+        const q = questions[i];
+        if (q.text === "Time") continue;
+        if (q.type === "score" || q.type === "redcapForm" || q.type === "cumulativeScore") {
+          metrics.push({ label: q.text, page, index: i });
+        }
+      }
+    }
+
+    // Count non-null values per metric across all records.
+    const counts = metrics.map((m) => {
+      let c = 0;
+      for (const r of records) {
+        const result = r && r.Result;
+        if (!result || !result[m.page]) continue;
+        if (isPresent(result[m.page][m.index])) c += 1;
+      }
+      return c;
+    });
+
+    const total = records.length;
+    const labels = metrics.map((m) => m.label);
     // Colour by coverage: fuller coverage = deeper teal; sparse = amber, so gaps stand out.
     const colors = counts.map((c) => {
       const frac = total > 0 ? c / total : 0;
@@ -68,7 +91,7 @@ function RecordCountBars({ dataToRender, form }) {
     const layout = {
       height: 260,
       margin: { l: 48, r: 16, t: 16, b: 90 },
-      yaxis: { title: { text: "reports with numeric values", font: { size: 12 } }, rangemode: "tozero" },
+      yaxis: { title: { text: "records with a value", font: { size: 12 } }, rangemode: "tozero" },
       xaxis: { tickangle: -35, automargin: true },
       shapes: total > 0 ? [{
         type: "line", xref: "paper", x0: 0, x1: 1, yref: "y", y0: total, y1: total,
@@ -81,8 +104,8 @@ function RecordCountBars({ dataToRender, form }) {
       bargap: 0.35,
     };
 
-    Plotly.react(node, [trace], layout, { responsive: true, displaylogo: false });
-    return () => Plotly.purge(node);
+    Plotly.react(ref.current, [trace], layout, { responsive: true, displaylogo: false });
+    return () => { if (ref.current) Plotly.purge(ref.current); };
   }, [dataToRender, form]);
 
   return (
@@ -90,7 +113,7 @@ function RecordCountBars({ dataToRender, form }) {
       <MDBox px={2} pt={2} pb={1}>
         <MDTypography variant="h6">{"Data Availability by Metric"}</MDTypography>
         <MDTypography variant="caption" color="text">
-          {"Reports with a finite numeric value, including zero, in the selected processed report set. Derived totals require every component. The dashed line marks all selected reports; counts do not indicate independent samples."}
+          {"Number of records that contain a value for each metric (non-null). The dashed line marks the total report count."}
         </MDTypography>
       </MDBox>
       <MDBox px={1} pb={2}>

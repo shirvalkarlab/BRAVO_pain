@@ -1,228 +1,315 @@
-import { currentTarget } from "utils/participantTargets";
-import ResearchEvidencePanel from "./ResearchEvidencePanel";
-import { useAnalysisQuery } from "../Biomarkers/queryAnalysis";
 /**
- * Closed-Loop Simulation / threshold-deployment view (DESIGN_biomarker_pipeline_v2 §8b — "Option 3").
+ * Closed-Loop Deployment — the clinician route, rebuilt 2026-09-04.
  *
- * Consumes ONE validated BandCandidate (the §6 contract emitted by the discovery/Biomarkers view)
- * and walks it toward a device-implementable Percept RC controller spec. This Phase-A scaffold
- * revalidates the chosen candidate (from this tab or an uploaded JSON), renders an identity header
- * + the key mixed-effects evidence + a raw-schema inspector, and stands up placeholders for the
- * panels that later phases fill: ROC + cut-point (B), LSB conversion + power (C), per-era
- * cross-validation (D), and the Deploy-to-Percept sign-off card (E).
+ * The reader this page is designed for is a clinician-scientist standing at a Medtronic A610 during
+ * a programming visit, deciding whether to enable Adaptive Therapy for this participant and what to
+ * type into the programmer. Their question has two parts in a strict order: may I enable this at
+ * all, and if so what do I enter.
+ *
+ * WHAT CHANGED, AND WHY. The page this replaces rendered eleven sections in the order the module was
+ * built in, which is a record of the work rather than a decision surface. It also stated its verdict
+ * three times, from two endpoints that answer different questions, and the statement pinned to the
+ * viewport was the one that did not know about the device rules — so the page could show a
+ * permissive headline stuck to the top of the screen while the body of the page said the device
+ * forbids the configuration. That is fixed structurally rather than by care: there is now one
+ * headline, it is computed from both endpoints, and no arrangement of the viewport can produce the
+ * old contradiction because there is no second verdict to disagree with.
+ *
+ * THE PAGE, in reading order since the minimalist redesign (SPEC 2026-09-26 section 5.2, which
+ * builds on decision 302's one decision card):
+ *   Head. The page's question as its title, the pain score, where the chosen band is held, the safe
+ *      current ceiling read from the server, then one row of controls (the pain score, the
+ *      clinic-sheet switch, and the ⋯ menu holding "Load a saved band file", "Clear" and the stored
+ *      results), then the contents row of jump links.
+ *   1. THE DECISION CARD: the verdict at 22 px; red ✕ bullets when the device refuses and ▲ ones for
+ *      evidence that was not checked, worded as before; the values to enter, only when the device
+ *      allows them; "Sign and print"; one Details fold.
+ *   2. "Band selection" (the grid).   3. "Device rule check" (the rule table).
+ *   4. "Evidence consistency"   5. "Does the band mean the same at every stimulation
+ *      state?"   6. Background, folded: current and band power three ways, the simulated closed
+ *      loop, and the switching-point panels.
+ *
+ * WHAT IS NO LONGER RENDERED HERE, and where it went. `DeploymentVerdictStrip` was superseded by
+ * `DeploymentDecisionHeader` (2026-09-04), and that header by `DecisionCard` (decision 302), which
+ * carries the verdict, the jump links and the print path. `DeploymentEvidencePanel` is
+ * superseded by `DeviceRuleLedger` and `EvidenceTrianglePanel` between them. `CalibrationInEffectPanel`
+ * (and, until its deletion on 2026-09-21, `PsdLsbPanel`) is not rendered on this route at all: the microvolt-to-least-significant-
+ * bit conversion model and the power spectrum are methods artefacts whose reader is the analyst
+ * before the visit, and the band has already been chosen and committed by the time anyone opens this
+ * page. The raw BandCandidate JSON inspector is also gone, because a dump of an internal schema has
+ * no clinical reader. All four component FILES are left in place and still export working
+ * components, so whoever places them on the Biomarkers route can import them unchanged.
+ *
+ * `DeploymentRocPanel`, `LsbPowerPanel` and `EraRefitPanel` are demoted rather than cut. All three
+ * are real evidence about whether the band generalises and where the cut-point sits, and none of
+ * them is the first question at a programming visit, so they sit below the evidence behind one
+ * fold.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 
-import { Card, Chip, Grid } from "@mui/material";
+import { Card, Grid } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 import MDButton from "components/MDButton";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
-import { usePlatformContext, setContextState } from "context.js";
-import { candidateRequestParams } from "./candidateRequest";
+
+import RecomputeBar from "views/Reports/RecomputeBar";
+import CacheStatusLine from "views/Reports/CacheStatusLine";
+import Fold from "./Fold";
+import { CL, newBandForClosedLoop, recomputeClosedLoop } from "views/Reports/moduleCacheKeys";
+import { prefetchNeighbours } from "./neighbourPrefetch";
 
 import {
-  loadBandCandidate, clearBandCandidate, parseUploadedCandidate, commitBandCandidate,
+  loadBandCandidate, parseUploadedCandidate, syncChosenBand, recordChosenBand, recordClearedBand,
+  chosenBandRecordText, loadBandsBySide, bandSide,
 } from "./bandCandidateStore";
 import DeploymentRocPanel from "./DeploymentRocPanel";
 import LsbPowerPanel from "./LsbPowerPanel";
 import EraRefitPanel from "./EraRefitPanel";
-import PsdLsbPanel from "./PsdLsbPanel";
-import ConversionModelPanel from "./ConversionModelPanel";
-import DeploySignoffCard from "./DeploySignoffCard";
-import RecomputeBar from "views/Reports/RecomputeBar";
+import DecisionCard, { ContentsRow, UncheckedStimulatorCard } from "./DecisionCard";
+import DeveloperMenu from "./DeveloperMenu";
+import EvidenceTrianglePanel from "./EvidenceTrianglePanel";
+import ClosedLoopSimulationPanel from "./ClosedLoopSimulationPanel";
+import BandStabilityPanel from "./BandStabilityPanel";
+import BandSweepGridPanel from "./BandSweepGridPanel";
+import ThreeSourceResponsePanel from "./ThreeSourceResponsePanel";
 import useDeploymentSummary from "./useDeploymentSummary";
+import useDeploymentReport from "./useDeploymentReport";
+import StimProgramCard from "./StimProgramCard";
+import WiringCard from "./WiringCard";
+import useWiringComparison from "./useWiringComparison";
+import { controllers as wiringControllers, sensedSides } from "./wiring";
+import { fromServer, isEdited, requestProgram, sensingPair } from "./stimProgram";
+import { SessionController } from "database/session-control";
+import useBandSweepGrid from "./useBandSweepGrid";
+import useThreeSourcePooled from "./useThreeSourcePooled";
+import useClosedLoopSimulation from "./useClosedLoopSimulation";
 import PAL from "./palette";
+import { TYPE, WRAP, CARD, LAYOUT } from "assets/theme/base/tokens";
+import PageHead from "views/Reports/paper/PageHead";
+import { SectionRevealedContext } from "views/Reports/paper/Section";
+import { FigureRecordContext } from "./figureSnapshots";
+import CeilingLine from "views/Reports/paper/CeilingLine";
+import { useStudyCode } from "views/Reports/paper/studyCode";
 import "./deployPrint.css";
+import { bandPainScore, reportCandidateFromBand, summaryCutpoint, summaryRequestParams,
+  withheldIfOtherBand } from "./candidateRequestParams";
+import PainScoreSelect, { pageHeadPainLabel } from "./PainScoreSelect";
+import { PAIN_SCORE_OPTIONS } from "views/Reports/painScores";
+import { inheritedMatching, inheritedMatchingLine, matchingRequestKeys, MATCHING_KEYS }
+  from "./inheritedMatching";
 
-const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(d));
-const fmtP = (p) => (p == null || !Number.isFinite(Number(p)) ? "—"
-  : Number(p) < 0.001 ? Number(p).toExponential(1) : Number(p).toFixed(3));
+/**
+ * THE PAGE'S OWN DISPLAY STATE, HELD AT MODULE SCOPE FOR THE SAME REASON THE RESULT CACHE IS.
+ *
+ * Caching the fetches is only half of what a reader means by "the page is still where I left it".
+ * This is a route-level component, so React Router destroys its `useState` on navigation, and four
+ * pieces of that state decide what the restored page looks like: whether the analyst fold was open,
+ * which threshold mode was selected, and which operating point and device threshold the panels had
+ * settled on. Losing them means coming back to a page that has the right numbers arranged in the
+ * wrong way — the fold shut on the panel someone was reading, the mode reset from the one they
+ * chose to the one the payload recommends.
+ *
+ * THE OPERATING POINT MATTERS FOR A SECOND AND LESS OBVIOUS REASON. It is an input to the
+ * statistical summary's request, so it is part of that request's cache key. If it came back as
+ * null on every return, the key would not match the entry stored under the cut-point that was in
+ * force, and the page would declare itself stale the moment it reappeared — on a change nobody
+ * made. Keeping it here means the key that is asked for on return is the key that was stored.
+ *
+ * A hard reload clears this, which is correct and matches the result cache: a reload is a request
+ * for a clean slate.
+ */
+const VIEW_STATE = new Map();
 
-// Verdict badge color, mirrors the discovery view's ValidationReadout palette (now via the shared
-// colorblind-safe roles: stim-stable = pass, stim-dependent = warn, failed = fail).
-function verdictColor(verdict) {
-  const v = verdict || "";
-  if (/VALIDATED \(stim-stable\)/.test(v)) return PAL.pass;
-  if (/VALIDATED \(stim-dependent\)/.test(v)) return PAL.warn;
-  if (/failed/.test(v)) return PAL.fail;
-  return PAL.neutral;
+// The user's stimulation program, per participant, in this browser only (decision 467). Storage may
+// be refused (a private window); the page then starts from the device's program each time.
+const STIM_PROGRAM_KEY = (uid) => `bravo:stimProgram:${uid}`;
+function loadStimProgram(uid) {
+  try {
+    const raw = window.localStorage.getItem(STIM_PROGRAM_KEY(uid));
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+function saveStimProgram(uid, program) {
+  try { window.localStorage.setItem(STIM_PROGRAM_KEY(uid), JSON.stringify(program)); } catch (e) { /* kept for this visit only */ }
+}
+// The sense-to-control wiring (the PI, 2026-10-08), the same way: per participant, this browser only.
+const WIRING_KEY = (uid) => `bravo:wiring:${uid}`;
+function loadWiring(uid) {
+  try { return window.localStorage.getItem(WIRING_KEY(uid)) || null; } catch (e) { return null; }
+}
+function saveWiring(uid, key) {
+  try { window.localStorage.setItem(WIRING_KEY(uid), key); } catch (e) { /* kept for this visit only */ }
 }
 
-// Audit C6: white text on the warn fill (#E69F00) is 2.25:1 — below WCAG. The badge text color must
-// adapt to its fill: near-black on the orange stim-dependent badge (7.7:1), white on pass/fail/
-// neutral (all ≥ 3.4:1 with white). Keyed on the same role the fill uses so the two never disagree.
-function verdictTextColor(verdict) {
-  return verdictColor(verdict) === PAL.warn ? PAL.onWarn : "white";
+function readViewState(uid) { return VIEW_STATE.get(String(uid || "unknown")) || {}; }
+
+function writeViewState(uid, patch) {
+  const k = String(uid || "unknown");
+  VIEW_STATE.set(k, { ...(VIEW_STATE.get(k) || {}), ...patch });
 }
 
-// A labeled key/value row used across the identity + evidence blocks.
-function KV({ label, children }) {
+/**
+ * True once `show` has been true at least once, and true forever after.
+ *
+ * This is how the analyst fold keeps its figures. A collapsed panel is HIDDEN rather than
+ * unmounted, so Plotly keeps its own zoom, pan and legend state and reopening the fold shows the
+ * figure exactly as it was left rather than redrawing it from the top. But the panels are not
+ * mounted until the fold has been opened once, because a Plotly graph first drawn inside a
+ * container with `display: none` measures its width as zero and stays that size when the container
+ * becomes visible. Mounting on first reveal means every first draw happens at the width it will be
+ * read at.
+ *
+ * The remaining limit is worth naming: a window resized while the fold is shut leaves those figures
+ * at their previous width until something else prompts Plotly to resize them.
+ */
+function useRevealedOnce(show) {
+  const [revealed, setRevealed] = useState(!!show);
+  useEffect(() => { if (show && !revealed) setRevealed(true); }, [show, revealed]);
+  return revealed;
+}
+
+/**
+ * Where the chosen band is held, in one line under the page title (the PI's ruling 8). A band held
+ * in this browser only is said so in the warning colour, with the reason, because nobody opening
+ * this page elsewhere would see it. The wording lives in `bandCandidateStore.chosenBandRecordText`.
+ */
+function ChosenBandRecordLine({ status, hasBand }) {
+  const text = chosenBandRecordText(status, hasBand);
+  if (!text) return null;
   return (
-    <MDBox display="flex" flexDirection="row" alignItems="baseline" gap={1} mb={0.4}>
-      <MDTypography variant="caption" sx={{ fontSize: 11, fontWeight: "bold", minWidth: 150,
-        color: "#555" }}>{label}</MDTypography>
-      <MDTypography variant="caption" sx={{ fontSize: 11.5 }}>{children}</MDTypography>
-    </MDBox>
+    <MDTypography variant="caption" display="block" sx={{ ...TYPE.body,
+      color: status.where === "browser" ? PAL.warnText : PAL.ink2 }}>
+      {/* A caution ink always carries its glyph (SPEC 2.3). */}
+      {status.where === "browser" ? <span aria-hidden="true">{"\u25B2 "}</span> : null}
+      {text}
+    </MDTypography>
   );
 }
 
-function BandCandidateIdentity({ bc, envelope }) {
-  const ev = bc.evidence || {};
-  const lbl = bc.label || {};
-  const prov = bc.provenance || {};
-  return (
-    <Card sx={{ width: "100%" }}>
-      <MDBox p={2}>
-        <MDBox display="flex" alignItems="center" gap={1.2} mb={1} flexWrap="wrap">
-          <MDBox px={1.4} py={0.4} sx={{ backgroundColor: verdictColor(bc.verdict),
-            color: verdictTextColor(bc.verdict),
-            borderRadius: "10px", fontSize: 11, fontWeight: "bold" }}>
-            {bc.verdict || "—"}
-          </MDBox>
-          <MDTypography variant="h6" sx={{ fontSize: 16 }}>
-            {`${bc.contact_label || bc.contact || "band"} @ ${fmt(bc.center_freq_hz, 1)} Hz`}
-          </MDTypography>
-          <Chip size="small" label={lbl.pro_metric_label || lbl.pro_metric || "metric"}
-            sx={{ height: 20, fontSize: 11 }} />
-          {bc.adaptive_valid
-            ? <Chip size="small" label="adaptive-valid (8–30 Hz)"
-                sx={{ height: 20, fontSize: 10.5, backgroundColor: PAL.pass, color: "white" }} />
-            : <Chip size="small" label="off adaptive band"
-                sx={{ height: 20, fontSize: 10.5, backgroundColor: PAL.warn, color: PAL.onWarn }} />}
-        </MDBox>
+/** The page's question, its title (SPEC 2026-09-26 section 5.2). */
+export const PAGE_QUESTION = "Closed-loop feasibility and entry values";
 
-        <Grid container spacing={3}>
-          <Grid item xs={12} md={6}>
-            <MDTypography variant="caption" sx={{ fontSize: 10.5, fontWeight: "bold",
-              letterSpacing: 0.4, color: "#999" }}>DEVICE IDENTITY</MDTypography>
-            <MDBox mt={0.6}>
-              <KV label="Hemisphere">{currentTarget(bc.hemisphere, bc.hemisphere || "—")}</KV>
-              <KV label="Contact (sensing)">{bc.contact || "—"}</KV>
-              <KV label="Band">{`${fmt(bc.band_lo_hz, 1)} – ${fmt(bc.band_hi_hz, 1)} Hz (${fmt(bc.bandwidth_hz, 1)} Hz wide)`}</KV>
-              <KV label="Center → FFT-snap">{`${fmt(bc.center_freq_hz, 2)} → ${fmt(bc.snapped_center_freq_hz, 2)} Hz`}</KV>
-              <KV label="Polarity">{bc.polarity || "—"}</KV>
-              <KV label="Suggested mode">
-                {bc.suggested_mode || <span style={{ color: PAL.warnText }}>none — see note</span>}
-              </KV>
-            </MDBox>
-          </Grid>
-          <Grid item xs={12} md={6}>
-            <MDTypography variant="caption" sx={{ fontSize: 10.5, fontWeight: "bold",
-              letterSpacing: 0.4, color: "#999" }}>MIXED-EFFECTS EVIDENCE</MDTypography>
-            <MDBox mt={0.6}>
-              <KV label="Odds ratio (per 1 SD)">
-                {`${fmt(ev.odds_ratio)} `}
-                {ev.or_lo != null && ev.or_hi != null ? `(95% CI ${fmt(ev.or_lo)}–${fmt(ev.or_hi)})` : ""}
-                {ev.credible_ci === false
-                  ? <span style={{ color: PAL.fail }}
-                      title="Credible-CI rule: OR-space 95% CI width > 0.10. This CI is narrower than that (saturated-random-effect Wald interval, not trustworthy) — re-validated by cluster bootstrap in Phase B."> · narrow CI — re-bootstrap (Phase B)</span>
-                  : ev.credible_ci === true
-                    ? <span style={{ color: PAL.pass }}
-                        title="Credible-CI rule: OR-space 95% CI width > 0.10 (not 'excludes 1'). Same flag gates the PE 'credible CI' deployment gate."> · credible</span> : null}
-              </KV>
-              <KV label="p (glmer)">{fmtP(ev.p_glmer)}</KV>
-              <KV label="Samples / eras">{`${ev.n_matched_samples ?? "—"} samples · ${ev.n_clusters ?? "—"} weekly eras`}</KV>
-              <KV label="Stim stability">
-                {ev.stim_stable == null ? "—" : ev.stim_stable ? "stim-stable" : "stim-dependent"}
-                {ev.stim_lrt_p != null ? ` (LRT p = ${fmtP(ev.stim_lrt_p)})` : ""}
-              </KV>
-              <KV label="Per-era OR">
-                {ev.or_by_era
-                  ? ["OFF", "LOW", "HIGH"].map((t) => `${t}: ${fmt(ev.or_by_era[t])}`).join("  ·  ")
-                  : "—"}
-              </KV>
-              <KV label="Label / join">{`${lbl.pro_metric || "—"} · ${(lbl.binarization && lbl.binarization.strategy) || "—"} · ${lbl.join || "—"} · n+ ${lbl.n_pos_days ?? "—"} / n− ${lbl.n_neg_days ?? "—"}`}</KV>
-            </MDBox>
-          </Grid>
-        </Grid>
+/**
+ * The browser tab's title (TASTE_AUDIT.md C7; SPEC section 6's naming table): the page's job in a
+ * few words, set by `paper/PageHead` while the page is shown.
+ */
+export const DOCUMENT_TITLE = "Closed-loop deployment";
 
-        {/* Adaptive-mode caveat for off-band / negative-direction candidates. */}
-        {(!bc.adaptive_valid || bc.suggested_mode == null) && bc.suggested_mode_reason ? (
-          <MDBox mt={1} p={1} sx={{ backgroundColor: "#fff6e6", borderRadius: "6px" }}>
-            <MDTypography variant="caption" sx={{ fontSize: 10.8, color: "#7a5200" }}>
-              {`Deployment note: ${bc.suggested_mode_reason}.`}
-              {bc.adaptive_valid_reason ? ` ${bc.adaptive_valid_reason}.` : ""}
-            </MDTypography>
-          </MDBox>
-        ) : null}
+/**
+ * The safe current ceiling line, READ FROM THE SERVER (decision 306 sends the ceiling for the
+ * stimulated side with the report's threshold block) and never typed here. It is drawn by the
+ * shared `paper/CeilingLine` in the specification's sentence (SPEC section 4 rule 1). The report
+ * carries the one side it plans for, so that side is printed and the other is said not to have
+ * been sent. Returns null when the report carries no ceiling at all; the page then says so
+ * (`CEILING_NOT_SENT`) instead of printing a number.
+ */
+export const CEILING_NOT_SENT = "Safe current ceiling: not sent with this report.";
 
-        {/* Pool-bias honesty + committed-at provenance. */}
-        <MDBox mt={1}>
-          <MDTypography variant="caption" color="text" sx={{ fontSize: 10.3, fontStyle: "italic" }}>
-            {prov.selection_biased ? "Selection-biased pool — " : ""}
-            {prov.selection_note || ""}
-            {envelope && envelope.committed_at ? ` · committed ${new Date(envelope.committed_at).toLocaleString()}` : ""}
-          </MDTypography>
-        </MDBox>
-      </MDBox>
-    </Card>
-  );
+export function ceilingLineProps(threshold, side) {
+  const v = threshold && threshold.safety_ceiling_mA;
+  if (v == null || !Number.isFinite(Number(v))) return null;
+  const n = Number(v);
+  const prov = (threshold.safety_ceiling_provenance
+    && String(threshold.safety_ceiling_provenance).trim()) || "";
+  // The PI-stated provenance reads "stated by PI, <date> ..."; any other (the module's hard limit
+  // where no ceiling was stated) is printed as the server wrote it, never as "set by the PI".
+  const source = !prov || /^stated by (the )?PI\b/i.test(prov) ? "set by the PI" : prov;
+  const s = String(side || "").toLowerCase();
+  if (s === "left") return { leftMa: n, rightMa: null, source };
+  if (s === "right") return { leftMa: null, rightMa: n, source };
+  return null;
 }
 
 function ClosedLoopSim() {
-  const queryAnalysis = useAnalysisQuery();
   const navigate = useNavigate();
   const { participant_uid } = useParams();
+  // The de-identified study code for the line under the title (SPEC section 4 rule 1); null when
+  // the participant record carries none.
+  const participantCode = useStudyCode(participant_uid);
   const fileRef = useRef(null);
-  const [, dispatch] = usePlatformContext();
-  const [selection, setSelection] = useState(null);
-  const [candidateStatus, setCandidateStatus] = useState("");
-  const [revalidate, setRevalidate] = useState(0);
 
+  // Everything below that describes how the page is ARRANGED is seeded from the retained view
+  // state, so a return to this route restores the arrangement as well as the results.
+  const retained = readViewState(participant_uid);
+
+  // False until the server's record of the chosen band has answered. The browser's own copy can
+  // name another band (or another pain score) than the server's, and a request sent for the copy
+  // is wasted: the server's wins and the page then asks again (the review of 2026-10-02: the pain
+  // score flipped after load and the first result was already "changed since").
+  const [bandSynced, setBandSynced] = useState(false);
   const [envelope, setEnvelope] = useState(null);   // {band_candidate, participant_uid, committed_at}
-  const [showJson, setShowJson] = useState(false);
-  const [cutpoint, setCutpoint] = useState(null);   // chosen operating point, lifted from Phase B
-  // Audit [42]: the resolved device-LSB threshold, lifted from Phase C (LsbPowerPanel) so Phase B's
-  // feature histogram can annotate its cut line with the SAME LSB the clinician will program.
-  const [lsbThreshold, setLsbThreshold] = useState(null);   // {upperLsb, estimated} | null
+  // The band chosen on each side, `{ Left, Right }` of envelopes (the PI, 2026-10-08: one band per
+  // side for "2 independent controllers"). `envelope` above is the band ticked last, the page's band.
+  const [bandsBySide, setBandsBySide] = useState({ Left: null, Right: null });
+  // Where the chosen band is held: on the server's record, or in this browser only (with why).
+  const [bandRecord, setBandRecord] = useState(null);
+  // THE MATCHING SETTINGS OF THE BIOMARKERS PAGE'S LAST RUN (decision 331), read once per visit:
+  // the grid, the report's stability card and the deployment summary take them from here, and the
+  // page prints which in one line (`inheritedMatching.js` says what each request takes).
+  const inherited = useMemo(() => inheritedMatching(participant_uid), [participant_uid]);
+  const reportMatching = useMemo(() => matchingRequestKeys(inherited, MATCHING_KEYS), [inherited]);
+  // The clinic-sheet ratings in the deployment summary: the Biomarkers page's last run decides, as it
+  // does for the grid and the stability card (the PI, 2026-10-04: "follow biomarkers page - remove
+  // toggle here"; the switch of 2026-09-24 is gone).
+  const includeSheets = !!reportMatching.IncludeClinicSheetRatings;
+  const [cutpoint, setCutpoint] = useState(retained.cutpoint || null);   // chosen operating point, lifted from the ROC
+  // The resolved device-LSB threshold, lifted from the LSB panel so the ROC's feature histogram can
+  // annotate its cut line with the same value.
+  const [lsbThreshold, setLsbThreshold] = useState(retained.lsbThreshold || null);   // {upperLsb, estimated} | null
+  const [showAnalyst, setShowAnalyst] = useState(!!retained.showAnalyst);
+
+  /**
+   * THE SELECTED THRESHOLD MODE, held here because two panels depend on it.
+   *
+   * It starts as null and STAYS null until the clinician picks a mode, and each panel falls back to
+   * the payload's own `prescriptions.selected` or `prescriptions.recommended` while it is null. That
+   * arrangement is what satisfies the requirement that a selection must never snap back to the
+   * recommendation: there is no effect that writes the recommendation into this state, so nothing
+   * can overwrite a choice once it has been made, not on a re-render and not when the report
+   * refetches.
+   *
+   * Changing it does NOT refetch anything. The payload already carries all three modes with their
+   * own field lists, couplings and duty cycles, so switching modes is a pure display change. That
+   * matters because the deployment endpoint fits regression models, and a toggle that refetched
+   * would put a model fit behind a button press.
+   */
+  const [thresholdMode, setThresholdMode] = useState(retained.thresholdMode || null);
+
+  // Retain the four pieces of arrangement across a route unmount. This writes only when one of them
+  // changes, and it writes plain values, so nothing here can hold a stale render's closure.
+  useEffect(() => {
+    if (!participant_uid) return;
+    writeViewState(participant_uid, { cutpoint, thresholdMode, showAnalyst, lsbThreshold });
+  }, [participant_uid, cutpoint, thresholdMode, showAnalyst, lsbThreshold]);
 
   useEffect(() => {
-    if (!participant_uid) { navigate("/database", { replace: false }); return; }
-    setContextState(dispatch, "report", "CustomizedAnalysis");
-    setEnvelope(null);
-    setRevalidate(0);
-    setSelection(loadBandCandidate(participant_uid));
+    if (!participant_uid) { navigate("/database", { replace: false }); return undefined; }
+    // This browser's copy first, so the page draws at once; then the server's record, which wins
+    // (the PI's ruling 8). The envelope is replaced only when the server's band differs, so a
+    // matching answer does not hand every panel a new object and refire its fetch.
+    const local = loadBandCandidate(participant_uid);
+    setEnvelope(local);
+    setBandsBySide(loadBandsBySide(participant_uid));
+    setBandSynced(false);
+    let alive = true;
+    syncChosenBand(participant_uid).then(({ envelope: server, status, bySide }) => {
+      if (!alive) return;
+      setBandRecord(status);
+      if (bySide) setBandsBySide(bySide);
+      const same = (a, b) => JSON.stringify(a && a.band_candidate) === JSON.stringify(b && b.band_candidate);
+      if (!same(server, local)) setEnvelope(server);
+      setBandSynced(true);
+    }).catch(() => { if (alive) setBandSynced(true); });
+    return () => { alive = false; };
   }, [participant_uid, navigate]);
 
-  useEffect(() => {
-    setEnvelope(null);
-    setCutpoint(null);
-    setLsbThreshold(null);
-    if (!selection || selection.participant_uid !== participant_uid || !selection.band_candidate) { setCandidateStatus(""); return undefined; }
-    if (!revalidate) { setCandidateStatus("Revalidate the selected band to review it against current approved data."); return undefined; }
-    let cancelled = false;
-    const candidate = selection.band_candidate;
-    const controls = candidateRequestParams(candidate, selection.request_params);
-    setCandidateStatus("Revalidating this band against the current cleaned dataset…");
-    queryAnalysis("/api/emitBandCandidate", {
-      ParticipantId: participant_uid,
-      Channel: candidate.contact,
-      CenterHz: Number(candidate.center_freq_hz),
-      BandWidthHz: candidate.bandwidth_hz || 5,
-      ...controls,
-    }).then(({ data }) => {
-      if (cancelled) return;
-      if (!data || !data.available || !data.band_candidate) {
-        setCandidateStatus((data && (data.reason || data.message)) || "This band is unavailable on the current dataset.");
-        return;
-      }
-      const fresh = commitBandCandidate(participant_uid, data.band_candidate,
-        { InputManifest: data.InputManifest, requestParams: controls });
-      setEnvelope(fresh);
-      setCandidateStatus("Band revalidated against the current cleaned dataset.");
-    }).catch(() => {
-      if (!cancelled) setCandidateStatus("Band revalidation failed. Select it again or reload to retry.");
-    });
-    return () => { cancelled = true; queryAnalysis.cancel("/api/emitBandCandidate"); };
-  }, [participant_uid, selection, revalidate]);
-
-  // Tag <body> while this view is mounted so the print stylesheet (deployPrint.css) can scope its
-  // "hide everything except the sign-off record" rules to this page only, and clean the class up on
-  // unmount so printing any OTHER view is unaffected.
+  // Tag <body> while this view is mounted so the print stylesheet can scope its "hide everything
+  // except the record" rules to this page only, and clean the class up on unmount so printing any
+  // other view is unaffected.
   useEffect(() => {
     document.body.classList.add("cl-deploy-root");
     return () => document.body.classList.remove("cl-deploy-root");
@@ -230,178 +317,557 @@ function ClosedLoopSim() {
 
   const bc = envelope && envelope.band_candidate;
 
+  // THE STIMULATION PROGRAM (decision 467): the device's program today, from the newest export, and
+  // the user's own, remembered in this browser per participant. Only an edited program is sent.
+  const [inheritedProgram, setInheritedProgram] = useState(null);
+  const [programUnavailable, setProgramUnavailable] = useState(null);
+  const [stimProgram, setStimProgramState] = useState(() => loadStimProgram(participant_uid));
+  const setStimProgram = useCallback((next) => {
+    setStimProgramState(next);
+    saveStimProgram(participant_uid, next);
+  }, [participant_uid]);
+  useEffect(() => {
+    if (!participant_uid) return undefined;
+    let live = true;
+    SessionController.query("/api/queryStimProgram", { ParticipantId: participant_uid })
+      .then((resp) => {
+        if (!live) return;
+        const prog = fromServer(resp && resp.data);
+        setInheritedProgram(prog ? { ...prog, session_date: resp.data.session_date } : null);
+        if (!prog) setProgramUnavailable((resp && resp.data && resp.data.reason) || "The device's settings could not be read");
+        setStimProgramState((cur) => cur || prog);
+      })
+      .catch(() => { if (live) setProgramUnavailable("The device's settings could not be read"); });
+    return () => { live = false; };
+  }, [participant_uid]);
+  const programEdited = !!(stimProgram && inheritedProgram && isEdited(stimProgram, inheritedProgram));
+  const programForReport = useMemo(() => (programEdited ? requestProgram(stimProgram) : null),
+    [programEdited, stimProgram]);
+  const bandSensing = bc ? sensingPair(bc.contact || bc.channel) : null;
+  const [wiring, setWiringState] = useState(() => loadWiring(participant_uid));
+  const setWiring = useCallback((key) => { setWiringState(key); saveWiring(participant_uid, key); },
+    [participant_uid]);
+
+  // The pain score chosen on this page, until another band is chosen (see below).
+  const [painScoreChoice, setPainScoreChoice] = useState(null);
+  // THE CHOSEN BAND AS THE GRID AND THE THREE-SOURCE PANEL READ IT, built once per band rather than
+  // as a new object on every render (speed-up item C6, 2026-10-02): a new object each time made the
+  // grid rebuild on every re-render of the page although the band had not changed.
+  const hasBand = !!bc;
+  const bandContact = bc ? bc.contact : null;
+  const bandCentreHz = bc ? bc.center_freq_hz : null;
+  const committedBand = useMemo(
+    () => (hasBand ? { contact: bandContact, centerHz: bandCentreHz } : null),
+    [hasBand, bandContact, bandCentreHz]);
+  // The band on each side and the sides the wiring reads, for the two-column Band selection; the same
+  // objects between changes, for the reason above.
+  const sideBandKey = ["Left", "Right"].map((sd) => {
+    const b = bandsBySide[sd] && bandsBySide[sd].band_candidate;
+    return b ? `${b.contact}|${b.center_freq_hz}` : "";
+  }).join("/");
+  const committedBySide = useMemo(() => {
+    const out = { Left: null, Right: null };
+    ["Left", "Right"].forEach((sd) => {
+      const b = bandsBySide[sd] && bandsBySide[sd].band_candidate;
+      if (b) out[sd] = { contact: b.contact, centerHz: b.center_freq_hz };
+    });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sideBandKey]);
+  const gridActiveSides = useMemo(() => (wiring ? sensedSides(wiring) : null), [wiring]);
+  const gridOffNote = gridActiveSides && gridActiveSides.length === 1
+    ? `Not used: ${gridActiveSides[0].toLowerCase()} sensing drives both stimulators.` : null;
+  // The grid's two callbacks, the same functions from render to render for the same reason.
+  // Choosing a band computes it (decision 418): the pain score starts again from the new band's own
+  // in the same render, and every answer about the band is fetched for it.
+  const onGridCandidateChosen = useCallback(() => {
+    setPainScoreChoice(null);
+    setEnvelope(loadBandCandidate(participant_uid));
+    setBandsBySide(loadBandsBySide(participant_uid));
+    newBandForClosedLoop(participant_uid);
+  }, [participant_uid]);
+  const onGridChoiceRecorded = useCallback(({ status }) => setBandRecord(status), []);
+
+  // THE PAIN SCORE EVERY BAND-TO-PAIN READING ON THIS PAGE IS COMPUTED ON (the PI, 2026-09-25
+  // night). Starts on the band's own (its grid's, decision 254), NRS when it carries none; a choice
+  // made here holds until another band is chosen.
+  const bandDefaultPain = useMemo(() => bandPainScore(bc), [bc]);
+  const bandIdentity = bc ? `${bc.contact}|${bc.center_freq_hz}|${bandDefaultPain.key}` : "";
+  useEffect(() => { setPainScoreChoice(null); }, [bandIdentity]);
+  const painScore = painScoreChoice || bandDefaultPain.key;
+
   // Derive the discovery request knobs ONCE per committed candidate. Building this inline in JSX
   // produced a fresh object identity on every parent re-render, which is listed in every panel's
-  // fetch-effect deps — so any child state change (e.g. the ROC cost slider lifting a new cut-point)
-  // re-created requestParams and re-fired EVERY panel's fetch, collapsing all figures into their
-  // loading state at once. Memoizing on the candidate's stable identity keeps the reference stable
-  // so panels only refetch when their own inputs actually change.
-  const requestParams = useMemo(() => candidateRequestParams(bc, envelope && envelope.request_params), [bc, envelope]);
+  // fetch-effect dependencies — so any child state change re-created it and re-fired every panel's
+  // fetch, collapsing all figures into their loading state at once.
+  const requestParams = useMemo(() => summaryRequestParams(bc, includeSheets, painScore, inherited),
+    [bc, includeSheets, painScore, inherited]);
 
-  // ONE deployment-summary fetch for the whole page. Both the top verdict strip and the bottom
-  // sign-off card need this payload; fetching it once here (instead of once per component) halves the
-  // load on /queryDeploymentSummary — each call runs glmer through rpy2's embedded R, which is
-  // single-threaded per worker, so duplicate concurrent calls were starving the worker pool and
-  // dropping sibling requests (the intermittent "ROC request failed"). Shared result, identical
-  // numbers in both places by construction.
-  const cutThr = cutpoint ? cutpoint.threshold : null;
-  const matchDir = cutpoint ? cutpoint.matchDir : (requestParams.MatchDirection || "prior");
+  // ONE deployment-summary fetch for the whole page. Each call runs a mixed-effects fit through
+  // rpy2's embedded R, which is single-threaded per worker, so duplicate concurrent calls starve
+  // the worker pool and drop sibling requests.
+  // The summary is sent a cut-point only when the reader moved the ROC off its defaults on this
+  // band (decision 416); the server takes the ROC's own default point otherwise.
+  const bandKey = bc ? `${bc.contact}|${bc.center_freq_hz}` : "";
+  const cutpointHere = cutpoint && cutpoint.forBand === bandKey ? cutpoint : null;
+  const { cutThr, matchDir } = summaryCutpoint(cutpoint, bandKey);
   const summary = useDeploymentSummary({
     participantUid: participant_uid,
-    channel: bc && bc.contact,
-    centerHz: bc && bc.center_freq_hz,
+    channel: bandSynced && bc ? bc.contact : null,
+    centerHz: bandSynced && bc ? bc.center_freq_hz : null,
     bandWidthHz: (bc && bc.bandwidth_hz) || 5.0,
-    matchDir, cutThr, requestParams, inputIdentity: envelope && envelope.InputManifest,
+    matchDir, cutThr, requestParams,
   });
+
+  // A SEPARATE question from the summary above, and a separate endpoint. The summary asks where the
+  // threshold goes and whether the statistical gates pass; this asks whether the device would permit
+  // the configuration at all, estimates the three edges of the amplitude, power and pain triangle at
+  // their correct clustering units, and tests whether the three signs are coherent with the control
+  // law. Both must clear, and they can disagree.
+  // One candidate object for the report AND the simulation fetch, so the two cannot name
+  // different bands (the simulation is read back BY candidate since 2026-09-11).
+  const reportCandidate = bandSynced && bc ? reportCandidateFromBand(bc) : null;
+  const deploymentReport = useDeploymentReport({
+    participantUid: participant_uid,
+    bandCandidate: reportCandidate,
+    painScore,
+    matching: reportMatching,
+    stimProgram: programForReport,
+  });
+
+  // ONE BAND ON THE WHOLE PAGE (decision 302). The cache hands back the last result, marked stale,
+  // when the request changes, so right after a new band is chosen the report and the summary in
+  // hand can still be the previous band's. Every card below reads these two, never the raw hooks,
+  // and a result computed for another band reaches them as "not computed for this band" with both
+  // bands named, instead of the old band's verdict under the new band's name.
+  // The same for the page's pain score and clinic-sheet switch (decision 307): a result computed on
+  // another score, or with the switch the other way, is withheld and named until Recompute.
+  // THE SENSE-TO-CONTROL WIRING (the PI, 2026-10-08) decides which stimulators the decision answers
+  // for: one card per stimulator, each checked with the band chosen on the side that drives it (one
+  // band per side). The page's band on its own side is the report above. Every other pairing gets a
+  // report of its own, IN A CACHE SLOT OF ITS OWN (decision 470: sharing the report's slot let one
+  // stimulator be shown the other's answer), fetched only when the wiring needs it. A stimulator
+  // driven through contralateral sensing sends the pairing acknowledged by the choice itself.
+  const pageSide = bc ? bandSide(bc) : null;
+  const otherSide = pageSide === "Left" ? "Right" : (pageSide === "Right" ? "Left" : null);
+  const otherEnvelope = otherSide ? bandsBySide[otherSide] : null;
+  const otherBc = (otherEnvelope && otherEnvelope.band_candidate) || null;
+  const bandSides = [pageSide, otherBc ? otherSide : null].filter(Boolean);
+  const stimulators = wiringControllers(wiring, bandSides, pageSide);
+  const needs = (fromPage, kind) => stimulators.some((st) => st.kind === kind
+    && (st.source === pageSide) === fromPage);
+  const otherCandidate = bandSynced && otherBc ? reportCandidateFromBand(otherBc) : null;
+  const reportArgs = { participantUid: participant_uid, painScore, matching: reportMatching,
+    stimProgram: programForReport };
+  const contraReportRaw = useDeploymentReport({ ...reportArgs, bandCandidate: reportCandidate,
+    hemisphere: otherSide, contralateral: true, enabled: needs(true, "contralateral"),
+    slot: CL.reportContra });
+  const otherReportRaw = useDeploymentReport({ ...reportArgs, bandCandidate: otherCandidate,
+    hemisphere: otherSide, enabled: needs(false, "own"), slot: CL.reportOther });
+  const otherContraReportRaw = useDeploymentReport({ ...reportArgs, bandCandidate: otherCandidate,
+    hemisphere: pageSide, contralateral: true, enabled: needs(false, "contralateral"),
+    slot: CL.reportOtherContra });
+  const usesOther = needs(false, "own") || needs(false, "contralateral");
+  // The other side's band has its own summary (its statistical checks), on the page's pain score.
+  const otherRequestParams = useMemo(() => (otherBc
+    ? summaryRequestParams(otherBc, includeSheets, painScore, inherited) : null),
+  [otherBc, includeSheets, painScore, inherited]);
+  const otherSummaryRaw = useDeploymentSummary({
+    participantUid: participant_uid,
+    channel: bandSynced && usesOther && otherBc ? otherBc.contact : null,
+    centerHz: bandSynced && usesOther && otherBc ? otherBc.center_freq_hz : null,
+    bandWidthHz: (otherBc && otherBc.bandwidth_hz) || 5.0,
+    matchDir: "prior", cutThr: null, requestParams: otherRequestParams, slot: CL.summaryOther,
+  });
+  const withheldReport = (r, band) => withheldIfOtherBand(r, band, "report",
+    { painScore, matching: reportMatching });
+  const contraReport = withheldReport(contraReportRaw, bc);
+  const otherReport = otherBc ? withheldReport(otherReportRaw, otherBc) : otherReportRaw;
+  const otherContraReport = otherBc ? withheldReport(otherContraReportRaw, otherBc) : otherContraReportRaw;
+  const otherSummary = otherBc ? withheldIfOtherBand(otherSummaryRaw, otherBc, "summary", { painScore,
+    includeSheets, matching: otherRequestParams, matchingKeys: MATCHING_KEYS.filter((k) => k !== "MatchDirection"
+      && k !== "IncludeClinicSheetRatings") }) : otherSummaryRaw;
+  // THE THREE WIRINGS COMPARED BY SIMULATION (decision 472), once a band is chosen on each side.
+  const wiringComparison = useWiringComparison({
+    participantUid: participant_uid,
+    left: bandSynced ? (bandsBySide.Left && bandsBySide.Left.band_candidate) || null : null,
+    right: bandSynced ? (bandsBySide.Right && bandsBySide.Right.band_candidate) || null : null,
+    painScore, matching: reportMatching, stimProgram: programForReport,
+  });
+  // The extra answers the wiring asked for, for the one Recompute control.
+  const extraAnswers = [
+    [contraReportRaw, needs(true, "contralateral")], [otherReportRaw, needs(false, "own")],
+    [otherContraReportRaw, needs(false, "contralateral")], [otherSummaryRaw, usesOther],
+  ].filter(([, on]) => on).map(([a]) => a);
+  const report = withheldIfOtherBand(deploymentReport, bc, "report",
+    { painScore, matching: reportMatching });
+  const summaryForBand = withheldIfOtherBand(summary, bc, "summary", { painScore, includeSheets,
+    matching: requestParams, matchingKeys: MATCHING_KEYS.filter((k) => k !== "MatchDirection"
+      && k !== "IncludeClinicSheetRatings") });
+  // ONE AUC WITH THE CURRENT TAKEN OUT, on the biomarker match window (the PI, 2026-10-02): the
+  // summary's reading feeds the sign-off, Evidence and ROC cards alike.
+  const matchWindowAuc = summaryForBand && summaryForBand.data && summaryForBand.data.evidence
+    ? (summaryForBand.data.evidence.auc_current_removed || null) : null;
+
+  // TRACK D: fetched independently of any committed candidate -- see useBandSweepGrid.js for why
+  // gating this on useDeploymentReport's own enabled condition would make it unreachable from the
+  // one screen that needs it (choosing a first candidate).
+  // The grid follows the pain-score dropdown once a band is chosen (the dropdown is shown only
+  // then); before that it is the Biomarkers page's last-run score.
+  const bandSweepGrid = useBandSweepGrid({ participantUid: participant_uid,
+    painScore: bc ? painScore : null });
+
+  // THE BANDS EITHER SIDE, ASKED FOR AHEAD (decision 425) once this band's report and summary are in,
+  // so ticking a neighbour is served the server's saved answer.
+  const reportReady = !!(report && report.data && !report.loading);
+  const summaryReady = !!(summaryForBand && summaryForBand.data && !summaryForBand.loading);
+  const prefetchGrid = bandSweepGrid.grid;
+  useEffect(() => {
+    if (!reportReady || !summaryReady || !bc || !prefetchGrid) return;
+    prefetchNeighbours({ participantUid: participant_uid, grid: prefetchGrid, channel: bc.contact,
+      centreHz: bc.center_freq_hz, includeSheets, inherited, reportMatching, bc, requestParams });
+  }, [reportReady, summaryReady, bc, prefetchGrid, participant_uid, includeSheets, inherited,
+    reportMatching, requestParams]);
+
+  // THE POOLED THREE-SOURCE VIEW, fetched AFTER the report has answered (the PI, 2026-09-11:
+  // "prefetch the data after the first figures load"). It reads two stored tables and groups
+  // them, so it never holds the verdict up; its own slot, so a Recompute rebuilds it too.
+  const threeSourcePooled = useThreeSourcePooled({
+    participantUid: participant_uid, afterReport: deploymentReport.data,
+  });
+  const closedLoopSim = useClosedLoopSimulation({ participantUid: participant_uid,
+    bandCandidate: reportCandidate, afterReport: deploymentReport.data,
+    reportStamp: deploymentReport.computedAt });
+  // Medtronic labels for sensing contacts, from the grid's own sweeps (server-built, decision 86).
+  // The same function until the grid changes (C6).
+  const gridSweeps = bandSweepGrid.grid && bandSweepGrid.grid.band_time_sweep;
+  const contactLabel = useCallback((ch) => {
+    const sw = gridSweeps && gridSweeps[ch];
+    return (sw && sw.display_short) || String(ch || "").replace(/_/g, " ");
+  }, [gridSweeps]);
+
+  // ARRIVING FROM THE BIOMARKERS PAGE'S "Open this grid in Closed-Loop" BUTTON. That button
+  // navigates here with the fragment `#cl-grid`, naming the anchor already on the grid panel's own
+  // Grid item below. React Router does not scroll to a fragment on its own, and this page is long
+  // enough that landing at the top would leave a reader hunting for the panel they asked for.
+  //
+  // WAITS FOR THE GRID'S OWN FETCH TO SETTLE rather than scrolling on mount: the panel renders
+  // immediately but is only a few lines tall while it is still loading, so a scroll fired on mount
+  // lands at a position that stops being the panel's position a moment later. `scrolledToHash`
+  // makes it fire once per arrival, so a later recompute (which flips `loading` again) does not
+  // yank a reader's scroll position back.
+  const location = useLocation();
+  const scrolledToHash = useRef(null);
+  useEffect(() => {
+    const hash = (location.hash || "").replace(/^#/, "");
+    if (!hash || bandSweepGrid.loading || scrolledToHash.current === hash) return;
+    const el = document.getElementById(hash);
+    if (!el) return;
+    scrolledToHash.current = hash;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [location.hash, bandSweepGrid.loading]);
+
+  /**
+   * THE ONE RECOMPUTE CONTROL FOR THIS PAGE, REPORTING ON BOTH PAGE-LEVEL REQUESTS AT ONCE.
+   *
+   * A reader is asking one question — does what I am looking at reflect the settings on this page —
+   * and the page answers it from two endpoints. Giving each its own control would put two of them
+   * at the top disagreeing about whether the page is current, which is the same class of problem
+   * the rebuilt page removed when it reduced three verdicts to one.
+   *
+   * The reasons are pooled and de-duplicated, because both requests see the same server restart and
+   * the same committed-band change and would each report it.
+   */
+  const staleReasons = Array.from(new Set([
+    ...(deploymentReport.staleReasons || []),
+    ...(summary.staleReasons || []),
+  ]));
+  // The OLDER of the two timestamps. Reporting the newer one would let a summary computed a moment
+  // ago speak for a deployment report computed an hour before it.
+  const computedAtCandidates = [deploymentReport.computedAt, summary.computedAt]
+    .filter((t) => t != null);
+  const pageComputedAt = computedAtCandidates.length ? Math.min(...computedAtCandidates) : null;
+
+  const onRecomputePage = () => recomputeClosedLoop(participant_uid);
+
+  const analystRevealed = useRevealedOnce(showAnalyst);
+
+  /**
+   * THE BACKGROUND'S TWO MOUNTED FIGURES ARE DRAWN THE FIRST TIME THE FOLD IS OPENED (speed-up item
+   * C5, 2026-10-02, as decision 354 did for the Stim Optimizer's current map). The three-source and
+   * simulation panels stay mounted inside the closed fold, so their figures were drawn on page load
+   * for nobody to see. They now read `SectionRevealedContext` and draw once it is true.
+   *
+   * THE PRINTED RECORD STILL GETS THEM. "Sign and print" and "Export JSON" take pictures of the
+   * figures drawn on the page (`figureSnapshots.js`), and both of these were always drawn, opened or
+   * not. So before taking pictures the record calls `drawFiguresForRecord` (through
+   * `FigureRecordContext`): the figures are drawn, without opening the fold, and the promise
+   * resolves in the page's own effect below, which React runs after the panels' drawing effects of
+   * the same commit (a child's effects run before its parent's). The switching-point panels are
+   * not drawn for the record: they send requests of their own and were never on a record unless
+   * the fold had been opened, exactly as before.
+   */
+  const [recordRequests, setRecordRequests] = useState(0);
+  const recordWaiters = useRef([]);
+  const drawFiguresForRecord = useCallback(() => new Promise((resolve) => {
+    recordWaiters.current.push(resolve);
+    setRecordRequests((n) => n + 1);
+  }), []);
+  useEffect(() => {
+    if (!recordWaiters.current.length) return;
+    const waiting = recordWaiters.current;
+    recordWaiters.current = [];
+    waiting.forEach((resolve) => resolve());
+  }, [recordRequests]);
+  const backgroundFiguresRevealed = analystRevealed || recordRequests > 0;
 
   const onUpload = (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      const parsed = parseUploadedCandidate(String(reader.result), participant_uid);
+      const parsed = parseUploadedCandidate(String(reader.result));
       if (parsed && parsed.band_candidate) {
-        setEnvelope(null);
-        setRevalidate(0);
-        setSelection(parsed);
-      } else {
-        setCandidateStatus("Choose a valid candidate export for this participant. Unidentified or other-participant files cannot be used.");
+        recordChosenBand(participant_uid, parsed.band_candidate, "upload")
+          .then(({ status }) => setBandRecord(status));
+        setEnvelope(loadBandCandidate(participant_uid));
+        setBandsBySide(loadBandsBySide(participant_uid));
       }
     };
     reader.readAsText(file);
     e.target.value = "";   // allow re-upload of the same file
   };
 
+  const painLabel = pageHeadPainLabel(report && report.data, painScore,
+    (bandSweepGrid.grid && bandSweepGrid.grid.available_metrics) || PAIN_SCORE_OPTIONS);
+  const threshold = report && report.data && report.data.threshold;
+  const sideOf = report && report.data && report.data.manifest && report.data.manifest.hemisphere;
+  const ceilingProps = ceilingLineProps(threshold, sideOf);
+
   return (
     <DatabaseLayout>
-      <MDBox pt={3}>
-        <Grid container spacing={2}>
-          <Grid item xs={12}>
-            <Card sx={{ width: "100%" }}>
-              <MDBox p={2} display="flex" flexDirection="row" justifyContent="space-between"
-                alignItems="center" flexWrap="wrap" gap={1}>
-                <MDBox>
-                  <MDTypography variant="h6" fontSize={22}>Closed-Loop Research Review</MDTypography>
-                  <MDTypography variant="caption" color="text" sx={{ fontSize: 11.5 }}>
-                    Research preparation from one candidate band. Review and export only; this page does not program the device.
-                  </MDTypography>
-                </MDBox>
-                <MDBox display="flex" gap={1} alignItems="center">
-                  <input ref={fileRef} type="file" accept="application/json,.json"
-                    style={{ display: "none" }} onChange={onUpload} />
-                  <MDButton size="small" variant="outlined" color="info"
-                    onClick={() => fileRef.current && fileRef.current.click()}>
-                    Load BandCandidate JSON
-                  </MDButton>
-                  {bc ? (
-                    <MDButton size="small" variant="text" color="secondary"
-                      onClick={() => { clearBandCandidate(participant_uid); setSelection(null); setEnvelope(null); }}>
-                      Clear
-                    </MDButton>
-                  ) : null}
-                </MDBox>
-              </MDBox>
-            </Card>
-          </Grid>
-
-          {candidateStatus ? (
-            <Grid item xs={12}>
-              <MDTypography variant="body2" role="status">{candidateStatus}</MDTypography>
-              {selection && !envelope && <MDButton onClick={() => setRevalidate((value) => value + 1)}
-                size="small" color="info" variant="outlined" disabled={candidateStatus.startsWith("Revalidating")} sx={{ mt: 1 }}>Revalidate selected band</MDButton>}
-            </Grid>
+      <MDBox pt={3} pb={8} sx={{ maxWidth: LAYOUT.contentMax, mx: "auto", px: { xs: 2, md: 0 } }}>
+        {/* THE HEAD (SPEC 2026-09-26 section 4 rule 1): the title as a question, one grey line,
+            the ceiling line read from the server, then the controls in one row. The verdict is
+            the decision card's status line, directly below. */}
+        <PageHead title={PAGE_QUESTION} participant={participantCode} painScore={painLabel}
+          documentTitle={DOCUMENT_TITLE}>
+          <ChosenBandRecordLine status={bandRecord} hasBand={!!bc} />
+          {bc ? (
+            <MDBox mt={1}>
+              {ceilingProps ? (
+                <CeilingLine leftMa={ceilingProps.leftMa} rightMa={ceilingProps.rightMa}
+                  source={ceilingProps.source} />
+              ) : (
+                <MDTypography data-paper="ceiling-line" sx={{ ...TYPE.body, color: PAL.ink }}>
+                  {CEILING_NOT_SENT}
+                </MDTypography>
+              )}
+            </MDBox>
           ) : null}
 
-          <Grid item xs={12}>
-            <ResearchEvidencePanel participantUid={participant_uid} bandCandidate={bc} requestParams={requestParams} inputIdentity={envelope && envelope.InputManifest} />
-          </Grid>
-
-          {!bc ? (
-            <Grid item xs={12}>
-              <Card sx={{ width: "100%" }}>
-                <MDBox p={3} textAlign="center">
-                  <MDTypography variant="h6" sx={{ fontSize: 15, color: "#777" }}>
-                    No band committed yet
-                  </MDTypography>
-                  <MDTypography variant="caption" color="text" display="block" mt={1} sx={{ fontSize: 12 }}>
-                    Open the Biomarker Exploration view, click a VALIDATED band, and press
-                    “Commit this band →”. It will appear here. Or load a previously downloaded
-                    BandCandidate JSON for this participant; its evidence will be recomputed.
-                  </MDTypography>
-                  <MDBox mt={2}>
-                    <MDButton size="small" color="info" variant="gradient"
-                      onClick={() => navigate(`/reports/biomarkers/${participant_uid}`)}>
-                      Go to Biomarker Exploration
-                    </MDButton>
+          <MDBox display="flex" gap={3} alignItems="flex-start" flexWrap="wrap" mt={2}>
+            {bc ? (
+              <PainScoreSelect value={painScore} bandDefault={bandDefaultPain}
+                options={(bandSweepGrid.grid && bandSweepGrid.grid.available_metrics)
+                  || PAIN_SCORE_OPTIONS}
+                onChange={setPainScoreChoice} />
+            ) : null}
+            <MDBox ml="auto">
+              <DeveloperMenu
+                onLoad={() => fileRef.current && fileRef.current.click()}
+                onClear={bc ? () => {
+                  recordClearedBand(participant_uid).then(({ status }) => setBandRecord(status));
+                  setEnvelope(null);
+                  setBandsBySide({ Left: null, Right: null });
+                } : null}>
+                {/* The stored-results line is for a developer, so it lives in the closed ⋯ menu
+                    (SPEC 2026-09-26 section 4 rule 2). The menu hides it without unmounting it, and
+                    it is not wrapped in a fold of its own: no fold inside a fold (rule 4). */}
+                {bc && deploymentReport.data && deploymentReport.data.cache_status ? (
+                  <MDBox data-testid="stored-results-menu-item">
+                    <MDTypography sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink3 }}>
+                      Stored results
+                    </MDTypography>
+                    <CacheStatusLine status={deploymentReport.data.cache_status} />
                   </MDBox>
-                </MDBox>
-              </Card>
-            </Grid>
-          ) : (
-            <>
-              {/* audit #1: top-of-page verdict strip — the READY/threshold answer first, not last.
-                  Consumes the SHARED summary fetch (no second /queryDeploymentSummary call). */}
-              <Grid item xs={12}>
-                <RecomputeBar {...summary} onRecompute={summary.recompute} title="Research summary" />
-              </Grid>
+                ) : null}
+              </DeveloperMenu>
+              <input ref={fileRef} type="file" accept="application/json,.json"
+                style={{ display: "none" }} onChange={onUpload} />
+            </MDBox>
+          </MDBox>
+          {/* Which matching settings this page took from the Biomarkers page (decision 331). */}
+          <MDTypography data-testid="inherited-matching" sx={{ ...TYPE.body, color: PAL.ink2, mt: 1.5 }}>
+            {inheritedMatchingLine(inherited)}
+          </MDTypography>
+          {bc ? <ContentsRow /> : null}
+        </PageHead>
 
-              <Grid item xs={12}>
-                <BandCandidateIdentity bc={bc} envelope={envelope} />
-              </Grid>
+        <MDBox id="cl-stim-program">
+          <StimProgramCard program={stimProgram} onChange={setStimProgram}
+            onInherit={() => inheritedProgram && setStimProgram({ ...inheritedProgram })}
+            inheritedFrom={inheritedProgram && inheritedProgram.session_date
+              ? String(inheritedProgram.session_date).slice(0, 10) : null}
+            edited={programEdited} sensing={bandSensing} unavailable={programUnavailable} />
+        </MDBox>
+        <MDBox id="cl-wiring">
+          <WiringCard value={wiring} onChange={setWiring} bandSides={bandSides}
+            comparison={wiringComparison} />
+        </MDBox>
 
-              <Grid item xs={12} md={6} id="cl-roc">
-                <DeploymentRocPanel participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParams} inputIdentity={envelope && envelope.InputManifest} onCutpoint={setCutpoint}
-                  lsbThreshold={lsbThreshold} />
-              </Grid>
-              <Grid item xs={12} md={6} id="cl-lsb">
-                <LsbPowerPanel participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParams} inputIdentity={envelope && envelope.InputManifest} cutpoint={cutpoint}
-                  onLsbThreshold={setLsbThreshold} />
-              </Grid>
-              <Grid item xs={12} md={6} id="cl-era">
-                <EraRefitPanel participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParams} inputIdentity={envelope && envelope.InputManifest} />
-              </Grid>
-              <Grid item xs={12} md={6}>
-                <PsdLsbPanel participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParams} inputIdentity={envelope && envelope.InputManifest} />
-              </Grid>
-              <Grid item xs={12}>
-                <ConversionModelPanel participantUid={participant_uid} inputIdentity={envelope && envelope.InputManifest} />
-              </Grid>
-              <Grid item xs={12} id="cl-signoff">
-                <DeploySignoffCard participantUid={participant_uid} bandCandidate={bc}
-                  requestParams={requestParams} inputIdentity={envelope && envelope.InputManifest} cutpoint={cutpoint} summary={summary} />
-              </Grid>
+        {bc ? (
+          <>
+            {/* The Recompute control sits immediately above the decision card, because whether the
+                verdict is current has to be readable before the verdict itself is read. */}
+            <MDBox mb={2}>
+              <RecomputeBar
+                title="closed-loop deployment"
+                stale={!!(deploymentReport.stale || summary.stale || extraAnswers.some((a) => a.stale))}
+                staleReasons={staleReasons}
+                computedAt={pageComputedAt}
+                loading={!!(deploymentReport.loading || summary.loading || extraAnswers.some((a) => a.loading))}
+                notKept={deploymentReport.notKept || summary.notKept}
+                onRecompute={onRecomputePage}
+              />
+            </MDBox>
+            {/* THE DECISION CARD (decision 302; SPEC 2026-09-26 section 5.2): the verdict, red and
+                caution bullets worded as the rule table words them, the values to enter only when
+                the device allows them, "Sign and print", and one Details fold. */}
+            <MDBox id="cl-decision" mb={8} display="flex" flexDirection="column" gap={3}>
+              <FigureRecordContext.Provider value={drawFiguresForRecord}>
+                {stimulators.map((st) => (st.kind === "no_band" ? (
+                  <UncheckedStimulatorCard key={st.stim} stimulator={st} />
+                ) : (
+                  st.source === pageSide ? (
+                    <DecisionCard key={st.stim} participantUid={participant_uid} bandCandidate={bc}
+                      summary={summaryForBand}
+                      deploymentReport={st.kind === "contralateral" ? contraReport : report}
+                      chosenBand={envelope} bandRecord={bandRecord}
+                      cutpoint={cutpointHere} mode={thresholdMode} onMode={setThresholdMode}
+                      onRecompute={onRecomputePage} stimulator={wiring ? st : null} />
+                  ) : (
+                    <DecisionCard key={st.stim} participantUid={participant_uid} bandCandidate={otherBc}
+                      summary={otherSummary}
+                      deploymentReport={st.kind === "contralateral" ? otherContraReport : otherReport}
+                      chosenBand={otherEnvelope} bandRecord={bandRecord}
+                      cutpoint={null} mode={thresholdMode} onMode={setThresholdMode}
+                      onRecompute={onRecomputePage} stimulator={st} />
+                  )
+                )))}
+              </FigureRecordContext.Provider>
+            </MDBox>
+          </>
+        ) : null}
 
-              <Grid item xs={12}>
-                <Card sx={{ width: "100%" }}>
-                  <MDBox p={2}>
-                    <MDBox display="flex" justifyContent="space-between" alignItems="center">
-                      <MDTypography variant="h6" sx={{ fontSize: 13, color: "#777" }}>
-                        BandCandidate schema (§6 contract)
-                      </MDTypography>
-                      <MDButton size="small" variant="text" color="info"
-                        onClick={() => setShowJson((s) => !s)}>
-                        {showJson ? "Hide JSON" : "Show JSON"}
-                      </MDButton>
-                    </MDBox>
-                    {showJson ? (
-                      <MDBox mt={1} p={1} sx={{ backgroundColor: "#1e1e1e", borderRadius: "6px",
-                        maxHeight: 360, overflow: "auto" }}>
-                        <pre style={{ margin: 0, color: "#d4d4d4", fontSize: 10.5,
-                          fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
-                          {JSON.stringify(bc, null, 2)}
-                        </pre>
-                      </MDBox>
-                    ) : null}
+        {/* SECTION 1, "Band selection" Rendered whether or not a band is chosen: the grid is how a
+            first band gets chosen, so it must be reachable exactly when none exists yet. Picking
+            a row commits a band through the same store the file path uses (bandCandidateStore). */}
+        <MDBox id="cl-grid" mb={8}>
+          <BandSweepGridPanel
+            grid={bandSweepGrid.grid}
+            participantUid={participant_uid}
+            committed={committedBand}
+            committedBySide={committedBySide}
+            activeSides={gridActiveSides}
+            offNote={gridOffNote}
+            onCandidateChosen={onGridCandidateChosen}
+            onChoiceRecorded={onGridChoiceRecorded}
+          />
+        </MDBox>
+
+        {!bc ? (
+          <Card sx={{ ...CARD, p: 3 }}>
+            <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>
+              No band has been chosen for this participant yet
+            </MDTypography>
+            <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 1, maxWidth: "68ch" }}>
+              {"Whether the device allows closed loop is checked for one sensing contact pair at one "
+                + "band, not for a participant, so a band has to be chosen before anything on this "
+                + "page applies. Choose one in the grid above, choose one on the Biomarkers page, or "
+                + "load a saved band file from the ⋯ menu."}
+            </MDTypography>
+            <MDBox mt={2}>
+              <MDButton size="small" variant="outlined" color="dark"
+                onClick={() => navigate(`/reports/biomarkers/${participant_uid}`)}
+                sx={{ textTransform: "none", fontSize: PAL.fs.body }}>
+                Go to the Biomarkers page
+              </MDButton>
+            </MDBox>
+          </Card>
+        ) : (
+          <>
+            {/* The device rule check is inside the decision card's Details (the PI, 2026-10-08:
+                one panel, not two). */}
+            {/* SECTION 3, "Evidence consistency" */}
+            <MDBox id="cl-evidence" mb={8}>
+              <EvidenceTrianglePanel report={report} matchWindowAuc={matchWindowAuc} />
+            </MDBox>
+
+            {/* SECTION 4, "Stability across stimulation states" It qualifies the
+                relationship section 3 draws: a band whose meaning shifts with the current is a
+                different problem from one whose relationship is simply weak. */}
+            <MDBox id="cl-stability" mb={8}>
+              <BandStabilityPanel stability={report?.data?.band_stability}
+                cacheStatus={report?.data?.cache_status}
+                painScore={report?.data?.pain_score} />
+            </MDBox>
+
+            {/* BACKGROUND, folded (SPEC section 5.2 item 7): how band power moves with current,
+                measured three ways; what the automatic adjustment would have done (simulated);
+                and the switching point, device units and month-by-month check. None of it gates
+                anything. The three-source and simulation panels stay MOUNTED inside the fold (it
+                collapses to zero height without hiding the width, so their Plotly figures measure
+                the right width), and draw their figures on the fold's first opening or when the
+                record asks for them (C5, above). The three switching-point panels are mounted on
+                the fold's first opening, as before, because they send their own requests. */}
+            <Card id="cl-background" sx={{ ...CARD, p: 3 }}>
+              <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Background</MDTypography>
+              <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 1, maxWidth: "68ch" }}>
+                {"Checks for the analyst before the visit. Nothing here changes the answer above."}
+              </MDTypography>
+              <Fold show="Show the background (current and band power; simulated closed loop; switching point and month-by-month check)"
+                hide="Hide the background" mt={2}
+                onChange={(open) => { if (open) setShowAnalyst(true); }}>
+                <SectionRevealedContext.Provider value={backgroundFiguresRevealed}>
+                  <MDBox id="cl-three-source" mt={2}>
+                    <ThreeSourceResponsePanel report={report} pooled={threeSourcePooled}
+                      committed={committedBand}
+                      contactLabel={contactLabel} />
                   </MDBox>
-                </Card>
-              </Grid>
-            </>
-          )}
-        </Grid>
+                  <MDBox id="cl-simulation" mt={4}>
+                    {/* Withheld when computed for another band, as the report and summary are; and
+                        the controller's switching values and limits print only when the device
+                        allows the configuration, as on the decision card. */}
+                    <ClosedLoopSimulationPanel sim={withheldIfOtherBand(closedLoopSim, bc, "simulation")}
+                      hemisphere={report?.data?.manifest?.hemisphere}
+                      deviceAllows={report?.data?.verdict_detail?.device_eligible === true}
+                      contactLabel={contactLabel} bandCandidate={bc} />
+                  </MDBox>
+                </SectionRevealedContext.Provider>
+                {analystRevealed ? (
+                  <Grid container spacing={3} mt={1}>
+                    <Grid item xs={12} md={6} id="cl-roc">
+                      <DeploymentRocPanel key={bc ? `${bc.contact}|${bc.center_freq_hz}` : "none"}
+                        participantUid={participant_uid} bandCandidate={bc}
+                        requestParams={requestParams} onCutpoint={setCutpoint}
+                        lsbThreshold={lsbThreshold} currentRemoved={matchWindowAuc} />
+                    </Grid>
+                    <Grid item xs={12} md={6} id="cl-lsb">
+                      <LsbPowerPanel participantUid={participant_uid} bandCandidate={bc}
+                        requestParams={requestParams} cutpoint={cutpointHere}
+                        onLsbThreshold={setLsbThreshold} deploymentReport={report} />
+                    </Grid>
+                    <Grid item xs={12} id="cl-era">
+                      <EraRefitPanel participantUid={participant_uid} bandCandidate={bc}
+                        requestParams={requestParams} />
+                    </Grid>
+                  </Grid>
+                ) : null}
+              </Fold>
+            </Card>
+          </>
+        )}
       </MDBox>
     </DatabaseLayout>
   );

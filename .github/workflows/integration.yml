@@ -1,0 +1,159 @@
+name: Integration validation
+on:
+  push:
+    branches: [aditya, aditya-jetstream-publication]
+  pull_request:
+    branches: [aditya]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  schema:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.2"
+          enable-cache: true
+      - run: uv sync --frozen --python 3.12
+      - name: Schema and deployment contracts (synthetic, no service access)
+        run: |
+          uv run --frozen pytest tests/runtime -q --cov=BRAVO.jetstream_settings --cov-branch --cov-report=json:runtime-coverage.json
+          uv run --frozen python -c 'import json; s=json.load(open("runtime-coverage.json"))["files"]["BRAVO/BRAVO/jetstream_settings.py"]["summary"]; assert s["num_branches"] > 0 and s["covered_branches"] / s["num_branches"] >= 0.95, s'
+      - name: Daily import contracts and per-module branch coverage (synthetic, no service access)
+        run: |
+          uv run --frozen pytest tests/daily_import -q --cov=state --cov=source_adapter --cov=target_adapter --cov=host --cov=clinic --cov=providers --cov=manual_sync --cov=upstream_target --cov=upstream_source --cov=upstream_dropbox --cov=upstream_clinic --cov-config=/dev/null --cov-branch --cov-report=json:daily-import-coverage.json
+          uv run --frozen python - <<'PY'
+          import json
+          files = json.load(open("daily-import-coverage.json"))["files"]
+          for name in ("state", "source_adapter", "target_adapter", "host", "clinic", "providers", "manual_sync", "upstream_target", "upstream_source", "upstream_dropbox", "upstream_clinic"):
+              summary = files[f"scripts/daily_import/{name}.py"]["summary"]
+              assert summary["num_branches"] > 0, (name, summary)
+              assert summary["covered_branches"] / summary["num_branches"] >= 0.95, (name, summary)
+              print(name, summary["covered_branches"], "/", summary["num_branches"], "branches")
+          PY
+      - name: Managed Oura contracts and branch coverage (synthetic, separate process)
+        run: |
+          uv run --frozen pytest tests/providers -q --cov=BRAVO/modules/OURA --cov-config=/dev/null --cov-branch --cov-report=json:provider-coverage.json
+          uv run --frozen python - <<'PYTHON'
+          import json
+          summary = json.load(open("provider-coverage.json"))["files"]["BRAVO/modules/OURA/ManagedToken.py"]["summary"]
+          assert summary["num_branches"] > 0, summary
+          assert summary["covered_branches"] / summary["num_branches"] >= 0.95, summary
+          print("Managed Oura", summary["covered_branches"], "/", summary["num_branches"], "branches")
+          PYTHON
+      - name: Manual sync mailbox and admin endpoint branch coverage
+        run: |
+          PYTHONPATH=BRAVO:BRAVO/modules uv run --frozen pytest tests/core/test_manual_sync_protocol.py tests/core/test_manual_sync_api.py -q --cov=manual_sync_protocol --cov=Server.APIs.ManualSync --cov-config=/dev/null --cov-branch --cov-report=json:manual-sync-coverage.json
+          uv run --frozen python - <<'PYTHON'
+          import json
+          files = json.load(open("manual-sync-coverage.json"))["files"]
+          for name in ("BRAVO/modules/ManualSyncProtocol.py", "BRAVO/Server/APIs/ManualSync.py"):
+              summary = files[name]["summary"]
+              assert summary["num_branches"] > 0 and summary["covered_branches"] / summary["num_branches"] >= 0.95, (name, summary)
+          PYTHON
+      - name: Core integration and authorization regressions (separate settings process)
+        run: PYTHONPATH=BRAVO:BRAVO/modules uv run --frozen pytest tests/core -q
+      - name: Aditya presentation contracts (separate Django settings process)
+        run: |
+          uv run --frozen pytest BRAVO/modules/tests/test_aditya_presentation.py BRAVO/modules/tests/test_aditya_presentation_api.py BRAVO/modules/tests/test_standard_mpq.py -q --cov=BRAVO/modules --cov=BRAVO/Server/APIs --cov-config=/dev/null --cov-branch --cov-report=json:presentation-coverage.json
+          uv run --frozen python - <<'PYTHON'
+          import json
+          files = json.load(open("presentation-coverage.json"))["files"]
+          for name in ("BRAVO/modules/AdityaPresentation.py", "BRAVO/Server/APIs/AdityaPresentation.py", "BRAVO/modules/SurveyForms/StandardMPQ.py"):
+              summary = files[name]["summary"]
+              assert summary["num_branches"] > 0 and summary["covered_branches"] / summary["num_branches"] >= 0.95, (name, summary)
+          PYTHON
+  portable-analysis:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.2"
+          enable-cache: true
+      - run: uv sync --frozen --python 3.12
+      - name: Portable upstream scientific tests (disposable DB and storage)
+        run: uv run --frozen python scripts/run_portable_tests.py
+      - name: Chronic band decisions and daily swing branch coverage (synthetic)
+        run: |
+          uv run --frozen python scripts/run_portable_tests.py BRAVO/modules/Biomarkers/tests/test_chronic_band_choice.py BRAVO/modules/Biomarkers/tests/test_daily_swing.py --cov=BRAVO/modules/Biomarkers/routines --cov-config=/dev/null --cov-branch --cov-report=json:chronic-choice-coverage.json
+          uv run --frozen python - <<'PYTHON'
+          import json
+          files = json.load(open("chronic-choice-coverage.json"))["files"]
+          for module in ("chronic_band_choice", "daily_swing"):
+              summary = files[f"BRAVO/modules/Biomarkers/routines/{module}.py"]["summary"]
+              assert summary["num_branches"] > 0, (module, summary)
+              assert summary["covered_branches"] / summary["num_branches"] >= 0.95, (module, summary)
+              print(module, summary["covered_branches"], "/", summary["num_branches"], "branches")
+          PYTHON
+
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: Client/package-lock.json
+      - run: npm ci
+        working-directory: Client
+      - name: Page tests
+        working-directory: Client
+        run: >-
+          CI=true npm test -- --watchAll=false --runInBand --coverage
+          --collectCoverageFrom=src/components/Navbars/DashboardNavbar/ManualSyncButton.js
+          --collectCoverageFrom=src/views/Reports/RedcapTimeline/useHomeNeuralTimeline.js
+          --collectCoverageFrom=src/views/Reports/RedcapTimeline/useStoredTimeline.js
+          --collectCoverageFrom=src/views/Reports/RedcapTimeline/HomeNeuralData.js
+          --coverageThreshold='{"./src/components/Navbars/DashboardNavbar/ManualSyncButton.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/useHomeNeuralTimeline.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/useStoredTimeline.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/HomeNeuralData.js":{"branches":95,"statements":95}}'
+      - name: Production bundle
+        working-directory: Client
+        run: CI=false GENERATE_SOURCEMAP=false npm run build
+
+  linux-container:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      BUILD_REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build backend from accepted source
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dockerfile
+          target: backend
+          load: true
+          tags: bravo-aditya-backend:${{ github.sha }}
+          build-args: BUILD_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=bravo-backend
+          cache-to: type=gha,mode=max,scope=bravo-backend
+      - name: Build matching frontend proxy image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dockerfile
+          target: web
+          load: true
+          tags: bravo-aditya-web:${{ github.sha }}
+          build-args: BUILD_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=bravo-backend
+      - name: Fresh MySQL, R and HTTPS application smoke
+        run: python3 scripts/smoke_container_deployment.py
+
+  optional-offline-adapters:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.2"
+          enable-cache: true
+      - run: uv sync --frozen --python 3.12 --extra offline-training
+      - name: Synthetic snapshots and d3rlpy dataset adapters (no deep training)
+        run: uv run --frozen --extra offline-training python scripts/run_portable_tests.py BRAVO/modules/StimRL/tests

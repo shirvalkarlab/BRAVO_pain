@@ -1,63 +1,4 @@
-"""The three-way comparison drawn: how current moved band power, measured three ways, side by side.
-
-WHAT THE READER IS MEANT TO GET FROM THIS FIGURE, and what they are not.
-
-The figure has three columns, one for each way of getting a band power out of this device, and two
-rows. It is informative only. It decides nothing, and nothing on the deployment page is allowed to
-depend on it.
-
-  * THE TOP ROW answers "when the current went up, which way did the band power go, and do the three
-    ways of measuring it agree?" All three columns are read at the ONE band the device itself was
-    sensing during that stretch, because that is the only band all three can report and a comparison
-    at different bands would not be a comparison. Each point is the settled level: the average over
-    the thirty seconds before the next increase in current. The chart is points joined by a thin
-    line, because there are five to seven settings and a reader needs to see each one; a smooth curve
-    would invent behaviour between them, and band power is not a straight line in current.
-  * THE BOTTOM ROW answers "what did the rest of the spectrum do, and does the band we care about
-    stand out from it?" One line per stimulation setting, shaded from pale to dark as the current
-    rises, so a whole family of bands moving together is visible at a glance. The column for the
-    device's own band power carries a single point instead of a line, because the device reports one
-    band and no more. That is the shape of the measurement, not a hole in our data.
-
-WHAT A READER MUST NOT CONCLUDE. Three columns agreeing is NOT three independent confirmations that
-stimulation moved the brain. The device computes its own band power on board from the very voltage
-trace the first column reads, and the contact surveys behind the second column are where the
-conversion into device units was fitted in the first place. So agreement across the columns says the
-conversion is behaving. It says nothing more than that, and the footer line says so on the figure.
-
-WHY THE BOTTOM ROW STOPS AT 30 HERTZ, which is a real restriction and not a cosmetic one. Two
-reasons, and the first is the one that matters. The firmware will not let an adaptive sensing band
-sit above 30 hertz, so a reader of the deployment page cannot act on a band above it however
-interesting it looks. The second reason is that the full spectrum cannot be drawn honestly on one
-linear axis: across 2.5 to 99.5 hertz the settled values on this record span a factor of about
-9,600, with the largest of them at 55.5 hertz, which is the stimulation rate itself and therefore
-a folded multiple of the stimulation rate. Inside 7.8 to 30 hertz the same values span a factor of about
-10 and every one of them fits on one linear axis with no compression. Both figures are computed at
-render time and printed on the figure rather than asserted here. The table saved beside the figure
-carries all 98 bands, so nothing is discarded, only left off this panel.
-
-WHY THERE IS NO LOGARITHM ON ANY AXIS. The device adds up squared magnitude across the band and
-compares the total against a threshold typed in those same units. It never takes a logarithm. A
-reader who has to undo one before they can compare a plotted height against a number they would
-type into the programmer has been given arithmetic homework instead of a figure.
-
-WHY THE BANDS THAT ARE MEASURING THE STIMULATOR ARE STRIPED, and why the stripe is quiet. This is a
-data label saying which bands are not brain signal, in the same way a hatch says which cells have no
-data. It stays because of something that happened on this record: before those bands were marked,
-the largest apparent effect on a heat map reached 45506 device units and 18.2 times its starting
-value, and it looked exactly like a spectacular biomarker. It was the stimulation artifact. The
-stripe is drawn under the data at low opacity so the printed values stay readable through it.
-
-EVERY PIECE OF TEXT ON THE FIGURE IS COMPUTED FROM THE NUMBERS IN THE SAME RENDER PASS. There are no
-sentences in here that state a finding, only functions that build one out of what the data turned out
-to be. This project has had a hardcoded claim in a title go false as the data moved underneath it,
-silently, more than once.
-
-BOTH RENDERINGS COME FROM ONE CONTEXT. :func:`build_context` reduces a
-:class:`ThreeSourceComparison` to the numbers and the derived sentences; :func:`mpl_figure` draws the
-static picture and :func:`plotly_figure` the one the browser gets. Neither computes anything of its
-own, so the picture in the report and the picture on the page cannot disagree about what happened.
-"""
+'Display the three source comparison of band power versus stimulation current.\n\nThe top row compares settled power at the same sensed band across the three routes. The bottom row shows the spectrum for each stimulation setting, or a single point for direct device band power. Agreement is informative about conversion, not three independent physiological confirmations.\n\nPlots use linear device units and the applicable frequency range. Bands carrying folded stimulation artifacts are marked without obscuring the values. Figure labels are computed from the current render context. Static and interactive renderings share build_context, and neither recalculates the underlying comparison or supplies deployment gates.'
 
 from __future__ import annotations
 
@@ -100,12 +41,6 @@ SPECTRUM_HI_HZ = 30.0
 #: Font sizes, three of them, mapped to what a piece of text is FOR rather than to how much room is
 #: left: titles and axis labels, then annotations, then tick labels.
 SIZE_TITLE, SIZE_NOTE, SIZE_TICK = 9.0, 7.5, 7.0
-
-
-
-# Aditya canonical compatibility imports/constants.
-
-
 
 
 def _short(source: str) -> str:
@@ -644,7 +579,7 @@ def _br(text: str, width: int) -> str:
 def render_all(comparisons, outdir=".", *, prefix="three_source_response"):
     """Draw every comparison, save one picture each, and return the paths in the order drawn.
 
-    One picture per run of rising current, never two runs on one picture. Each run is a different
+    One picture per run of stepped current, never two runs on one picture. Each run is a different
     sensing contact at a different band, and stacking them would invite a reader to read across two
     measurements that have nothing in common but the date.
     """
@@ -722,6 +657,3 @@ def report_payload(build) -> Dict[str, Any]:
                 {"side": getattr(comp, "ramped_side", "unknown"),
                  "reason": f"the figure text could not be built: {exc!r}"})
     return out
-
-
-# Retained active Aditya interfaces.

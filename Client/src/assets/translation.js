@@ -106,7 +106,7 @@ export const dictionary = {
       en: `###################################\n
       #######################################\n
       ####################################`,
-      zh: `This is a demo website for the UF BRAVO Platform submitted for publication.
+      zh: `This is a demo website for the UF/UCSF BRAVO submitted for publication.
       Registered Accounts are by default "Researcher-only" accounts without ability to view identified data.
       The platform is hosted in a cloud-server and data are stored in cloud server to demonstrate long-term data analysis capability.
       Please upload data with that in mind and upload deidentified data only.`,
@@ -118,8 +118,8 @@ export const dictionary = {
       zh: "账号登陆"
     },
     Email: {
-      en: "Username",
-      zh: "用户名"
+      en: "Email",
+      zh: "邮箱"
     },
     Password: {
       en: "Password",
@@ -791,7 +791,6 @@ export const dictionary = {
     },
   },
   Breadcrumbs: {
-    "redcap-pretrial": {en: "Aditya - All Data Streams", zh: "Aditya - All Data Streams"},
     dashboard: {
       en: "Dashboard",
       zh: "主平台"
@@ -877,8 +876,26 @@ export const dictionary = {
       zh: "Mobile App Manager"
     },
     analysis: {
-      en: "Analysis Builder",
+      en: "Analysis builder",
       zh: "Analysis Builder"
+    },
+    // The three pain pages, named by the question each answers (SPEC.md section 6, 2026-09-26).
+    // The breadcrumb for "/reports/<page>/<participant>" reads these instead of the address.
+    biomarkers: {
+      en: "Biomarkers exploration",
+      zh: "Biomarkers exploration"
+    },
+    "stim-optimizer": {
+      en: "Stim optimizer",
+      zh: "Stim optimizer"
+    },
+    "closed-loop": {
+      en: "Closed-loop deployment",
+      zh: "Closed-loop deployment"
+    },
+    "analysis-builder": {
+      en: "Analysis builder",
+      zh: "Analysis builder"
     },
     surveys: {
       en: "Surveys",
@@ -991,7 +1008,7 @@ export const dictionary = {
       zh: "Mobile App Manager"
     },
     CustomizedAnalysis: {
-      en: "Analysis Builder",
+      en: "Choosing stimulation settings",
       zh: "Analysis Builder"
     },
     TremorStudy: {

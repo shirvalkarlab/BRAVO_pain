@@ -37,12 +37,6 @@ from sklearn.gaussian_process.kernels import ConstantKernel, Matern
 from .surrogate import ParameterGrid
 
 
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
 class PreferenceGP:
     """Pairwise-probit GP over the latent preference value of each tested setting.
 
@@ -219,6 +213,3 @@ class PreferenceGP:
                 correct += int(mu[i] > mu[j])
                 total += 1
         return correct / total
-
-
-# Retained active Aditya interfaces.

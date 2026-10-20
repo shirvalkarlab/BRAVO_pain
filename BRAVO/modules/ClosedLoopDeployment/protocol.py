@@ -2,13 +2,9 @@
 
 WHY THIS FILE EXISTS, AND WHAT IT CAN AND CANNOT DELIVER
 -------------------------------------------------------
-Every amplitude-to-power estimate in this project so far comes from the historical record, in which
-the amplitude a participant was on is confounded with WHEN they were on it. Settings changed for
-clinical reasons, in eras, and the eras differ in medication, in season, in electrode impedance and
-in the participant's baseline pain. The strongest single result on the record makes the problem
-concrete: on ONE_THREE_LEFT at 165 Hz all seventeen bands moved in the correct direction with a
-median separation of d = 1.28, and that estimate still rests on two eras, so era-confounding is not
-excluded by it.
+Historical amplitude-to-power associations can be confounded by time-varying clinical
+settings and participant state. A within-session randomized design addresses that
+association; observational effects alone do not establish the expected session effect.
 
 Randomising the ORDER in which candidate configurations are tested inside ONE session is what breaks
 that confound, and it is the entire point of this file. Nothing else here is novel; the arithmetic
@@ -39,7 +35,7 @@ import math
 import numpy as np
 from scipy import optimize, stats
 
-from modules.StimOptimizer.routines import percept_adaptive
+from StimOptimizer.routines import percept_adaptive
 
 from . import types
 
@@ -83,11 +79,9 @@ SETTLE_EXCLUDE_S = SETTLE_WINDOWS * INTEGRATION_S             # 8.192 s
 #: plan then states for it.
 DEFAULT_N_PAIRS = 11
 
-#: The effect size the plan is sized for. It is the median separation observed on ONE_THREE_LEFT at
-#: 165 Hz in the historical record, and it is an ASSUMPTION carried into the design rather than a
-#: guarantee: that estimate rests on two eras, so if any part of it was era-confounding rather than
-#: amplitude, the true within-session effect is smaller and this session is underpowered. The
-#: session is worth running anyway, because it is the only design that can find out.
+#: Assumed target effect size for session sizing. This is a design parameter,
+#: not participant evidence or a guarantee. A smaller true effect leaves the
+#: session underpowered; review the assumption for each intended use.
 DEFAULT_D_TARGET = 1.28
 
 #: Conventional power target, used when solving for the effect size a given session could detect.
@@ -112,12 +106,6 @@ DEFAULT_RAMP_INTERVAL_S = 2.0
 # --------------------------------------------------------------------------------------------
 # Power
 # --------------------------------------------------------------------------------------------
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
 def paired_power(n_pairs, d, alpha=0.05, n_comparisons=1) -> float:
     """Power of a two-sided paired t-test at effect size ``d``, Bonferroni-corrected.
 
@@ -601,12 +589,10 @@ def _build_note(*, n_cand, cands, n_pairs, alpha, d_target, power, det_d, durati
             "rather than as an absence of an amplitude effect.")
 
     parts.append(
-        f"The d of {d_target} the session is sized for is an ASSUMPTION carried in from the "
-        "historical record — the median separation observed on ONE_THREE_LEFT at 165 Hz — and that "
-        "estimate rests on two eras, so era-confounding is not excluded from it. If part of that "
-        "separation was era rather than amplitude, the true within-session effect is smaller and "
-        "this session is underpowered for it. The power figure above is a property of the design "
-        "under its assumptions and is not evidence about this participant.")
+        f"The d of {d_target} the session is sized for is an ASSUMPTION, not an effect established "
+        "by this session. If the true within-session effect is smaller, this session is "
+        "underpowered for it. The power figure above is a property of the design under its "
+        "assumptions and is not evidence about this participant.")
 
     parts.append(
         f"Each measurement contributes {n_windows} non-overlapping {INTEGRATION_S:.3f} s "
@@ -648,6 +634,3 @@ def _build_note(*, n_cand, cands, n_pairs, alpha, d_target, power, det_d, durati
         + ("; ..." if len(order_log) > 3 else "") + ".")
 
     return " ".join(parts)
-
-
-# Retained active Aditya interfaces.

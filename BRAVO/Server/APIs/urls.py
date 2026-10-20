@@ -21,22 +21,12 @@ All API URLs
 from django.urls import path
 from django.conf import settings
 
-from . import Auth, WebSession, Participants
+from . import Auth, WebSession, Participants, ManualSync
 from . import FitbitDashboard, OuraRingDashboard, EmpaticaDashboard, GoogleHealthDashboard
 from . import DataHandler, EventAnnotationHandler, DataAnalysis, Therapy, GroupAnalysis, AIModels
-from . import AsyncJobScheduling
-from . import DataFilter
-from . import RCS08Sync
-from . import PrasadAnalysis
-from . import OuraFreeReps
-from . import OuraTimeline
-from . import RedcapTimeline
-from . import HomeNeuralTimeline
+from . import AsyncJobScheduling, DataFilter, AdityaPresentation
 
 urlpatterns = [
-    *[path(endpoint, PrasadAnalysis.ResearchAnalysis.as_view(operation=endpoint))
-      for endpoint in PrasadAnalysis.OPERATIONS],
-    path('queryServerIdentity', PrasadAnalysis.QueryServerIdentity.as_view()),
     path('register', Auth.UserRegister.as_view()),
     path('login', Auth.UserLogin.as_view()),
     path('logout', Auth.UserLogout.as_view()),
@@ -47,16 +37,11 @@ urlpatterns = [
     path('requestGoogleHealthAuth', GoogleHealthDashboard.GoogleHealthAuthHandler.as_view()),
     path('queryGoogleHealthData', GoogleHealthDashboard.QueryGoogleHealthData.as_view()),
     path('requestOuraRingAuth', OuraRingDashboard.OuraRingAuthHandler.as_view()),
-    path('queryOuraFreeReps', OuraFreeReps.QueryOuraFreeReps.as_view()),
-    path('queryOuraTimeline', OuraTimeline.QueryOuraTimeline.as_view()),
-    path('queryRedcapTimeline', RedcapTimeline.QueryRedcapTimeline.as_view()),
-    path('queryHomeNeuralTimeline', HomeNeuralTimeline.QueryHomeNeuralTimeline.as_view()),
     path('queryOuraRingData', OuraRingDashboard.QueryOuraRingData.as_view()),
     path('queryEmpaticaData', EmpaticaDashboard.QueryEmpaticaData.as_view()),
 
     path('downloadData', DataHandler.DataDownloadHandler.as_view()),
     path('uploadData', DataHandler.DataUploadHandler.as_view()),
-    path('syncRCS08', RCS08Sync.RCS08SyncHandler.as_view()),
     path('setRecordingTimeShift', DataHandler.RecordingTimeShiftHandler.as_view()),
     path('queryRawTimeseries', DataHandler.TimeSeriesRecordingHandler.as_view()),
 
@@ -64,10 +49,10 @@ urlpatterns = [
     path('queryImageSourceFiles', DataHandler.NeuroImageFileHandler.as_view()),
 
     path('querySurveyForms', EventAnnotationHandler.QuerySurveyForms.as_view()),
-    path('requestSurveyAccessCode', EventAnnotationHandler.SurveyAccessCodes.as_view()),
     path('deleteSurveyForms', EventAnnotationHandler.DeleteSurveyForms.as_view()),
     path('setSurveyForms', EventAnnotationHandler.SetSurveyForms.as_view()),
     path('queryParticipantSurveyRecords', EventAnnotationHandler.QueryParticipantSurveyRecords.as_view()),
+    path('importRedcapCSV', EventAnnotationHandler.ImportRedcapCSV.as_view()),
     
     path('downloadParticipantExport', Participants.ExportParticipant.as_view()),
     path('queryParticipantEvents', EventAnnotationHandler.QueryEventHandler.as_view()),
@@ -78,6 +63,7 @@ urlpatterns = [
     path('querySessions', WebSession.QuerySessionConfig.as_view()),
     path('updateSessions', WebSession.UpdateSessionConfig.as_view()),
     path('queryProcessingQueue', WebSession.QueryProcessingQueue.as_view()),
+    path('manualSync', ManualSync.ManualSync.as_view()),
 
     path('queryParticipants', Participants.QueryParticipants.as_view()),
     path('queryParticipantInformation', Participants.QueryParticipantInformation.as_view()),
@@ -96,6 +82,29 @@ urlpatterns = [
     path('queryNeuralActivitySnapshot', DataAnalysis.QueryNeuralActivitySnapshot.as_view()),
     path('queryChronicNeuralActivity', DataAnalysis.QueryChronicNeuralActivity.as_view()),
     path('queryChronicTimeline', DataAnalysis.QueryChronicTimeline.as_view()),
+    path('queryBiomarkerAnalysis', DataAnalysis.QueryBiomarkerAnalysis.as_view()),
+    path('queryStimOptimizer', DataAnalysis.QueryStimOptimizer.as_view()),
+    path('exportTitrationSheet', DataAnalysis.ExportTitrationSheet.as_view()),
+    path('queryServerIdentity', DataAnalysis.QueryServerIdentity.as_view()),
+    path('queryClosedLoopDeployment', DataAnalysis.QueryClosedLoopDeployment.as_view()),
+    path('queryClosedLoopChosenBand', DataAnalysis.QueryClosedLoopChosenBand.as_view()),
+    path('queryControlAnalyses', DataAnalysis.QueryControlAnalyses.as_view()),
+    path('queryDeploymentROC', DataAnalysis.QueryDeploymentROC.as_view()),
+    path('queryLsbPower', DataAnalysis.QueryLsbPower.as_view()),
+    path('queryPsdLsbConversionModel', DataAnalysis.QueryPsdLsbConversionModel.as_view()),
+    path('queryElectrodeIdentifierCheck', DataAnalysis.QueryElectrodeIdentifierCheck.as_view()),
+    path('queryTimelineDetail', DataAnalysis.QueryTimelineDetail.as_view()),
+    path('queryStimProgram', DataAnalysis.QueryStimProgram.as_view()),
+    path('queryWiringComparison', DataAnalysis.QueryWiringComparison.as_view()),
+    path('queryDeploymentRocByEra', DataAnalysis.QueryDeploymentRocByEra.as_view()),
+    path('queryDeploymentSummary', DataAnalysis.QueryDeploymentSummary.as_view()),
+    path('queryPainScores', DataAnalysis.QueryPainScores.as_view()),
+    path('queryDataAvailability', DataAnalysis.QueryDataAvailability.as_view()),
+    path('queryPsdScanIndex', DataAnalysis.QueryPsdScanIndex.as_view()),
+    path('queryRedcapTimeline', AdityaPresentation.QueryRedcapTimeline.as_view()),
+    path('queryHomeNeuralTimeline', AdityaPresentation.QueryHomeNeuralTimeline.as_view()),
+    path('queryOuraTimeline', AdityaPresentation.QueryOuraTimeline.as_view()),
+    path('queryFilterData', DataFilter.QueryFilterData.as_view()),
     path('queryTimeseriesAnalysis', DataAnalysis.QueryTimeseriesAnalysis.as_view()),
     path('queryBurstAnalysis', DataAnalysis.QueryBurstAnalysis.as_view()),
 
@@ -112,6 +121,4 @@ urlpatterns = [
     
     path('queryTherapyHistory', Therapy.QueryTherapyHistory.as_view()),
     path('assignTherapyLabel', Therapy.AssignTherapyLabel.as_view()),
-
-    path('queryFilterData', DataFilter.QueryFilterData.as_view()),
 ]

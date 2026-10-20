@@ -239,6 +239,8 @@ def getOffsetString(offset):
         return f"-{int(abs(offset)/3600):02d}:{int((abs(offset)%3600)/60):02d}"
 
 def refreshFitbitData(device):
+    if not DataQuery.oauthConfigured():
+        raise RuntimeError("Fitbit connection is not configured on this server.")
     Participant = device.owner
     Data = loadFitbitData(Participant)
 

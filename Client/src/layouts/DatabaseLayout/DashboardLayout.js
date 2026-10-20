@@ -24,8 +24,17 @@ import PropTypes from "prop-types";
 import MDBox from "components/MDBox";
 
 import { usePlatformContext, setContextState } from "context";
+import { T, LAYOUT, SPACE_FACTOR, REDUCED_MOTION } from "assets/theme/base/tokens";
+import pxToRemPlain from "assets/theme/functions/pxToRem";
+import { SIDENAV_WIDTH } from "assets/theme/components/sidenav";
+import { SIDENAV_MINI_WIDTH } from "components/SideMenu/SidenavRoot";
 
-function DashboardLayout({ children }) {
+// The page's main region (TASTE_AUDIT.md C7, 2026-09-26): a <main> landmark with the id the
+// top bar's "Skip to content" link moves focus to. The top bar, when given as `navbar`, is drawn
+// before it and so sits outside it, as a banner should.
+export const MAIN_CONTENT_ID = "main-content";
+
+function DashboardLayout({ children, navbar }) {
   const [controller, dispatch] = usePlatformContext();
   const { miniSidenav, hideSidenav } = controller;
   const { pathname } = useLocation();
@@ -35,24 +44,38 @@ function DashboardLayout({ children }) {
     document.body.style.overflow = null;
   }, [pathname]);
 
+  // The page frame (SPEC.md section 2.5, 2026-09-26): the page background, 16 px side gutters on
+  // a phone, 24 px on a tablet and 32 px on a wide screen, and one content column no wider than
+  // 1120 px, centred in the space beside the sidebar, so a line of prose never runs the full
+  // width of a large monitor. The sidebar is flush with the window's left edge.
   return (
     <MDBox
       sx={({ breakpoints, transitions, functions: { pxToRem } }) => ({
-        p: { xs: 2, sm: 3 },
-        minWidth: 0,
+        px: { xs: SPACE_FACTOR.sm, md: SPACE_FACTOR.md, lg: SPACE_FACTOR.lg },
+        pb: SPACE_FACTOR.xl,
         position: "relative",
         minHeight: "calc(100vh - 80px)",
+        backgroundColor: T.page,
+        maxWidth: "100vw",
 
         [breakpoints.up("xl")]: {
-          marginLeft: miniSidenav ? pxToRem(120) : pxToRem(274),
+          marginLeft: miniSidenav ? pxToRem(SIDENAV_MINI_WIDTH) : pxToRem(SIDENAV_WIDTH),
+          maxWidth: `calc(100vw - ${pxToRem(miniSidenav ? SIDENAV_MINI_WIDTH : SIDENAV_WIDTH)})`,
           transition: transitions.create(["margin-left", "margin-right"], {
             easing: transitions.easing.easeInOut,
             duration: transitions.duration.standard,
           }),
+          // Instant for a reader who asked for less motion (TASTE_AUDIT.md C4).
+          [REDUCED_MOTION]: { transition: "none" },
         },
       })}
     >
-      {children}
+      <MDBox sx={{ maxWidth: pxToRemPlain(LAYOUT.contentMax), mx: "auto", width: "100%" }}>
+        {navbar}
+        <MDBox component="main" id={MAIN_CONTENT_ID} tabIndex={-1}>
+          {children}
+        </MDBox>
+      </MDBox>
     </MDBox>
   );
 }
@@ -60,6 +83,11 @@ function DashboardLayout({ children }) {
 // Typechecking props for the DashboardLayout
 DashboardLayout.propTypes = {
   children: PropTypes.node.isRequired,
+  navbar: PropTypes.node,
+};
+
+DashboardLayout.defaultProps = {
+  navbar: null,
 };
 
 export default DashboardLayout;

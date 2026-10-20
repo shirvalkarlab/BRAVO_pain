@@ -13,11 +13,6 @@ import numpy as np
 import pandas as pd
 
 
-
-# Aditya canonical compatibility imports/constants.
-
-
-
 def _fmt(x, nd=3):
     if x is None:
         return "n/a"
@@ -47,15 +42,14 @@ def render(result: dict, per_fold: pd.DataFrame, queue: pd.DataFrame, audit: dic
     L = []
     A = L.append
 
-    A("# Phase 4 — warm-start surrogate validation, RCS08")
+    A("# Phase 4 — warm-start surrogate validation")
     A("")
     A(f"**PROVISIONAL — data horizon: {result['data_horizon']}.** "
       f"Wash-in exclusion window {result['washin_min']:g} min (declared parameter). "
       f"Generated {_dt.datetime.now(_dt.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} by "
       "`StimOptimizer.routines.validation.run_validation`.")
     A("")
-    A("Every number in this report is conditional on that horizon. Approximately ten weeks of "
-      "stimulation changes and pain reports after it are known to exist and are not yet on disk. "
+    A("Every number in this report is conditional on that horizon. Any records after that horizon are outside this report. "
       "The calibration verdict, the plateau decision, the exploration queue, the confound "
       "correlations and the replay numbers are all first-pass values that a refresh can move. "
       "Re-running `run_validation` against a newer design matrix regenerates all three "
@@ -129,14 +123,13 @@ def render(result: dict, per_fold: pd.DataFrame, queue: pd.DataFrame, audit: dic
           "queue is a coverage statement about where the record is empty, not a ranked list of "
           "settings to program. No setting table is issued from this report.")
         A("")
-        A("This is not softened. The warm start has 45 epochs spread over 6 frequencies, and "
-          "held-out prediction of a whole temporal block is the hardest thing that can be asked "
+        A("This is not softened. Held-out prediction of a whole temporal block is the hardest thing that can be asked "
           "of it. Failing that test is informative — it says the historical design does not "
           "identify a transferable response surface — and the correct response is to collect "
           "prospective, randomised-order data, not to lower the bar.")
     A("")
-    A("PIT histogram and predicted-vs-observed panels: `rcs08_pit_calibration.png`. "
-      "Per-epoch held-out predictions with fold labels: `rcs08_loo_calibration.csv`.")
+    A("PIT histogram and predicted-vs-observed panels: `pit_calibration.png`. "
+      "Per-epoch held-out predictions with fold labels: `loo_calibration.csv`.")
     A("")
 
     # ---- step 2
@@ -145,7 +138,7 @@ def render(result: dict, per_fold: pd.DataFrame, queue: pd.DataFrame, audit: dic
     A(f"Posterior over all **{d['n_grid_cells']}** grid cells (12 frequencies x 33 amplitudes). "
       f"Posterior mean spans {_fmt(d['grid_mu_min'])} to {_fmt(d['grid_mu_max'])} NRS points; "
       f"posterior SD spans {_fmt(d['grid_sd_min'])} to {_fmt(d['grid_sd_max'])}. Incumbent "
-      f"(55 Hz / 1.6 mA) posterior mean **{_fmt(d['incumbent_mu'])}** "
+      f"({_fmt(d.get('incumbent_frequency_hz'))} Hz / {_fmt(d.get('incumbent_amplitude_mA'))} mA) posterior mean **{_fmt(d['incumbent_mu'])}** "
       f"(SD {_fmt(d['incumbent_sd'])}).")
     A("")
     A(f"Unexplored set = cells with fewer than {d['min_reports']} usable reports: "
@@ -196,25 +189,14 @@ def render(result: dict, per_fold: pd.DataFrame, queue: pd.DataFrame, audit: dic
         A("Frequency composition of the top 20 by EI: "
           + ", ".join(f"{k} Hz x{vv}" for k, vv in d["top20_freq_composition"].items()) + ".")
         A("")
-    A("Full queue with both rankings: `rcs08_exploration_queue.csv`.")
+    A("Full queue with both rankings: `exploration_queue.csv`.")
     A("")
-    A("### Structural finding: the signal is in frequency, not amplitude")
+    A("### Fitted length scales")
     A("")
-    A(f"The fitted amplitude length scale is **{_fmt(d['amp_length_scale_fitted'], 2)}** on a "
-      f"unit-scaled axis (frequency pinned at {_fmt(d['freq_length_scale_pinned'], 3)}). An "
-      "amplitude length scale that large means the surrogate has found **no usable amplitude "
-      "gradient over 0.8-4.0 mA** — it models the response as nearly flat in amplitude and puts "
-      "what remains of the signal into frequency. That is why the queue is dominated by a single "
-      "frequency column rather than by an amplitude frontier: the highest-EI cells are at "
-      "**40 Hz**, the untested frequency adjacent to the best-performing tested frequency "
-      "(55 Hz), and the amplitude at which they are ranked is nearly immaterial to the model.")
-    A("")
-    A("Two readings of that, and the data at this horizon do not separate them. Either amplitude "
-      "genuinely does little over this range for this patient, or the historical amplitude "
-      "contrasts are so entangled with time and with right-hemisphere amplitude (section 3) that "
-      "no amplitude gradient is identifiable from them. The second is the more likely and the "
-      "more actionable: it is fixed by randomising amplitude within a fixed frequency "
-      "prospectively, which the historical record never did.")
+    A(f"Fitted amplitude length scale: **{_fmt(d['amp_length_scale_fitted'], 2)}** on a "
+      f"unit-scaled axis; pinned frequency length scale: {_fmt(d['freq_length_scale_pinned'], 3)}. "
+      "Interpret these against the observed coverage and confound audit for this input record; "
+      "a fitted length scale alone does not establish a causal amplitude effect.")
     A("")
     A("### Where the record is empty")
     A("")
@@ -226,10 +208,7 @@ def render(result: dict, per_fold: pd.DataFrame, queue: pd.DataFrame, audit: dic
       + ". At 10 Hz the record spans only "
       + (f"{d['low_freq_amp_span'][0]:.1f}-{d['low_freq_amp_span'][1]:.1f} mA"
          if d["low_freq_amp_span"] else "no cell at the coverage threshold")
-      + ". Note this corrects the earlier Phase 1 phrasing that amplitude \"never left "
-        "1.4-1.8 mA at 10-55 Hz\": under the 5-minute wash-in window, 55 Hz now reaches 3.0 and "
-        "4.0 mA at the coverage threshold. The band is still essentially unexplored, but not "
-        "entirely so.")
+      + ".")
     A("")
 
     # ---- step 3
@@ -280,44 +259,16 @@ def render(result: dict, per_fold: pd.DataFrame, queue: pd.DataFrame, audit: dic
         m = co[(co.model == model) & (co.term == term)]
         return float(m.iloc[0][col]) if len(m) else float("nan")
 
-    A("### What does not survive adjustment")
+    A("### Interpretation of adjustment")
     A("")
-    sp = audit["spearman"]
-    A(f"1. **\"Higher frequency is associated with worse pain.\"** Marginally, rho = "
-      f"{_fmt(sp['log2_freq~nrs']['rho'])} (p = {_p(sp['log2_freq~nrs']['p'])}) at epoch level. "
-      f"The coefficient on log2(frequency) falls from {_fmt(_get('M1_naive_unweighted', 'log2_freq', 'coef'))} "
-      f"NRS points per octave unadjusted, to {_fmt(_get('M2_precision_weighted', 'log2_freq', 'coef'))} "
-      f"when epochs are weighted by precision, to {_fmt(_get('M3_era_blocked', 'log2_freq', 'coef'))} "
-      f"(p = {_p(_get('M3_era_blocked', 'log2_freq', 'p'))}) once era is blocked — about "
-      f"{_fmt(100 * (1 - abs(_get('M3_era_blocked', 'log2_freq', 'coef')) / abs(_get('M1_naive_unweighted', 'log2_freq', 'coef'))), 0)}% "
-      "of the unadjusted effect is time. **Does not survive.**")
-    A(f"2. **\"Left-hemisphere amplitude affects pain.\"** Never established marginally "
-      f"(rho = {_fmt(sp['amp_L~nrs']['rho'])}, p = {_p(sp['amp_L~nrs']['p'])}), and the "
-      f"coefficient changes sign under era blocking "
-      f"({_fmt(_get('M1_naive_unweighted', 'amp_L', 'coef'))} -> "
-      f"{_fmt(_get('M3_era_blocked', 'amp_L', 'coef'))}, "
-      f"p = {_p(_get('M3_era_blocked', 'amp_L', 'p'))}). A sign flip on adjustment means the "
-      "unadjusted estimate was carrying the confound, not an effect. **Does not survive.**")
-    jt = audit["joint_tests"]
-    A(f"3. **The searched dimensions jointly.** F({jt['M3_era_blocked']['df_num']}, "
-      f"{_fmt(jt['M3_era_blocked']['df_denom'], 0)}) = {_fmt(jt['M3_era_blocked']['F'], 2)}, "
-      f"p = {_p(jt['M3_era_blocked']['p'])} after era blocking. Frequency and amplitude together "
-      "explain nothing beyond era. **The historical record does not identify a response surface "
-      "over the searched dimensions.** This is the same conclusion section 1 reaches from the "
-      "prediction side, arrived at independently.")
-    A(f"4. **What does survive is time itself.** With era blocked and a linear day term added, "
-      f"the day coefficient is {_fmt(_get('M4_era_blocked_plus_days', 'days', 'coef'), 4)} NRS "
-      f"points/day (p = {_p(_get('M4_era_blocked_plus_days', 'days', 'p'))}), i.e. roughly "
-      f"{_fmt(abs(_get('M4_era_blocked_plus_days', 'days', 'coef')) * 30, 2)} points per month of "
-      "improvement not attributable to either searched parameter. Right-hemisphere amplitude is "
-      f"nearly collinear with time (rho = {_fmt(sp['days~amp_R']['rho'])}, "
-      f"p = {_p(sp['days~amp_R']['p'])}, VIF {_fmt(audit['vif']['amp_R'], 2)}), so it cannot be "
-      "separated from the trend and is not interpretable as an effect either.")
-    A("")
-    A("**Consequence for the protocol.** Any prospective batch must randomise delivery order "
-      "within the batch, as the spec already requires, and must vary amplitude within a fixed "
-      "frequency rather than changing both together — otherwise the next year's record will be "
-      "as unidentifiable as this one.")
+    A("Compare the unadjusted and era-blocked coefficients above, including uncertainty, "
+      "before making a claim about frequency or amplitude. Correlation and a change after "
+      "adjustment do not establish a causal effect.")
+    jt = audit["joint_tests"]["M3_era_blocked"]
+    A(f"Joint searched-dimension test after era blocking: F({jt['df_num']}, "
+      f"{_fmt(jt['df_denom'], 0)}) = {_fmt(jt['F'], 2)}, p = {_p(jt['p'])}.")
+    A("Prospective batches must randomise delivery order and independently vary the dimensions "
+      "under study, as required by the protocol.")
     A("")
 
     # ---- step 4
@@ -351,11 +302,8 @@ def render(result: dict, per_fold: pd.DataFrame, queue: pd.DataFrame, audit: dic
     A("")
     A("**What this establishes and what it does not.** A lookup-table replay over "
       f"{r['n_visited_cells']} cells is a weak test and must not be read as evidence that the "
-      "optimizer will find a better setting for this patient. It establishes exactly one thing: "
-      "that the acquisition machinery, run end to end on real RCS08 objective values, reaches "
-      "the historically best-performing visited cell in fewer measurements than undirected "
-      "search — i.e. the code path from surrogate to batch is functional and its ordering is not "
-      "arbitrary. It does **not** establish that the surrogate generalises (section 1 is the test "
+      "optimizer will find a better setting for this patient. The results above compare how quickly the acquisition machinery and the baseline "
+      "strategies reach the best visited cell using the supplied objective values. It does **not** establish that the surrogate generalises (section 1 is the test "
       "of that, and it is the binding one), that the historical best is a global optimum, or that "
       f"sample efficiency measured on a {r['n_visited_cells']}-cell replay with fixed lookup "
       f"values transfers to a {d['n_grid_cells']}-cell prospective search with day-scale "
@@ -365,32 +313,26 @@ def render(result: dict, per_fold: pd.DataFrame, queue: pd.DataFrame, audit: dic
     A("")
 
     # ---- what a refresh could change
-    A("## What ten more weeks of data could change")
+    A("## What additional data could change")
     A("")
     A(f"Stated so that a future reader can see which conclusions are load-bearing on the "
       f"{result['data_horizon']} horizon:")
     A("")
-    A("1. **The calibration verdict.** More epochs, and in particular a fifth era, change both "
+    A("1. **The calibration verdict.** More epochs, and additional eras, change both "
        "the MAE ratio and the number of era folds. The verdict above can move in either "
        "direction.")
     A("2. **The incumbent.** If the chronic setting changed after the horizon, J is referenced "
        "to the wrong cell and every J value shifts by a constant, which moves the plateau "
        "decision.")
-    A("3. **The queue.** Ten weeks of prospective settings would move cells out of the "
+    A("3. **The queue.** Additional prospective settings would move cells out of the "
        "unexplored set and re-rank what remains. A queue computed on a stale record can send "
        "the clinic to a cell that has already been tested.")
-    A("4. **The confound.** The time trend is the single strongest signal in the record. A "
-       "refresh either extends it or breaks it, and that determines whether frequency and "
-       "amplitude effects are estimable at all.")
-    A("5. **The amplitude length scale**, and with it the claim that the response is nearly flat "
-       "in amplitude. That is a fitted quantity on 45 epochs and it is the structural claim most "
-       "exposed to new data.")
+    A("4. **The confound.** A refresh can change time trends and their association with frequency and "
+       "amplitude, affecting identifiability.")
+    A("5. **The amplitude length scale**, is fitted to the supplied epochs and can change when new data are added.")
     A("")
     A("Re-run: "
       "`validation.run_validation(design_matrix_path=..., per_report_path=..., "
       "data_horizon=..., washin_min=..., outdir=...)`.")
     A("")
     return "\n".join(L)
-
-
-# Retained active Aditya interfaces.

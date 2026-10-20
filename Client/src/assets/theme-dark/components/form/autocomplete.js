@@ -31,7 +31,6 @@ const { borderRadius } = borders;
 const autocomplete = {
   styleOverrides: {
     popper: {
-      maxWidth: "calc(100vw - 32px)",
       boxShadow: md,
       padding: pxToRem(8),
       fontSize: size.sm,
@@ -47,8 +46,6 @@ const autocomplete = {
     },
 
     option: {
-      whiteSpace: "normal",
-      overflowWrap: "anywhere",
       padding: `${pxToRem(4.8)} ${pxToRem(16)}`,
       borderRadius: borderRadius.md,
       fontSize: size.sm,
@@ -89,9 +86,7 @@ const autocomplete = {
       color: white.main,
 
       "& .MuiChip-label": {
-        lineHeight: 1.4,
-        whiteSpace: "normal",
-        overflowWrap: "anywhere",
+        lineHeight: 1.2,
         padding: `0 ${pxToRem(10)} 0 ${pxToRem(4)}`,
       },
 

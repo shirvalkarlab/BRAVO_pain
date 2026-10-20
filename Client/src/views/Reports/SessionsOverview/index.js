@@ -11,7 +11,6 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import { currentTarget } from "utils/participantTargets";
 import { useEffect, useState } from "react";
 
 import {
@@ -103,7 +102,7 @@ export default function SessionOverview() {
             {[0,1].map((index) => {
               return <MDBox key={index} mb={0} lineHeight={1}>
                 <MDTypography variant="p" fontSize={15} style={{marginBottom: 0}}>
-                  {"["}{currentTarget("Left", dictionary.SessionOverview.LeftHemisphere[language])}{"] "}
+                  {"["}{dictionary.SessionOverview.LeftHemisphere[language]}{"] "}
                 </MDTypography>
                 <MDTypography variant="p" fontSize={15} style={{marginBottom: 0}}>
                   {formatStimulationChannel(group.LeftHemisphere.Channel[index]).map((channel) => {
@@ -123,7 +122,7 @@ export default function SessionOverview() {
             })}
           </> : <>
             <MDTypography variant="p" fontSize={15} style={{marginBottom: 0}}>
-              {"["}{currentTarget("Left", dictionary.SessionOverview.LeftHemisphere[language])}{"] "}
+              {"["}{dictionary.SessionOverview.LeftHemisphere[language]}{"] "}
             </MDTypography>
             <MDTypography variant="p" fontSize={15} style={{marginBottom: 0}}>
               {formatStimulationChannel(group.LeftHemisphere.Channel).map((channel) => {
@@ -153,7 +152,7 @@ export default function SessionOverview() {
             {[0,1].map((index) => {
               return <MDBox key={index} mb={0} lineHeight={1}>
                 <MDTypography variant="p" fontSize={15} style={{marginBottom: 0}}>
-                  {"["}{currentTarget("Right", dictionary.SessionOverview.RightHemisphere[language])}{"] "}
+                  {"["}{dictionary.SessionOverview.RightHemisphere[language]}{"] "}
                 </MDTypography>
                 <MDTypography variant="p" fontSize={15} style={{marginBottom: 0}}>
                   {formatStimulationChannel(group.RightHemisphere.Channel[index]).map((channel) => {
@@ -173,7 +172,7 @@ export default function SessionOverview() {
             })}
           </> : <>
             <MDTypography variant="p" fontSize={15} style={{marginBottom: 0}}>
-              {"["}{currentTarget("Right", dictionary.SessionOverview.RightHemisphere[language])}{"] "}
+              {"["}{dictionary.SessionOverview.RightHemisphere[language]}{"] "}
             </MDTypography>
             <MDTypography variant="p" fontSize={15} style={{marginBottom: 0}}>
               {formatStimulationChannel(group.RightHemisphere.Channel).map((channel) => {
@@ -389,7 +388,8 @@ export default function SessionOverview() {
                         <MDBox mb={0} lineHeight={1}>
                           <MDBox mb={0} lineHeight={1}>
                             <MDTypography variant="h6" fontSize={18} style={{marginBottom: 0}}>
-                              {currentTarget(config.TargetLocation, dictionaryLookup(dictionary.FigureStandardText, config.TargetLocation.split(" ")[0], language) + " " + dictionaryLookup(dictionary.BrainRegions, config.TargetLocation.split(" ")[1], language))}
+                              {dictionaryLookup(dictionary.FigureStandardText, config.TargetLocation.split(" ")[0], language)} {" "}
+                              {dictionaryLookup(dictionary.BrainRegions, config.TargetLocation.split(" ")[1], language)}
                             </MDTypography>
                           </MDBox>
                           <MDBox mb={0} lineHeight={1}>

@@ -11,8 +11,7 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import { currentTarget } from "utils/participantTargets";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import {
@@ -61,7 +60,6 @@ import LoadingProgress from "components/LoadingProgress";
 
 import routes from "routes.js";
 import SetExperimentView from "./SetExperimentView";
-import { featureAvailability, groupAvailability, loadFeatureInformation, publishFeatureInformation } from "./featureAvailability";
 
 const filter = createFilterOptions();
 
@@ -78,14 +76,12 @@ export default function ParticipantOverview() {
 
   const [alert, setAlert] = useState(null);
   const { participant_uid } = useParams();
-  const currentParticipant = useRef(participant_uid);
-  currentParticipant.current = participant_uid;
 
   const initialSetup = async () => {
     try {
-      let response = await loadFeatureInformation(participant_uid);
-      if (currentParticipant.current !== participant_uid) return;
-      publishFeatureInformation(dispatch, participant_uid, response.data);
+      let response = await SessionController.query("/api/queryParticipantInformation", {
+        ParticipantId: participant_uid
+      });
       
       setContextState(dispatch, "participant_uid", participant_uid);
       setEditParticipantInfo(false);
@@ -95,23 +91,6 @@ export default function ParticipantOverview() {
       if (!report) setContextState(dispatch, "report", "GeneralReports");
 
     } catch (error) {
-      if (currentParticipant.current !== participant_uid) return;
-      if (error?.response?.status === 404) {
-        setContextState(dispatch, "participant_uid", null);
-        const returnToDatabase = () => {
-          setAlert(null);
-          navigate("/database", {replace: true});
-        };
-        setAlert(
-          <MuiAlertDialog
-            title={"Participant Not Found"}
-            message={"This link points to an older database. Return to the participant list and select the current record."}
-            handleClose={returnToDatabase}
-            handleConfirm={returnToDatabase}
-          />
-        );
-        return;
-      }
       SessionController.displayError(error, setAlert, () => {
         navigate("/database", {replace: true});
       });
@@ -216,7 +195,7 @@ export default function ParticipantOverview() {
         <MDBox mb={3}>
           <Grid container spacing={2}>
             <Grid item xs={12} lg={4} display={"flex"} alignItems={"stretch"}>
-              <Card sx={{width: "100%", minWidth: 0, display: "flex", flexDirection: "column"}}>
+              <Card sx={{width: "100%"}}>
                 <MDBox p={2}>
                   <Grid container spacing={1}>
                     <Grid item xs={12}>
@@ -242,8 +221,19 @@ export default function ParticipantOverview() {
                           ) : "Diagnosis: N/A"}
                         </MDTypography>
                       </MDBox>
+                      {participantInfo.DOB !== 0 ? (
+                      <MDBox mb={0.5} lineHeight={1}>
+                        <MDTypography
+                          variant="p"
+                          fontWeight="medium"
+                          fontSize={13}
+                          textTransform="capitalize"
+                        >
+                          {dictionary.ParticipantOverview.ParticipantInformation.DOB[language]}: {new Date(participantInfo.DOB*1000).toLocaleDateString(language, SessionController.getDateTimeOptions("DateLong"))}
+                        </MDTypography>
+                      </MDBox>
+                      ) : null}
                     </Grid>
-                    {!user.ReadOnly ? (
                     <Grid item xs={12}>
                       <Divider variant="middle" />
                       <MDButton variant="contained" color="warning" fullWidth 
@@ -257,22 +247,21 @@ export default function ParticipantOverview() {
                         {"Upload Data to Participant"}
                       </MDButton>
                     </Grid>
-                    ) : null}
                   </Grid>
                 </MDBox>
               </Card>
-              {!user.ReadOnly ? <EditParticipantInfoView
+              <EditParticipantInfoView 
                 show={editParticipantInfo} 
                 participantInfo={participantInfo} 
                 removeParticipant={removeParticipant}
                 onCancel={() => setEditParticipantInfo(false)} 
                 onUpdate={updateParticipantInformation} 
-              /> : null}
-              {!user.ReadOnly ? <UploadDataView
+              />
+              <UploadDataView 
                 show={uploadView.show}
                 participant_uid={participant_uid} 
-                onCancel={() => { setUploadView({show: false}); initialSetup(); }} 
-              /> : null}
+                onCancel={() => setUploadView({show: false})} 
+              />
             </Grid>
             <Grid item xs={12} lg={8} display={"flex"} alignItems={"stretch"}>
               <Card sx={{width: "100%", overflowX: "auto"}}>
@@ -288,9 +277,9 @@ export default function ParticipantOverview() {
                               </MDTypography>
                             </TableCell>
                         )})}
-                        {!user.ReadOnly ? <TableCell key={"viewdelete"} variant="head" style={{width: "15%", verticalAlign: "bottom", paddingBottom: 5, paddingTop: 5, textAlign: "center", lineHeight: 1}}>
+                        <TableCell key={"viewdelete"} variant="head" style={{width: "15%", verticalAlign: "bottom", paddingBottom: 5, paddingTop: 5, textAlign: "center", lineHeight: 1}}>
                           <MDTypography variant="span" fontSize={12} fontWeight={"bold"} style={{cursor: "pointer"}}> {" "} </MDTypography>
-                        </TableCell> : null}
+                        </TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
@@ -314,7 +303,7 @@ export default function ParticipantOverview() {
                                 {lead.Type}
                               </MDTypography>
                               <MDTypography style={{marginBottom: 0, marginTop: 0}} align="center" fontSize={11}>
-                                {currentTarget(lead.Hemisphere || lead.Target, lead.CustomName || lead.Target)}
+                                {lead.CustomName ? lead.CustomName : lead.Target}
                               </MDTypography>
                             </MDBox>
                             })}
@@ -324,7 +313,7 @@ export default function ParticipantOverview() {
                               {new Date(SessionController.decodeTimestamp(device.Date*1000)).toLocaleString(language, SessionController.getDateTimeOptions("DateNumeric"))}
                             </MDTypography>
                           </TableCell>
-                          {!user.ReadOnly ? <TableCell key={"viewedit"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
+                          <TableCell key={"viewedit"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                             <MDBox style={{display: "flex", flexDirection: "row"}}>
                               <Tooltip title="Delete Device" placement="top">
                                 <IconButton variant="contained" color="error" onClick={() => removeDevice(device.Id)}>
@@ -337,7 +326,7 @@ export default function ParticipantOverview() {
                                 </IconButton>
                               </Tooltip>
                             </MDBox>
-                          </TableCell> : null}
+                          </TableCell>
                         </TableRow>
                       })}
                     </TableBody>
@@ -345,12 +334,12 @@ export default function ParticipantOverview() {
                 </MDBox>
               </Card>
 
-              {!user.ReadOnly ? <EditDeviceInfoView
+              <EditDeviceInfoView 
                 show={editDeviceInfo.show} 
                 deviceInfo={editDeviceInfo.deviceInfo} 
                 onCancel={() => setEditDeviceInfo({show: false})} 
                 onUpdate={updateDeviceInformation} 
-              /> : null}
+              />
             </Grid>
           </Grid>
         </MDBox>
@@ -366,9 +355,8 @@ export default function ParticipantOverview() {
               if (key === "Main") return;
               if (key === "StudyGroupAnalysis") return;
               if (key === "SurveyTabs") return;
-              const availability = groupAvailability(routes[key].children, controller.participantFeatureAvailability, participant_uid);
-              return <Grid key={key} item xs={12} sm={6} md={4} lg={3} xl={2} display={"flex"} alignItems={"stretch"}>
-                <Card sx={{width: "100%", minWidth: 0, display: "flex", flexDirection: "column"}}>
+              return <Grid key={key} item xs={6} md={4} lg={3} xl={2} display={"flex"} alignItems={"stretch"}>
+                <Card sx={{width: "100%"}}>
                   <MDBox p={2} mx={3} display="flex" justifyContent="center">
                     <MDBox
                       display="grid" justifyContent="center" alignItems="center"
@@ -380,14 +368,13 @@ export default function ParticipantOverview() {
                       </Icon>
                     </MDBox>
                   </MDBox>
-                  <MDBox pb={2} px={2} textAlign="center" lineHeight={1.25}>
+                  <MDBox pb={6} px={2} textAlign="center" lineHeight={1.25}>
                     <MDTypography variant="h6" fontWeight="medium" textTransform="capitalize" pb={2}>
                       {routes[key].name}
                     </MDTypography>
-                    {!availability.available ? <MDTypography variant="caption" color="text" display="block">{availability.reason}</MDTypography> : null}
                   </MDBox>
-                  <MDBox pb={2} px={2} lineHeight={1.25} sx={{mt: "auto", width: "100%"}}>
-                    <MDButton variant={"contained"} color={"info"} fullWidth disabled={!availability.available} title={availability.reason} onClick={() => {
+                  <MDBox pb={2} px={2} lineHeight={1.25} sx={{position: "absolute", bottom: 0, width: "100%"}}>
+                    <MDButton variant={"contained"} color={"info"} fullWidth onClick={() => {
                       setContextState(dispatch, "report", key);
                     }}>
                       {dictionary.ParticipantOverview.ParticipantInformation.View[language]}
@@ -407,8 +394,8 @@ export default function ParticipantOverview() {
                 </MDTypography>
               </Grid>
               {report === "DataManager" ? (
-                <Grid item xs={12} sm={6} md={4} lg={3} xl={2} display={"flex"} alignItems={"stretch"}>
-                  <Card sx={{width: "100%", minWidth: 0, display: "flex", flexDirection: "column"}}>
+                <Grid item xs={6} md={4} lg={3} xl={2} display={"flex"} alignItems={"stretch"}>
+                  <Card sx={{width: "100%"}}>
                     <MDBox p={2} mx={3} display="flex" justifyContent="center">
                       <MDBox
                         display="grid" justifyContent="center" alignItems="center"
@@ -420,12 +407,12 @@ export default function ParticipantOverview() {
                         </Icon>
                       </MDBox>
                     </MDBox>
-                    <MDBox pb={2} px={2} textAlign="center" lineHeight={1.25}>
+                    <MDBox pb={6} px={2} textAlign="center" lineHeight={1.25}>
                       <MDTypography variant="h6" fontWeight="medium" textTransform="capitalize" pb={2}>
                         {"Export Participant Data"}
                       </MDTypography>
                     </MDBox>
-                    <MDBox pb={2} px={2} lineHeight={1.25} sx={{mt: "auto", width: "100%"}}>
+                    <MDBox pb={2} px={2} lineHeight={1.25} sx={{position: "absolute", bottom: 0, width: "100%"}}>
                       <MDButton variant={"contained"} color={"info"} href={`/api/downloadParticipantExport?ParticipantId=${participant_uid}`} fullWidth>
                         {"Download"}
                       </MDButton>
@@ -435,9 +422,8 @@ export default function ParticipantOverview() {
               ) : null}
               {routes[report].children.map((subreport) => {
                 if (subreport.hide) return;
-                const availability = featureAvailability(subreport.key, controller.participantFeatureAvailability, participant_uid);
-                return <Grid key={subreport.route} item xs={12} sm={6} md={4} lg={3} xl={2} display={"flex"} alignItems={"stretch"}>
-                  <Card sx={{width: "100%", minWidth: 0, display: "flex", flexDirection: "column"}}>
+                return <Grid key={subreport.route} item xs={6} md={4} lg={3} xl={2} display={"flex"} alignItems={"stretch"}>
+                  <Card sx={{width: "100%"}}>
                     <MDBox p={2} mx={3} display="flex" justifyContent="center">
                       <MDBox
                         display="grid" justifyContent="center" alignItems="center"
@@ -449,24 +435,17 @@ export default function ParticipantOverview() {
                         </Icon>
                       </MDBox>
                     </MDBox>
-                    <MDBox pb={2} px={2} textAlign="center" lineHeight={1.25} sx={{ opacity: availability.available ? 1 : 0.65 }}>
+                    <MDBox pb={6} px={2} textAlign="center" lineHeight={1.25}>
                       <MDTypography variant="h6" fontWeight="medium" textTransform="capitalize" pb={2}>
                         {subreport.name}
                       </MDTypography>
-                      {!availability.available ? <MDTypography variant="caption" color="text" display="block">{availability.reason}</MDTypography> : null}
-                      {availability.available && availability.kind === "research" ? <MDTypography variant="caption" color="text" display="block">Research analysis</MDTypography> : null}
                     </MDBox>
-                    <MDBox pb={2} px={2} lineHeight={1.25} sx={{mt: "auto", width: "100%"}}>
-                      <MDButton variant={"contained"} color={"info"} fullWidth disabled={!availability.available} title={availability.reason} onClick={() => {
+                    <MDBox pb={2} px={2} lineHeight={1.25} sx={{position: "absolute", bottom: 0, width: "100%"}}>
+                      <MDButton variant={"contained"} color={"info"} fullWidth onClick={() => {
                         navigate(subreport.route.replace(":participant_uid", participant_uid), {replace: false})
                       }}>
                         {dictionary.ParticipantOverview.ParticipantInformation.View[language]}
                       </MDButton>
-                      {!availability.available && availability.setup && !user.ReadOnly ? (
-                        <MDButton variant="text" color="info" fullWidth onClick={() => navigate(subreport.route.replace(":participant_uid", participant_uid))}>
-                          Connection / import setup
-                        </MDButton>
-                      ) : null}
                     </MDBox>
                   </Card>
                 </Grid>

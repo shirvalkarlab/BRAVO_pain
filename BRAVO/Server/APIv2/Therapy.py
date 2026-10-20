@@ -1,4 +1,3 @@
-from modules.ReportCache import cached_report
 """"""
 """
 =========================================================
@@ -44,7 +43,6 @@ class QueryTherapyHistory(RestViews.APIView):
     permission_classes = [IsAuthenticated]
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
-    @cached_report
     def post(self, request):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType"]):
             return Response(status=400, data={"message": "Malformed Input"})

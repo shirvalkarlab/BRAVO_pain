@@ -1,7 +1,7 @@
 """Track A step 7: how stimulation current moves band power, on every band, as a table Stim
 Optimizer can read.
 
-WHERE THE NUMBERS COME FROM. The three-source comparison already finds every run of rising current
+WHERE THE NUMBERS COME FROM. The three-source comparison already finds every run of stepped current
 on one side in the device's own current record, cuts the voltage trace into three second pieces,
 and averages the settled pieces before each next increase into one band power per setting, at
 every band centre on the tile grid (`three_source_response.build_for_participant`). That panel is
@@ -13,13 +13,12 @@ WHAT IS COMPUTED PER RUN AND BAND, and why each column is there.
 * The number and range of currents actually tested, and how many pieces of recording stood
   behind each. The approved plan asks for these because the eight things that must never be
   claimed begin with concluding that a band does not respond from a narrow range of currents.
-* A straight-line slope of the logarithm of band power on current, with its standard error and
-  p-value from that one run's settings. The standard error is the honest statement of the smallest
+* A straight-line slope of band power on current, in device units per mA (decision 202; on the
+  logarithm until 2026-09-19), with its standard error and p-value from that one run's settings. The standard error is the honest statement of the smallest
   slope this run could have shown; a slope of about twice it would have been visible.
 * Curvature, from `within_visit.amplitude_response_shape`: whether the relationship rises and then
   falls, where the peak sits, and how much more a curve explains than a straight line. This is not
-  optional. A rise-then-fall response exists in this record (25 to 28 Hz on 2026-08-18, peaking
-  near 2.1 mA) and a straight-line fit reads it as no response.
+  optional: a rise-then-fall response can appear flat in a straight-line fit.
 * The fold change from the lowest to the highest current, so a reader sees the size of the
   movement in the device's own units, not only whether a line through it is significant.
 * Whether the band sits on a folded stimulation harmonic, reported and not acted on, and whether
@@ -43,7 +42,7 @@ import pandas as pd
 KIND = "amplitude_effect_by_band"
 from . import post_ramp as _post_ramp
 
-RULE_VERSION = "v3_per_run_any_held_side_post_ramp_margin_" + _post_ramp.version_tag()   # v3: decision 197   # v2: the margin, on or off (2026-09-12)
+RULE_VERSION = "v5_slope_on_raw_device_power_both_legs_post_ramp_margin_tablet_clock_" + _post_ramp.version_tag()   # v4: decision 202 (the slope in device units, not log)   # v3: decision 197   # v2: the margin, on or off (2026-09-12)
 
 #: The source panel that feeds the table: the calibrated voltage-trace route, which covers every
 #: band. The device's own band power covers one band and its own spectrum is empty during ladders.
@@ -57,13 +56,6 @@ MIN_POINTS_SLOPE = 3
 MIN_POINTS_CURVATURE = 8
 
 
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
-
 def _f(v):
     try:
         x = float(v)
@@ -72,19 +64,21 @@ def _f(v):
     return x if np.isfinite(x) else np.nan
 
 
-def _slope(x, y_log):
-    """Straight line of log power on current: slope, intercept, standard error, p, r squared."""
+def _slope(x, y):
+    """Straight line of band power on current, in DEVICE UNITS per mA: slope, intercept, standard
+    error, p, r squared. Fitted on the logarithm of power until 2026-09-19 (decision 202; the PI's
+    rule is that log power enters no calculation)."""
     from scipy import stats
     if x.size < MIN_POINTS_SLOPE or np.unique(x).size < 2:
-        return dict(slope_log_per_mA=np.nan, slope_intercept=np.nan, slope_stderr=np.nan,
-                    slope_p=np.nan, r2_linear=np.nan, log_power_residual_sd=np.nan)
-    r = stats.linregress(x, y_log)
-    resid = y_log - (r.intercept + r.slope * x)
+        return dict(slope_per_mA=np.nan, slope_intercept=np.nan, slope_stderr=np.nan,
+                    slope_p=np.nan, r2_linear=np.nan, power_residual_sd=np.nan)
+    r = stats.linregress(x, y)
+    resid = y - (r.intercept + r.slope * x)
     dof = x.size - 2
-    return dict(slope_log_per_mA=float(r.slope), slope_intercept=float(r.intercept),
+    return dict(slope_per_mA=float(r.slope), slope_intercept=float(r.intercept),
                 slope_stderr=float(r.stderr), slope_p=float(r.pvalue),
                 r2_linear=float(r.rvalue ** 2),
-                log_power_residual_sd=(float(np.sqrt(np.sum(resid ** 2) / dof)) if dof > 0
+                power_residual_sd=(float(np.sqrt(np.sum(resid ** 2) / dof)) if dof > 0
                                        else np.nan))
 
 
@@ -141,7 +135,7 @@ def _raw_pairs_for_band(comparison, band_center_hz):
 def rows_for_comparison(comparison, *, checked_lo_hz, checked_hi_hz, band_half_hz,
                         min_points_curvature=MIN_POINTS_CURVATURE):
     """One row per band centre for one run. Empty when the voltage-trace panel has nothing."""
-    from modules.StimOptimizer.routines import within_visit
+    from StimOptimizer.routines import within_visit
     panel, centres, currents, P = _panel_grid(comparison)
     if panel is None:
         return []
@@ -179,10 +173,10 @@ def rows_for_comparison(comparison, *, checked_lo_hz, checked_hi_hz, band_half_h
         }
         row["fold_max_over_min"] = (row["power_at_max_current"] / row["power_at_min_current"]
                                     if n and row["power_at_min_current"] > 0 else np.nan)
-        row.update(_slope(x, np.log(yy)) if n else _slope(np.empty(0), np.empty(0)))
-        row["smallest_detectable_slope_log_per_mA"] = (
+        row.update(_slope(x, yy) if n else _slope(np.empty(0), np.empty(0)))
+        row["smallest_detectable_slope_per_mA"] = (
             2.0 * row["slope_stderr"] if np.isfinite(row["slope_stderr"]) else np.nan)
-        row["direction"] = _direction(row["slope_log_per_mA"], row["slope_p"])
+        row["direction"] = _direction(row["slope_per_mA"], row["slope_p"])
         # curvature, on the settled powers themselves, as the routine defines it
         if n >= 3:
             shape = within_visit.amplitude_response_shape(x, yy, min_points=min_points_curvature)
@@ -225,7 +219,7 @@ def pooled_shape_for_band(build, band_center_hz, sensing_contact, *, min_points=
     same dict shape as `amplitude_response_shape_pooled`, with a "not assessed" verdict and NaN
     fields when no matching comparison has a usable panel for this centre.
     """
-    from modules.StimOptimizer.routines import within_visit
+    from StimOptimizer.routines import within_visit
     contact = str(sensing_contact)
     xs, ys, vs = [], [], []
     for comp in (build or {}).get("comparisons", []) or []:
@@ -288,9 +282,17 @@ def table_from_build(build, *, checked_lo_hz, checked_hi_hz, band_half_hz,
     return pd.DataFrame(rows).reset_index(drop=True)
 
 
-# Participant-specific provenance and examples are maintained outside source control.
+#: The pooled within-visit table: ONE row per (sensing contact, band centre), holding the
+#: dose-response direction pooled across every stimulation-current ladder this participant has.
+#: A DERIVED kind — it must be written with `writer=` and `provenance=` (CLAUDE.md §7 rule 6).
+#:
+#: WHY IT IS STORED RATHER THAN COMPUTED ON THE PAGE. `pooled_shape_for_band` needs EVERY run, and
+#: `adapter.report_for_participant` builds only the runs the page draws once the amplitude-effect
+#: and ground-truth entries exist — which is the steady state. Pooling over that slice defeats
+#: decision 55/56, whose whole point is pooling across visits. Storing the table computed from the
+#: full build keeps the answer independent of which runs happened to be cached for display.
 POOLED_KIND = "within_visit_pooled_shape"
-POOLED_RULE_VERSION = "v5_pooled_shape_per_run_slopes_post_ramp_margin_" + _post_ramp.version_tag()   # v5: decision 200 (per-run slopes)   # v4: decision 197   # v3: the margin, on or off (2026-09-12)
+POOLED_RULE_VERSION = "v6_pooled_shape_per_run_slopes_both_legs_post_ramp_margin_tablet_clock_" + _post_ramp.version_tag()   # v5: decision 200 (per-run slopes)   # v4: decision 197   # v3: the margin, on or off (2026-09-12)
 
 #: The fields carried per row. `post_peak` is deliberately absent: it is a nested structure rather
 #: than a scalar, no consumer reads it, and a table is the wrong shape to carry it in.
@@ -387,6 +389,3 @@ def count_matches(table, build):
                 if not ((expect == have) or (math.isnan(expect) and math.isnan(have))):
                     differ += 1
     return compared, differ
-
-
-# Retained active Aditya interfaces.

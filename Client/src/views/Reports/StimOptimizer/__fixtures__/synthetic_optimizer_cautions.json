@@ -1,0 +1,1062 @@
+{
+  "_fixture_provenance": {
+    "kind": "independently-authored-synthetic",
+    "purpose": "Frontend display-contract testing only; not measured participant data or scientific validation."
+  },
+  "available": true,
+  "design_matrix": {
+    "n_epochs": 16,
+    "n_reports": 32
+  },
+  "washin_min": 5,
+  "arms": {},
+  "in_force_by_side": {
+    "Left": {
+      "hemisphere": "Left",
+      "rate_hz": 55,
+      "pulse_width_us": 60,
+      "amplitude_mA": 3,
+      "display_short": "L C+2-"
+    },
+    "Right": {
+      "hemisphere": "Right",
+      "rate_hz": 55,
+      "pulse_width_us": 160,
+      "amplitude_mA": 2.5,
+      "display_short": "R C+2-"
+    }
+  },
+  "closed_loop": {
+    "available": true,
+    "ready": false,
+    "n_cells_screened": 3,
+    "n_cells_deployable": 0,
+    "responding_cells": [
+      {
+        "channel": "ONE_THREE_LEFT",
+        "display_short": "L 1\u207b3\u207a",
+        "hemisphere": "Left",
+        "rate_hz": 55,
+        "n_bands": 3,
+        "n_qualifying": 0,
+        "n_responding": 1,
+        "n_era_negative_significant": 1,
+        "n_pain_positive": 0,
+        "qualifying_centers_hz": [],
+        "deployable": false,
+        "median_separation_d": 0.2,
+        "blocking_reasons": "Synthetic missing pain support"
+      },
+      {
+        "channel": "ZERO_THREE_RIGHT",
+        "display_short": "R 0\u207b3\u207a",
+        "hemisphere": "Right",
+        "rate_hz": 55,
+        "n_bands": 3,
+        "n_qualifying": 0,
+        "n_responding": 1,
+        "n_era_negative_significant": 1,
+        "n_pain_positive": 0,
+        "qualifying_centers_hz": [],
+        "deployable": false,
+        "median_separation_d": 0.2,
+        "blocking_reasons": "Synthetic missing pain support"
+      },
+      {
+        "channel": "ZERO_TWO_LEFT",
+        "display_short": "L 0\u207b2\u207a",
+        "hemisphere": "Left",
+        "rate_hz": 55,
+        "n_bands": 3,
+        "n_qualifying": 0,
+        "n_responding": 1,
+        "n_era_negative_significant": 1,
+        "n_pain_positive": 0,
+        "qualifying_centers_hz": [],
+        "deployable": false,
+        "median_separation_d": 0.2,
+        "blocking_reasons": "Synthetic missing pain support"
+      }
+    ],
+    "pain_relationship": {
+      "available": true,
+      "score": "nrs",
+      "score_label": "NRS (0\u201310)",
+      "by_channel": {}
+    },
+    "sensing_rule": {
+      "sentence": "Synthetic device rule allows L 1\u207b3\u207a and R 0\u207b3\u207a; neither has a usable band.",
+      "by_side": {
+        "Left": {
+          "rule_applied": true,
+          "allowed_channel": "ONE_THREE_LEFT",
+          "allowed_display": "L 1\u207b3\u207a",
+          "n_usable_on_allowed_pair": 0
+        },
+        "Right": {
+          "rule_applied": true,
+          "allowed_channel": "ZERO_THREE_RIGHT",
+          "allowed_display": "R 0\u207b3\u207a",
+          "n_usable_on_allowed_pair": 0
+        }
+      }
+    }
+  },
+  "two_stage": {
+    "available": true,
+    "stage1": {
+      "strata": [
+        {
+          "hemisphere": "Left",
+          "pw_us": 60,
+          "pw_us_left": 60,
+          "pw_us_right": 160,
+          "joint_stratum_key": "60_160",
+          "gain": 0.2,
+          "sd_of_difference": 0.8,
+          "optimum_resolved": false,
+          "opt_rate_hz": 55,
+          "opt_amp_mA": 2,
+          "opt_posterior_mean": -0.2,
+          "stop": false,
+          "stop_binding": "not assessable: no history",
+          "queue_size": 6,
+          "n_epochs": 8,
+          "opt_amp_mA_left": 2,
+          "opt_amp_mA_right": 1.5,
+          "n_reports": 16
+        },
+        {
+          "hemisphere": "Right",
+          "pw_us": 160,
+          "pw_us_left": 60,
+          "pw_us_right": 160,
+          "joint_stratum_key": "60_160",
+          "gain": 0.2,
+          "sd_of_difference": 0.8,
+          "optimum_resolved": false,
+          "opt_rate_hz": 55,
+          "opt_amp_mA": 2,
+          "opt_posterior_mean": -0.2,
+          "stop": false,
+          "stop_binding": "not assessable: no history",
+          "queue_size": 6,
+          "n_epochs": 8,
+          "opt_amp_mA_left": 2,
+          "opt_amp_mA_right": 1.5,
+          "n_reports": 16
+        }
+      ],
+      "rate_strata": [
+        {
+          "pw_us_left": 60,
+          "pw_us_right": 160,
+          "rate_hz": 55,
+          "fitted": true,
+          "resolved": false,
+          "n_epochs": 8,
+          "n_reports": 16,
+          "amp_mA_left": 3.5,
+          "amp_mA_right": 3.5,
+          "flat_passes": false,
+          "flat_range": 0.2,
+          "coverage_passes": false,
+          "coverage_n_pairs": 2,
+          "coverage_span_left_mA": 2,
+          "coverage_span_right_mA": 2,
+          "surface": {
+            "amps_mA": [
+              0,
+              2,
+              4
+            ],
+            "mu": [
+              [
+                0,
+                -1,
+                -2
+              ],
+              [
+                1,
+                0,
+                -1
+              ],
+              [
+                2,
+                1,
+                0
+              ]
+            ],
+            "safe": [
+              [
+                true,
+                true,
+                true
+              ],
+              [
+                true,
+                true,
+                true
+              ],
+              [
+                true,
+                true,
+                false
+              ]
+            ],
+            "pain_reference": 4,
+            "pain_item": "left_leg_vas",
+            "points": [
+              {
+                "amp_left_mA": 0,
+                "amp_right_mA": 2,
+                "epoch": 1,
+                "n_reports": 2
+              },
+              {
+                "amp_left_mA": 2,
+                "amp_right_mA": 4,
+                "epoch": 2,
+                "n_reports": 2
+              }
+            ]
+          },
+          "coverage_gap": {
+            "n_pairs_missing": 2,
+            "cheapest_way": "Add two independently specified synthetic current pairs"
+          },
+          "calibration": {
+            "diagnosis": {
+              "verdict": "moves between blocks of time",
+              "n_blocks": 3
+            }
+          }
+        },
+        {
+          "pw_us_left": 140,
+          "pw_us_right": 180,
+          "rate_hz": 110,
+          "fitted": true,
+          "resolved": false,
+          "n_epochs": 8,
+          "n_reports": 16,
+          "amp_mA_left": 3.5,
+          "amp_mA_right": 3.5,
+          "flat_passes": false,
+          "flat_range": 0.2,
+          "coverage_passes": false,
+          "coverage_n_pairs": 2,
+          "coverage_span_left_mA": 2,
+          "coverage_span_right_mA": 2,
+          "surface": {
+            "amps_mA": [
+              0,
+              2,
+              4
+            ],
+            "mu": [
+              [
+                0,
+                -1,
+                -2
+              ],
+              [
+                1,
+                0,
+                -1
+              ],
+              [
+                2,
+                1,
+                0
+              ]
+            ],
+            "safe": [
+              [
+                true,
+                true,
+                true
+              ],
+              [
+                true,
+                true,
+                true
+              ],
+              [
+                true,
+                true,
+                false
+              ]
+            ],
+            "pain_reference": 4,
+            "pain_item": "left_leg_vas",
+            "points": [
+              {
+                "amp_left_mA": 0,
+                "amp_right_mA": 2,
+                "epoch": 1,
+                "n_reports": 2
+              },
+              {
+                "amp_left_mA": 2,
+                "amp_right_mA": 4,
+                "epoch": 2,
+                "n_reports": 2
+              }
+            ]
+          }
+        },
+        {
+          "pw_us_left": 60,
+          "pw_us_right": 160,
+          "rate_hz": 165,
+          "fitted": false,
+          "n_epochs": 2,
+          "n_reports": 4,
+          "reason": "too few stretches",
+          "source": "rate_strata"
+        }
+      ],
+      "rate_strata_clinic": [
+        {
+          "pw_us_left": 60,
+          "pw_us_right": 160,
+          "rate_hz": 55,
+          "fitted": true,
+          "resolved": false,
+          "n_epochs": 8,
+          "n_reports": 16,
+          "amp_mA_left": 3.5,
+          "amp_mA_right": 3.5,
+          "flat_passes": false,
+          "flat_range": 0.2,
+          "coverage_passes": false,
+          "coverage_n_pairs": 2,
+          "coverage_span_left_mA": 2,
+          "coverage_span_right_mA": 2,
+          "surface": {
+            "amps_mA": [
+              0,
+              2,
+              4
+            ],
+            "mu": [
+              [
+                0,
+                -1,
+                -2
+              ],
+              [
+                1,
+                0,
+                -1
+              ],
+              [
+                2,
+                1,
+                0
+              ]
+            ],
+            "safe": [
+              [
+                true,
+                true,
+                true
+              ],
+              [
+                true,
+                true,
+                true
+              ],
+              [
+                true,
+                true,
+                false
+              ]
+            ],
+            "pain_reference": 4,
+            "pain_item": "left_leg_vas",
+            "points": [
+              {
+                "amp_left_mA": 0,
+                "amp_right_mA": 2,
+                "epoch": 1,
+                "n_reports": 2
+              },
+              {
+                "amp_left_mA": 2,
+                "amp_right_mA": 4,
+                "epoch": 2,
+                "n_reports": 2
+              }
+            ]
+          }
+        },
+        {
+          "pw_us_left": 100,
+          "pw_us_right": 100,
+          "rate_hz": 110,
+          "fitted": true,
+          "resolved": false,
+          "n_epochs": 8,
+          "n_reports": 16,
+          "amp_mA_left": 3.5,
+          "amp_mA_right": 3.5,
+          "flat_passes": false,
+          "flat_range": 0.2,
+          "coverage_passes": false,
+          "coverage_n_pairs": 2,
+          "coverage_span_left_mA": 2,
+          "coverage_span_right_mA": 2,
+          "surface": {
+            "amps_mA": [
+              0,
+              2,
+              4
+            ],
+            "mu": [
+              [
+                0,
+                -1,
+                -2
+              ],
+              [
+                1,
+                0,
+                -1
+              ],
+              [
+                2,
+                1,
+                0
+              ]
+            ],
+            "safe": [
+              [
+                true,
+                true,
+                true
+              ],
+              [
+                true,
+                true,
+                true
+              ],
+              [
+                true,
+                true,
+                false
+              ]
+            ],
+            "pain_reference": 4,
+            "pain_item": "left_leg_vas",
+            "points": [
+              {
+                "amp_left_mA": 0,
+                "amp_right_mA": 2,
+                "epoch": 1,
+                "n_reports": 2
+              },
+              {
+                "amp_left_mA": 2,
+                "amp_right_mA": 4,
+                "epoch": 2,
+                "n_reports": 2
+              }
+            ]
+          }
+        },
+        {
+          "pw_us_left": 60,
+          "pw_us_right": 160,
+          "rate_hz": 165,
+          "fitted": false,
+          "n_epochs": 2,
+          "n_reports": 4,
+          "reason": "too few stretches",
+          "source": "rate_strata_clinic"
+        }
+      ],
+      "clinic_stream": {
+        "available": true,
+        "note": "Synthetic clinic stream"
+      },
+      "frozen_configuration": {
+        "settings": [
+          {
+            "hemisphere": "Left",
+            "pulse_width_us": 60,
+            "rate_hz": 55,
+            "amplitude_preferred_mA": null,
+            "resolved": false,
+            "rate_resolved": false,
+            "pulse_width_resolved": null,
+            "gain": 0.2,
+            "sd_of_difference": 0.8,
+            "detail": {
+              "best_pw_us_left": 60,
+              "best_pw_us_right": 160
+            }
+          },
+          {
+            "hemisphere": "Right",
+            "pulse_width_us": 160,
+            "rate_hz": 55,
+            "amplitude_preferred_mA": null,
+            "resolved": false,
+            "rate_resolved": false,
+            "pulse_width_resolved": null,
+            "gain": 0.2,
+            "sd_of_difference": 0.8,
+            "detail": {
+              "best_pw_us_left": 60,
+              "best_pw_us_right": 160
+            }
+          }
+        ],
+        "in_force_by_side": {
+          "Left": {
+            "hemisphere": "Left",
+            "rate_hz": 55,
+            "pulse_width_us": 60,
+            "amplitude_mA": 3,
+            "display_short": "L C+2-"
+          },
+          "Right": {
+            "hemisphere": "Right",
+            "rate_hz": 55,
+            "pulse_width_us": 160,
+            "amplitude_mA": 2.5,
+            "display_short": "R C+2-"
+          }
+        },
+        "adaptive_envelope": {
+          "min_rate_hz": 55,
+          "exclusions": {},
+          "n_exclusions": 0
+        }
+      },
+      "queue": [
+        {
+          "rank": 1,
+          "rate_hz": 55,
+          "amp_mA_left": 0.0,
+          "amp_mA_right": 1
+        },
+        {
+          "rank": 2,
+          "rate_hz": 55,
+          "amp_mA_left": 0.5,
+          "amp_mA_right": 1
+        },
+        {
+          "rank": 3,
+          "rate_hz": 55,
+          "amp_mA_left": 1.0,
+          "amp_mA_right": 1
+        }
+      ]
+    },
+    "gate": {
+      "passed": false,
+      "n_conditions": 4,
+      "verdict": "Stage 2 MUST NOT START: 2 of 4 conditions block",
+      "failed": [
+        "openloop_choice_resolved"
+      ],
+      "not_assessed": [
+        "amplitude_limits_inside_envelope_and_under_ceiling"
+      ],
+      "conditions": [
+        {
+          "name": "rate_at_or_above_adaptive_minimum",
+          "passed": true,
+          "verdict": "PASS",
+          "evidence": {
+            "min_rate_hz": 55
+          },
+          "detail": "Rate meets the device minimum."
+        },
+        {
+          "name": "openloop_choice_resolved",
+          "passed": false,
+          "verdict": "FAIL",
+          "evidence": {
+            "per_hemisphere": {
+              "Left": {
+                "pw_resolved": null
+              },
+              "Right": {
+                "pw_resolved": null
+              }
+            }
+          },
+          "detail": "No setting is proven better."
+        },
+        {
+          "name": "adaptive_band_passes_lfp_response",
+          "passed": null,
+          "verdict": "NOT ASSESSED",
+          "evidence": {},
+          "detail": "Synthetic band response passes."
+        },
+        {
+          "name": "amplitude_limits_inside_envelope_and_under_ceiling",
+          "passed": null,
+          "verdict": "NOT ASSESSED",
+          "evidence": {
+            "history_above_ceiling": {
+              "Left": {
+                "delivered_max_mA": 4.9,
+                "ceiling_mA": 4.5
+              }
+            },
+            "ceiling_by_side": {
+              "Left": {
+                "ceiling_mA": 4.5,
+                "provenance": "synthetic test ceiling"
+              },
+              "Right": {
+                "ceiling_mA": 4.5,
+                "provenance": "synthetic test ceiling"
+              }
+            },
+            "side_effect_vs_current": {
+              "n_scored_stim_on": 8,
+              "sentence": "8 scored clinic steps; Spearman rho = 0.25, p = 0.400"
+            }
+          },
+          "detail": "No limits proposed."
+        }
+      ]
+    }
+  },
+  "titration_plan": {
+    "_fixture_provenance": {
+      "kind": "independently-authored-synthetic",
+      "purpose": "Frontend display-contract testing only; not measured participant data or scientific validation."
+    },
+    "available": true,
+    "sides": {
+      "Left": {
+        "side": "Left",
+        "rate_hz": 55,
+        "pulse_width_us": 60,
+        "ceiling_mA": 4.5,
+        "held_other_side": {
+          "current_mA": 2.5,
+          "above_ceiling": false
+        },
+        "ladder": {
+          "compact": "0 \u2192 0.5 \u2192 1.0 \u2192 0.5 \u2192 0 mA",
+          "steps_mA": [
+            0,
+            0.5,
+            1,
+            0.5,
+            0
+          ],
+          "n_steps": 5,
+          "n_distinct_currents": 3
+        },
+        "bands": {
+          "centres_hz": [
+            10.5,
+            20.5,
+            27.5
+          ],
+          "avoid_hz": [
+            27.5
+          ],
+          "avoid_reasons": {
+            "27.5": "synthetic harmonic warning"
+          },
+          "n_clear": 2,
+          "n_avoid": 1,
+          "harmonics_hz": {
+            "half_rate": 27.5
+          },
+          "guard_hz": 2.5,
+          "half_width_hz": 2.5
+        },
+        "hold": {
+          "seconds": 60
+        },
+        "sensing_contact": {
+          "display_short": "L 1\u207b3\u207a",
+          "rate_hz": 55,
+          "n_qualifying": 0,
+          "n_bands": 3
+        },
+        "conditions": [
+          "Record a rating at each step."
+        ],
+        "yield": {
+          "record_today": {
+            "note": "Synthetic example: two rated steps."
+          },
+          "sentence": "Synthetic example session."
+        }
+      },
+      "Right": {
+        "side": "Right",
+        "rate_hz": 55,
+        "pulse_width_us": 160,
+        "ceiling_mA": 4.5,
+        "held_other_side": {
+          "current_mA": 3,
+          "above_ceiling": false
+        },
+        "ladder": {
+          "compact": "0 \u2192 0.5 \u2192 1.0 \u2192 0.5 \u2192 0 mA",
+          "steps_mA": [
+            0,
+            0.5,
+            1,
+            0.5,
+            0
+          ],
+          "n_steps": 5,
+          "n_distinct_currents": 3
+        },
+        "bands": {
+          "centres_hz": [
+            10.5,
+            20.5,
+            27.5
+          ],
+          "avoid_hz": [
+            27.5
+          ],
+          "avoid_reasons": {
+            "27.5": "synthetic harmonic warning"
+          },
+          "n_clear": 2,
+          "n_avoid": 1,
+          "harmonics_hz": {
+            "half_rate": 27.5
+          },
+          "guard_hz": 2.5,
+          "half_width_hz": 2.5
+        },
+        "hold": {
+          "seconds": 60
+        },
+        "sensing_contact": {
+          "display_short": "R 1\u207b3\u207a",
+          "rate_hz": 55,
+          "n_qualifying": 0,
+          "n_bands": 3
+        },
+        "conditions": [
+          "Record a rating at each step."
+        ],
+        "yield": {
+          "record_today": {
+            "note": "Synthetic example: two rated steps."
+          },
+          "sentence": "Synthetic example session."
+        }
+      }
+    },
+    "step_timing": {
+      "ramp_s": 30,
+      "test_s": 60,
+      "total_s": 90
+    },
+    "session_time": {
+      "total_minutes": 18
+    },
+    "sheet_columns": [
+      "Contacts",
+      "Amp (mA)",
+      "Rate (Hz)",
+      "Notes"
+    ],
+    "sheet_rows": [
+      {
+        "block": "left_ladder",
+        "row_kind": "ramp",
+        "step": 1,
+        "Contacts": "left",
+        "Amp (mA)": 0,
+        "Rate (Hz)": 55
+      },
+      {
+        "block": "left_ladder",
+        "row_kind": "ramp",
+        "step": 2,
+        "Contacts": "left",
+        "Amp (mA)": 0.5,
+        "Rate (Hz)": 55
+      },
+      {
+        "block": "left_ladder",
+        "row_kind": "ramp",
+        "step": 3,
+        "Contacts": "left",
+        "Amp (mA)": 1,
+        "Rate (Hz)": 55
+      },
+      {
+        "block": "left_ladder",
+        "row_kind": "ramp",
+        "step": 4,
+        "Contacts": "left",
+        "Amp (mA)": 0.5,
+        "Rate (Hz)": 55
+      },
+      {
+        "block": "left_ladder",
+        "row_kind": "ramp",
+        "step": 5,
+        "Contacts": "left",
+        "Amp (mA)": 0,
+        "Rate (Hz)": 55
+      },
+      {
+        "block": "right_ladder",
+        "row_kind": "ramp",
+        "step": 1,
+        "Contacts": "right",
+        "Amp (mA)": 0,
+        "Rate (Hz)": 55
+      },
+      {
+        "block": "right_ladder",
+        "row_kind": "ramp",
+        "step": 2,
+        "Contacts": "right",
+        "Amp (mA)": 0.5,
+        "Rate (Hz)": 55
+      },
+      {
+        "block": "right_ladder",
+        "row_kind": "ramp",
+        "step": 3,
+        "Contacts": "right",
+        "Amp (mA)": 1,
+        "Rate (Hz)": 55
+      },
+      {
+        "block": "right_ladder",
+        "row_kind": "ramp",
+        "step": 4,
+        "Contacts": "right",
+        "Amp (mA)": 0.5,
+        "Rate (Hz)": 55
+      },
+      {
+        "block": "right_ladder",
+        "row_kind": "ramp",
+        "step": 5,
+        "Contacts": "right",
+        "Amp (mA)": 0,
+        "Rate (Hz)": 55
+      },
+      {
+        "block": "exploratory_left",
+        "row_kind": "ramp",
+        "step": 1,
+        "Contacts": "L C+1-2- / R C+1-2-",
+        "Notes": ""
+      },
+      {
+        "block": "exploratory_left",
+        "row_kind": "test",
+        "step": 1,
+        "Contacts": "L C+1-2- / R C+1-2-",
+        "Notes": ""
+      },
+      {
+        "block": "exploratory_left",
+        "row_kind": "ramp",
+        "step": 2,
+        "Contacts": "L C+1-2- / R C+1-2-",
+        "Notes": ""
+      },
+      {
+        "block": "exploratory_left",
+        "row_kind": "test",
+        "step": 2,
+        "Contacts": "L C+1-2- / R C+1-2-",
+        "Notes": ""
+      },
+      {
+        "block": "exploratory_left",
+        "row_kind": "ramp",
+        "step": 3,
+        "Contacts": "L C+1-2- / R C+1-2-",
+        "Notes": ""
+      },
+      {
+        "block": "exploratory_left",
+        "row_kind": "test",
+        "step": 3,
+        "Contacts": "L C+1-2- / R C+1-2-",
+        "Notes": ""
+      },
+      {
+        "block": "exploratory_left",
+        "row_kind": "ramp",
+        "step": 4,
+        "Contacts": "L C+1-2- / R C+1-2-",
+        "Notes": ""
+      },
+      {
+        "block": "exploratory_left",
+        "row_kind": "test",
+        "step": 4,
+        "Contacts": "L C+1-2- / R C+1-2-",
+        "Notes": ""
+      },
+      {
+        "block": "exploratory_left",
+        "row_kind": "ramp",
+        "step": 5,
+        "Contacts": "L C+1-2- / R C+1-2-",
+        "Notes": ""
+      },
+      {
+        "block": "exploratory_left",
+        "row_kind": "test",
+        "step": 5,
+        "Contacts": "L C+1-2- / R C+1-2-",
+        "Notes": ""
+      },
+      {
+        "block": "exploratory_left",
+        "row_kind": "hold",
+        "step": 1,
+        "Contacts": "L C+1-2- / R C+1-2-",
+        "Notes": "hold 1 of 3, stimulation off"
+      },
+      {
+        "block": "exploratory_left",
+        "row_kind": "hold",
+        "step": 2,
+        "Contacts": "L C+1-2- / R C+1-2-",
+        "Notes": "hold 2 of 3, stimulation on"
+      },
+      {
+        "block": "exploratory_left",
+        "row_kind": "hold",
+        "step": 3,
+        "Contacts": "L C+1-2- / R C+1-2-",
+        "Notes": "hold 3 of 3, stimulation off"
+      }
+    ],
+    "proposed": {
+      "Left": {
+        "side": "Left",
+        "stimulation": {
+          "contacts_short": "L C+1-2-",
+          "differs_from_in_force": true,
+          "in_force_rings": [
+            2
+          ]
+        },
+        "sensing_pair": {
+          "display_short": "L 0\u207b3\u207a",
+          "why": "contacts it flanks (1, 2) stimulate together"
+        },
+        "contact": {
+          "n_qualifying": 2,
+          "n_bands": 3,
+          "rate_hz": 125,
+          "n_responding": 0
+        },
+        "rate_hz": 125,
+        "rate_in_force_hz": 55,
+        "pulse_width_us": 60,
+        "ceiling_mA": 1,
+        "bands": {
+          "watch_hz": [
+            10.5,
+            20.5
+          ]
+        },
+        "first_exposure": {
+          "ever_powered": false,
+          "sentence": "Synthetic example at 0.0 mA only: the full rings have never carried current; L C+1a-2a- at 0.5 mA for 12 h.",
+          "stop_rule": "Stop at a side-effect score of 2 or more."
+        },
+        "purpose": "Two answers from one visit: sensing response and acute pain.",
+        "ladder": {
+          "compact": "0 \u2192 0.5 \u2192 1.0 \u2192 0.5 \u2192 0 mA",
+          "steps_mA": [
+            0,
+            0.5,
+            1,
+            0.5,
+            0
+          ],
+          "n_steps": 5,
+          "n_distinct_currents": 3
+        },
+        "acute_pain_holds": {
+          "holds": [
+            {
+              "state": "off",
+              "current_mA": 0
+            },
+            {
+              "state": "on",
+              "current_mA": 1
+            },
+            {
+              "state": "off",
+              "current_mA": 0
+            }
+          ],
+          "minutes_each": 3,
+          "rating_every_minutes": 1
+        },
+        "held_other_side": {
+          "current_mA": 2.5
+        },
+        "session_time": {
+          "total_minutes": 21
+        }
+      }
+    }
+  },
+  "current_map_schedule": {
+    "available": true,
+    "rate_hz": 55,
+    "pulse_width_us_left": 60,
+    "pulse_width_us_right": 160,
+    "ceiling_left_mA": 4.5,
+    "ceiling_right_mA": 4.5,
+    "total_days": 4,
+    "steps": [
+      {
+        "step": 1,
+        "amp_left_mA": 1,
+        "amp_right_mA": 2,
+        "planned_days": 2,
+        "target_reports": 4,
+        "why": "Synthetic lower-current step",
+        "in_safe_set": true
+      },
+      {
+        "step": 2,
+        "amp_left_mA": 2,
+        "amp_right_mA": 2,
+        "planned_days": 2,
+        "target_reports": 4,
+        "why": "Synthetic comparison step",
+        "in_safe_set": true
+      }
+    ],
+    "in_force": {
+      "above_ceiling": false,
+      "amp_left_mA": 3,
+      "amp_right_mA": 2.5
+    }
+  },
+  "cache_status": {
+    "available": true,
+    "computed_at": "2000-01-01T00:00:00Z"
+  }
+}

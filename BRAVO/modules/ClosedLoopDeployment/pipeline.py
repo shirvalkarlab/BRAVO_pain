@@ -18,14 +18,7 @@ from __future__ import annotations
 import numpy as np
 
 from . import adapter, edges as E, consistency as C, authority as A
-from .types import DeploymentReport, EdgeEstimate
-
-
-
-# Aditya canonical compatibility imports/constants.
-
-import pandas as pd
-
+from .types import DeploymentReport
 
 
 def _optional(name):
@@ -41,8 +34,7 @@ def _optional(name):
         return None
 
 
-def _participant_facts(participant_uid, device_facts=None, constraints_module=None,
-                       participant_context=None):
+def _participant_facts(participant_uid, device_facts=None, constraints_module=None):
     """Build the PARTICIPANT dict, routing participant-scoped device facts into it.
 
     A fact one dictionary away from the rule that reads it is invisible, and the symptom is
@@ -53,7 +45,20 @@ def _participant_facts(participant_uid, device_facts=None, constraints_module=No
     taken from the constraint module's own ``PARTICIPANT_KEYS`` rather than a list kept here, so a
     rule that changes which dict it reads cannot silently strand its input again.
     """
-    facts = {**(participant_context or {}), "uid": participant_uid}
+    facts = {"uid": participant_uid}
+    # Programming eligibility is a clinical input, not an application-wide default.
+    try:
+        from StimOptimizer.routines import percept_adaptive as _PA
+        eligibility = _PA.participant_eligibility(participant_uid)
+        for key in ("programming_mode", "indication"):
+            if eligibility.get(key) is not None:
+                facts[key] = eligibility[key]
+    except (ValueError, AttributeError):
+        pass  # Unknown remains unknown; the eligibility rule supplies its blocker.
+    # Actual supplied device facts take priority over historical private evidence.
+    for key in ("programming_mode", "indication"):
+        if (device_facts or {}).get(key) is not None:
+            facts[key] = device_facts[key]
     scoped = set(getattr(constraints_module, "PARTICIPANT_KEYS", {}) or {})
     for k, v in (device_facts or {}).items():
         if k.startswith("_"):
@@ -82,15 +87,23 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None, threshold=None
     (SUPERSEDED 2026-09-12 by the PI's decision, kept here because this project keeps a reversed
     rule on the record rather than deleting it. The paragraph below is the rule in force.)
 
+    A SIGN IS SUPPLIED WHENEVER THE EDGE HAS ONE, RESOLVED OR NOT — PI decision, 2026-09-12.
+    To retain the distinction between a point sign and statistical establishment, each sign
+    travels with a sibling flag,
+    ``power_slope_vs_amplitude_sign_established`` and ``power_slope_vs_pain_sign_established``
+    (the edge's ``statistically_established``: its interval excludes zero -- until 2026-09-13
+    this was the edge's ``resolved``, which the PI's rule of that day, "established means mean
+    only", turned into the point sign itself), and with the edge's interval and p-value
+    (``power_slope_vs_amplitude_ci`` / ``_p``, ``power_slope_vs_pain_ci`` / ``_p``), which D19's
+    observed-values line prints for any sign that is not established.
+
     THE POWER SCALE IS A FACT ABOUT THIS RUN, not an assumption. It is whatever scale the edges were
     actually estimated on, so if a caller asks for the log scale, D11 correctly fails rather than
-    silently reporting the linear scale the device requires."""
+    silently reporting the linear scale the device requires.
+    """
     f = dict(candidate or {})
-    sign_keys = {"power_slope_vs_amplitude_sign", "power_slope_vs_pain_sign"}
-    for key in sign_keys:
-        f.pop(key, None)
     f.setdefault("intent", "adaptive")
-    f["power_scale"] = "linear" if power_scale == "power_linear" else "log"
+    f["power_scale"] = "linear"          # the only scale (D11; decision 202 removed the log columns)
     # One centre frequency and one threshold mode per report, so no pooling occurs by construction.
     f.setdefault("pooled_across_center_or_mode", False)
     # PI decision 2026-09-12: the point sign is supplied whenever the edge has one, and whether it
@@ -117,7 +130,7 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None, threshold=None
     # defaults for the participant. Keys beginning with an underscore are provenance and diagnostics
     # for the interface, not inputs to any predicate, so they are excluded.
     for _k, _v in (device_facts or {}).items():
-        if not _k.startswith("_") and _k not in sign_keys and f.get(_k) is None:
+        if not _k.startswith("_") and f.get(_k) is None:
             f[_k] = _v
     # D26, from the threshold plan this same run placed. Only a plan that actually carries the
     # alert fills it in: a run with no plan (no thresholds could be placed) leaves the key absent,
@@ -126,7 +139,10 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None, threshold=None
         _alert = getattr(threshold, "predicted_recapture_alert", None)
         if _alert is not None and f.get("predicted_recapture_alert") is None:
             f["predicted_recapture_alert"] = bool(_alert)
-        # Participant-specific provenance and examples are maintained outside source control.
+        # The plan's own sentences (each capture verdict that is adverse, not established or not
+        # assessed), so the D26 row can say WHY -- why an alert is predicted, or why none could
+            # be. With no stored pooled slope, authority returns None rather than fabricating a
+            # prediction (decision 139), and the row remains not determinable with its reason.
         _why = [str(w) for w in (getattr(threshold, "warnings", None) or []) if w]
         if _why and f.get("predicted_recapture_alert_reason") is None:
             f["predicted_recapture_alert_reason"] = "; ".join(_why)
@@ -137,9 +153,13 @@ def _facts_for(candidate, e1, e2, power_scale, device_facts=None, threshold=None
 def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro_frame=None,
         candidates=(), washin_s=60.0, amp_limit_ma=5.0, power_scale="power_linear",
         hemisphere="Left", strict=True, n_boot=500, seed=0, device_facts=None,
-        pooled_e1=None, place_thresholds=None, participant_context=None,
-        outcome="nrs", outcome_cluster="report_id", band_width_hz=5.0, include_planning=True):
+        pooled_e1=None, place_thresholds=None, pain_score="nrs", chunk_bounds=None):
     """Build the deployment report for one participant.
+
+    ``pain_score`` (the PI, 2026-09-25 night): the pain-score column the band-to-pain reading (E2)
+    and the current-to-pain reading (E3) are computed on, one of the Biomarkers heat maps' choices
+    (``adapter.PAIN_SCORE_KEYS``). NRS by default, which is what both edges read before the page's
+    dropdown existed. It is named on the manifest.
 
     ``place_thresholds`` (decision 180): a callable ``(rep, candidates) -> (plan, placement)``
     invoked right after the capture rule has placed ``rep.threshold`` and BEFORE the eligibility
@@ -148,16 +168,27 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     (`adapter._place_thresholds_from_record`); ``None`` keeps the capture pair. The placement dict
     is kept on ``rep.threshold_placement``.
 
+    ``chunk_bounds`` (decision 412): `adapter.chunk_bounds_for_candidates`'s output. When given,
+    E2 and the threshold capture pair read the joined table after the 7-MAD-above chunk rule
+    (`adapter.drop_chunks_above_bounds`); E1 always reads the whole table (the PI's choice,
+    2026-10-03). ``None`` applies no rule, as before.
+
     ``psd_frame`` and ``epochs`` are what ``StimOptimizer.adapter.evidence_inputs`` returns. They are
     passed in rather than fetched here so this function stays testable without a database, and so
     the caller controls the expensive spectral assembly.
     """
+    if power_scale != "power_linear":
+        # The joined table carries linear power only (D11; decision 202 removed the log columns),
+        # so a request for any other scale cannot be answered and must not be answered on a look-alike.
+        raise ValueError(f"power_scale must be 'power_linear'; the device thresholds linear band "
+                         f"power and no other scale is computed (got {power_scale!r})")
     rep = DeploymentReport(participant=str(participant_uid))
     # If no separate pain frame was supplied but the design matrix already carries one rating per
     # exposure epoch, use it. Without this E2 silently has no outcome to regress on and reports
     # itself unestimable, which reads like a data problem when it is only a wiring one.
     if pro_frame is None and design_matrix is not None and len(design_matrix):
-        cols = [c for c in ("epoch", outcome) if c in design_matrix.columns]
+        cols = [c for c in dict.fromkeys(("epoch", "nrs", "vas", pain_score))
+                if c in design_matrix.columns]
         if "epoch" in cols and len(cols) > 1:
             pro_frame = design_matrix[cols].copy()
             pro_frame["report_id"] = pro_frame["epoch"].astype(str)
@@ -178,26 +209,29 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
             cen.add(float(cd.get("center_hz")))
         except (TypeError, ValueError, AttributeError):
             pass
+    # Only the first candidate's contact and band are read below (decision 419); the manifest still
+    # states the whole table's size. A candidate naming no contact or band builds the whole table.
+    _c0 = (candidates[0] if candidates and isinstance(candidates[0], dict) else {}) or {}
+    _ch0, _fc0 = _c0.get("channel"), _c0.get("center_hz")
+    try:
+        _fc0 = None if _fc0 is None else float(_fc0)
+    except (TypeError, ValueError):
+        _fc0 = None
     T = adapter.joined_table_cached(psd_frame, epochs, pro_frame=pro_frame,
-                                    centers=tuple(sorted(cen)), width=band_width_hz)
-    if not T.empty:
-        T = T[T.setting_epoch >= 0].copy()
-        if "t_start" in T.columns:
-            starts = pd.to_datetime(T.t_start, utc=True).to_numpy().astype("datetime64[ns]").astype("int64") / 1e9
-            T = T[T.t >= starts + float(washin_s)].copy()
+                                    centers=tuple(sorted(cen)),
+                                    channels=None if (_ch0 is None or _fc0 is None) else (str(_ch0),),
+                                    only_center=None if (_ch0 is None or _fc0 is None) else _fc0)
     rep.manifest = {
         "n_psd_rows": 0 if psd_frame is None else int(len(psd_frame)),
         "n_epochs": 0 if epochs is None else int(len(epochs)),
-        "n_table_rows": int(len(T)),
+        "n_table_rows": int(T.attrs.get("n_rows_all_contacts_bands", len(T))),
         "power_scale": power_scale, "washin_s": float(washin_s),
         "amp_limit_ma": float(amp_limit_ma), "hemisphere": hemisphere,
-        "outcome": outcome, "outcome_cluster": outcome_cluster,
-        "participant_context": dict(participant_context or {}),
-        "scale_disagreement": adapter.scale_disagreement(T),
+        "pain_score": pain_score,
     }
     if T.empty:
         rep.blockers.append("no joined table could be built: the participant has no assembled "
-                            "spectra, or none of them fall inside a known setting epoch")
+                            "TD and PSD band power, or none of them fall inside a known setting epoch")
         return rep
 
     cand = list(candidates) or []
@@ -214,7 +248,7 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     # be evaluated until the edges have been estimated. Checking eligibility first would report D19
     # as "not determinable" on every run, which is the least useful possible answer for the one rule
     # that decides whether the control loop is negative feedback or positive.
-    e1 = E.actuation_edge(T, channel=ch, center_hz=fc, hemisphere=hemisphere, scale=power_scale, n_boot=n_boot, seed=seed)
+    e1 = E.actuation_edge(T, channel=ch, center_hz=fc, hemisphere=hemisphere, scale=power_scale)
     # E1 FROM THE POOLED TITRATION SLOPE when the stored row exists (redesign decision 9, decision
     # 124 in the log, the PI's choice on 2026-09-11): the same row the three-source panel draws, so
     # the triangle and the panel cannot disagree. The historical setting-epoch estimate is kept
@@ -224,29 +258,48 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     # it stays None when no slope is stored so those verdicts say "not assessed" rather than
     # quietly reading the historical setting-epoch edge, which is a different quantity.
     pooled_edge = None
-    # Use the shared edge boundary: strings, booleans and nonfinite values are absent
-    # evidence, even when a persisted row can be coerced to a float.
-    if isinstance(pooled_e1, dict) and EdgeEstimate(
-            "E1", pooled_e1.get("pooled_slope_per_mA"), None, None, 0, "", 0).sign is not None:
+    if pooled_e1 and pooled_e1.get("pooled_slope_per_mA") is not None \
+            and np.isfinite(float(pooled_e1["pooled_slope_per_mA"])):
         rep.edges_historical = {"E1": e1}
         e1 = E.pooled_actuation_edge(pooled_e1, scale=power_scale)
         pooled_edge = e1
-    e2 = E.state_edge(T, channel=ch, center_hz=fc, scale=power_scale,
-                      outcome=outcome, cluster=outcome_cluster, n_boot=n_boot, seed=seed)
+    # E2 IS ALSO READ WITH THE CURRENT IN FORCE TAKEN OUT OF THE BAND POWER (panel D item 4,
+    # 2026-09-22). Every band on this participant's left lead that rises with pain also rests on
+    # the current the stimulator was delivering (decision 232), and this page carried only a
+    # warning about that in words (decision 235). The second reading rides on the edge's `adjusted`
+    # field and is descriptive: it never resolves the edge, selects a band or moves a verdict (the
+    # PI, 2026-09-22, decision 233 answer 2). The column is the one E1 and E3 read on the same
+    # side, so all three edges are about the same stimulator.
+    _e2_amp_col = adapter.canonical_amp_col(hemisphere)
+    if _e2_amp_col not in T.columns:
+        _e2_amp_col = adapter.resolve_setting_column(T.columns, "amp", hemisphere)
+    # THE 7-MAD-ABOVE CHUNK RULE (decision 412) on a copy that only E2 and the capture pair read.
+    T_pain = T
+    if chunk_bounds:
+        T_pain = adapter.drop_chunks_above_bounds(T, chunk_bounds)
+        rep.manifest["chunk_rule"] = dict(T_pain.attrs.get("chunk_rule") or {},
+                                          applies_to=["E2", "threshold capture pair"])
+    e2 = E.state_edge(T_pain, channel=ch, center_hz=fc, outcome=pain_score, scale=power_scale,
+                      adjust_for_column=_e2_amp_col)
     # E3 ON THE ACTUATED SIDE'S CURRENT (review C1). ``therapy_edge`` defaults to the left column;
     # the design matrix carries one amplitude column per side, and the side the loop would drive
     # is the one whose current is regressed on pain.
-    _e3_col = adapter.canonical_amp_col(hemisphere)
+    _e3_col = None
     if design_matrix is not None and hasattr(design_matrix, "columns"):
         _e3_col = (adapter.resolve_setting_column(design_matrix.columns, "amp", hemisphere)
                    or adapter.canonical_amp_col(hemisphere))
-    e3 = (E.therapy_edge(design_matrix, amp_col=_e3_col, outcome=outcome, n_boot=n_boot, seed=seed) if _e3_col
-          else E.therapy_edge(design_matrix, outcome=outcome, n_boot=n_boot, seed=seed))
+    e3 = (E.therapy_edge(design_matrix, outcome=pain_score, amp_col=_e3_col) if _e3_col
+          else E.therapy_edge(design_matrix, outcome=pain_score))
     rep.edges = {"E1": e1, "E2": e2, "E3": e3}
     rep.coherence = C.coherence_report(e1, e2, e3)
 
     # --- control authority and threshold placement ----------------------------------------------
     d = T[(T.channel == ch) & (np.isclose(T.center_hz, fc))].dropna(subset=[power_scale])
+    # The capture means read the rows left after the chunk rule (decision 412); the controller
+    # replay and the prescription's power series below keep every row, as the device sees them.
+    d_place = (d if T_pain is T else
+               T_pain[(T_pain.channel == ch)
+                      & (np.isclose(T_pain.center_hz, fc))].dropna(subset=[power_scale]))
     # THE COLUMN NAME COMES FROM THE ADAPTER, NOT FROM AN f-STRING HERE. Fixed 2026-09-04.
     #
     # This read `f"amp_{hemisphere}"` while the joined table spells the column `amp_mA_Left`, with
@@ -256,59 +309,89 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     # absent too, and the payload looked exactly as it would if the participant genuinely had no
     # amplitude on record. `adapter.canonical_amp_col` is the single definition of this name and is
     # used here so the two cannot drift apart again.
-    if include_planning:
-        amp_col = adapter.canonical_amp_col(hemisphere)
-        if amp_col not in d.columns:
-            # Fall back to the tolerant resolver before giving up, since older frames in the artifact
-            # store predate the canonical spelling, then say plainly which name was missing.
-            try:
-                amp_col = adapter.resolve_setting_column(d.columns, "amp", hemisphere) or amp_col
-            except Exception:
-                pass
-        if amp_col not in d.columns and len(d):
+    amp_col = adapter.canonical_amp_col(hemisphere)
+    if amp_col not in d.columns:
+        # Fall back to the tolerant resolver before giving up, since older frames in the artifact
+        # store predate the canonical spelling, then say plainly which name was missing.
+        try:
+            amp_col = adapter.resolve_setting_column(d.columns, "amp", hemisphere) or amp_col
+        except Exception:
+            pass
+    if amp_col not in d.columns and len(d):
+        rep.blockers.append(
+            f"no {hemisphere} amplitude column in the joined table (looked for "
+            f"{adapter.canonical_amp_col(hemisphere)!r}; the table has "
+            f"{sorted(c for c in d.columns if 'amp' in c.lower())!r}), so no thresholds were "
+            f"placed and no prescription was generated")
+    if amp_col in d.columns and len(d):
+        amps = d[amp_col].astype(float)
+        # THE CAPTURE AMPLITUDES MUST BOTH BE THERAPEUTIC, so zero is excluded. Fixed 2026-09-04.
+        #
+        # A plain minimum can be zero, making the lower capture amplitude stimulation OFF.
+        # Comparing no stimulation against a therapeutic current reintroduces the artifact
+        # confound that the amplitude-response screen was built to avoid: any
+        # difference in band power is uninterpretable as a physiological response — it is at least
+        # partly the artefact appearing and disappearing.
+        #
+        # Second, it produces a prescription the device will not accept. The adaptive amplitude
+        # limits inherit the capture amplitudes (D28) and the lower limit must be strictly above
+        # zero (D07), because an adaptive lower limit of zero means therapy switches off entirely
+        # whenever the band is quiet, which is a rebound risk rather than a therapeutic floor. A
+        # capture at 0 mA therefore yields a lower amplitude limit that fails D07 and D28.
+        #
+        # The lowest THERAPEUTIC amplitude on record is used instead. When the record contains no
+        # nonzero amplitude for this hemisphere there is nothing to capture from and the threshold
+        # placement is skipped, which is reported rather than silently substituted.
+        therapeutic = amps[amps > 0]
+        if not len(therapeutic):
             rep.blockers.append(
-                f"no {hemisphere} amplitude column in the joined table (looked for "
-                f"{adapter.canonical_amp_col(hemisphere)!r}; the table has "
-                f"{sorted(c for c in d.columns if 'amp' in c.lower())!r}), so no thresholds were "
-                f"placed and no prescription was generated")
-        if amp_col in d.columns and len(d):
-            amps = d[amp_col].astype(float)
-            # Participant-specific provenance and examples are maintained outside source control.
-            therapeutic = amps[amps > 0]
-            if not len(therapeutic):
-                rep.blockers.append(
-                    f"no nonzero {hemisphere} amplitude on record for this cell, so the two capture "
-                    f"amplitudes cannot both be therapeutic (D07, D28) and no thresholds were placed")
-                lo_a = hi_a = float("nan")
-            else:
-                lo_a, hi_a = therapeutic.min(), therapeutic.max()
-            if np.isfinite(lo_a) and np.isfinite(hi_a) and hi_a > lo_a:
-                rep.threshold = A.threshold_placement(
-                    d.loc[(amps > 0) & (amps <= lo_a), power_scale].to_numpy(),
-                    d.loc[(amps > 0) & (amps >= hi_a), power_scale].to_numpy(),
-                    amp_low=float(lo_a), amp_high=float(hi_a),
-                    expected_sign=-1, observed_series=d[power_scale].to_numpy(),
-                    pooled_slope=pooled_edge)
-                # THE PAIR FROM THE RECORD (decision 180): re-placed here, so the ledger, the replay
-                # and the rows below all read the pair the card recommends, with the capture pair
-                # kept beside it on the plan.
-                if place_thresholds is not None:
-                    try:
-                        rep.threshold, rep.threshold_placement = place_thresholds(rep, list(candidates))
-                    except Exception as _pex:              # noqa: BLE001 - the capture pair stands
-                        rep.threshold_placement = {"available": False,
-                                                   "reason": f"placement failed: {_pex!r}"}
-            elif np.isfinite(lo_a) and np.isfinite(hi_a):
-                # ONE therapeutic current on record (review C12, 2026-09-12). The two capture
-                # amplitudes must differ (D24: the thresholds are read at a low and a high current),
-                # so no plan can be placed -- and until this line nothing said so: the block was
-                # skipped, ``rep.threshold`` stayed None, and ``is_licensed`` does not require a plan,
-                # so with a stored pooled slope such a report could have read "supported" with no
-                # prescription behind it.
-                rep.blockers.append(
-                    f"only one therapeutic {hemisphere} amplitude on record for this cell "
-                    f"({float(lo_a):g} mA), so no low and high capture amplitudes exist (D24) and no "
-                    f"thresholds were placed")
+                f"no nonzero {hemisphere} amplitude on record for this cell, so the two capture "
+                f"amplitudes cannot both be therapeutic (D07, D28) and no thresholds were placed")
+            lo_a = hi_a = float("nan")
+        else:
+            lo_a, hi_a = therapeutic.min(), therapeutic.max()
+        if np.isfinite(lo_a) and np.isfinite(hi_a) and hi_a > lo_a:
+            # the currents were read from every row above; the arms from the rows the chunk
+            # rule left (decision 412), with the same therapeutic restriction
+            amps = d_place[amp_col].astype(float)
+            rep.threshold = A.threshold_placement(
+                d_place.loc[(amps > 0) & (amps <= lo_a), power_scale].to_numpy(),
+                d_place.loc[(amps > 0) & (amps >= hi_a), power_scale].to_numpy(),
+                amp_low=float(lo_a), amp_high=float(hi_a),
+                expected_sign=-1, observed_series=d_place[power_scale].to_numpy(),
+                pooled_slope=pooled_edge)
+            # THE PAIR FROM THE RECORD (decision 180): re-placed here, so the ledger, the replay
+            # and the rows below all read the pair the card recommends, with the capture pair
+            # kept beside it on the plan.
+            if place_thresholds is not None:
+                try:
+                    rep.threshold, rep.threshold_placement = place_thresholds(rep, list(candidates))
+                except Exception as _pex:              # noqa: BLE001 - the capture pair stands
+                    rep.threshold_placement = {"available": False,
+                                               "reason": f"placement failed: {_pex!r}"}
+            # THE SAFE CEILING (decision 306): the adaptive limits the card recommends and the
+            # replay, the simulation and the titration ladder run with are the capture currents
+            # held at or below the PI-stated ceiling for the stimulated side, read from its one
+            # home (StimOptimizer/safety_ceiling.py). The measured capture currents stay on the
+            # plan as measured, because the thresholds above were read at them.
+            from . import safe_current as _safe
+            try:
+                rep.threshold = _safe.apply_to_plan(rep.threshold, participant_uid, hemisphere)
+            except _safe.ClinicalConfigurationUnavailable as exc:
+                # Preserve the observed evidence, withhold any unbounded recommendation/replay.
+                rep.threshold = None
+                rep.blockers.append(f"clinical configuration unavailable: {exc}")
+        elif np.isfinite(lo_a) and np.isfinite(hi_a):
+            # ONE therapeutic current on record (review C12, 2026-09-12). The two capture
+            # amplitudes must differ (D24: the thresholds are read at a low and a high current),
+            # so no plan can be placed -- and until this line nothing said so: the block was
+            # skipped, ``rep.threshold`` stayed None, and ``is_licensed`` does not require a plan,
+            # so with a stored pooled slope such a report could have read "supported" with no
+            # prescription behind it.
+            rep.blockers.append(
+                f"only one therapeutic {hemisphere} amplitude on record for this cell "
+                f"({float(lo_a):g} mA), so no low and high capture amplitudes exist (D24) and no "
+                f"thresholds were placed")
 
     # --- Phase 1: device eligibility, with every fact this module can legitimately supply ---------
     # RUNS AFTER THRESHOLD PLACEMENT, NOT BEFORE (review C2, 2026-09-12). Rule D26 reads the
@@ -329,7 +412,7 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
         rep.eligibility = con.check_eligibility(
             _facts_for(first, e1, e2, power_scale, device_facts=device_facts,
                        threshold=rep.threshold),
-            _participant_facts(participant_uid, device_facts, con, participant_context))
+            _participant_facts(participant_uid, device_facts, con))
     else:
         rep.blockers.append("constraints.py not available: device eligibility was NOT checked, so "
                             "no candidate may be licensed")
@@ -341,83 +424,93 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     # brief excursion past a threshold moves it only part of the way. The replay needs a strictly
     # increasing time base and the joined table has duplicate timestamps, so the series is collapsed
     # to one power value per timestamp first rather than letting the replay refuse it.
-    if include_planning:
-        rpl = _optional("replay")
-        if rpl is not None and rep.threshold is not None and len(d) and "t" in d.columns:
-            try:
-                g = (d[["t", power_scale]].dropna().groupby("t", as_index=False)[power_scale].mean()
-                     .sort_values("t"))
-                if len(g) >= 3:
-                    t0 = float(g["t"].iloc[0])
-                    # Segment-wise, because a chronic record is streaming bursts separated by days and
-                    # the single-shot replay correctly refuses a non-uniform interval rather than
-                    # attributing a month-long gap to the controller's ramp.
-                    rep.replay = rpl.dual_threshold_segments(
-                        (g["t"].astype(float) - t0).to_numpy(),
-                        g[power_scale].astype(float).to_numpy(), rep.threshold)
-            except Exception as ex:
-                rep.blockers.append(f"controller replay failed: {ex}")
+    rpl = _optional("replay")
+    if rpl is not None and rep.threshold is not None and len(d) and "t" in d.columns:
+        try:
+            g = (d[["t", power_scale]].dropna().groupby("t", as_index=False)[power_scale].mean()
+                 .sort_values("t"))
+            if len(g) >= 3:
+                t0 = float(g["t"].iloc[0])
+                # Segment-wise, because a chronic record is streaming bursts separated by days and
+                # the single-shot replay correctly refuses a non-uniform interval rather than
+                # attributing a month-long gap to the controller's ramp.
+                rep.replay = rpl.dual_threshold_segments(
+                    (g["t"].astype(float) - t0).to_numpy(),
+                    g[power_scale].astype(float).to_numpy(), rep.threshold)
+        except Exception as ex:
+            rep.blockers.append(f"controller replay failed: {ex}")
 
-        # --- the programmable prescription ----------------------------------------------------------
-        # Built LAST among the analytic steps because it consumes their outputs: the thresholds place
-        # the LFP fields, the timing plan sets the averaging and ramp, and the replay supplies the
-        # amplitude-side duty cycle. It is deliberately built even when the verdict is blocked, because
-        # a clinician reviewing a blocked configuration still needs to see what would be programmed —
-        # that is often how the blocker becomes intelligible. Whether it may be ENTERED is the
-        # verdict's business, not this file's, and the interface must not present a prescription from a
-        # blocked report as though it were authorised.
-        presc = _optional("prescription")
-        if presc is not None and rep.threshold is not None:
-            try:
-                from modules.StimOptimizer.routines import percept_adaptive as _PA
-                _mode = (first or {}).get("threshold_mode") or _PA.DUAL
-                _t = d["t"].to_numpy() if "t" in d.columns else None
-                # Participant-specific provenance and examples are maintained outside source control.
-                _tr = _optional("timing_recommendation")
-                _record_timing = _tr.for_participant(participant_uid) if _tr is not None else {}
-                _prog_all = (device_facts or {}).get("active_sensing_group_timing") or {}
-                _programmed = _prog_all.get(hemisphere) if isinstance(_prog_all, dict) else None
-                _all = presc.prescribe_all_modes(
-                    threshold_plan=rep.threshold, candidate=first,
-                    power_series=d[power_scale].to_numpy() if len(d) else None,
-                    t_s=_t, replay_result=rep.replay,
-                    validated_hemispheres=(hemisphere,) if rep.threshold is not None else (),
-                    configuring_both_hemispheres=False,
-                    record_timing=_record_timing, programmed_timing=_programmed or {})
-                rep.prescriptions = _all
-                # `rep.prescription` stays as the mode the CANDIDATE asked for, so callers that predate
-                # the toggle keep the behaviour they had. The recommendation is separate from the
-                # selection on purpose: a clinician exploring Single Threshold must not have the page
-                # silently switch back to what the module prefers.
-                rep.prescription = (_all["modes"].get(_mode)
-                                    or _all["modes"].get(_all["recommended"]))
-            except Exception as ex:
-                rep.blockers.append(f"prescription generation failed: {ex}")
+    # --- the programmable prescription ----------------------------------------------------------
+    # Built LAST among the analytic steps because it consumes their outputs: the thresholds place
+    # the LFP fields, the timing plan sets the averaging and ramp, and the replay supplies the
+    # amplitude-side duty cycle. It is deliberately built even when the verdict is blocked, because
+    # a clinician reviewing a blocked configuration still needs to see what would be programmed —
+    # that is often how the blocker becomes intelligible. Whether it may be ENTERED is the
+    # verdict's business, not this file's, and the interface must not present a prescription from a
+    # blocked report as though it were authorised.
+    presc = _optional("prescription")
+    if presc is not None and rep.threshold is not None:
+        try:
+            from StimOptimizer.routines import percept_adaptive as _PA
+            _mode = (first or {}).get("threshold_mode") or _PA.DUAL
+            _t = d["t"].to_numpy() if "t" in d.columns else None
+            # ALL modes, not just the recommended one. The clinician chooses the mode, so the
+            # interface needs a toggle, and a toggle needs every option's field set. Building them
+            # here rather than on demand also means the comparison is against one snapshot of the
+            # data instead of two fetches that could straddle a change.
+            # The participant's measured timing (decision 148) and what the
+            # device RUNS on the sensing side (the newest session report's active group, read by
+            # the adapter into device_facts["active_sensing_group_timing"]) ride into every
+            # row of the parameter card, so the recommendation is shown against the current
+            # programming (2026-09-13). Either may be absent; the card says so per row.
+            _tr = _optional("timing_recommendation")
+            # The band's own onset when the record pair worked one out (decision 417).
+            _record_timing = (_tr.for_band(participant_uid, getattr(rep, "band_timing", None))
+                              if _tr is not None else {})
+            _prog_all = (device_facts or {}).get("active_sensing_group_timing") or {}
+            _programmed = _prog_all.get(hemisphere) if isinstance(_prog_all, dict) else None
+            _all = presc.prescribe_all_modes(
+                threshold_plan=rep.threshold, candidate=first,
+                power_series=d[power_scale].to_numpy() if len(d) else None,
+                t_s=_t, replay_result=rep.replay,
+                validated_hemispheres=(hemisphere,) if rep.threshold is not None else (),
+                configuring_both_hemispheres=False,
+                record_timing=_record_timing, programmed_timing=_programmed or {},
+                participant_uid=participant_uid, hemisphere=hemisphere)
+            rep.prescriptions = _all
+            # `rep.prescription` stays as the mode the CANDIDATE asked for, so callers that predate
+            # the toggle keep the behaviour they had. The recommendation is separate from the
+            # selection on purpose: a clinician exploring Single Threshold must not have the page
+            # silently switch back to what the module prefers.
+            rep.prescription = (_all["modes"].get(_mode)
+                                or _all["modes"].get(_all["recommended"]))
+        except Exception as ex:
+            rep.blockers.append(f"prescription generation failed: {ex}")
 
-        # --- optional pieces ------------------------------------------------------------------------
-        prot = _optional("protocol")
-        if prot is not None and hasattr(prot, "titration_plan"):
-            try:
-                # The titration session varies AMPLITUDE, so each candidate must carry the amplitude to
-                # be tested; the screen's candidates describe a sensing configuration and do not. The
-                # two capture amplitudes are the right ladder ends: they are the amplitudes the
-                # thresholds were captured at (D24) and the ones the adaptive limits inherit (D28), so
-                # testing between them is testing the range the loop will actually operate over.
-                _cand = list(cand or [])
-                if rep.threshold is not None:
-                    _lo = getattr(rep.threshold, "capture_amp_low", None)
-                    _hi = getattr(rep.threshold, "capture_amp_high", None)
-                    if _lo is not None and _hi is not None:
-                        # Each arm needs its OWN label. The protocol groups differences by label and
-                        # refuses duplicates, correctly: two arms sharing a label would be pooled into
-                        # one comparison, which is exactly the amplitude contrast the session exists
-                        # to measure. So the label carries the amplitude that distinguishes them.
-                        _cand = [dict(c, test_amp_mA=a,
-                                      label=f"{c.get('channel', 'candidate')} @ {a:g} mA")
-                                 for c in _cand for a in (float(_lo), float(_hi))]
-                rep.protocol = prot.titration_plan(_cand, seed=seed)
-            except Exception as ex:
-                rep.blockers.append(f"protocol generation failed: {ex}")
+    # --- optional pieces ------------------------------------------------------------------------
+    prot = _optional("protocol")
+    if prot is not None and hasattr(prot, "titration_plan") and rep.threshold is not None:
+        try:
+            # The titration session varies AMPLITUDE, so each candidate must carry the amplitude to
+            # be tested; the screen's candidates describe a sensing configuration and do not. The
+            # two capture amplitudes are the right ladder ends: they are the amplitudes the
+            # thresholds were captured at (D24) and the ones the adaptive limits inherit (D28), so
+            # testing between them is testing the range the loop will actually operate over.
+            _cand = list(cand or [])
+            if rep.threshold is not None:
+                # the capped limits (decision 306): a ladder never tests above the safe ceiling
+                _lo, _hi = rep.threshold.amplitude_limits()
+                if _lo is not None and _hi is not None:
+                    # Each arm needs its OWN label. The protocol groups differences by label and
+                    # refuses duplicates, correctly: two arms sharing a label would be pooled into
+                    # one comparison, which is exactly the amplitude contrast the session exists
+                    # to measure. So the label carries the amplitude that distinguishes them.
+                    _cand = [dict(c, test_amp_mA=a,
+                                  label=f"{c.get('channel', 'candidate')} @ {a:g} mA")
+                             for c in _cand for a in (float(_lo), float(_hi))]
+            rep.protocol = prot.titration_plan(_cand, seed=seed)
+        except Exception as ex:
+            rep.blockers.append(f"protocol generation failed: {ex}")
 
     if strict and rep.threshold is not None and rep.threshold.problems:
         rep.blockers.extend(rep.threshold.problems)
@@ -426,9 +519,6 @@ def run(participant_uid, *, psd_frame=None, epochs=None, design_matrix=None, pro
     # travel in `threshold.warnings` and land in `rep.warnings`, which `is_licensed` does not
     # read. Copied whether or not the run is strict, because a sentence that gates nothing has no
     # strictness to respect.
-    if rep.threshold is not None and getattr(rep.threshold, "warnings", None):
+    if rep.threshold is not None and rep.threshold.warnings:
         rep.warnings.extend(rep.threshold.warnings)
     return rep
-
-
-# Retained active Aditya interfaces.

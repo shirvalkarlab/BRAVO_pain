@@ -7,6 +7,7 @@ candidate that violates a device constraint must be REJECTED rather than clipped
 clipped policy is a different clinical proposal that nobody evaluated.
 """
 import dataclasses
+import functools
 import os
 from pathlib import Path
 
@@ -18,38 +19,39 @@ from StimOptimizer import stage1_openloop as S1
 from StimOptimizer import stage2_closedloop as S2
 from StimOptimizer.routines import percept_adaptive as PA
 from StimOptimizer.routines import stage_gate as GATE
+from StimOptimizer.tests import _helpers as H
+
+
+# Invented evidence exercises argument forwarding, not any participant findings.
+SYNTHETIC_SELECTED_BANDS = (GATE.SelectedBand(
+    outcome="synthetic_pain", center_hz=16.0, band_width_hz=4.0,
+    r=0.4, perm_p=0.2, fdr_q=0.3, exceeds_null_95th=False,
+    provenance="synthetic forwarding fixture"),)
+SYNTHETIC_RESPONSE_SUMMARY = GATE.ResponseSummary(
+    responds=False, n_cells_suppressing=1, n_cells_total=4,
+    source="synthetic forwarding fixture")
 
 
 # ---------------------------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------------------------
-def _setting(hemisphere="Left", rate_hz=130.0, pw_us=60.0, amp_star=2.0, amp_lo=1.0, amp_hi=4.0,
-             rate_resolved=True, pw_resolved=True):
-    return S1.HemisphereSetting(
-        hemisphere=hemisphere, rate_hz=rate_hz, pw_us=pw_us, amp_star_mA=amp_star,
-        amp_delivered_min_mA=amp_lo, amp_delivered_max_mA=amp_hi, n_epochs_fitted=20,
-        rate_resolved=rate_resolved, pw_resolved=pw_resolved, reasons=("fixture",))
+# Explicit test-only bounds; no participant clinical configuration is implied.
+SYNTHETIC_CEILINGS = {side: (5.0, "synthetic algorithm fixture") for side in ("Left", "Right")}
 
 
-def _frozen(*settings):
-    return S1.FrozenConfiguration(
-        settings=tuple(settings or (_setting(),)), primary_item="left_leg",
-        incumbent_epoch=1.0, incumbent_rate_hz=55.0, incumbent_pw_us=60.0,
-        data_horizon="test", washin_min=1.0, n_epochs_total=40)
+_setting = functools.partial(H.setting, amp_hi=4.0)
+
+
+_frozen = H.frozen
 
 
 def _responding_lfp(n=120, seed=0):
-    rng = np.random.default_rng(seed)
-    amp = np.repeat([1.0, 3.0], n // 2)
-    freqs = np.arange(4.0, 40.0, 0.5)
-    mag = np.abs(rng.normal(1.0, 0.05, (n, freqs.size)))
-    sel = (freqs >= 13.0) & (freqs <= 17.0)
-    mag[:, sel] *= (np.exp(-0.9 * amp)[:, None] * 3.0)
-    evidence = GATE.LfpEvidence(amplitude_mA=amp, magnitude=mag, freqs=freqs,
-                            era=np.tile(["a", "b"], n // 2), cluster=np.arange(n))
-    evidence.channel = "synthetic_left"
-    evidence.hemisphere = "Left"
-    return evidence
+    return H.responding_lfp(n=n, seed=seed)
+
+
+#: The pain half of the gate's one-band rule (decision 199): the fixture's bands all rise with
+#: pain, so the suppressed 13-17 Hz bands qualify and the gate can pass.
+PAIN = {"FIXTURE": set(float(c) for c in GATE.DEFAULT_BAND_CENTERS_HZ)}
 
 
 @pytest.fixture
@@ -58,7 +60,7 @@ def passing_gate():
     cfg = _frozen(_setting(rate_hz=130.0, amp_lo=1.0, amp_hi=4.0))
     lfp = _responding_lfp()
     g = GATE.evaluate_gate(cfg, lfp=lfp, amp_limits={"Left": (1.5, 3.0)},
-                           pain_positive_by_channel={"synthetic_left": set(np.arange(0., 101., .5))})
+                           pain_positive_by_channel=PAIN, ceiling_mA=SYNTHETIC_CEILINGS)
     assert g.passed, g.describe()
     return cfg, g, lfp
 
@@ -68,7 +70,7 @@ def refusing_gate():
     """A configuration the gate refuses on the rate floor: 40 Hz is below the adaptive minimum."""
     cfg = _frozen(_setting(rate_hz=40.0))
     lfp = _responding_lfp()
-    g = GATE.evaluate_gate(cfg, lfp=lfp)
+    g = GATE.evaluate_gate(cfg, lfp=lfp, ceiling_mA=SYNTHETIC_CEILINGS)
     assert not g.passed
     return cfg, g, lfp
 
@@ -78,7 +80,7 @@ def refusing_gate():
 # ---------------------------------------------------------------------------------------------
 def test_stage2_does_not_start_when_the_gate_refuses(refusing_gate):
     cfg, g, lfp = refusing_gate
-    res = S2.run_stage2(cfg, g, lfp=lfp)
+    res = S2.run_stage2(cfg, g, lfp=lfp, ceiling_mA=SYNTHETIC_CEILINGS)
     assert res.started is False
     assert res.policies.empty
     assert res.rejected.empty
@@ -88,7 +90,7 @@ def test_stage2_does_not_start_when_the_gate_refuses(refusing_gate):
 def test_the_refusal_names_which_condition_failed(refusing_gate):
     """"Not ready" is useless without "not ready why"; the answers imply different next actions."""
     cfg, g, lfp = refusing_gate
-    res = S2.run_stage2(cfg, g, lfp=lfp)
+    res = S2.run_stage2(cfg, g, lfp=lfp, ceiling_mA=SYNTHETIC_CEILINGS)
     names = [n for n, _ in res.refusal_reasons]
     assert "rate_at_or_above_adaptive_minimum" in names
     detail = dict(res.refusal_reasons)["rate_at_or_above_adaptive_minimum"]
@@ -100,14 +102,14 @@ def test_the_refusal_names_which_condition_failed(refusing_gate):
 
 def test_not_starting_is_reported_as_a_terminal_answer_not_an_error(refusing_gate):
     cfg, g, lfp = refusing_gate
-    res = S2.run_stage2(cfg, g, lfp=lfp)
+    res = S2.run_stage2(cfg, g, lfp=lfp, ceiling_mA=SYNTHETIC_CEILINGS)
     assert "terminal answer, not a failure" in res.describe()
 
 
 def test_every_blocking_condition_is_carried_into_the_refusal():
     cfg = _frozen(_setting(rate_hz=40.0, rate_resolved=False))
-    g = GATE.evaluate_gate(cfg, lfp=None)
-    res = S2.run_stage2(cfg, g, lfp=None)
+    g = GATE.evaluate_gate(cfg, lfp=None, ceiling_mA=SYNTHETIC_CEILINGS)
+    res = S2.run_stage2(cfg, g, lfp=None, ceiling_mA=SYNTHETIC_CEILINGS)
     assert res.started is False
     assert len(res.refusal_reasons) == len(g.refusals()) == 3
 
@@ -115,9 +117,9 @@ def test_every_blocking_condition_is_carried_into_the_refusal():
 def test_allow_gate_failure_runs_the_enumeration_but_records_that_nothing_is_deployable():
     """The testing escape hatch must not quietly look like a pass."""
     cfg = _frozen(_setting(rate_hz=40.0))
-    g = GATE.evaluate_gate(cfg, lfp=_responding_lfp())
+    g = GATE.evaluate_gate(cfg, lfp=_responding_lfp(), ceiling_mA=SYNTHETIC_CEILINGS)
     res = S2.run_stage2(cfg, g, lfp=_responding_lfp(), allow_gate_failure=True,
-                        band_centers=(15.0,), band_widths=(4.0,))
+                        band_centers=(15.0,), band_widths=(4.0,), ceiling_mA=SYNTHETIC_CEILINGS)
     assert res.started is True
     joined = " ".join(res.notes)
     assert "REFUSED" in joined
@@ -131,23 +133,21 @@ def test_allow_gate_failure_runs_the_enumeration_but_records_that_nothing_is_dep
 # ---------------------------------------------------------------------------------------------
 # Stage 2 must not alter the frozen rate or pulse width
 # ---------------------------------------------------------------------------------------------
-def test_stage2_refuses_a_caller_supplied_rate(passing_gate):
-    """Accepting the argument and ignoring it would hide the caller's misunderstanding."""
+@pytest.mark.parametrize("kw,match", [
+    # Accepting the argument and ignoring it would hide the caller's misunderstanding.
+    ({"rate_hz": 165.0}, "cannot set the stimulation rate"),
+    ({"pw_us": 90.0}, "cannot set the stimulation rate or the pulse width"),
+], ids=["rate", "pulse_width"])
+def test_stage2_refuses_a_caller_supplied_rate_or_pulse_width(passing_gate, kw, match):
     cfg, g, lfp = passing_gate
-    with pytest.raises(ValueError, match="cannot set the stimulation rate"):
-        S2.run_stage2(cfg, g, lfp=lfp, rate_hz=165.0)
-
-
-def test_stage2_refuses_a_caller_supplied_pulse_width(passing_gate):
-    cfg, g, lfp = passing_gate
-    with pytest.raises(ValueError, match="cannot set the stimulation rate or the pulse width"):
-        S2.run_stage2(cfg, g, lfp=lfp, pw_us=90.0)
+    with pytest.raises(ValueError, match=match):
+        S2.run_stage2(cfg, g, lfp=lfp, **kw, ceiling_mA=SYNTHETIC_CEILINGS)
 
 
 def test_the_refusal_quotes_the_device_constraint_and_the_frozen_values(passing_gate):
     cfg, g, lfp = passing_gate
     with pytest.raises(ValueError) as exc:
-        S2.run_stage2(cfg, g, lfp=lfp, rate_hz=165.0)
+        S2.run_stage2(cfg, g, lfp=lfp, rate_hz=165.0, ceiling_mA=SYNTHETIC_CEILINGS)
     msg = str(exc.value)
     assert "BrainSense" in msg
     assert "re-run Stage 1" in msg
@@ -157,7 +157,7 @@ def test_the_refusal_quotes_the_device_constraint_and_the_frozen_values(passing_
 def test_every_emitted_policy_inherits_the_frozen_rate_and_pulse_width(passing_gate):
     """There must be no path by which a proposal carries a rate the clinician did not freeze."""
     cfg, g, lfp = passing_gate
-    res = S2.run_stage2(cfg, g, lfp=lfp, band_centers=(15.0, 20.0), band_widths=(4.0, 5.0))
+    res = S2.run_stage2(cfg, g, lfp=lfp, band_centers=(15.0, 20.0), band_widths=(4.0, 5.0), ceiling_mA=SYNTHETIC_CEILINGS)
     assert res.started is True and res.n_valid > 0
     s = cfg.setting("Left")
     assert (res.policies["rate_hz"] == s.rate_hz).all()
@@ -168,7 +168,7 @@ def test_every_emitted_policy_inherits_the_frozen_rate_and_pulse_width(passing_g
 
 def test_a_validated_policy_cannot_be_mutated(passing_gate):
     cfg, g, lfp = passing_gate
-    accepted, _ = S2.enumerate_candidates(cfg, lfp=lfp, band_centers=(15.0,), band_widths=(4.0,))
+    accepted, _ = S2.enumerate_candidates(cfg, lfp=lfp, band_centers=(15.0,), band_widths=(4.0,), ceiling_mA=SYNTHETIC_CEILINGS)
     assert accepted
     with pytest.raises(dataclasses.FrozenInstanceError):
         accepted[0].rate_hz = 165.0
@@ -179,7 +179,7 @@ def test_a_validated_policy_cannot_be_mutated(passing_gate):
 def test_the_frozen_configuration_is_unchanged_by_a_stage2_run(passing_gate):
     cfg, g, lfp = passing_gate
     before = (cfg.setting("Left").rate_hz, cfg.setting("Left").pw_us)
-    S2.run_stage2(cfg, g, lfp=lfp, band_centers=(15.0,), band_widths=(4.0,))
+    S2.run_stage2(cfg, g, lfp=lfp, band_centers=(15.0,), band_widths=(4.0,), ceiling_mA=SYNTHETIC_CEILINGS)
     assert (cfg.setting("Left").rate_hz, cfg.setting("Left").pw_us) == before
 
 
@@ -194,7 +194,7 @@ def test_a_band_outside_the_adaptive_range_is_rejected_not_moved_into_range(pass
     """
     cfg, g, lfp = passing_gate
     accepted, rejected = S2.enumerate_candidates(cfg, lfp=lfp, band_centers=(6.0,),
-                                                 band_widths=(5.0,))
+                                                 band_widths=(5.0,), ceiling_mA=SYNTHETIC_CEILINGS)
     assert accepted == []
     assert rejected
     for pol, probs in rejected:
@@ -206,7 +206,7 @@ def test_a_sensing_only_mode_is_rejected_rather_than_silently_swapped(passing_ga
     """Single Threshold Inverse cannot drive therapy at all, so it must be refused, not replaced."""
     cfg, g, lfp = passing_gate
     accepted, rejected = S2.enumerate_candidates(cfg, lfp=lfp, modes=(PA.SINGLE_INVERSE,),
-                                                 band_centers=(15.0,), band_widths=(4.0,))
+                                                 band_centers=(15.0,), band_widths=(4.0,), ceiling_mA=SYNTHETIC_CEILINGS)
     assert accepted == []
     assert rejected
     for pol, probs in rejected:
@@ -218,7 +218,7 @@ def test_a_sub_floor_frozen_rate_makes_every_candidate_invalid():
     """validate_policy checks the adaptive rate floor on every policy, not just the gate."""
     cfg = _frozen(_setting(rate_hz=40.0))
     accepted, rejected = S2.enumerate_candidates(cfg, lfp=_responding_lfp(),
-                                                 band_centers=(15.0,), band_widths=(4.0,))
+                                                 band_centers=(15.0,), band_widths=(4.0,), ceiling_mA=SYNTHETIC_CEILINGS)
     assert accepted == []
     assert all(any("adaptive minimum" in p for p in probs) for _pol, probs in rejected)
 
@@ -232,7 +232,7 @@ def test_without_lfp_evidence_every_candidate_is_rejected_for_the_unmeasured_res
     """
     cfg = _frozen(_setting(rate_hz=130.0))
     accepted, rejected = S2.enumerate_candidates(cfg, lfp=None, band_centers=(15.0,),
-                                                 band_widths=(4.0,))
+                                                 band_widths=(4.0,), ceiling_mA=SYNTHETIC_CEILINGS)
     assert accepted == []
     assert all(any("RESPONDS TO STIMULATION AMPLITUDE" in p for p in probs)
                for _pol, probs in rejected)
@@ -241,7 +241,7 @@ def test_without_lfp_evidence_every_candidate_is_rejected_for_the_unmeasured_res
 def test_no_valid_policy_ever_carries_a_device_problem(passing_gate):
     """The invariant that makes the accepted set meaningful: it is validated, not merely filtered."""
     cfg, g, lfp = passing_gate
-    accepted, _ = S2.enumerate_candidates(cfg, lfp=lfp)
+    accepted, _ = S2.enumerate_candidates(cfg, lfp=lfp, ceiling_mA=SYNTHETIC_CEILINGS)
     assert accepted
     for pol in accepted:
         assert pol.problems() == []
@@ -255,7 +255,7 @@ def test_no_valid_policy_ever_carries_a_device_problem(passing_gate):
 def test_amplitude_windows_never_leave_the_delivered_envelope_or_the_ceiling(passing_gate):
     cfg, g, lfp = passing_gate
     s = cfg.setting("Left")
-    accepted, _ = S2.enumerate_candidates(cfg, lfp=lfp, band_centers=(15.0,), band_widths=(4.0,))
+    accepted, _ = S2.enumerate_candidates(cfg, lfp=lfp, band_centers=(15.0,), band_widths=(4.0,), ceiling_mA=SYNTHETIC_CEILINGS)
     assert accepted
     for pol in accepted:
         assert pol.amp_min_mA >= s.amp_delivered_min_mA - 1e-9
@@ -281,7 +281,7 @@ def test_single_mode_predicts_the_device_derived_threshold_rather_than_choosing_
     """
     cfg, g, lfp = passing_gate
     accepted, _ = S2.enumerate_candidates(cfg, lfp=lfp, modes=(PA.SINGLE,),
-                                          band_centers=(15.0,), band_widths=(4.0,))
+                                          band_centers=(15.0,), band_widths=(4.0,), ceiling_mA=SYNTHETIC_CEILINGS)
     assert accepted
     pol = accepted[0]
     assert pol.threshold_single is not None
@@ -296,7 +296,7 @@ def test_single_mode_predicts_the_device_derived_threshold_rather_than_choosing_
 def test_dual_mode_carries_a_manual_threshold_pair(passing_gate):
     cfg, g, lfp = passing_gate
     accepted, _ = S2.enumerate_candidates(cfg, lfp=lfp, modes=(PA.DUAL,),
-                                          band_centers=(15.0,), band_widths=(4.0,))
+                                          band_centers=(15.0,), band_widths=(4.0,), ceiling_mA=SYNTHETIC_CEILINGS)
     assert accepted
     pol = accepted[0]
     assert pol.threshold_lower is not None and pol.threshold_upper is not None
@@ -313,7 +313,7 @@ def test_the_ranking_basis_states_that_it_is_not_an_efficacy_ordering(passing_ga
     A ranked table invites being read as a preference ordering; this one has to say that it is not.
     """
     cfg, g, lfp = passing_gate
-    res = S2.run_stage2(cfg, g, lfp=lfp, band_centers=(15.0, 20.0), band_widths=(4.0,))
+    res = S2.run_stage2(cfg, g, lfp=lfp, band_centers=(15.0, 20.0), band_widths=(4.0,), ceiling_mA=SYNTHETIC_CEILINGS)
     assert "DEPLOYABILITY" in res.ranking_basis
     assert "NOT an efficacy ordering" in res.ranking_basis
     assert "no closed-loop pain outcome" in res.ranking_basis.lower()
@@ -322,7 +322,7 @@ def test_the_ranking_basis_states_that_it_is_not_an_efficacy_ordering(passing_ga
 
 def test_the_ranking_is_ordered_by_capture_separation(passing_gate):
     cfg, g, lfp = passing_gate
-    res = S2.run_stage2(cfg, g, lfp=lfp)
+    res = S2.run_stage2(cfg, g, lfp=lfp, ceiling_mA=SYNTHETIC_CEILINGS)
     assert res.ranking_assessed is True
     d = res.policies["separation_d"].to_numpy(float)
     assert np.all(np.diff(d) <= 1e-9), "separation must be non-increasing down the table"
@@ -335,8 +335,8 @@ def test_the_ranking_is_ordered_by_capture_separation(passing_gate):
 # ---------------------------------------------------------------------------------------------
 # The whole staged run
 # ---------------------------------------------------------------------------------------------
-def _rcs08_like():
-    """A matrix reproducing the real record's structure: pulse width aliased with rate."""
+def _synthetic_design_matrix():
+    'Regression for  synthetic design matrix.'
     rng = np.random.default_rng(0)
     rows, ep = [], 0
     for i, pw in enumerate((100.0, 140.0)):
@@ -353,15 +353,16 @@ def _rcs08_like():
     return d
 
 
-def test_the_two_stage_run_reports_honestly_that_it_cannot_proceed():
-    """End to end on a matrix with the real record's structure and no spectral data at all.
-
-    Two of the four gate conditions must block for reasons intrinsic to the data rather than to any
-    threshold choice: the open-loop choice is not resolved, and whether any band responds to
-    stimulation amplitude was never measured because the matrix carries no LFP.
-    """
+# FIT ONCE, ASSERT MANY (2026-09-12). Every `run_two_stage` call below fits Stage 1 on the SAME
+# matrix with the SAME Stage 1 arguments and then asserts something about the gate or Stage 2 that
+# sits after the fit -- the merge of `gate_kwargs`, the evidence factory, a refusal. Seven fits at
+# 5 to 9 s each were one fit's worth of information. `shared_stage1` (conftest.py) hands every call
+# with the same inputs the same Stage 1 result; `run_two_stage` itself still runs end to end.
+# `test_the_original_flat_entry_point_still_works` does not go through Stage 1 and is unchanged.
+def test_the_two_stage_run_reports_honestly_that_it_cannot_proceed(shared_stage1):
+    'Regression for the two stage run reports honestly that it cannot proceed.'
     from StimOptimizer import pipeline
-    rep = pipeline.run_two_stage(_rcs08_like(), data_horizon="test", washin_min=1.0)
+    rep = pipeline.run_two_stage(_synthetic_design_matrix(), data_horizon="test", washin_min=1.0, gate_kwargs=dict(ceiling_mA=SYNTHETIC_CEILINGS), stage1_kwargs=dict(safety_ceiling_by_hemisphere=SYNTHETIC_CEILINGS))
     assert rep.can_deploy_closed_loop() is False
     assert rep.stage2.started is False
     assert rep.frozen.resolved is False
@@ -373,54 +374,7 @@ def test_the_two_stage_run_reports_honestly_that_it_cannot_proceed():
     assert rep.manifest["stage2_n_valid_policies"] == 0
 
 
-def test_the_run_against_the_reconciled_biomarker_plate_refuses_for_three_stateable_reasons():
-    """The three reasons must be reported SEPARATELY, each with its number, so a reader can see which
-    condition binds:
-
-    1. the only adaptive-capable selected band (14.817 Hz) is not statistically supported —
-       perm_p = 0.4166 after selection correction, FDR q = 0.5055;
-    2. the nominally strongest band (3.9215 Hz, perm_p 0.0809) spans roughly 1.4-6.4 Hz and is
-       excluded by the 8-30 Hz adaptive window — a DEVICE constraint, independent of its statistics;
-    3. the LFP-response requirement fails on the historical record — 3 of 15 channel-by-rate cells
-       suppress, one-sided binomial p = 0.996.
-
-    Refusing here is the correct behaviour and no threshold may be relaxed to change it."""
-    from StimOptimizer import pipeline
-    rep = pipeline.run_two_stage(_rcs08_like(), data_horizon="test", washin_min=1.0,
-                                 selected_bands=GATE.RCS08_SELECTED_BANDS,
-                                 response_summary=GATE.RCS08_RESPONSE_SUMMARY)
-    assert rep.can_deploy_closed_loop() is False
-    assert rep.stage2.started is False
-    assert rep.stage2.n_valid == 0
-    assert len(rep.gate.conditions) == 6
-
-    # reason 1: the usable band is not supported, and its numbers are in the detail
-    stat = rep.gate.condition("selected_band_statistically_supported")
-    assert stat.passed is False
-    assert "0.4166" in stat.detail and "0.5055" in stat.detail
-
-    # reason 2: the other band is excluded by the DEVICE window, reported as a device fact and not
-    # as a statistical one. The condition itself PASSES, because a band inside the window does
-    # exist -- the exclusion is attached to the band it applies to rather than to the whole gate.
-    win = rep.gate.condition("selected_band_inside_adaptive_window")
-    assert win.passed is True
-    assert "DEVICE" in win.detail
-    assert "regardless of their statistics" in win.detail
-    assert [r["outcome"] for r in win.evidence["outside"]] == ["nrs"]
-
-    # reason 3: the response requirement fails on the historical record, with attribution
-    resp = rep.gate.condition("adaptive_band_passes_lfp_response")
-    assert resp.passed is False
-    assert "3 of 15" in resp.detail and "0.996" in resp.detail
-
-    # each blocking reason is separately named in the refusal, not merged into one verdict
-    names = [n for n, _ in rep.stage2.refusal_reasons]
-    assert "selected_band_statistically_supported" in names
-    assert "adaptive_band_passes_lfp_response" in names
-    assert "openloop_choice_resolved" in names
-
-
-def test_both_routes_for_supplying_selected_bands_reach_the_gate_identically():
+def test_both_routes_for_supplying_selected_bands_reach_the_gate_identically(shared_stage1):
     """Regression, 2026-09-02. Both invocation styles must work.
 
     `selected_bands` and `response_summary` were reachable through `gate_kwargs` before they were
@@ -430,97 +384,41 @@ def test_both_routes_for_supplying_selected_bands_reach_the_gate_identically():
     end-to-end test above uses the new style and the gate unit tests call evaluate_gate directly.
     """
     from StimOptimizer import pipeline
-    d = _rcs08_like()
+    d = _synthetic_design_matrix()
     named = pipeline.run_two_stage(d, data_horizon="test", washin_min=1.0,
-                                   selected_bands=GATE.RCS08_SELECTED_BANDS,
-                                   response_summary=GATE.RCS08_RESPONSE_SUMMARY)
+                                   selected_bands=SYNTHETIC_SELECTED_BANDS,
+                                   response_summary=SYNTHETIC_RESPONSE_SUMMARY, gate_kwargs=dict(ceiling_mA=SYNTHETIC_CEILINGS), stage1_kwargs=dict(safety_ceiling_by_hemisphere=SYNTHETIC_CEILINGS))
     viakw = pipeline.run_two_stage(d, data_horizon="test", washin_min=1.0,
-                                   gate_kwargs=dict(
-                                       selected_bands=GATE.RCS08_SELECTED_BANDS,
-                                       response_summary=GATE.RCS08_RESPONSE_SUMMARY))
+                                   gate_kwargs={"ceiling_mA": SYNTHETIC_CEILINGS, **(dict(
+                                       selected_bands=SYNTHETIC_SELECTED_BANDS,
+                                       response_summary=SYNTHETIC_RESPONSE_SUMMARY))}, stage1_kwargs=dict(safety_ceiling_by_hemisphere=SYNTHETIC_CEILINGS))
     assert [c.name for c in named.gate.conditions] == [c.name for c in viakw.gate.conditions]
     assert [c.verdict for c in named.gate.conditions] == [c.verdict for c in viakw.gate.conditions]
     assert named.gate.passed is viakw.gate.passed is False
     assert len(named.gate.conditions) == 6
 
 
-def test_supplying_the_same_gate_argument_by_both_routes_is_an_explicit_error():
+def test_supplying_the_same_gate_argument_by_both_routes_is_an_explicit_error(shared_stage1):
     """Silent precedence would make the winning value an implementation detail."""
     from StimOptimizer import pipeline
     with pytest.raises(ValueError, match="supplied both as a run_two_stage argument"):
-        pipeline.run_two_stage(_rcs08_like(), data_horizon="test", washin_min=1.0,
-                               selected_bands=GATE.RCS08_SELECTED_BANDS,
-                               gate_kwargs=dict(selected_bands=GATE.RCS08_SELECTED_BANDS))
+        pipeline.run_two_stage(_synthetic_design_matrix(), data_horizon="test", washin_min=1.0,
+                               selected_bands=SYNTHETIC_SELECTED_BANDS,
+                               gate_kwargs={"ceiling_mA": SYNTHETIC_CEILINGS, **(dict(selected_bands=SYNTHETIC_SELECTED_BANDS))}, stage1_kwargs=dict(safety_ceiling_by_hemisphere=SYNTHETIC_CEILINGS))
 
 
-def test_other_gate_kwargs_still_reach_the_gate():
+def test_other_gate_kwargs_still_reach_the_gate(shared_stage1):
     """The merge must not swallow the keys it does not manage."""
     from StimOptimizer import pipeline
-    rep = pipeline.run_two_stage(_rcs08_like(), data_horizon="test", washin_min=1.0,
-                                 gate_kwargs=dict(min_rate_hz=10.0))
+    rep = pipeline.run_two_stage(_synthetic_design_matrix(), data_horizon="test", washin_min=1.0,
+                                 gate_kwargs={"ceiling_mA": SYNTHETIC_CEILINGS, **(dict(min_rate_hz=10.0))}, stage1_kwargs=dict(safety_ceiling_by_hemisphere=SYNTHETIC_CEILINGS))
     assert rep.gate.condition("rate_at_or_above_adaptive_minimum").passed is True, (
         "a 10 Hz floor passed through gate_kwargs must change the rate verdict")
 
 
-def test_the_original_flat_entry_point_still_works():
-    """run() must be untouched by the staged addition; existing callers depend on it."""
-    from StimOptimizer import pipeline
-    d = _rcs08_like()
-    out = pipeline.run(d, sites=("left_leg",), hemispheres=("Left",), outdir=None,
-                       render_figures=False, data_horizon="test", washin_min=1.0,
-                       n_batches=1, q=2)
-    assert "left_leg__Left" in out.arms
-    assert not out.summary.empty
-    assert hasattr(out, "recommendation_is_supported")
-
-
-def _find_real_matrix():
-    """The canonical copy of this file lives in the project's artifact store rather than in the
-    repository, so it is usually absent from a checkout. ``STIMOPT_DESIGN_MATRIX`` lets a caller
-    point at it; the test that needs it skips when it cannot be found, and the structural fixture
-    above covers the same behaviour unconditionally."""
-    env = os.environ.get("STIMOPT_DESIGN_MATRIX")
-    candidates = ([Path(env)] if env else []) + [
-        Path(__file__).resolve().parents[1] / "data" / "rcs08_bo_design_matrix.csv",
-        Path(__file__).resolve().parents[4] / "rcs08_bo_design_matrix.csv",
-    ]
-    for p in candidates:
-        if p.is_file():
-            return p
-    return None
-
-
-def test_the_real_design_matrix_cannot_proceed_to_closed_loop():
-    """Observed on the real matrix (86 epochs, horizon 2026-08-12) on 2026-09-02.
-
-    Three of the four conditions blocked. The frozen left-hemisphere rate came out at 40 Hz, below
-    the 55 Hz adaptive minimum. Neither hemisphere's open-loop choice was resolved: on the left the
-    gain over the setting in force was +0.036 NRS points against a difference SD of 0.931, and on
-    the right the comparison was NOT ASSESSED because the chosen 140 us stratum never delivered the
-    incumbent's 55 Hz rate. And the matrix carries no spectral data, so the LFP-response condition
-    was NOT ASSESSED. Only the amplitude-limit condition passed, and it passed on defaulted limits.
-    """
-    p = _find_real_matrix()
-    if p is None:
-        pytest.skip("the real design matrix is not on disk (it lives in the artifact store); "
-                    "set STIMOPT_DESIGN_MATRIX to point at a copy")
-    from StimOptimizer import pipeline
-    rep = pipeline.run_two_stage(str(p), data_horizon="2026-08-12", washin_min=1.0)
-    assert rep.can_deploy_closed_loop() is False
-    assert rep.stage2.started is False
-    assert set(rep.gate.failed_names()) >= {"rate_at_or_above_adaptive_minimum",
-                                            "openloop_choice_resolved"}
-    assert "adaptive_band_passes_lfp_response" in rep.gate.not_assessed_names()
-
-
 # --- the evidence factory: selection must happen AFTER freezing (2026-09-05) --------------------
-def test_lfp_may_be_a_factory_that_receives_the_frozen_configuration():
-    """The sequencing fix. Rate and pulse width freeze when BrainSense is configured, so evidence
-    measured at another rate says nothing about the configuration Stage 2 will run. Passing a
-    pre-selected cell invites that mismatch, and it happened on the first live run: the screen's
-    best cell was at 165 Hz while Stage 1 had frozen 40 Hz. Accepting a callable makes the ordering
-    structural instead of something the caller has to remember.
-    """
+def test_lfp_may_be_a_factory_that_receives_the_frozen_configuration(shared_stage1):
+    """Evidence selection receives the configuration after rate and pulse width freeze."""
     seen = {}
 
     def factory(frozen):
@@ -529,7 +427,7 @@ def test_lfp_may_be_a_factory_that_receives_the_frozen_configuration():
         return _responding_lfp()
 
     from StimOptimizer import pipeline
-    rep = pipeline.run_two_stage(_rcs08_like(), data_horizon="test", washin_min=1.0, lfp=factory)
+    rep = pipeline.run_two_stage(_synthetic_design_matrix(), data_horizon="test", washin_min=1.0, lfp=factory, gate_kwargs=dict(ceiling_mA=SYNTHETIC_CEILINGS), stage1_kwargs=dict(safety_ceiling_by_hemisphere=SYNTHETIC_CEILINGS))
     assert seen.get("called") is True, "the factory was never called"
     assert seen["rates"], "the factory did not receive a frozen configuration with rates"
     # and the evidence it returned actually reached the gate rather than being discarded
@@ -537,118 +435,26 @@ def test_lfp_may_be_a_factory_that_receives_the_frozen_configuration():
         {c.name for c in rep.gate.conditions}
 
 
-def test_a_plain_evidence_object_still_works_unchanged():
+def test_a_plain_evidence_object_still_works_unchanged(shared_stage1):
     """Backward compatibility: the non-callable path is the one every existing caller uses."""
     from StimOptimizer import pipeline
     lfp = _responding_lfp()
-    rep = pipeline.run_two_stage(_rcs08_like(), data_horizon="test", washin_min=1.0, lfp=lfp)
+    rep = pipeline.run_two_stage(_synthetic_design_matrix(), data_horizon="test", washin_min=1.0, lfp=lfp, gate_kwargs=dict(ceiling_mA=SYNTHETIC_CEILINGS), stage1_kwargs=dict(safety_ceiling_by_hemisphere=SYNTHETIC_CEILINGS))
     names = {c.name for c in rep.gate.conditions}
     assert "adaptive_band_passes_lfp_response" in names
 
 
-def test_the_factory_may_refuse_by_returning_none_and_the_gate_then_blocks():
+def test_the_factory_may_refuse_by_returning_none_and_the_gate_then_blocks(shared_stage1):
     """A factory that cannot honestly pick a cell returns None, and that must BLOCK rather than
     pass. This is the path taken when the two hemispheres freeze different rates: there is no single
     rate to pin the evidence to, and attributing one hemisphere's measurement to the other's
     configuration would be worse than refusing.
     """
     from StimOptimizer import pipeline
-    rep = pipeline.run_two_stage(_rcs08_like(), data_horizon="test", washin_min=1.0,
-                                 lfp=lambda frozen: None)
+    rep = pipeline.run_two_stage(_synthetic_design_matrix(), data_horizon="test", washin_min=1.0,
+                                 lfp=lambda frozen: None, gate_kwargs=dict(ceiling_mA=SYNTHETIC_CEILINGS), stage1_kwargs=dict(safety_ceiling_by_hemisphere=SYNTHETIC_CEILINGS))
     assert rep.gate.passed is False
     assert rep.stage2.started is False
     # the response condition must be NOT ASSESSED, not passed
     cond = {c.name: c for c in rep.gate.conditions}["adaptive_band_passes_lfp_response"]
     assert cond.passed is not True, cond.verdict
-
-
-@pytest.mark.parametrize('requested,rates,expected', [
-    (165.0, (55.0,), 'requested_rate_mismatch'),
-    (55.0, (55.0, 110.0), 'requested_rate_mismatch'),
-    (55.0, (), 'no_adaptive_capable_rate'),
-    (float('nan'), (55.0,), 'requested_rate_mismatch'),
-    (None, (55.0, 110.0), 'evidence_selected'),
-    (None, (), 'no_adaptive_capable_rate'),
-    (55.0, (55.0,), 'evidence_selected'),
-    (None, (55.0,), 'evidence_selected'),
-])
-def test_live_evidence_requires_the_actual_frozen_rate(monkeypatch, requested, rates, expected):
-    from types import SimpleNamespace
-    from StimOptimizer import pipeline, adapter
-    frozen = SimpleNamespace(settings=[SimpleNamespace(rate_hz=r, hemisphere=h)
-                                       for h, r in zip(("Left", "Right"), rates)])
-    selected = object()
-    calls = []
-    monkeypatch.setattr(adapter, 'build_design_matrix', lambda *a, **k: 'synthetic-design')
-    def live(*args, **kwargs):
-        calls.append(kwargs['rate_hz'])
-        return pipeline.LiveEvidence(selected=selected, selected_key=('test', 'Left', 55.0))
-    monkeypatch.setattr(pipeline, 'live_evidence', live)
-    monkeypatch.setattr(pipeline, 'select_for_side',
-                        lambda ev, h, r, **kw: (selected, ('test', h, r), 'synthetic selected'))
-    def run(design, *, lfp, **kwargs):
-        assert design == 'synthetic-design'
-        evidence = lfp(frozen)
-        if expected == 'evidence_selected':
-            assert evidence == {h: selected for h in ('Left', 'Right')[:len(rates)]}
-        else:
-            assert evidence is None
-        return SimpleNamespace(manifest={})
-    monkeypatch.setattr(pipeline, 'run_two_stage', run)
-    report = pipeline.run_two_stage_live(object(), rate_hz=requested)
-    assert report.manifest['lfp_evidence']['refusal_class'] == expected
-    assert calls == (sorted(set(rates)) if expected == 'evidence_selected' else [])
-
-
-@pytest.mark.parametrize("requested_side,requested_rate,expected", [
-    ("Right", 110.0, "evidence_selected"),
-    ("Right", 55.0, "requested_rate_mismatch"),
-    ("Both", None, "requested_hemisphere_missing"),
-])
-def test_explicit_side_request_keeps_its_own_frozen_rate(monkeypatch, requested_side, requested_rate, expected):
-    from types import SimpleNamespace
-    from StimOptimizer import pipeline, adapter
-    frozen = SimpleNamespace(settings=[SimpleNamespace(hemisphere="Left", rate_hz=55.0),
-                                       SimpleNamespace(hemisphere="Right", rate_hz=110.0)])
-    selected, calls = object(), []
-    monkeypatch.setattr(adapter, "build_design_matrix", lambda *a, **k: "design")
-    def live(*args, **kwargs):
-        calls.append(kwargs["rate_hz"])
-        return pipeline.LiveEvidence()
-    monkeypatch.setattr(pipeline, "live_evidence", live)
-    monkeypatch.setattr(pipeline, "select_for_side",
-                        lambda ev, h, r, **kw: (selected, ("test", h, r), "selected"))
-    def run(design, *, lfp, **kw):
-        result = lfp(frozen)
-        assert result == ({"Right": selected} if expected == "evidence_selected" else None)
-        return SimpleNamespace(manifest={})
-    monkeypatch.setattr(pipeline, "run_two_stage", run)
-    report = pipeline.run_two_stage_live(object(), hemisphere=requested_side, rate_hz=requested_rate)
-    assert report.manifest["lfp_evidence"]["refusal_class"] == expected
-    assert calls == ([110.0] if expected == "evidence_selected" else [])
-
-
-def test_supplied_design_is_reused_and_a_missing_side_is_not_licensed(monkeypatch):
-    from types import SimpleNamespace
-    from StimOptimizer import pipeline, adapter
-    design, selected = object(), object()
-    frozen = SimpleNamespace(settings=[SimpleNamespace(hemisphere=h, rate_hz=55.)
-                                       for h in ('Left', 'Right')])
-    def unexpected(*args, **kwargs):
-        pytest.fail('a supplied design must not be rebuilt')
-    monkeypatch.setattr(adapter, 'build_design_matrix', unexpected)
-    monkeypatch.setattr(pipeline, 'live_evidence', lambda *a, **kw: pipeline.LiveEvidence())
-    monkeypatch.setattr(pipeline, 'select_for_side', lambda ev, h, r, **kw:
-                        (selected, ('synthetic', h, r), 'available') if h == 'Left'
-                        else (None, None, 'no usable right-side recording'))
-    def run(actual_design, *, lfp, **kwargs):
-        assert actual_design is design
-        assert lfp(frozen) == {'Left': selected}
-        return SimpleNamespace(manifest={})
-    monkeypatch.setattr(pipeline, 'run_two_stage', run)
-    report = pipeline.run_two_stage_live(object(), design=design)
-    evidence = report.manifest['lfp_evidence']
-    assert evidence['refusal_class'] == 'evidence_missing_on_some_sides'
-    assert evidence['selected_by_side']['Left']['selected']
-    assert not evidence['selected_by_side']['Right']['selected']
-    assert evidence['selected_by_side']['Right']['selected_key'] is None

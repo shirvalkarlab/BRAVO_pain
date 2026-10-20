@@ -11,12 +11,17 @@ data that had been ingested all along.
 The right long-term fix is to decode these fields into the model at ingest, once, for every
 participant. This module is the interim: a single pass over the raw reports that writes a compact
 per-participant summary, which ``device_facts`` then reads. It is deliberately a SUMMARY and not a
-live scan — the reports are 8.5 GB across 1154 files for one participant, so scanning them per
-request is not an option.
+live scan: decrypting and parsing a large report collection belongs off the request path.
 
-The summary records the NEWEST value for each fact plus the distribution across the whole record,
-because for several of these rules the distribution is the finding: D27 is violated by 1571 of 1736
-right-hemisphere capture records, and reporting only the newest would hide that."""
+The ingested-report route, introduced 2026-09-12, builds summaries with `summary_from_ingested`,
+stores the raw `session_report_summary` kind keyed on the participant file set, and rebuilds
+through the management command when missing or stale. `scan_documents` is the pure scanner
+shared with the folder-based `scan_folder` wrapper. Private committed snapshots must not be
+used as generic participant facts.
+
+The summary records the NEWEST value plus the distribution across the whole record, because
+reporting only the newest could hide historical rule violations.
+"""
 from __future__ import annotations
 
 import glob
@@ -32,14 +37,6 @@ CAPTURE_PW_CEILING_US = 120.0
 
 #: D09 gate (A610 p. 37, p. 72).
 LFP_CAPTURE_FLOOR_UVP = 1.2
-
-
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-import statistics
 
 
 def _walk(o, path=""):
@@ -60,7 +57,7 @@ def _tail(v):
 #: Bumped when the scanner's output changes shape or meaning. It is part of the stored summary's
 #: key, so a summary built by older scanner code is never served as if this code had built it
 #: (decision 25: the key carries every constant the stored numbers depend on).
-SUMMARY_RULE_VERSION = "v3_session_report_summary_d32_per_hemisphere_and_adaptive_limits"
+SUMMARY_RULE_VERSION = "v3_session_report_summary_d32_per_hemisphere_and_adaptive_limits_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 #: The store kind. Registered as RAW in ``CacheStore.provenance``: it is read straight off the
 #: device export and no module's choice produced it, so it can never close a provenance cycle.
@@ -71,7 +68,13 @@ _STAMP_TOKEN = re.compile(r"(\d{8}T\d{6})")
 
 
 def report_stamp(name):
-    """The string "newest" is decided on, for one session-report file name."""
+    """The string "newest" is decided on, for one session-report file name.
+
+    Export names may carry a session-date token and may also have uploader-added prefixes.
+    Sorting by the whole filename can therefore select a prefix rather than the newest date.
+    Use the date token first and the whole name as a tie-break; names with no token remain
+    their own stamp. Uniformly named folders preserve the original ordering.
+    """
     name = str(name or "")
     m = _STAMP_TOKEN.search(name)
     return f"{m.group(1)} {name}" if m else name
@@ -191,8 +194,7 @@ def scan_documents(docs):
                 electrodes[_tail(v)] += 1
 
         # capture pairs and their pulse widths, per hemisphere
-        groups = d.get("Groups") or {}
-        for grp in (("Final",) if groups.get("Final") else ("Initial",)):
+        for grp in ("Final", "Initial"):
             for g in ((d.get("Groups") or {}).get(grp) or []):
                 ps = g.get("ProgramSettings") or {}
                 rate = ps.get("RateInHertz")
@@ -235,9 +237,18 @@ def scan_documents(docs):
                         # More than one distinct rate inside the group is what "multiple rates"
                         # means; a single rate at the group level with agreeing channels is one.
                         "multiple_rates_in_group": (len(rates) > 1) if rates else None,
-                        # Participant-specific provenance and examples are maintained outside source control.
+                        # Interleaving shows up as programs on ONE hemisphere at different pulse
+                        # widths or rates. With one program per hemisphere there is nothing to
+                        # interleave, which is the common case here. Counted PER HEMISPHERE
+                        # (corrected 2026-09-12): pooling both hemispheres can falsely classify
+                        # ordinary bilateral pulse-width differences as interleaving.
                         "interleaving_in_group": _interleaving_per_hemisphere(progs),
-                        # Participant-specific provenance and examples are maintained outside source control.
+                        # Patient amplitude limits. The SensingChannel's Upper/LowerLimitInMilliAmps
+                        # are the ADAPTIVE amplitude limits while Adaptive Therapy is RUNNING (they
+                        # default to the capture amplitudes, D28) and become patient limits only
+                        # when the group is sensing-only.
+                        # Corrected 2026-09-12: reading a present limit as a patient limit
+                        # regardless of status failed D32 on the very group running adaptive DBS.
                         "patient_limits_configured": _patient_limits_configured(progs, limits),
                         # The pocket adaptor is a hardware accessory and is NOT reported anywhere in
                         # the session report, so it stays None and D32 stays honest about it rather
@@ -293,7 +304,6 @@ def scan_documents(docs):
         return xs[len(xs) // 2] if xs else None
 
     return {
-        "source_scope": "Raw SessionReport scan; not BRAVO canonical unless selected by the approved input adapter",
         "n_files": n_files, "n_unreadable": unreadable,
         "adaptive_status_counts": dict(adaptive),
         "adaptive_status_newest": newest["adaptive"],
@@ -369,12 +379,30 @@ def candidate_lfp_bins(summary, channel, hemisphere):
 try:
     from modules.CacheStore import store as _cache_store
 except ImportError:                                   # pragma: no cover - depends on the runner
-    from modules.CacheStore import store as _cache_store
+    from CacheStore import store as _cache_store
 
 
 def is_session_report(source_file):
-    """The rule for which ingested files are session reports: the name contains "Session"."""
-    return "Session" in (getattr(source_file, "name", None) or "")
+    """Recognize a Medtronic device export or a name containing "Session".
+    Ingested filenames may be renamed, so the name-only rule is insufficient (decision 467)."""
+    return (getattr(source_file, "type", None) == "MedtronicJSON"
+            or "Session" in (getattr(source_file, "name", None) or ""))
+
+
+def row_stamp(row):
+    """``report_stamp`` of a stored row's name; when the name carries no date token, the row's
+    stored session date (seconds since 1970, UTC) written in the token's form, then the name, so
+    renamed files order by when the session happened (decision 467)."""
+    import datetime as _dt
+    name = str(getattr(row, "name", "") or "")
+    if _STAMP_TOKEN.search(name):
+        return report_stamp(name)
+    date = getattr(row, "date", None)
+    try:
+        token = _dt.datetime.fromtimestamp(float(date), _dt.timezone.utc).strftime("%Y%m%dT%H%M%S")
+    except (TypeError, ValueError, OverflowError, OSError):
+        return report_stamp(name)
+    return f"{token} {name}"
 
 
 def session_report_files(participant):
@@ -384,8 +412,7 @@ def session_report_files(participant):
     p = participant if hasattr(participant, "uid") else _m.Participant.find(uid=participant)
     if p is None:
         return []
-    from modules.AnalysisData import eligible_source_files
-    rows = [s for s in eligible_source_files(p) if is_session_report(s)]
+    rows = [s for s in _m.SourceFile.find_all(owner=p) if is_session_report(s)]
     rows.sort(key=lambda s: (str(s.name or ""), str(s.uid)))
     return rows
 
@@ -417,19 +444,22 @@ def newest_by_stamp(rows):
     rows = list(rows or [])
     if not rows:
         return None
-    return max(rows, key=lambda r: report_stamp(getattr(r, "name", "") or ""))
+    return max(rows, key=row_stamp)
 
 
 def _decoded_documents(rows, loader):
     """``(stamp, dict-or-None)`` for each ingested row, decrypted through ``loader``; a file that
     cannot be decrypted or parsed becomes ``(stamp, None)`` and is counted, not fatal."""
     for sf in rows:
-        stamp = report_stamp(getattr(sf, "name", "") or "")
+        stamp = row_stamp(sf)
         try:
             raw = loader(sf)
-            if isinstance(raw, (bytes, bytearray)):
-                raw = raw.decode("utf-8")
-            d = json.loads(raw)
+            if isinstance(raw, dict):                            # already decoded (and converted)
+                d = raw
+            else:
+                if isinstance(raw, (bytes, bytearray)):
+                    raw = raw.decode("utf-8")
+                d = json.loads(raw)
         except Exception:                                        # noqa: BLE001
             d = None
         yield stamp, d
@@ -439,28 +469,36 @@ def summary_from_ingested(participant, *, rows=None, loader=None):
     """The summary built from the participant's INGESTED session reports, the same pass
     ``scan_folder`` makes over a folder.
 
+    Each row is decrypted with ``DataCurator.loadCacheFile`` (the route the therapy history and
+    the D30 reader already take) and handed to ``scan_documents`` with ``report_stamp`` of
+    ``SourceFile.name`` as the stamp. Decrypting and parsing belongs off the request path:
+    the management command and detached launcher call this, never a page request.
+
     ``rows`` and ``loader`` exist for the tests; production passes neither and the Django imports
     happen here, inside the function, because this module is imported by tests with no Django.
     Adds to the scanner's dict: ``newest_stamp`` (the NAME of the newest file, by ``report_stamp``
     order), ``newest_stamp_key`` (its stamp, what a later file set is compared against),
     ``built_utc``, ``source_signature`` (the file-set key the summary is stored under),
-    ``participant_uid`` and ``source``."""
+    ``participant_uid`` and ``source``.
+    """
     import datetime as _dt
     if rows is None:
         rows = session_report_files(participant)
     if loader is None:
         from modules import DataCurator as _DC
-        loader = _DC.loadCacheFile
+        # every time on the tablet's clock (the PI, 2026-09-26), one anchor table per device
+        _tables = _DC.clock_anchor_tables(participant if hasattr(participant, "uid") else
+                                          _DC.models.Participant.find(uid=participant))
+        loader = lambda sf: _DC.loadPerceptJSON(sf, table=_tables.get(getattr(sf, "device", "") or ""))
     sig = file_set_signature(rows)
     summary = scan_documents(_decoded_documents(rows, loader))
     newest = newest_by_stamp(rows)
     summary["newest_stamp"] = str(newest.name or "") if newest is not None else None
-    summary["newest_stamp_key"] = report_stamp(newest.name) if newest is not None else None
+    summary["newest_stamp_key"] = row_stamp(newest) if newest is not None else None
     summary["built_utc"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
     summary["source_signature"] = list(sig) if sig else None
     summary["participant_uid"] = str(getattr(participant, "uid", participant))
     summary["source"] = "ingested"
-    summary["source_scope"] = "Approved canonical source-file selection; raw session device facts"
     return summary
 
 
@@ -510,6 +548,3 @@ def rebuild_and_store(participant, *, force=False, rows=None, loader=None):
     finally:
         out["wall_seconds"] = round(_time.perf_counter() - t0, 3)
     return out
-
-
-# Retained active Aditya interfaces.

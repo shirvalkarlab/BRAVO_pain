@@ -1,69 +1,111 @@
-"""The safety model's amplitude ceiling: a value the PI states, per participant and per side.
+"""Participant-specific clinical safety ceilings from private, provenance-bound configuration.
 
-WHERE IT REACHES THE PAGE. Stim Optimizer page: the per-arm cards ("safe ceiling N mA", the amber
-"above the reachable safe ceiling" mark), the queue table's ``safe`` column, the blockers list,
-and, under "Two-stage plan", each side's safe-cell count and the gate's "under the ceiling" check.
-The ceiling and its provenance are in the response under ``arms.<arm>.safety_anchors`` and
-``two_stage.stage1.audit.per_hemisphere.<side>.safety_ceiling``.
-
-THE RESPONSE KEY. ``bravo_service._code_digest`` hashes every ``.py`` file in this package, this
-one included, so changing a number in the table changes the key and every stored response
-rebuilds once. That is deliberate: a ceiling edited here must never be served from a copy computed
-under the old one."""
+The search grid's hard limit is not a participant's safe ceiling. Missing clinical
+evidence makes recommendations unavailable; it must never select a higher limit.
+"""
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
 from .routines import objective as OBJ
+try:
+    from modules.DecodeCommon.private_clinical_config import (
+        ClinicalConfigurationUnavailable, participant_section, config_digest)
+except ImportError:
+    from DecodeCommon.private_clinical_config import (
+        ClinicalConfigurationUnavailable, participant_section, config_digest)
 
-#: THE ONE PLACE TO CHANGE A PARTICIPANT'S CEILING. Participant uid -> side -> current in mA.
-#: A side that is absent, or a participant that is absent, falls back to the module hard limit
-#: with a provenance that says so; nothing is invented.
-PI_STATED_CEILING_MA = {}  # Participant-specific values remain in private reviewed storage.
+# Compatibility label for callers; this is never used to supply an amplitude.
+FALLBACK_PROVENANCE = "unavailable: no participant-specific clinical ceiling"
 
-#: What the table's numbers rest on, printed beside every ceiling the page shows.
-PI_STATED_PROVENANCE = ("stated by PI, 2026-09-14 (was 5.0 mA, stated 2026-09-02 as the hard "
-                        "limit and confirmed as the safety ceiling 2026-09-12)")
-FALLBACK_PROVENANCE = "module hard limit, no PI-stated ceiling for this participant"
-
-#: An epoch counts as TOLERATED (severity 0 at its setting) when this side's current was above zero
-#: and the setting was held at least this long. Shared by the flat fit and Stage 1 so the two
-#: fitters read one rule (until 2026-09-12 Stage 1 also counted epochs at 0 mA on this side as
-#: tolerated anchors at zero current, and the flat fit did not; the two safe sets therefore
-#: differed for the same side under the same anchors). Zero current on a side is a different
-#: therapeutic state, not the low end of that side's dose axis (OBJECTIVE_SPEC amendment
-#: 2026-08-29), so it says nothing about what that side tolerates.
 TOLERATED_RULE = ("epochs with this side's current above 0 mA held at least min_tolerated_h hours, "
                   "and not reported moderate or severe")
 
 
 def ceiling_for(participant_uid, hemisphere):
-    """``(ceiling_mA, provenance)`` for one side of one participant.
+    """Return ``(ceiling_mA, provenance)`` or explicitly refuse missing evidence.
 
-    A stated ceiling above the module hard limit is clamped to it, because the search grid stops
-    there (``plots.AMP_GRID``) and a cell above the grid cannot be scored; the provenance says the
-    clamp happened. ``None`` for the participant or the side means the fallback.
+    A configured ceiling above the representable grid is conservatively clamped
+    to its hard limit, with that clamp recorded in provenance.
     """
-    hard = float(OBJ.AMP_HARD_LIMIT_MA)
-    table = PI_STATED_CEILING_MA.get(str(participant_uid)) if participant_uid is not None else None
+    record = participant_section(participant_uid, "safety_ceiling")
+    table = record.get("values_mA")
     value = table.get(str(hemisphere)) if isinstance(table, dict) else None
-    if value is None:
-        return hard, FALLBACK_PROVENANCE
-    v = float(value)
-    if not np.isfinite(v) or v <= 0:
-        raise ValueError(f"a stated ceiling must be a positive current in mA, got {value!r} "
-                         f"for {participant_uid} {hemisphere}")
+    v = _validated_ceiling(value)
+    hard = float(OBJ.AMP_HARD_LIMIT_MA)
+    provenance = record["provenance"]
     if v > hard + 1e-9:
-        return hard, (f"{PI_STATED_PROVENANCE}; the stated {v:g} mA is above the module hard "
+        return hard, (f"{provenance}; the stated {v:g} mA is above the module hard "
                       f"limit of {hard:g} mA and is clamped to it")
-    return v, PI_STATED_PROVENANCE
+    return v, provenance
+
+
+def _validated_ceiling(value):
+    try:
+        v = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ClinicalConfigurationUnavailable("A participant-specific ceiling is required for this side.") from exc
+    if isinstance(value, bool) or not np.isfinite(v) or v <= 0:
+        raise ClinicalConfigurationUnavailable("The configured ceiling must be a finite positive current in mA.")
+    return v
 
 
 def ceilings_by_hemisphere(participant_uid, hemispheres=("Left", "Right")):
     """``{side: (ceiling_mA, provenance)}`` for every requested side; what the service passes to
     both fitters so they seed from one source."""
     return {str(h): ceiling_for(participant_uid, h) for h in hemispheres}
+
+
+def ceiling_mA_by_side(ceilings=None, sides=("Left", "Right")) -> dict:
+    """Normalize explicit ceiling mappings, refusing every missing/invalid side."""
+    out = {}
+    src = dict(ceilings or {})
+    for side in sides:
+        value = src.get(str(side))
+        if isinstance(value, (tuple, list)):
+            value = value[0] if value else None
+        out[str(side)] = min(_validated_ceiling(value), float(OBJ.AMP_HARD_LIMIT_MA))
+    return out
+
+
+def within_ceiling_mask(amp_left_mA, amp_right_mA, ceilings=None, *, tol_mA=1e-9) -> np.ndarray:
+    """True where all supplied sides are below their explicitly configured ceilings."""
+    sides = tuple(side for side, amps in (("Left", amp_left_mA), ("Right", amp_right_mA))
+                  if amps is not None)
+    c = ceiling_mA_by_side(ceilings, sides=sides)
+    keep = None
+    for side, amps in (("Left", amp_left_mA), ("Right", amp_right_mA)):
+        if amps is None:
+            continue
+        m = np.asarray(amps, dtype=float) <= c[side] + float(tol_mA)
+        keep = m if keep is None else (keep & m)
+    return np.asarray(True if keep is None else keep, dtype=bool)
+
+
+def held_at_or_below_ceiling(current_mA, ceiling_mA, *, side, source=None) -> dict:
+    """The current a side is HELD at while the other side's ladder runs, never above its ceiling.
+
+    The held side's current in force is copied into every ladder row and the clinic sheet; until
+    decision 308 it was copied as it stood. When it is above today's ceiling -- a setting programmed
+    before the ceiling was lowered -- it is held AT the ceiling instead, and the returned ``note``
+    says so in plain words for the card, the sheet caption and the conditions list. Holding at the
+    ceiling rather than refusing the ladder: the ladder measures the OTHER side, which only needs
+    this side held constant, and the ceiling is the nearest current to the one in force that the
+    page may propose. ``current_mA`` None means no reading, returned as such."""
+    cur = None if current_mA is None else float(current_mA)
+    ceil = min(_validated_ceiling(ceiling_mA), float(OBJ.AMP_HARD_LIMIT_MA))
+    out = {"current_mA": cur, "in_force_mA": cur, "ceiling_mA": ceil, "above_ceiling": False,
+           "note": None, "source": source}
+    if cur is None or not np.isfinite(cur) or cur <= ceil + 1e-9:
+        return out
+    out["current_mA"] = ceil
+    out["above_ceiling"] = True
+    out["note"] = (f"the {side} side's current in force, {cur:g} mA, is above today's safe ceiling "
+                   f"for that side, {ceil:g} mA; "
+                   f"it is held at {ceil:g} mA for this ladder, not at the current in force -- set "
+                   f"it to {ceil:g} mA before the first step")
+    return out
 
 
 def ceiling_anchors(ceiling_mA, freq_grid):
@@ -75,7 +117,7 @@ def ceiling_anchors(ceiling_mA, freq_grid):
     "not above N mA on this side" means; a single anchor at one rate would let the GP's length
     scale in frequency decide how far the statement reaches.
     """
-    c = float(ceiling_mA)
+    c = min(_validated_ceiling(ceiling_mA), float(OBJ.AMP_HARD_LIMIT_MA))
     return np.array([[float(f), c] for f in freq_grid], dtype=float).reshape(-1, 2)
 
 
@@ -119,14 +161,15 @@ def safety_seed(D, amp_col, *, freq_grid, ceiling=None, min_tolerated_h=72.0):
     """``(X, severity, severity_var, meta)`` for ``SafetyGP.fit``, the one call both fitters make.
 
     ``ceiling`` is ``(ceiling_mA, provenance)`` from :func:`ceiling_for`; ``None`` means the
-    fallback. ``meta`` carries the ceiling, its provenance, the anchors as lists, and the counts,
+    unavailable state. ``meta`` carries the ceiling, its provenance, the anchors as lists, and the counts,
     so a report can print exactly what the safety model was told.
     """
     from .routines import surrogate as SUR
 
     if ceiling is None:
         ceiling = ceiling_for(None, None)
-    ceiling_mA, provenance = float(ceiling[0]), str(ceiling[1])
+    ceiling_mA = min(_validated_ceiling(ceiling[0]), float(OBJ.AMP_HARD_LIMIT_MA))
+    provenance = str(ceiling[1])
     limits = ceiling_anchors(ceiling_mA, freq_grid)
     deliv = tolerated_anchors(D, amp_col, min_tolerated_h=min_tolerated_h)
     X, sev, var = SUR.SafetyGP.seed_from_history(deliv, limits)

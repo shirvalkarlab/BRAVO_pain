@@ -1,61 +1,19 @@
-"""How stimulation current moves band power, measured three separate ways and put side by side.
+"""Compare settled stimulation responses from three recording sources.
 
-WHAT THIS FILE IS FOR. The closed-loop deployment page needs to show the person reading it how the
-band power it wants to place a threshold on actually behaved when the stimulation current was
-turned up. There are three different ways to get a band power out of this device, they come from
-three different recordings, and this file computes all three over the same stimulation settings so
-they can be read next to each other. It answers "when the current went up, did the band power go up
-or down, and do the three ways of measuring it agree", and it answers nothing else. In particular it
-does NOT decide whether a band is fit to deploy, it does not pass or fail anything, and no verdict
-anywhere in the deployment report is allowed to depend on it. It is there to be informative.
+Time-domain voltage traces and device spectra use the calibrated conversion
+provided by the biomarker pipeline. Device band power is read in its original
+units for the programmed band only. These routes are not independent: the device
+computes power from the same signal, and conversion calibration may use paired
+recordings. Agreement checks consistency, not independent replication.
 
-THE THREE WAYS OF GETTING A BAND POWER, and they really are three different recordings:
-
-  1. FROM THE 250-SAMPLES-A-SECOND VOLTAGE TRACE. The device can stream the raw voltage of a sensing
-     contact in microvolts. We cut that trace into three second pieces, run the lab's validated
-     recipe over each piece, and multiply by the constant that puts the answer into the device's own
-     units. The trace carries the whole spectrum, so this route can report every candidate band. The
-     pieces are read out of the tile cache that the biomarker exploration page already builds
-     (Biomarkers.routines.availability.raw_lsb_spectrum_cache); nothing here recomputes them.
-
-  2. FROM THE DEVICE'S OWN SPECTRUM. The device can also run its own spectrum calculation on board
-     and hand back the result, either as a snapshot when the patient presses the button or as a
-     survey of the contacts. We add up the squared magnitude inside the band and multiply by the
-     constant for that route. This also carries the whole spectrum. Same tile cache, different
-     family inside it.
-
-  3. FROM THE DEVICE'S OWN BAND POWER, WITH NO CONVERSION AT ALL. While the device streams, it also
-     reports the band power it computed on board for the one band it was programmed to sense, about
-     twice a second, with the stimulation current of each side written next to it on the same clock.
-     Nothing is converted, so nothing can be mis-converted. This is the reference wherever it exists,
-     and it exists for one band only, which is a fact about the device and not a gap in our data.
-
-FIVE THINGS THAT ARE TRUE OF THIS MEASUREMENT AND STAY TRUE IN THE CODE. The PI read these on
-2026-09-06 and accepted all five, so they are stated once here rather than argued on the figures.
-
-  (e) Some bands carry a folded multiple of the stimulation rate. The stimulator puts out energy
-      at its own rate and at whole multiples of it, and anything above half the sampling rate folds
-      back down into the recorded spectrum. Those bands are marked on every panel and in every row.
-      The marking is a data label, not an opinion: before it was there, the largest apparent effect
-      on a heat map of this record was the stimulation artifact, reaching 45506 device units and
-      18.2 times its starting value, and it looked exactly like a spectacular biomarker. The landings
-      come from Biomarkers.routines.analytics.harmonic_landings_hz through
-      ClosedLoopDeployment.clinic_steps.amplitude_response_band_mask; the folding is not
-      reimplemented here.
-  (e) Band power is not a straight line in current, and a measurement taken while the current is
-      moving is measuring the move. The settled level is the quantity of interest. Every number this
-      file emits is an average over settled recording only, taken from the thirty seconds
-      immediately before the next increase in current, and only along a run of increases. When the
-      current falls, and especially when it falls to zero, that run has ended and the window is not
-      carried across the break. Routes 1 and 2 get this from
-      StimOptimizer.routines.within_visit.mean_power_before_next_change, which is the PI's rule
-      already written down. Route 3 can do better because it carries the current itself, so it also
-      requires the device's own record to show the current standing still across the whole window.
-
-WHY THERE IS NO LOGARITHM ANYWHERE IN HERE. The device forms a band power by adding up squared
-magnitude across the band and compares it against a threshold typed in those same units. It never
-takes a logarithm, so neither do we: every number that leaves this file is in the device's own
-units, and a reader can compare it against a threshold without doing arithmetic in their head."""
+Each source contributes only its own samples. Settled windows end at the next
+current change, preserve gaps and report refusals. Device samples additionally
+require stable current and participant-bound historical spike-ceiling quality
+control. Missing configuration never borrows another participant's thresholds.
+Folded stimulation harmonics are marked as potential interference, not evidence
+that a band measures the stimulator rather than neural activity. Outputs remain
+linear power in device units; no logarithm is taken.
+"""
 
 from __future__ import annotations
 
@@ -65,10 +23,10 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from modules.Biomarkers.routines import analytics
+from Biomarkers.routines import analytics
 from . import clinic_steps
 from . import post_ramp as _post_ramp
-from modules.StimOptimizer.routines import within_visit
+from StimOptimizer.routines import within_visit
 
 
 # -------------------------------------------------------------------------------------------------
@@ -101,17 +59,13 @@ SOURCE_COVERS_WHOLE_SPECTRUM = {
 #: second copy of this number is how the two files would come to disagree about what a band is.
 BAND_HALF_HZ = clinic_steps.BAND_HALF_HZ
 
-#: The range over which the conversion into device units was actually checked, in hertz: 7.8 to 28.3,
-#: the lowest and highest centre the device happened to sense during the paired recordings the
-#: conversion was fitted on. Read from analytics so this file cannot drift from the constants it is
-#: describing, and deliberately NOT the 30 hertz figure that also appears there -- 30 is the highest
-#: place the firmware will let an adaptive sensing band sit, which is a fact about the device, while
-#: 28.3 is the highest place we have data to check the conversion at, which is a fact about our
-#: recordings. Using the device limit here would claim a check we never ran.
+#: Calibration validation bounds come from analytics, independently of the
+#: firmware's allowed sensing range. Device capability does not prove calibration.
 CHECKED_LO_HZ = float(analytics.LSB_VALIDATED_HZ_LO)
 CHECKED_HI_HZ = float(analytics.LSB_VALIDATED_HZ_HI)
 
-# Participant-specific provenance and examples are maintained outside source control.
+#: Source-method settling margin after the device current stops moving.
+#: Retained for compatibility; participant observations underlying it stay private.
 DEVICE_SETTLE_AFTER_CURRENT_STOPS_S = 5.0
 
 #: What fraction of the samples a thirty second window could hold must actually be there before the
@@ -120,48 +74,54 @@ DEVICE_SETTLE_AFTER_CURRENT_STOPS_S = 5.0
 #: out-of-ten rule the other two routes use, written for a stream that samples fifteen times faster.
 DEVICE_MIN_SAMPLE_FRACTION = 2.0 / 3.0
 
-#: THE DEVICE ROUTE'S SATURATION CEILING (decision 33, condition 1; decision 52 for this version).
-#: About 1 percent of the device's own band-power samples that sit alongside a voltage trace are
-#: spikes: the reading jumps to ten thousand or a hundred thousand while the simultaneous trace
-#: stays flat. A sample above the ceiling for its own (electrode, band centre) is excluded from
-#: the average AND COUNTED, and a setting left with too few samples falls through to the
-#: voltage-trace route with that reason recorded.
-#:
-#: THE CEILING NO LONGER COMES FROM THE WINDOW IT CHECKS (open item 20's second concern, resolved
-#: 2026-09-08). The first version multiplied the same 30-second window's own median by a fixed
-#: fold, which fails exactly when it matters most: a window that is mostly spikes has an inflated
-#: median, so the check can miss the very case it exists for. The ceiling is now looked up from
-#: `ceiling_thresholds.POWER_DOMAIN_CEILINGS`, the 99.5th percentile of every historical reading
-#: this participant has ever produced for that exact electrode and band centre -- a period of data
-#: that can never include the window being judged. See that module's docstring for how the table
-#: was built and what it deliberately leaves out.
-CEILING_RULE_VERSION = "v2_historical_99p5_pctl_2026_09_08"
+# Historical ceilings are private participant data. Their content digest is part
+# of downstream cache identity; absence never borrows another participant's cutoff.
+CEILING_RULE_VERSION = "v3_participant_bound_historical_99p5"
 
 
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
-
-
-
-
-def device_power_ceiling(sensing_contact, centre_hz):
-    """The precomputed ceiling for this electrode and band centre, or None with no historical
-    basis to judge it -- which means the ceiling check simply does not run, never that the window
-    is refused. Matches on the band centre rounded to one decimal place, the same rounding the
-    table was built with; the device's own centre_hz values are already this coarse."""
-    from . import ceiling_thresholds as _ceil
-    if sensing_contact is None or centre_hz is None or not np.isfinite(centre_hz):
+def device_power_ceiling(sensing_contact, centre_hz, *, participant_uid=None, configuration=None):
+    from . import ceiling_thresholds
+    config = configuration or ceiling_thresholds.load_configuration(participant_uid)
+    uid = str(participant_uid) if participant_uid is not None else ""
+    if config.participant_uid != uid:
         return None
-    return _ceil.POWER_DOMAIN_CEILINGS.get((str(sensing_contact), round(float(centre_hz), 1)))
+    return config.power_ceiling(sensing_contact, centre_hz)
 
 
 # -------------------------------------------------------------------------------------------------
 # Reading the device's own band power (route 3) out of the stored streaming recordings
 # -------------------------------------------------------------------------------------------------
+def _missing_like(rec, data):
+    """The recording's own missing marks (1 = no reading at that place), shaped like its data;
+    all zeros for legacy recordings without marks, all missing for malformed marks."""
+    m = rec.get("Missing")
+    if m is None:
+        return np.zeros(data.shape)
+    try:
+        m = np.asarray(m, dtype=float)
+    except (TypeError, ValueError):
+        return np.ones(data.shape)
+    if m.shape != data.shape and m.T.shape == data.shape:
+        m = m.T
+    return m if m.shape == data.shape else np.ones(data.shape)
+
+
+def _reading_times(rec, n, t0, fs):
+    """Use exact device reading offsets when present; only legacy rows use the grid.
+
+    A malformed supplied clock cannot be replaced with plausible invented times.
+    """
+    if "ReadingTime" not in rec:
+        return t0 + np.arange(n, dtype=float) / fs
+    try:
+        offsets = np.asarray(rec["ReadingTime"], dtype=float)
+    except (TypeError, ValueError):
+        return np.full(n, np.nan)
+    if offsets.shape != (n,):
+        return np.full(n, np.nan)
+    return t0 + offsets
+
+
 def read_device_band_power(power_domain_recordings) -> Dict[str, Dict[str, Any]]:
     """Pull the device's own band power, and the current beside it, out of the streaming records.
 
@@ -196,7 +156,8 @@ def read_device_band_power(power_domain_recordings) -> Dict[str, Dict[str, Any]]
             continue
         if not np.isfinite(t0) or not np.isfinite(fs) or fs <= 0:
             continue
-        t = t0 + np.arange(data.shape[0], dtype=float) / fs
+        t = _reading_times(rec, data.shape[0], t0, fs)
+        missing = _missing_like(rec, data)
         therapy = (rec.get("Descriptor") or {}).get("Therapy") or {}
 
         # The columns are named "<CONTACT> Power" and "<CONTACT> Stimulation". Pair them by contact
@@ -217,9 +178,12 @@ def read_device_band_power(power_domain_recordings) -> Dict[str, Dict[str, Any]]
             entry = out.setdefault(contact, {"t": [], "power": [], "mA": [], "centre_hz": [],
                                              "rate_hz": [], "averaging_s": [],
                                              "hemisphere": side, "n_recordings": 0})
-            entry["t"].append(t)
-            entry["power"].append(data[:, ip])
-            entry["mA"].append(data[:, ia])
+            # only the device's own readings (decision 480 (e)): a place on the grid with no
+            # reading is marked missing and holds no number; it is no sample and counts as none
+            real = np.isfinite(t) & (missing[:, ip] == 0) & (missing[:, ia] == 0) & np.isfinite(data[:, ip]) & np.isfinite(data[:, ia])
+            entry["t"].append(t[real])
+            entry["power"].append(data[real, ip])
+            entry["mA"].append(data[real, ia])
             entry["n_recordings"] += 1
             # The band the device was sensing, the rate it was stimulating at and how long it
             # averaged over are recorded PER SAMPLE rather than once per contact. They are settings
@@ -227,7 +191,7 @@ def read_device_band_power(power_domain_recordings) -> Dict[str, Dict[str, Any]]
             # shows them doing exactly that: the right 0-3 contact was sensed at 10.74 hertz in some
             # sessions and 7.81 hertz in others. Keeping one value per contact would report whichever
             # session happened to be read first and quietly mislabel every other one.
-            n_here = data.shape[0]
+            n_here = int(real.sum())
             for key, src, scale in (("centre_hz", "FrequencyInHertz", 1.0),
                                     ("rate_hz", "RateInHertz", 1.0),
                                     ("averaging_s", "AveragingDurationInMilliSeconds", 1e-3)):
@@ -254,7 +218,7 @@ def read_device_band_power(power_domain_recordings) -> Dict[str, Dict[str, Any]]
 def device_band_power_in_window(entry, t_lo, t_hi):
     """Cut one contact's device band power down to a stretch of time, and say what it was sensing.
 
-    Everything a panel says about this route has to describe the stretch of rising current being
+    Everything a panel says about this route has to describe the stretch of stepped current being
     shown, not the whole recording history. Reporting a whole-history sample count beside one run's
     numbers would tell a reader the route is well covered here when it may have almost nothing here.
 
@@ -289,12 +253,13 @@ def settled_device_band_power(step_t0, step_end_t, current_mA, sample_t, sample_
                               window_s=within_visit.PRE_CHANGE_WINDOW_S,
                               settle_s=DEVICE_SETTLE_AFTER_CURRENT_STOPS_S,
                               min_fraction=DEVICE_MIN_SAMPLE_FRACTION,
-                              block=None, require_rise_into_setting=True,
-                              sensing_contact=None, centre_hz=None):
+                              block=None, require_change_into_setting=True, prev_current_mA=None,
+                              sensing_contact=None, centre_hz=None, participant_uid=None, ceiling_configuration=None):
     """The settled level of the device's own band power, one number per stimulation setting.
 
     This is the same rule the other two routes follow -- average the last ``window_s`` seconds before
-    the next increase in current, and only along a run of increases -- with one extra requirement
+    the current next moves, on every setting the current changed into, rising or falling (decision
+    213) -- with one extra requirement
     that only this route can check. Because the device writes the current next to the power on the
     same clock, we can insist that the device's OWN record shows the current standing still across
     the whole window, and that it stopped moving at least ``settle_s`` seconds before the window
@@ -314,8 +279,16 @@ def settled_device_band_power(step_t0, step_end_t, current_mA, sample_t, sample_
     written in ``ceiling_device_units``. A window left with fewer samples than the rule requires is
     refused with the spike count in its reason, so the setting falls through to the voltage-trace
     route rather than resting on a spike. With no ``sensing_contact``/``centre_hz`` given, or no
-    historical ceiling on record for that pair, the check simply does not run for that window.
+    historical ceiling on record for that pair inside a matching validated configuration,
+    the check does not run for that window. Missing, invalid or cross-participant
+    configuration makes this qualified route unavailable; the raw stream is untouched.
     """
+    from . import ceiling_thresholds
+    config = ceiling_configuration or ceiling_thresholds.load_configuration(participant_uid)
+    uid = str(participant_uid) if participant_uid is not None else ""
+    if config.participant_uid != uid:
+        config = ceiling_thresholds.CeilingConfiguration(uid, 'participant_mismatch')
+    ceiling = config.power_ceiling(sensing_contact, centre_hz)
     t0 = np.asarray(step_t0, dtype=float)
     amp = np.asarray(current_mA, dtype=float)
     st = np.asarray(sample_t, dtype=float)
@@ -330,7 +303,8 @@ def settled_device_band_power(step_t0, step_end_t, current_mA, sample_t, sample_
     if st.size and np.any(np.diff(st) < 0):
         raise ValueError("sample_t must be sorted ascending")
 
-    up_from_previous, _ = within_visit.rising_current_settings(amp, block)
+    changed_into, rose_into, fell_into, leg = within_visit.changed_current_settings(
+        amp, block, prev_current_mA=prev_current_mA)
     t_end = np.asarray(step_end_t, dtype=float)
     if t_end.size != n:
         raise ValueError("step_end_t must have one entry per setting")
@@ -358,15 +332,17 @@ def settled_device_band_power(step_t0, step_end_t, current_mA, sample_t, sample_
 
         reason = ""
         n_spikes = 0
-        ceiling = device_power_ceiling(sensing_contact, centre_hz)
         if n_found and ceiling is not None:
             spike = sel & (sp > ceiling)
             n_spikes = int(spike.sum())
             sel = sel & ~spike
             n_found = int(sel.sum())
-        if require_rise_into_setting and not up_from_previous[i]:
-            reason = ("the current did not go up to reach this setting, so the thirty seconds "
-                      "would mix this setting with the higher or equal current before it")
+        if not config.available:
+            reason = config.reason
+        elif require_change_into_setting and not changed_into[i]:
+            reason = ("the current did not change to reach this setting"
+                      + (" (nothing is known about the current before it)" if leg[i] == "first"
+                         else ", so there is no move whose settled level this window would describe"))
         elif not np.isfinite(t_end[i]):
             reason = ("the moment the current was next changed is not known, so there is no "
                       "thirty second window that is certain to sit inside this setting")
@@ -394,7 +370,13 @@ def settled_device_band_power(step_t0, step_end_t, current_mA, sample_t, sample_
                      "n_pieces_averaged": n_found,
                      "n_spikes_excluded": n_spikes,
                      "ceiling_device_units": ceiling,
-                     "current_went_up_into_this_setting": bool(up_from_previous[i]),
+                     "ceiling_configuration_status": config.status,
+                     "ceiling_configuration_digest": config.digest,
+                     "ceiling_check_status": ('unavailable' if not config.available else
+                                              'applied' if ceiling is not None else 'no_historical_pair'),
+                     "current_rose_into_this_setting": bool(rose_into[i]),
+                     "current_fell_into_this_setting": bool(fell_into[i]),
+                     "leg": leg[i],
                      "accepted": bool(np.isfinite(power[i])),
                      "why_not_used": reason})
     return power, pd.DataFrame(rows)
@@ -437,7 +419,7 @@ class SourcePanel:
     spectrum_power: List[List[Optional[float]]] = field(default_factory=list)
     spectrum_band_is_measuring_the_stimulator: List[bool] = field(default_factory=list)
     #: How much recording this route had before any of the settling rules were applied. All three
-    #: counts describe THIS run of rising current, never the whole recording history.
+    #: counts describe THIS run of stepped current, never the whole recording history.
     n_pieces_available_in_visit: int = 0
     n_pieces_in_run_before_quality_checks: int = 0
     n_pieces_dropped_for_quality: int = 0
@@ -456,6 +438,7 @@ class SourcePanel:
     piece_description: Optional[str] = None
     #: Set when the route has nothing to show, and it says WHY rather than leaving a blank panel.
     absent_reason: Optional[str] = None
+    ceiling_quality: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -484,12 +467,13 @@ class SourcePanel:
             "n_settings_offered": self.n_settings_offered,
             "n_settings_used": self.n_settings_used,
             "absent_reason": self.absent_reason,
+            "ceiling_quality": self.ceiling_quality,
         }
 
 
 @dataclass
 class ThreeSourceComparison:
-    """The three panels for one run of rising current on one side, plus what a reader needs to know."""
+    """The three panels for one run of stepped current on one side, plus what a reader needs to know."""
 
     label: str
     ramped_side: str
@@ -507,8 +491,7 @@ class ThreeSourceComparison:
     bands_measuring_the_stimulator_hz: List[float] = field(default_factory=list)
     stimulator_landings_hz: List[float] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
-    #: The current the OTHER side was held at throughout this run (decision 197): 0 on the 2025
-    #: visits, the side's own current in force on a titration session run as decision 160 designed.
+    #: Current held on the other side throughout the run (may be nonzero).
     other_side_mA: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
@@ -533,7 +516,8 @@ class ThreeSourceComparison:
         }
 
 
-# Participant-specific provenance and examples are maintained outside source control.
+#: Source-method arrival criterion: ignore brief increments during a current ramp.
+#: This is a method parameter, not a claim about every participant's response.
 DEVICE_MOVE_GAP_S = 20.0
 
 
@@ -547,8 +531,9 @@ def read_device_current(power_domain_recordings):
     timing.
 
     Returns ``{"blocks": [{"t": [...], "mA": {contact: [...]}}], "contacts": [...]}`` -- one block
-    per streaming recording, because the clock is continuous inside a recording and not across the
-    gap between two of them, and a run of rising current must never be assembled across such a gap.
+    per streaming recording. The run finder joins two of them only across a restart shorter than
+    its move-grouping window with the current unchanged on both sides (decision 213); any longer
+    gap, or a change across it, keeps them apart.
     """
     blocks = []
     contacts = set()
@@ -565,22 +550,57 @@ def read_device_current(power_domain_recordings):
             t0, fs = float(rec.get("StartTime")), float(rec.get("SamplingRate") or 0.0)
         except (TypeError, ValueError):
             continue
-        if not np.isfinite(t0) or fs <= 0:
+        if not np.isfinite(t0) or not np.isfinite(fs) or fs <= 0:
             continue
         cols = {n[: -len(" Stimulation")]: i for i, n in enumerate(names)
                 if n.endswith(" Stimulation") and i < data.shape[1]}
         if not cols:
             continue
         contacts |= set(cols)
-        blocks.append({"t": t0 + np.arange(data.shape[0], dtype=float) / fs,
-                       "mA": {c: data[:, i] for c, i in cols.items()}})
+        # only the rows where the device reported the current on every side (decision 480 (e)): a
+        # place on the grid with no reading is marked missing and holds no number
+        missing = _missing_like(rec, data)
+        idx = list(cols.values())
+        t = _reading_times(rec, data.shape[0], t0, fs)
+        real = np.isfinite(t) & np.all(missing[:, idx] == 0, axis=1) & np.all(np.isfinite(data[:, idx]), axis=1)
+        blocks.append({"t": t[real],
+                       "mA": {c: data[real, i] for c, i in cols.items()}})
     blocks.sort(key=lambda b: float(b["t"][0]) if len(b["t"]) else np.inf)
     return {"blocks": blocks, "contacts": sorted(contacts)}
 
 
+def join_recordings_across_short_gaps(blocks, *, gap_s=DEVICE_MOVE_GAP_S):
+    """Concatenate consecutive streaming recordings separated by less than ``gap_s`` when the
+    current on BOTH sides is the same at the end of one and the start of the next (decision 213).
+
+    A short restart with unchanged current need not split the ladder. Only actual
+    samples contribute; missing band-power pieces in the gap remain missing.
+    """
+    out = []
+    for b in blocks or []:
+        t = np.asarray(b["t"], dtype=float)
+        if t.size == 0:
+            continue
+        if out:
+            prev = out[-1]
+            pt = prev["t"]
+            same_contacts = set(prev["mA"]) == set(b["mA"])
+            gap = float(t[0]) - float(pt[-1])
+            held = same_contacts and all(float(prev["mA"][c][-1]) == float(b["mA"][c][0]) for c in b["mA"])
+            if same_contacts and 0.0 < gap <= float(gap_s) and held:
+                out[-1] = {"t": np.concatenate([pt, t]),
+                           "mA": {c: np.concatenate([np.asarray(prev["mA"][c], dtype=float),
+                                                     np.asarray(b["mA"][c], dtype=float)]) for c in b["mA"]},
+                           "n_recordings_joined": prev.get("n_recordings_joined", 1) + 1}
+                continue
+        out.append({"t": t, "mA": {c: np.asarray(v, dtype=float) for c, v in b["mA"].items()},
+                    "n_recordings_joined": b.get("n_recordings_joined", 1)})
+    return out
+
+
 def find_single_side_runs_from_device(current_record, *, min_settings=3,
                                       move_gap_s=DEVICE_MOVE_GAP_S):
-    """Find the runs of rising current on ONE side, from the device's own current record.
+    """Find the runs of stepped current on ONE side, from the device's own current record.
 
     Same question as :func:`find_single_side_runs` and the same answer shape, asked of the device's
     own log instead of the clinic testing sheet. This is the version the server uses, because the
@@ -598,7 +618,8 @@ def find_single_side_runs_from_device(current_record, *, min_settings=3,
     and when the current falls the run ends, so no window is ever carried across a break.
     """
     runs = []
-    for block in (current_record or {}).get("blocks", []):
+    for block in join_recordings_across_short_gaps((current_record or {}).get("blocks", []),
+                                                   gap_s=move_gap_s):
         t = np.asarray(block["t"], dtype=float)
         if t.size < 3:
             continue
@@ -632,22 +653,19 @@ def find_single_side_runs_from_device(current_record, *, min_settings=3,
             # away the highest current of every run that ended with the recording, which on this
             # record is most of them.
             t_end = float(t[later[0]]) if later else float(t[-1])
+            # the current the device was at BEFORE this move: the sample before the move's first
+            # increment, so the settled rule can judge the first setting of a recording too
+            first_inc = max(x for x in starts if t[x] <= t[e] + 1e-9)
             settings.append({"t0": float(t[e]), "t_end": t_end,
-                             "left_mA": float(aL[e]), "right_mA": float(aR[e])})
+                             "left_mA": float(aL[e]), "right_mA": float(aR[e]),
+                             "prev_left_mA": float(aL[first_inc - 1]),
+                             "prev_right_mA": float(aR[first_inc - 1])})
         if not settings:
             continue
 
-        # THE RULE (decision 197, 2026-09-17, the PI: "accept ANY and all clinic and at home
-        # testing sessions ... any change in a setting on either side counts as a new setting").
-        # A SETTING is any stretch of constant current on both sides (a change on either side
-        # starts a new one -- that is what `settings` above holds). A RUN is a maximal stretch of
-        # consecutive settings in which ONE side's current moves and the OTHER side's stays
-        # exactly where it was -- at zero or at any other value; the setting the run starts from
-        # is its first point (the baseline, whatever moved into it), and a move on which both
-        # sides changed, or the held side changing, ends the run. Until this the other side had
-        # to be at ZERO, the shape of the 2025 visits; the titration session of decision 160 holds
-        # the other side at its own current in force, and the 2026-09-16 visit -- run exactly
-        # that way -- was invisible to every table built from here.
+        # A setting is constant current on both sides. A run permits one side
+        # to move while the other remains fixed at any value. Both sides moving
+        # or a change on the held side ends the run.
         def moved(prev, cur):
             dl = cur["left_mA"] != prev["left_mA"]
             dr = cur["right_mA"] != prev["right_mA"]
@@ -669,6 +687,8 @@ def find_single_side_runs_from_device(current_record, *, min_settings=3,
             chunk = settings[i:j + 1]
             amp = np.array([(st["left_mA"] if side == "Left" else st["right_mA"])
                             for st in chunk], dtype=float)
+            prev = np.array([(st["prev_left_mA"] if side == "Left" else st["prev_right_mA"])
+                             for st in chunk], dtype=float)
             held = float(chunk[0]["right_mA"] if side == "Left" else chunk[0]["left_mA"])
             if len(chunk) >= int(min_settings):
                 label = f"{side} run {len(runs) + 1}"
@@ -679,6 +699,7 @@ def find_single_side_runs_from_device(current_record, *, min_settings=3,
                         "t0": [st["t0"] for st in chunk],
                         "t_end": [st["t_end"] for st in chunk],
                         "current_mA": amp,
+                        "prev_current_mA": prev,
                         "block": [label] * len(chunk)}),
                     "n_settings": int(len(chunk)),
                     "current_from_mA": _lowest_positive(amp),
@@ -822,11 +843,15 @@ def _tile_panel(source, tile_t, tile_power, ok_mask, centres, steps, *, band_ind
         panel.absent_reason = absent_when_empty
         return panel
 
-    # Participant-specific provenance and examples are maintained outside source control.
+    # Apply the configured post-ramp policy. t0 is the last increment of the
+    # move, so the optional margin removes early settling samples as intended
+    # by the shared within-visit rule. Stored result versions must reflect it.
     power, table = within_visit.mean_power_before_next_change(
         steps["t0"].to_numpy(dtype=float), steps["current_mA"].to_numpy(dtype=float),
         t, P, block=steps["block"].to_numpy(), step_end_t=steps["t_end"].to_numpy(dtype=float),
         window_s=window_s, min_chunks=min_pieces,
+        prev_current_mA=(steps["prev_current_mA"].to_numpy(dtype=float)
+                         if "prev_current_mA" in steps.columns else None),
         ramp_end_t=steps["t0"].to_numpy(dtype=float),
         ramp_margin_s=_post_ramp.margin_s())
 
@@ -835,9 +860,9 @@ def _tile_panel(source, tile_t, tile_power, ok_mask, centres, steps, *, band_ind
     if panel.n_settings_used == 0:
         panel.absent_reason = (
             f"this route had {t.size} usable three second pieces of recording inside this run of "
-            f"rising current, but none of the {len(steps)} stimulation settings had the "
+            f"stepped current, but none of the {len(steps)} stimulation settings had the "
             f"{int(min_pieces)} pieces the settled rule requires in the {window_s:g} seconds "
-            f"before the next current increase")
+            f"before the next current change")
         return panel
 
     j = band_index
@@ -856,11 +881,13 @@ def _tile_panel(source, tile_t, tile_power, ok_mask, centres, steps, *, band_ind
     amps = steps["current_mA"].to_numpy(dtype=float)
     counts = table["n_chunks_found"].to_numpy()
     why = table["refusal_reason"].tolist()
+    legs = table["leg"].tolist()
     for i in range(len(steps)):
         v = power[i, j] if used[i] else np.nan
         row = {"current_mA": float(amps[i]) if np.isfinite(amps[i]) else None,
                "settled_power": float(v) if np.isfinite(v) else None,
                "n_pieces": int(counts[i]),
+               "leg": legs[i],
                "accepted": bool(np.isfinite(v)),
                "why_not_used": (why[i] if not np.isfinite(v) else "")}
         panel.settings.append(row)
@@ -879,8 +906,9 @@ def build_comparison(*, label, ramped_side, sensing_contact, steps, visit_date,
                      window_start_local, window_end_local,
                      tiles, device_band_power, stimulation_rate_hz,
                      window_s=within_visit.PRE_CHANGE_WINDOW_S,
-                     min_pieces=within_visit.MIN_CHUNKS_PRE_CHANGE, other_side_mA=0.0):
-    """Compute all three panels for one run of rising current on one side.
+                     min_pieces=within_visit.MIN_CHUNKS_PRE_CHANGE, other_side_mA=0.0,
+                     participant_uid=None, ceiling_configuration=None):
+    """Compute all three panels for one run of stepped current on one side.
 
     ``steps`` is a table of the stimulation settings in time order, with ``t0`` the moment each
     setting started, ``t_end`` the moment the next one started, ``current_mA`` the current of the
@@ -969,7 +997,7 @@ def build_comparison(*, label, ramped_side, sensing_contact, steps, visit_date,
         centres, steps, band_index=j, programmed_centre_hz=programmed, usable_band_mask=usable,
         window_s=window_s, min_pieces=min_pieces, run_window=run_window,
         absent_when_empty=("the device streamed no voltage trace on this contact during this run of "
-                           "rising current, so there is nothing to compute a band power from")))
+                           "stepped current, so there is nothing to compute a band power from")))
 
     # ---- route 2: the device's own spectrum ----
     psd = tiles.get("psd") or {}
@@ -977,7 +1005,7 @@ def build_comparison(*, label, ramped_side, sensing_contact, steps, visit_date,
         SOURCE_DEVICE_SPECTRUM, psd.get("t", []), psd.get("lsb", np.empty((0, centres.size))), None,
         centres, steps, band_index=j, programmed_centre_hz=programmed, usable_band_mask=usable,
         window_s=window_s, min_pieces=min_pieces, run_window=run_window,
-        absent_when_empty=("the device produced none of its own spectra during this run of rising "
+        absent_when_empty=("the device produced none of its own PSD snapshots during this run of rising "
                            "current. It computes one only when the patient presses the button or "
                            "when a contact survey is run with the stimulation off, and neither "
                            "happened here")))
@@ -992,7 +1020,7 @@ def build_comparison(*, label, ramped_side, sensing_contact, steps, visit_date,
     elif not device_here or int(device_here.get("n_samples") or 0) == 0:
         whole = int((device_band_power or {}).get("n_samples") or 0)
         panel.absent_reason = ("the device reported none of its own band power on this contact "
-                               "during this run of rising current, so this route has nothing to "
+                               "during this run of stepped current, so this route has nothing to "
                                "show. It exists only while the device is streaming"
                                + (f", and it did stream {whole} samples on this contact at other "
                                   f"times in the record" if whole else ""))
@@ -1014,7 +1042,15 @@ def build_comparison(*, label, ramped_side, sensing_contact, steps, visit_date,
             steps["current_mA"].to_numpy(dtype=float),
             device_band_power["t"], device_band_power["power"], device_band_power["mA"],
             block=steps["block"].to_numpy(), window_s=window_s,
-            sensing_contact=sensing_contact, centre_hz=programmed)
+            prev_current_mA=(steps["prev_current_mA"].to_numpy(dtype=float)
+                             if "prev_current_mA" in steps.columns else None),
+            sensing_contact=sensing_contact, centre_hz=programmed,
+            participant_uid=participant_uid, ceiling_configuration=ceiling_configuration)
+        panel.ceiling_quality = {
+            key: table[key].iloc[0] if len(table) else None
+            for key in ('ceiling_configuration_status', 'ceiling_configuration_digest',
+                        'ceiling_check_status', 'ceiling_device_units')
+        }
         used = np.isfinite(power)
         panel.n_settings_used = int(used.sum())
         if panel.n_settings_used == 0:
@@ -1036,12 +1072,15 @@ def build_comparison(*, label, ramped_side, sensing_contact, steps, visit_date,
             counts = table["n_pieces_averaged"].to_numpy()
             spikes = table["n_spikes_excluded"].to_numpy()
             why = table["why_not_used"].tolist()
+            legs = table["leg"].tolist()
             for i in range(len(steps)):
                 v = power[i]
                 row = {"current_mA": float(amps[i]) if np.isfinite(amps[i]) else None,
                        "settled_power": float(v) if np.isfinite(v) else None,
                        "n_pieces": int(counts[i]),
                        "n_spikes_excluded": int(spikes[i]),
+                       **panel.ceiling_quality,
+                       "leg": legs[i],
                        "accepted": bool(np.isfinite(v)),
                        "why_not_used": (why[i] if not np.isfinite(v) else "")}
                 panel.settings.append(row)
@@ -1059,7 +1098,7 @@ def build_comparison(*, label, ramped_side, sensing_contact, steps, visit_date,
         "conversion into device units was fitted. Agreement here means the conversion is behaving, "
         "not that stimulation moved the brain three times over.",
         f"Every number is an average over settled recording only: the {float(window_s):g} seconds "
-        f"before the next increase in current, along a run of increases. Where the current fell, the "
+        f"before the next change in current, along a run of steps up or down. Where the current fell, the "
         f"run ended and no window was carried across the break.",
         f"Bands where a multiple of the {stimulation_rate_hz:g} hertz stimulation lands after "
         f"sampling are marked; those carry a folded multiple of the stimulation rate.",
@@ -1092,6 +1131,7 @@ def comparison_rows(comparison: ThreeSourceComparison) -> List[Dict[str, Any]]:
             "conversion_into_device_units": panel.conversion_into_device_units,
             "piece_length_s": panel.piece_length_s,
             "route_absent_reason": panel.absent_reason or "",
+            **panel.ceiling_quality,
         }
 
     for panel in comparison.panels:
@@ -1112,6 +1152,7 @@ def comparison_rows(comparison: ThreeSourceComparison) -> List[Dict[str, Any]]:
                          "band_lower_edge_hz": panel.band_lo_hz,
                          "band_upper_edge_hz": panel.band_hi_hz,
                          "current_mA": st["current_mA"],
+                         "leg": st.get("leg"),
                          "settled_band_power_device_units": st["settled_power"],
                          "n_pieces_averaged": st["n_pieces"],
                          "n_spikes_excluded": int(st.get("n_spikes_excluded", 0) or 0),
@@ -1137,6 +1178,7 @@ def comparison_rows(comparison: ThreeSourceComparison) -> List[Dict[str, Any]]:
                              "band_lower_edge_hz": centre - BAND_HALF_HZ,
                              "band_upper_edge_hz": centre + BAND_HALF_HZ,
                              "current_mA": st["current_mA"],
+                             "leg": st.get("leg"),
                              "settled_band_power_device_units": panel.spectrum_power[k_acc][jj],
                              "n_pieces_averaged": st["n_pieces"],
                              "band_is_measuring_the_stimulator":
@@ -1151,44 +1193,33 @@ def comparison_rows(comparison: ThreeSourceComparison) -> List[Dict[str, Any]]:
 # The one call the server makes
 # -------------------------------------------------------------------------------------------------
 def build_for_participant(uid, *, max_runs=4, min_settings=3, loaded_sink=None):
-    """Build every three-source comparison this participant's record supports, for the report.
+    """Build comparisons supported by this participant's recordings.
 
-    ``loaded_sink``, when a dict is given, receives the decoded recordings this build loaded
-    (``power``, ``td``, ``psd``) and the tile cache entry (``cache``), so the same request can hand
-    them to the simulation instead of decoding the same files a second time (review C8,
-    2026-09-12; decision 77 measured the time-domain load at 1.27 s and the PSD load at 0.38 s).
-    They are NOT put in the payload, which is serialised to the page whole.
-
-    WHERE THE LADDER OF CURRENTS COMES FROM, and why it is not the clinic testing sheet. The sheets
-    are a spreadsheet a person keeps during the visit, they live in the analysis folder, and the
-    server has no copy of them. The device's own log of the current it delivered is in the database
-    already, and -- the reason it is the one to use -- it is written on the SAME CLOCK as the band
-    power it reported, so a setting and the power measured during it cannot be misaligned by however
-    far the two clocks have drifted apart. It also records what the device delivered rather than what
-    was intended.
-
-    ONE CONSEQUENCE OF USING THE DEVICE'S LOG, stated because it shortens a run rather than
-    lengthening it. The log stops when the streaming session stops. On that same visit the clinician
-    kept stepping the right side up to 3.0 mA but the device stopped streaming after 2.0 mA, so the
-    run reported here ends at 2.0 mA. This is not a loss: the voltage trace behind the first panel
-    comes from the same streaming session, so it stopped at the same moment. A run is never joined
-    across such a gap, because on the far side of it there is no record that the current rose.
-
-    Returns a payload dictionary, and NEVER raises for want of data. When the record supports no
-    comparison at all, the payload says which of the required pieces was missing."""
-    from modules.Biomarkers import bravo_service as bs
-    from modules.Biomarkers.routines import availability as _avail
+    loaded_sink optionally shares decoded recordings with other calculations in
+    this request. It is not serialized into the report. Current-setting ladders
+    come from the device log on the same clock as power, rather than manual visit
+    sheets. Comparisons end when observed streaming ends; unrecorded settings and
+    samples are never inferred. Missing inputs return an explicit absent reason.
+    """
+    from Biomarkers import bravo_service as bs
+    from Biomarkers.routines import availability as _avail
 
     payload: Dict[str, Any] = {"comparisons": [], "gates_nothing": True,
                                "ladder_from": "the device's own per-sample current record"}
 
+    from . import ceiling_thresholds
+    ceiling_configuration = ceiling_thresholds.load_configuration(uid)
+    payload["ceiling_configuration"] = {
+        "status": ceiling_configuration.status, "digest": ceiling_configuration.digest,
+        "reason": ceiling_configuration.reason,
+    }
     power = bs._load_recordings(uid, bs.POWERDOMAIN_TYPES)
     if isinstance(loaded_sink, dict):
         loaded_sink["power"] = power
     if not power:
         payload["absent_reason"] = (
             "the device has no streaming recordings stored for this participant, so there is no "
-            "record of the current it delivered and no run of rising current to measure against")
+            "record of the current it delivered and no run of stepped current to measure against")
         return payload
 
     current = read_device_current(power)
@@ -1197,7 +1228,7 @@ def build_for_participant(uid, *, max_runs=4, min_settings=3, loaded_sink=None):
     if not runs:
         payload["absent_reason"] = (
             f"the device streamed {len(current['blocks'])} recordings, but none of them contains a "
-            f"stretch of at least {int(min_settings)} rising currents on one side with the other "
+            f"stretch of at least {int(min_settings)} stepped currents on one side with the other "
             f"side at zero. Only such a stretch lets a change in band power be attributed to one "
             f"side, so there is nothing here that can be compared three ways")
         return payload
@@ -1249,7 +1280,8 @@ def build_for_participant(uid, *, max_runs=4, min_settings=3, loaded_sink=None):
                 visit_date=f"{stamp:%Y-%m-%d}", window_start_local=f"{stamp:%Y-%m-%d %H:%M:%S}",
                 window_end_local=f"{stamp_end:%Y-%m-%d %H:%M:%S}",
                 tiles=cache[picked], device_band_power=device.get(picked),
-                stimulation_rate_hz=rate)
+                stimulation_rate_hz=rate, participant_uid=uid,
+                ceiling_configuration=ceiling_configuration)
         except Exception as exc:                        # one bad run must not lose the others
             payload.setdefault("runs_that_failed", []).append(
                 {"side": run["side"], "starting_at": f"{stamp:%Y-%m-%d %H:%M:%S}",
@@ -1259,10 +1291,7 @@ def build_for_participant(uid, *, max_runs=4, min_settings=3, loaded_sink=None):
 
     if not payload["comparisons"]:
         payload["absent_reason"] = (
-            f"the device's current record holds {len(runs)} runs of rising current on one side, but "
+            f"the device's current record holds {len(runs)} runs of stepped current on one side, but "
             f"none of them could be matched to a sensing contact that was reporting band power at "
             f"the time, so there is no band on which the three routes can be compared")
     return payload
-
-
-# Retained active Aditya interfaces.

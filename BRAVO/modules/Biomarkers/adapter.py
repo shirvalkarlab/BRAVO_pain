@@ -32,9 +32,11 @@ from scipy.signal import savgol_filter
 try:
     from modules.DecodeCommon.representation import missing_per_sample as _missing_per_sample
     from modules.DecodeCommon import matching as _matching
+    from modules.DecodeCommon.representation import merge_chronic_repeats as _merge_chronic_repeats
 except ImportError:
-    from modules.DecodeCommon.representation import missing_per_sample as _missing_per_sample
-    from modules.DecodeCommon import matching as _matching
+    from DecodeCommon.representation import missing_per_sample as _missing_per_sample
+    from DecodeCommon import matching as _matching
+    from DecodeCommon.representation import merge_chronic_repeats as _merge_chronic_repeats
 
 # THE CALENDAR DAY IS THE CALIFORNIA DAY (review B1, 2026-09-12). Every instant in this file is
 # tz-naive UTC by the time a "day" is read from it, and UTC midnight is 4-5 pm in California, so
@@ -46,16 +48,6 @@ from .routines.local_time import local_calendar_day as _local_day
 # ---------------------------------------------------------------------------
 # 1) Recording reshape: BRAVO TimeDomain dict -> Stream-like epoch dict
 # ---------------------------------------------------------------------------
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
-from .routines.availability import _missing_per_sample
-
-from .routines.local_time import local_calendar_day
-
 def bravo_timedomain_to_streamdata(recording):
     """
     Convert one BRAVO TimeDomain recording dict into the per-epoch dict the streaming
@@ -67,7 +59,7 @@ def bravo_timedomain_to_streamdata(recording):
        "channel_names": [ [ch0, ch1, ...] ],
        "sample_rate": float,
        "start_time": float or None,
-       "missing": per-sample dropped-packet flags, or None}
+       "missing": (n_samples,) 0/1 dropped-packet flag, or None if the recording carries none}
     """
     data = np.asarray(recording["Data"], dtype=float)
     if data.ndim == 1:
@@ -115,12 +107,47 @@ def _to_datetime(value):
 # ---------------------------------------------------------------------------
 # 3) PRO alignment to the stim/LFP timeline
 # ---------------------------------------------------------------------------
+def report_sharing(rating_cluster_id, *, mode, cap_per_report=None, n_dropped_by_cap=0) -> dict:
+    'How many pain reports the session matcher let more than one session claim, as a WARNING,.'
+    out = {"mode": mode, "cap_per_report": cap_per_report, "n_dropped_by_cap": int(n_dropped_by_cap or 0),
+           "n_sessions_matched": 0, "n_reports_matched": 0, "n_reports_shared": 0,
+           "n_sessions_on_shared_reports": 0, "max_sessions_per_report": 0, "warning": None}
+    if mode != "time_window" or rating_cluster_id is None:
+        return out
+    ids = np.asarray(rating_cluster_id, dtype=int)
+    ids = ids[ids >= 0]
+    if ids.size == 0:
+        return out
+    _, counts = np.unique(ids, return_counts=True)
+    shared = counts[counts > 1]
+    out.update({"n_sessions_matched": int(ids.size), "n_reports_matched": int(counts.size),
+                "n_reports_shared": int(shared.size), "n_sessions_on_shared_reports": int(shared.sum()),
+                "max_sessions_per_report": int(counts.max())})
+    if shared.size:
+        cap_txt = (f"within the cap of {int(cap_per_report)} sessions per report set on this page"
+                   if cap_per_report else "with no cap on sessions per report")
+        out["warning"] = (
+            f"Warning: {int(shared.size)} of {int(counts.size)} matched pain reports are claimed by more "
+            f"than one recording session ({int(shared.sum())} sessions; at most {int(counts.max())} per "
+            f"report), {cap_txt}. The correlation's p-value is grouped on the report, so a shared report "
+            f"counts once there.")
+    return out
+
+
 def align_pros(pro_df, *, target, recordings=None, chronic=None,
                metrics=("nrs", "vas", "mpq_sum"),
                timestamp_col="date_time_s1_daily",
-               stim_amplitudes=None, match_tolerance_min=None):
+               stim_amplitudes=None, match_tolerance_min=None,
+               max_per_rating=None, refractory_min=0.0, match_direction="nearest"):
     """
     Align REDCap PRO rows to the decoded timeline.
+
+    `max_per_rating`, `refractory_min` and `match_direction` (the PI, 2026-09-21) are the
+    Binarization card's own matching settings, applied here to sessions per report exactly as the
+    card applies them to neural samples per rating: at most `max_per_rating` sessions per report,
+    the nearest first, none within `refractory_min` minutes of one already kept, in the page's
+    direction ("nearest", "prior", "pro_first"). `max_per_rating=None` keeps the uncapped
+    behaviour for callers that ask for it.
 
     Parameters
     ----------
@@ -130,8 +157,10 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
     target : {"session", "chronic"}
         "session": one output row per streaming session (mirrors notebook cell 7 -- PRO
                    metrics aggregated by the session's calendar date: mean & min).
-        "chronic": one output row per chronic 10-min sample, with the nearest-date PRO
+        "chronic": one output row per chronic 10-min sample, with the same-date PRO mean
                    joined and the stim amplitude taken from the chronic packet itself.
+        "Calendar date" on both is the CALIFORNIA date of the UTC instant
+        (`routines.local_time.local_calendar_day`), never the UTC date -- review B1, 2026-09-12.
     recordings : list[dict], required for target="session"
         BRAVO TimeDomain (or PowerDomain) recordings; their `StartTime` sets the session date.
     chronic : dict, required for target="chronic"
@@ -170,53 +199,74 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
         df[timestamp_col] = pd.to_datetime(df["_pro_time_utc"], errors="coerce")
     else:
         df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors="coerce")
-    # Canonical values are UTC instants; the raw library fallback can still be
-    # naive local wall time. Choose dates without reinterpreting match timestamps.
-    df["_date"] = local_calendar_day(df[timestamp_col],
-                                     naive_is_local="_pro_time_utc" not in pro_df.columns)
+    # The rating's CALIFORNIA calendar day, not the UTC one (review B1).
+    df["_date"] = _local_day(df[timestamp_col])
 
     if target == "session":
         if recordings is None:
             raise ValueError('target="session" requires `recordings`.')
 
-        # Time-window matching path: pre-sort PRO reports by timestamp once, then for each session
-        # take the nearest report within tolerance. Vectorized via searchsorted on the sorted times.
+        # Time-window matching path: nearest report within tolerance, via the shared Layer 1
+        # matcher (`DecodeCommon.matching.matched_samples`) rather than a private reimplementation
+        # of the same nearest-neighbour search -- Track B of the shared matching layer plan.
+        # `max_per_rating=None` reproduces this call site's own, pre-existing behavior exactly: no
+        # independence rule, so one PRO report may still match any number of sessions.
         tol = None if match_tolerance_min is None else float(match_tolerance_min)
         if tol is not None and tol > 0:
             valid = df[pd.notna(df[timestamp_col])].sort_values(timestamp_col).reset_index(drop=True)
-            pro_times = valid[timestamp_col].to_numpy("datetime64[ns]")
-            tol_ns = np.timedelta64(int(round(tol * 60.0 * 1e9)), "ns")
+            pro_times_ns = valid[timestamp_col].to_numpy("datetime64[ns]")
+            pro_ns_i64 = pro_times_ns.astype(np.int64)
+            session_ts = [_to_datetime(rec.get("StartTime")) for rec in recordings]
+            # `.to_datetime64()` on a pandas Timestamp does NOT always give nanosecond resolution
+            # -- a Timestamp built from a plain `datetime.datetime` (as `_to_datetime` does, via
+            # `datetime.datetime.utcfromtimestamp`) carries only microsecond resolution in pandas
+            # 2.x, so casting it to int64 directly would read microseconds as if they were
+            # nanoseconds, a 1000x error. Forcing "datetime64[ns]" first, exactly as already done
+            # for `pro_times_ns` above, makes both sides' units agree.
+            session_ns_i64 = np.array([
+                (t.to_datetime64().astype("datetime64[ns]").astype(np.int64) if not pd.isna(t)
+                else np.iinfo(np.int64).min)
+                for t in session_ts
+            ])
+            # A shared reference epoch, subtracted in exact integer nanoseconds before converting
+            # to the float64 seconds `matched_samples` takes. Epoch nanoseconds since 1970 are
+            # ~1.7e18, so a raw float64 conversion keeps only ~7 significant digits after the
+            # decimal at that magnitude (float64 has ~15-17 total) -- a few hundred nanoseconds of
+            # noise, negligible for a minutes-wide tolerance window but still a real, avoidable
+            # loss of precision this project's own equality-proof discipline does not accept
+            # without checking. Shifting first keeps the matched magnitude near zero, so the
+            # float64 conversion below is exact to well under a nanosecond.
+            finite_session_ns = session_ns_i64[session_ns_i64 != np.iinfo(np.int64).min]
+            ref_ns = int(min(pro_ns_i64.min() if pro_ns_i64.size else 0,
+                             finite_session_ns.min() if finite_session_ns.size else 0))
+            pro_times_s = (pro_ns_i64 - ref_ns) / 1e9
+            session_times_s = np.where(session_ns_i64 == np.iinfo(np.int64).min, np.nan,
+                                       (session_ns_i64 - ref_ns) / 1e9)
+            _dir = str(match_direction or "nearest").lower()
+            match = _matching.matched_samples(
+                session_times_s, session_times_s, pro_times_s, np.zeros(len(valid)),
+                tolerance_min=tol, direction=_dir,
+                max_per_rating=(int(max_per_rating) if max_per_rating else None),
+                refractory_min=float(refractory_min or 0.0))
             rows = []
             for i, rec in enumerate(recordings):
-                ts = _to_datetime(rec.get("StartTime"))
+                ts = session_ts[i]
                 row = {"session_index": i, "session_start": ts,
-                       "session_date": local_calendar_day(ts),
+                       "session_date": _local_day(ts),
                        "matched": False, "match_dt_min": np.nan,
                        "matched_pro_time": pd.NaT}
-                j = -1
-                if not pd.isna(ts) and len(pro_times):
-                    ts64 = np.datetime64(ts.to_datetime64())
-                    pos = int(np.searchsorted(pro_times, ts64))
-                    # Nearest of the two neighbours straddling ts (searchsorted gives the right one).
-                    best, best_d = -1, None
-                    for k in (pos - 1, pos):
-                        if 0 <= k < len(pro_times):
-                            d = abs(pro_times[k] - ts64)
-                            if d <= tol_ns and (best_d is None or d < best_d):
-                                best, best_d = k, d
-                    j = best
+                j = int(match["rating_cluster_id"][i])
                 if j >= 0:
                     rr = valid.iloc[j]
-                    dt_min = (pro_times[j] - np.datetime64(ts.to_datetime64())) / np.timedelta64(1, "m")
                     row["matched"] = True
-                    row["match_dt_min"] = float(dt_min)
+                    row["match_dt_min"] = float(match["dt_min"][i])
                     # IDENTITY of the matched report, not its value. Callers need to know WHICH
                     # rating a session was matched to in order to cluster/group correctly. Without
                     # it, pipeline.run_timedomain_branch reconstructed the grouping by searching for
                     # a PRO whose VALUE equalled the label, which on an integer pain scale collapses
                     # every session sharing a score into one "rating" — and worse, makes the grouping
                     # a function of the outcome being predicted.
-                    row["matched_pro_time"] = pd.Timestamp(pro_times[j])
+                    row["matched_pro_time"] = pd.Timestamp(pro_times_ns[j])
                     for m in metrics:
                         v = float(rr[m]) if (m in valid.columns and pd.notna(rr[m])) else np.nan
                         row[f"{m}_mean"] = v
@@ -230,13 +280,18 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
                 else:
                     row["stim_amplitude"] = _session_stim_amplitude(rec)
                 rows.append(row)
-            return pd.DataFrame(rows)
+            out = pd.DataFrame(rows)
+            out.attrs["report_sharing"] = report_sharing(
+                match["rating_cluster_id"], mode="time_window",
+                cap_per_report=(int(max_per_rating) if max_per_rating else None),
+                n_dropped_by_cap=int(match.get("n_dropped_by_cap", 0) or 0))
+            return out
 
         # Legacy same-calendar-day mean/min (match_tolerance_min is None).
         rows = []
         for i, rec in enumerate(recordings):
             ts = _to_datetime(rec.get("StartTime"))
-            sess_date = local_calendar_day(ts)
+            sess_date = _local_day(ts)
             same_day = df[df["_date"] == sess_date] if sess_date is not None else df.iloc[0:0]
             # On this path the "rating" is the DAY'S AGGREGATE (mean/min over that date's reports),
             # so the identity of the matched rating is the date itself: two sessions on the same day
@@ -258,7 +313,9 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
             else:
                 row["stim_amplitude"] = _session_stim_amplitude(rec)
             rows.append(row)
-        return pd.DataFrame(rows)
+        out = pd.DataFrame(rows)
+        out.attrs["report_sharing"] = report_sharing(None, mode="same_day")
+        return out
 
     elif target == "chronic":
         if chronic is None:
@@ -269,17 +326,23 @@ def align_pros(pro_df, *, target, recordings=None, chronic=None,
         amp = cdata[:, 1] if cdata.shape[1] > 1 else np.full(len(time), np.nan)
         chronic_ts = [_to_datetime(t) for t in time]
 
-        # Reduce each day/metric once, then broadcast to chronic samples. Use the
-        # existing Series.mean reduction (rather than groupby.mean) to preserve
-        # its floating-point and nullable-dtype behavior exactly.
-        if not chronic_ts:
-            return pd.DataFrame()
-        pro_by_date = {d: g for d, g in df.groupby("_date")}
-        chronic_dates = local_calendar_day(chronic_ts)
+        # Nearest-date PRO join (PROs are daily; chronic samples are ~10 min). One vectorized
+        # per-date mean instead of a per-sample `.mean()` call per metric per row: `m in g.columns`
+        # was really checking df's own columns (identical for every group), so it's hoisted out of
+        # the loop; `df.groupby("_date")` drops NaT dates by default, matching the old
+        # `pro_by_date.get(d)` returning None (-> NaN) for any date that never appears.
+        present_metrics = [m for m in metrics if m in df.columns]
+        # Each sample's CALIFORNIA calendar day, the same rule `_date` above was built with, so a
+        # rating filed at 18:00 local joins the samples recorded that local day (review B1).
+        chronic_dates = _local_day(chronic_ts)
         out = pd.DataFrame({"time": chronic_ts, "lfp": lfp, "stim_amplitude": amp})
+        if present_metrics:
+            joined = df.groupby("_date")[present_metrics].mean().reindex(chronic_dates)
+            for m in present_metrics:
+                out[m] = joined[m].to_numpy()
         for m in metrics:
-            means = {d: g[m].mean() for d, g in pro_by_date.items() if m in g.columns}
-            out[m] = [means.get(d, np.nan) for d in chronic_dates]
+            if m not in present_metrics:
+                out[m] = np.nan
         return out
 
     else:
@@ -334,6 +397,18 @@ def _concat_chronic(chronic, mad_k=None):
     chronic = [c for c in chronic if c is not None]
     if not chronic:
         raise ValueError("chronic must be a recording dict or a non-empty list of them.")
+    # Each chronic reading once (the PI, 2026-10-18, item 6a): every export carries the device's
+    # whole chronic log, so a caller joining raw recordings handed the same reading in once per
+    # export. Merged BEFORE the per-recording outlier rule, so a reading is judged once. Only the
+    # chronic log ("Source" chronic, the default); streaming band power converted to this shape
+    # is left as it is. The Biomarkers loader merges already, so there this changes nothing.
+    _ci = [i for i, c in enumerate(chronic) if str(c.get("Source", "chronic")) == "chronic"]
+    if _ci:
+        _merged, _ = _merge_chronic_repeats([chronic[i] for i in _ci])
+        chronic = list(chronic)
+        for i, c in zip(_ci, _merged):
+            chronic[i] = c
+        chronic.extend(_merged[len(_ci):])     # readings moved to their signal's lead (decision 488)
     times_list, datas_list, src_list, freq_list = [], [], [], []
     for c in chronic:
         t = np.asarray(c["Time"], dtype=float)
@@ -352,11 +427,12 @@ def _concat_chronic(chronic, mad_k=None):
         # Explicit disable is mad_k=0 or mad_k=False.
         _mad_on = not (mad_k is False or (isinstance(mad_k, (int, float)) and float(mad_k) == 0.0))
         if _mad_on and d.ndim == 2 and d.shape[0] == t.shape[0] and t.shape[0] >= 3:
-            # LOG-scale rule: Data[:,0] is LINEAR LFP power, a multiplicative quantity, so a
-            # symmetric raw-scale MAD window would delete the upper tail almost exclusively. Same
-            # canonical threshold as everywhere else; only the space it is evaluated in differs.
+            # The rule runs on the raw LFP power (decision 205; until 2026-09-19 it ran on its
+            # log10, which trimmed both tails of a multiplicative quantity). Same canonical
+            # threshold as everywhere else, per recording so a low-scale source is not judged
+            # against a high-scale one.
             from .routines.stats_utils import mad_keep_mask as _mk
-            keep = _mk(d[:, 0], n_mad=mad_k, scale="log")   # per-recording (homogeneous scale)
+            keep = _mk(d[:, 0], n_mad=mad_k, scale="raw")   # per-recording (homogeneous scale)
             t, d = t[keep], d[keep]
         if t.size:
             times_list.append(t)
@@ -511,7 +587,10 @@ def _threshold_pain_level(df, label_metric, *, strategy="median", pain_cutoff=No
 
     # Build the distribution the thresholds are computed on.
     if daily_broadcast and "timestamp" in df.columns:
-        day = local_calendar_day(df["timestamp"])
+        # One value per CALIFORNIA calendar day (review B1): flooring the UTC instant split each
+        # local day's samples across two UTC days, so the daily series the cut is computed on held
+        # means of two different days' ratings.
+        day = _local_day(df["timestamp"])
         # one value per day: mean of that day's (already nearest-date-aligned) metric values
         daily = pd.Series(metric_vals, index=day).groupby(level=0).mean()
         ref = daily.to_numpy(dtype=float)
@@ -542,21 +621,7 @@ def bravo_chronic_to_lfp_df(chronic, pro_df, *, label_metric="nrs", pain_cutoff=
                             label_strategy="kmeans", kmeans_features=("left_leg_vas", "mpq_sum"),
                             low_pct=33.3333, high_pct=66.6667, daily_broadcast=True,
                             timestamp_col="date_time_s1_daily", smooth_window=7):
-    """Build the tidy `cv_df` the chronic threshold detector consumes from a BRAVO Chronic
-    recording (or list of them) + REDCap PROs.
-
-    Returns DataFrame with columns:
-        timestamp        : tz-naive pd.Timestamp (per ~10-min chronic sample)
-        LFP              : raw chronic LFP power (Data[:,0], device units)
-        LFP_smoothed     : Savitzky-Golay smoothed LFP (window=`smooth_window`, polyorder=2)
-        stim_amplitude   : mA (Data[:,1])
-        pain_level       : binary 0/1 pain label (1 = higher pain)
-        <label_metric>   : the carried PRO metric value (nearest-date)
-
-    For every threshold labeler (`median`/`tertile`/`percentile`/`cutoff`) the boundary is computed
-    on the DAILY metric distribution and broadcast to each sample (`daily_broadcast=True`), so the
-    cut reflects pain across days rather than recording density. Set `daily_broadcast=False` to fit
-    the cut on the raw per-sample array (legacy behavior)."""
+    '.'
     import warnings
 
     chronic = _concat_chronic(chronic)
@@ -702,6 +767,3 @@ def merge_timelines(td_timeline, chronic_timeline):
     merged = pd.merge_asof(left, right, on="time", direction="nearest",
                            tolerance=pd.Timedelta("1D"))
     return merged.reset_index(drop=True)
-
-
-# Retained active Aditya interfaces.

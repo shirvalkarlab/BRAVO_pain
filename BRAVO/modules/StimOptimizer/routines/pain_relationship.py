@@ -4,22 +4,46 @@ Decision 199 (2026-09-17). The readiness screen and the two-stage gate call a (c
 rate) cell responsive when at least ONE band both falls with stimulation current (the
 era-blocked slope, `lfp_evidence.band_era_negative_significant`) and rises with pain. This module
 supplies the second half: for every contact on the calibrated grid the Biomarkers page shows, the
-band centres whose best-of-lengths correlation with the pain score is POSITIVE and ESTABLISHED
-(the grid's own `answer`, the 22-band-corrected q below 0.05, decision 63).
+band centres whose best-of-lengths correlation with the pain score is POSITIVE and SUPPORTED.
+
+Decision 210 (2026-09-20), the PI: "loosen the rule ... so at least some bands pass". Until then
+the leg required the grid's own "established" answer, which asks two things of a band: that its
+block-bootstrap interval on the correlation lie wholly off zero (decision 183), AND that the value
+beat what the same best-of-nine-lengths choice reaches on shuffled pain scores (the selection-aware
+bar). Ten pain reports on 2026-09-20 took R 1-3+'s best band from r 0.44 (established) to 0.23 --
+interval still wholly above zero, but under the shuffle bar of 0.28 -- and the readiness screen went
+from six usable cells to none. The pain leg now counts a band as SUPPORTED when its correlation is
+positive and its own interval lies wholly above zero; the selection-aware bar is reported beside it
+(`n_established_positive`, `supported_not_established_hz`) rather than required. This is the
+classical criterion at a fixed length, and the joint rule still demands the SAME band fall with
+current on an independent era-blocked test, so the conjunction stays conservative. A positive point
+value whose interval includes zero does not count, and a row with no interval can only count by
+being established.
+
+The controller requires power to fall as current rises and pain to fall as power
+falls (rule D19). Therefore qualifying power must rise with pain. A negative pain
+association may still be a biomarker but has the wrong controller sign; count it
+as n_established_negative and do not qualify it for this controller.
 
 The grid is `ClosedLoopDeployment.adapter.band_sweep_grid_for_closed_loop`'s payload, read by
 the Stim Optimizer as its own consumer. Django-free so the host suite can test it on a constructed
-payload."""
+payload.
+"""
 from __future__ import annotations
 
 import numpy as np
 
-#: The grid's own word for a correlation that clears the 22-band correction (decision 63).
+#: The grid's own word for a correlation that clears the 22-band correction AND the selection-aware
+#: shuffle bar (decisions 63, 183).
 ESTABLISHED = "established"
+#: The pain leg's own level (decision 210): positive, with the block-bootstrap interval wholly above zero.
+SUPPORTED = "supported"
 
-RULE = ("a band counts when its best-of-lengths Pearson correlation with the pain score on the "
-        "Biomarkers grid is positive (power rises with pain) AND the grid calls it established "
-        "(corrected q below 0.05 across the 22 band centres)")
+RULE = ("a band counts when the choosing correlation with pain is positive (power rises with pain) "
+        "AND its block-bootstrap interval lies wholly above zero (supported). Where the chronic "
+        "log covers a band, its correlation chooses; otherwise the TD-only grid chooses. "
+        "The established status uses that source's own criterion: exact rotation for the chronic log, or "
+        "selection-aware and across-band checks for TD. Established is reported, not required.")
 
 
 def _rows(grid, channel):
@@ -35,20 +59,36 @@ def _finite(v):
     return f if np.isfinite(f) else None
 
 
-def pain_positive_centers_by_channel(grid):
+def _is_established(r):
+    rr = _finite(r.get("pearson_r"))
+    return rr is not None and rr > 0 and str(r.get("answer") or "") == ESTABLISHED
+
+
+def _is_supported(r):
+    """Positive, with the row's own block-bootstrap interval wholly above zero. An established row
+    is supported by construction (its interval is off zero on the positive side)."""
+    if _is_established(r):
+        return True
+    rr, lo = _finite(r.get("pearson_r")), _finite(r.get("pearson_r_low"))
+    return rr is not None and lo is not None and rr > 0 and lo > 0
+
+
+def pain_positive_centers_by_channel(grid, *, level=SUPPORTED):
     """``{channel: frozenset(centres)}`` for every contact on the grid, or ``None`` when there is
     no grid. A contact ON the grid with no qualifying band maps to an EMPTY set (known: none);
-    a contact absent from the grid is absent here (unknown), and the screen says which."""
+    a contact absent from the grid is absent here (unknown), and the screen says which.
+    ``level`` is SUPPORTED (the rule, decision 210) or ESTABLISHED (the stricter reading)."""
     if not isinstance(grid, dict) or not grid.get("available") or not grid.get("band_time_sweep"):
         return None
+    if level not in (SUPPORTED, ESTABLISHED):
+        raise ValueError(f"level must be {SUPPORTED!r} or {ESTABLISHED!r}, got {level!r}")
+    test = _is_established if level == ESTABLISHED else _is_supported
     out = {}
     for ch in (grid.get("band_time_sweep") or {}):
         cs = set()
         for r in _rows(grid, ch):
-            c, rr = _finite(r.get("band_center_hz")), _finite(r.get("pearson_r"))
-            if c is None or rr is None:
-                continue
-            if rr > 0 and str(r.get("answer") or "") == ESTABLISHED:
+            c = _finite(r.get("band_center_hz"))
+            if c is not None and test(r):
                 cs.add(c)
         out[str(ch)] = frozenset(cs)
     return out
@@ -67,13 +107,82 @@ def summarise(grid) -> dict:
     per = {}
     for ch in by:
         rows = _rows(grid, ch)
+        est = {_finite(r.get("band_center_hz")) for r in rows if _is_established(r)}
         est_neg = sum(1 for r in rows if (_finite(r.get("pearson_r")) or 0) < 0
                       and str(r.get("answer") or "") == ESTABLISHED)
-        pos_not = sum(1 for r in rows if (_finite(r.get("pearson_r")) or 0) > 0
-                      and str(r.get("answer") or "") != ESTABLISHED)
-        per[ch] = {"centers_hz": sorted(by[ch]), "n_established_positive": len(by[ch]),
-                   "n_positive_not_established": int(pos_not),
+        pos_not = sum(1 for r in rows if (_finite(r.get("pearson_r")) or 0) > 0 and not _is_supported(r))
+        per[ch] = {"centers_hz": sorted(by[ch]),
+                   "n_supported_positive": len(by[ch]), "n_established_positive": len(est),
+                   "supported_not_established_hz": sorted(by[ch] - est),
+                   "n_positive_not_supported": int(pos_not),
                    "n_established_negative": int(est_neg), "n_centres_on_grid": len(rows)}
     return {"available": True, "score": gs.get("sweep_metric"),
             "score_label": gs.get("metric_label"), "stored_utc": gs.get("stored_utc"),
             "built_now": bool(gs.get("built_now")), "rule": RULE, "by_channel": per}
+
+
+#: How closely the plain correlation under the adjusted grid must equal the plain grid's own before
+#: the adjusted value is read against it. The two grids are built by one routine from one record, so
+#: on the same record they agree to the last digit; anything larger means different ratings or
+#: recordings went in, and the adjusted number belongs to a different record.
+SAME_RECORD_TOL = 1e-9
+
+STILL_POSITIVE_NOTE = (
+    "Beside each band that rises with pain: whether its correlation with pain is still positive once "
+    "the stimulation current in force at each rating is taken out of both the band power and the "
+    "pain score (a straight line, decision 234). This is the adjusted POINT value only -- the grid "
+    "carries no interval on it -- and it moves no verdict: the plain value decides which bands "
+    "count (the PI, 2026-09-22, decision 233 answer 2).")
+
+
+def still_positive_without_current(grid, adjusted_grid) -> dict:
+    """For every band that rises with pain on ``grid``, whether it still does on ``adjusted_grid``.
+
+    Returns ``{"available", "reason", "note", "by_channel": {channel: [row, ...]}}``, each row
+    ``{"center_hz", "pearson_r", "pearson_r_adjusted", "answer", "why"}`` with ``answer`` one of
+    "yes", "no" or "not assessed". The qualifying bands are the PLAIN grid's (decision 233): the
+    adjusted grid is read, never used to choose.
+    """
+    by = pain_positive_centers_by_channel(grid)
+    if by is None:
+        return {"available": False, "note": STILL_POSITIVE_NOTE, "by_channel": {},
+                "reason": "no stored Biomarkers grid, so no band rises with pain to ask about"}
+    adj_ok = (isinstance(adjusted_grid, dict) and adjusted_grid.get("available") is not False
+              and bool(adjusted_grid.get("band_time_sweep")))
+    reason = None if adj_ok else (
+        "no current-adjusted grid is stored under these settings. Turning on the Biomarkers "
+        "page's switch for taking the stimulation current out builds and stores one; this page "
+        "reads it and never builds it")
+    out = {}
+    for ch, centres in by.items():
+        plain_rows = {_finite(r.get("band_center_hz")): r for r in _rows(grid, ch)}
+        adj_rows = ({_finite(r.get("band_center_hz")): r for r in _rows(adjusted_grid, ch)}
+                    if adj_ok else {})
+        rows = []
+        for c in sorted(centres):
+            p = plain_rows.get(c) or {}
+            a = adj_rows.get(c)
+            r_plain = _finite(p.get("pearson_r"))
+            row = {"center_hz": c, "pearson_r": r_plain, "pearson_r_adjusted": None,
+                   "answer": "not assessed", "why": None}
+            if not adj_ok:
+                row["why"] = reason
+            elif a is None:
+                row["why"] = "the stored current-adjusted grid has no row for this band"
+            elif (r_plain is None or _finite(a.get("pearson_r")) is None
+                  or abs(_finite(a.get("pearson_r")) - r_plain) > SAME_RECORD_TOL):
+                row["why"] = ("the stored current-adjusted grid was built on a different record "
+                              f"(its plain value here is {a.get('pearson_r')}, this page's is "
+                              f"{r_plain}), so its adjusted value is not read against this one")
+            elif _finite(a.get("pearson_r_adjusted")) is None:
+                row["why"] = ("the adjustment could not be made for this band (the grid says why "
+                              "under its covariate block)")
+            else:
+                ra = _finite(a.get("pearson_r_adjusted"))
+                row["pearson_r_adjusted"] = ra
+                row["answer"] = "yes" if ra > 0 else "no"
+                row["why"] = (f"{r_plain:+.3f} plainly, {ra:+.3f} with the current taken out")
+            rows.append(row)
+        out[str(ch)] = rows
+    return {"available": bool(adj_ok), "reason": reason, "note": STILL_POSITIVE_NOTE,
+            "by_channel": out}

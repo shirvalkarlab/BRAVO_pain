@@ -1,0 +1,18 @@
+{$BRAVO_DOMAIN} {
+    encode zstd gzip
+    @assets path /static/* /favicon.ico /manifest.json /asset-manifest.json
+    handle @assets {
+        root * /srv
+        file_server
+    }
+    handle {
+        reverse_proxy app:8000 {
+            header_up X-Bravo-Client-IP {remote_host}
+            # Gunicorn closes idle upstream connections after two seconds.
+            # Avoid reusing a closed connection for POST-based data reads.
+            transport http {
+                keepalive off
+            }
+        }
+    }
+}

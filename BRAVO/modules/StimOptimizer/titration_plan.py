@@ -2,6 +2,10 @@
 participant's own record (open item 30, decision 124's protocol; the PI's decision of 2026-09-12
 evening: "make #4 a feature of next stim opt recommendation combined with 30").
 
+WHAT THIS IS FOR. Collect settled current-to-power observations and support curvature
+assessment using the supplied participant record. The session design and clinical safety
+limits are unchanged; actual support must be computed from the current inputs.
+
 WHERE IT IS ON SCREEN. Stim Optimizer page, the card "Titration session to run next," directly
 under "What to test at the next visit." The response carries it under `titration_plan`
 (`bravo_service.titration_plan_block` assembles the inputs; everything here is pure arithmetic on
@@ -22,7 +26,11 @@ ceiling as before, but now comes back DOWN in 1.0 mA drops rather than the same 
 words: "keep the 1.0 mA down legs"). Also new: each side's ladder holds the OTHER side at its own
 current in force, rather than at 0 mA or unstated; an optional third block, "joint corners," gives
 the pain surface's off-diagonal points a one-side ladder cannot; and every plan carries a flat
-`sheet_rows` list laid out exactly like the clinic sheet's own "Stim Testing" tab."""
+`sheet_rows` list laid out exactly like the clinic sheet's own "Stim Testing" tab.
+
+THE SHEET LAYOUT follows the clinic template's "Stim Testing" tab. The actual private
+workbook is supplied at export time. Step and block travel separately from sheet columns.
+"""
 from __future__ import annotations
 
 import math
@@ -30,6 +38,7 @@ import math
 import numpy as np
 import pandas as pd
 
+from . import safety_ceiling as SC
 from .routines import percept_adaptive as PA
 from .routines import within_visit as WV
 
@@ -38,10 +47,12 @@ from .routines import within_visit as WV
 CENTRES_HZ = tuple(float(c) for c in np.arange(8.5, 30.0, 1.0))
 CENTRES_SOURCE = "the 22 calibrated-grid centres, 8.5-29.5 Hz (decision 32)"
 
-#: A band centre this close to a harmonic of the stimulation rate is not analysed: the band is
-#: measuring the stimulator, not the brain. 2.5 Hz is half the 5 Hz band width the stored tables
-#: use (`clinic_steps.BAND_HALF_HZ`), so a centre inside this distance has the harmonic inside its
-#: own band.
+#: A band centre this close to a harmonic of the stimulation rate carries a folded multiple of the
+#: stimulation rate -- ADVISORY, not a refusal (the PI, 2026-09-06 correction, kept verbatim in
+#: `Biomarkers.routines.analytics.harmonic_landings_hz`'s own docstring): that does NOT mean the
+#: band is measuring the stimulator rather than the brain, only that its response to current needs
+#: care. 2.5 Hz is half the 5 Hz band width the stored tables use (`clinic_steps.BAND_HALF_HZ`), so
+#: a centre inside this distance has the harmonic inside its own band.
 HARMONIC_HALF_WIDTH_HZ = 2.5
 
 #: The current step of the ladder GOING UP (mA). Research synthesis §1 / open item 30.
@@ -82,8 +93,7 @@ SHEET_COLUMNS = ("Group", "Contacts", "sEEG Contacts", "Amp (mA)", "Rate (Hz)", 
                  "Threshold", "Duration (s)", "Side Effect?", "Timestamp",
                  "Movement/Change point", "General Notes / Pt Verbal Notes", "Overall", "Head",
                  "Back", "Left Leg", "Left Foot", "Right Leg", "Right Foot")
-SHEET_SOURCE = ('BRAVO/_pro_dump/clinic_sheets/RCS08/[Template]RCS08 Stage 2 - {Month} 2025 Clinic '
-                'Testing {MM}_{DD}_{YY}.xlsx, tab "Stim Testing," row 11, columns A-S')
+SHEET_SOURCE = 'Configured clinic template, tab "Stim Testing," row 11, columns A-S'
 
 #: One off-stimulation baseline and one impedance test before the first step and after the last
 #: (decision 133: impedance at a FIXED measurement current, not the device's automatic low-current
@@ -105,10 +115,23 @@ def _f(v):
     return x if math.isfinite(x) else None
 
 
+_ORDINAL_WORDS = {1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth", 6: "sixth",
+                  7: "seventh", 8: "eighth", 9: "ninth", 10: "tenth"}
+
+
+def _ordinal(k) -> str:
+    """1 -> "first", ..., 8 -> "eighth" (harmonic_avoidance's own `max_harmonic` default); a k
+    outside the named range falls back to "12th" rather than raising."""
+    k = int(k)
+    return _ORDINAL_WORDS.get(k, f"{k}th")
+
+
 def _n(count, noun):
-    """"1 run" / "4 runs"."""
+    """"1 run" / "4 runs"; "1 stretch" / "2 stretches"."""
     c = int(count)
-    return f"{c} {noun}" if c == 1 else f"{c} {noun}s"
+    if c == 1:
+        return f"{c} {noun}"
+    return f"{c} {noun}es" if noun.endswith(("ch", "sh", "s", "x")) else f"{c} {noun}s"
 
 
 def _bilateral(left_val, right_val) -> str:
@@ -253,49 +276,94 @@ def session_time_estimate(n_steps_total, *, step_minutes=2.0,
             "why": (f"{n} steps at {step_minutes:g} min each is {steps_min:g} min, plus an "
                     f"off-stimulation baseline before and after ({baseline_minutes_each:g} min "
                     f"each) and an impedance test before and after ({impedance_minutes_each:g} "
-                    f"min each, at a fixed measurement current, decision 133): {total_min:g} min "
+                    f"min each, at a fixed measurement current): {total_min:g} min "
                     f"in all")}
 
 
 # ---------------------------------------------------------------------------------------------
-# the band centres to analyse and to avoid
+# the band centres to analyse, and which of them carry a stimulator harmonic (advisory: every
+# centre below is still analysed; a flagged one is never dropped, decision 220)
 # ---------------------------------------------------------------------------------------------
+#: How many whole multiples of the rate `harmonic_avoidance` folds through the device's 250 Hz
+#: sampling before it stops looking. 8 covers every multiple that can land inside or near the
+#: 8.5-29.5 Hz grid for every rate the device accepts (55-160 Hz); found 2026-09-25 (this module's
+#: own default before that day folded no multiple at all, see `harmonic_avoidance`'s docstring).
+MAX_HARMONIC_MULTIPLE = 8
+
+
 def harmonic_avoidance(rate_hz, *, centres_hz=CENTRES_HZ, half_width_hz=HARMONIC_HALF_WIDTH_HZ,
-                       candidate_center_hz=None) -> dict:
-    """Which of the 22 centres are clear of the stimulation rate's harmonics at `rate_hz`, and
-    which are within `half_width_hz` of one. The harmonics: |250 - rate| (the rate folded about
-    the device's 250 Hz sampling rate), and the rate's 1/2, 1/4 and 3/4 sub-harmonics (research
-    synthesis §1; decision 124). `candidate_center_hz`, when known, is judged the same way and
-    reported on its own."""
+                       candidate_center_hz=None, max_harmonic=MAX_HARMONIC_MULTIPLE) -> dict:
+    """Which of the 22 centres carry a folded multiple of the stimulation rate at `rate_hz`, and
+    which are clear. ADVISORY, NEVER A REFUSAL, and the sense is the PI's own correction of
+    2026-09-06 (kept verbatim in `Biomarkers.routines.analytics.harmonic_landings_hz`'s docstring):
+    a band that carries a folded multiple of the stimulation rate is NOT thereby measuring the
+    stimulator rather than the brain. What it means is narrower: take care reading that band's
+    response to current, because a stimulation artefact could in principle land there too.
+
+    THE LANDINGS COME FROM ONE HOME, `analytics.harmonic_landings_hz` -- found 2026-09-25: this
+    function used to fold only |250 - rate| itself (the rate's own first image about the device's
+    250 Hz sampling), missing every higher multiple. At 55 Hz the fifth multiple, 275 Hz, folds to
+    25 Hz and the fourth, 220 Hz, folds to 30 Hz; neither was caught before, and 25 Hz sits close
+    enough to pull an adjacent band centre onto a
+    harmonic too. Every whole multiple of the rate up to `max_harmonic` is folded here, over a
+    window widened by `half_width_hz` on each side of `centres_hz` so a landing just outside the
+    grid still catches an edge centre (55 Hz's 30 Hz landing sits half a Hz past the grid's own
+    29.5 Hz top and still reaches it). Each landing is named by what it is: "the fifth multiple of
+    the rate folded by the device's 250 Hz sampling."
+
+    THE SUB-HARMONICS ARE KEPT AS BEFORE: half, a quarter and three quarters of the rate (research
+    synthesis §1; decision 124). They are not folded multiples of the rate, so
+    `harmonic_landings_hz` does not compute them; this function adds them itself, unconditionally,
+    as it always has.
+
+    `candidate_center_hz`, when known, is judged the same way and reported on its own.
+    """
+    try:
+        from modules.Biomarkers.routines import analytics as _an
+    except ImportError:
+        from Biomarkers.routines import analytics as _an
     r = float(rate_hz)
-    harmonics = {"folded_about_250_hz": abs(250.0 - r), "half_rate": r / 2.0,
-                 "quarter_rate": r / 4.0, "three_quarters_rate": 3.0 * r / 4.0}
-    names = {"folded_about_250_hz": "|250 − rate|", "half_rate": "half the rate",
-             "quarter_rate": "a quarter of the rate", "three_quarters_rate": "three quarters of the rate"}
+    hw = float(half_width_hz)
+    cs = [float(c) for c in centres_hz]
+    lo = (min(cs) - hw) if cs else -hw
+    hi = (max(cs) + hw) if cs else hw
+    landings = _an.harmonic_landings_hz(r, lo, hi, max_harmonic=int(max_harmonic))
+    harmonics, names = {}, {}
+    for land in landings:
+        k = int(land["harmonic"])
+        key = f"multiple_{k}"
+        harmonics[key] = float(land["lands_at_hz"])
+        names[key] = f"the {_ordinal(k)} multiple of the rate folded by the device's 250 Hz sampling"
+    harmonics["half_rate"], names["half_rate"] = r / 2.0, "half the rate"
+    harmonics["quarter_rate"], names["quarter_rate"] = r / 4.0, "a quarter of the rate"
+    harmonics["three_quarters_rate"], names["three_quarters_rate"] = 3.0 * r / 4.0, "three quarters of the rate"
     clear, avoid, reasons = [], [], {}
-    for c in centres_hz:
-        hits = [(k, h) for k, h in harmonics.items() if abs(float(c) - h) <= float(half_width_hz) + 1e-9]
+    for c in cs:
+        hits = [(k, h) for k, h in harmonics.items() if abs(c - h) <= hw + 1e-9]
         if hits:
-            avoid.append(float(c))
-            reasons[f"{float(c):g}"] = "; ".join(
-                f"within {half_width_hz:g} Hz of {h:g} Hz ({names[k]})" for k, h in hits)
+            avoid.append(c)
+            reasons[f"{c:g}"] = "; ".join(
+                f"within {hw:g} Hz of {h:g} Hz ({names[k]})" for k, h in hits)
         else:
-            clear.append(float(c))
-    out = {"rate_hz": r, "harmonics_hz": harmonics, "half_width_hz": float(half_width_hz),
-           "centres_hz": [float(c) for c in centres_hz], "clear_hz": clear, "avoid_hz": avoid,
+            clear.append(c)
+    landing_desc = _and_list([f"{h:g} Hz ({names[k]})"
+                             for k, h in sorted(harmonics.items(), key=lambda kv: kv[1])])
+    out = {"rate_hz": r, "harmonics_hz": harmonics, "harmonic_names": names, "half_width_hz": hw,
+           "centres_hz": cs, "clear_hz": clear, "avoid_hz": avoid,
            "avoid_reasons": reasons, "n_clear": len(clear), "n_avoid": len(avoid),
-           "why": (f"at {r:g} Hz the stimulator shows up at {harmonics['folded_about_250_hz']:g}, "
-                   f"{harmonics['half_rate']:g}, {harmonics['quarter_rate']:g} and "
-                   f"{harmonics['three_quarters_rate']:g} Hz; a band centre within "
-                   f"{half_width_hz:g} Hz of one of those measures the stimulator, not the brain")}
+           "why": (f"at {r:g} Hz the stimulation rate lands at " + landing_desc + f"; a band centre "
+                   f"within {hw:g} Hz of one of those carries a folded multiple of the stimulation "
+                   f"rate. That is advisory, not a refusal (the PI, 2026-09-06): it does not mean "
+                   f"the band measures the stimulator rather than the brain, only that its response "
+                   f"to current needs care")}
     cc = _f(candidate_center_hz)
     if cc is not None:
-        hits = [(k, h) for k, h in harmonics.items() if abs(cc - h) <= float(half_width_hz) + 1e-9]
+        hits = [(k, h) for k, h in harmonics.items() if abs(cc - h) <= hw + 1e-9]
         out["candidate_center_hz"] = cc
         out["candidate_clear"] = not hits
         out["candidate_note"] = (f"{cc:g} Hz is clear of every harmonic" if not hits else
                                  f"{cc:g} Hz is " + "; ".join(
-                                     f"within {half_width_hz:g} Hz of {h:g} Hz ({names[k]})"
+                                     f"within {hw:g} Hz of {h:g} Hz ({names[k]})"
                                      for k, h in hits))
     return out
 
@@ -303,6 +371,44 @@ def harmonic_avoidance(rate_hz, *, centres_hz=CENTRES_HZ, half_width_hz=HARMONIC
 # ---------------------------------------------------------------------------------------------
 # what the record holds today on a contact, from the two stored tables
 # ---------------------------------------------------------------------------------------------
+
+def harmonic_warning(rate_hz, qualifying_centers_hz, *, usable) -> dict:
+    """The harmonic rule on the readiness screen as a WARNING, never a refusal (the PI,
+    2026-09-21: "put a warning for the harmonic rule, but don't make it blocking").
+
+    A qualifying band (falls with current, rises with pain; decision 199) that sits within
+    `HARMONIC_HALF_WIDTH_HZ` of a stimulator harmonic at this rate may be measuring the
+    stimulator rather than the brain. When a usable cell qualifies ONLY through such bands the
+    warning fires; when at least one qualifying band is clear of every harmonic it is a note;
+    a cell that is not usable gets the information and no warning. `usable` is read, never
+    returned: the caller's `deployable` is untouched by design.
+    """
+    q = [float(x) for x in (qualifying_centers_hz or [])]
+    if not q:
+        return {"near_hz": [], "clear_hz": [], "notes": {}, "only_through_harmonics": False,
+                "warning": None, "note": None}
+    h = harmonic_avoidance(float(rate_hz), centres_hz=q)
+    near, clear, notes = list(h["avoid_hz"]), list(h["clear_hz"]), dict(h["avoid_reasons"])
+    only = bool(usable) and bool(near) and not clear
+    fmt = lambda xs: ", ".join(f"{x:g}" for x in xs)  # noqa: E731
+    warning = note = None
+    if only:
+        warning = (f"Warning: this combination qualifies only through bands on a stimulator "
+                   f"harmonic at {float(rate_hz):g} Hz ({fmt(near)} Hz: "
+                   + "; ".join(notes[f"{x:g}"] for x in near)
+                   + "). A fall there with current may be the stimulator, not the brain. It stays "
+                   f"usable: by the PI's ruling of 2026-09-21 this is a warning, not a refusal.")
+    elif near and clear:
+        note = (f"{fmt(near)} Hz sits on a stimulator harmonic at {float(rate_hz):g} Hz; "
+                f"{fmt(clear)} Hz is clear, so the combination does not rest on the harmonic band alone.")
+    elif near:
+        # every qualifying band on a harmonic, but the cell is not usable for another reason
+        note = (f"every qualifying band ({fmt(near)} Hz) sits on a stimulator harmonic at "
+                f"{float(rate_hz):g} Hz; the combination is not usable for the reason given, so the "
+                f"harmonic warning does not apply to it today.")
+    return {"near_hz": near, "clear_hz": clear, "notes": notes, "only_through_harmonics": only,
+            "warning": warning, "note": note}
+
 def record_today_for_contact(pooled, run_points, channel, *, lo_hz=None, hi_hz=None) -> dict:
     """What the stored tables say the record holds for one sensing contact: the pooled table's
     largest point count over the band centres inside [lo_hz, hi_hz] with its run count and the
@@ -507,13 +613,34 @@ def build_sheet_rows(sides, joint_corners_block, *, in_force, timing) -> list:
     return rows
 
 
+def _held_block(held_mA, held_src, detail) -> dict:
+    """The `held_other_side` block: the current the other side is held at and where it came from,
+    plus -- when `detail` (``safety_ceiling.held_at_or_below_ceiling``'s output) is given -- the
+    current in force, the ceiling, whether the current in force was above it and the sentence that
+    says so (decision 308)."""
+    block = {"current_mA": held_mA, "source": held_src}
+    if detail:
+        block.update(in_force_mA=detail.get("in_force_mA"), ceiling_mA=detail.get("ceiling_mA"),
+                     above_ceiling=bool(detail.get("above_ceiling")), note=detail.get("note"))
+    return block
+
+
+def _held_condition(other, held_src, detail) -> str:
+    """The conditions-list line for the held side: at its own current in force, or -- when that
+    is above today's ceiling -- at the ceiling, saying so (decision 308)."""
+    if detail and detail.get("above_ceiling"):
+        return f"the {other} side is HELD at {detail['current_mA']:g} mA, not at its current in force: {detail['note']}"
+    return f"the {other} side is HELD at its own current in force ({held_src})"
+
+
 # ---------------------------------------------------------------------------------------------
 # one side's plan
 # ---------------------------------------------------------------------------------------------
 def side_plan(side, *, rate_in_force_hz, rate_source, pulse_width_us, pulse_width_source,
               ceiling_mA, ceiling_source, contact, contact_source, record_today, margin,
               candidate_center_hz=None, min_rate_hz=PA.MIN_ADAPTIVE_RATE_HZ,
-              held_other_side_mA=None, held_other_side_source=None) -> dict:
+              held_other_side_mA=None, held_other_side_source=None,
+              held_other_side_detail=None) -> dict:
     """The whole plan for one side, every field beside its source.
 
     `contact` is a dict from the readiness screen (`channel`, `display_short`, `n_responding`,
@@ -522,6 +649,8 @@ def side_plan(side, *, rate_in_force_hz, rate_source, pulse_width_us, pulse_widt
     `ClosedLoopDeployment.post_ramp.margin_becomes_available`'s output. `held_other_side_mA` and
     `held_other_side_source` (2026-09-14) are the OTHER side's own current in force and where it
     came from: while this side's ladder runs, the other side is held there, not at 0 mA.
+    `held_other_side_detail` (decision 308) is ``safety_ceiling.held_at_or_below_ceiling``'s output
+    for that side, so a current in force above today's ceiling is held at the ceiling and says so.
     """
     rate = rate_to_hold(rate_in_force_hz, min_rate_hz=min_rate_hz)
     lad = ladder(ceiling_mA)
@@ -536,7 +665,7 @@ def side_plan(side, *, rate_in_force_hz, rate_source, pulse_width_us, pulse_widt
     held_mA = _f(held_other_side_mA)
     held_src = str(held_other_side_source) if held_other_side_source else \
         "no reading for the other side"
-    held_block = {"current_mA": held_mA, "source": held_src}
+    held_block = _held_block(held_mA, held_src, held_other_side_detail)
 
     contact_block = None
     if contact:
@@ -571,12 +700,14 @@ def side_plan(side, *, rate_in_force_hz, rate_source, pulse_width_us, pulse_widt
     conditions = [
         "each step is two clinic-sheet rows: a ramp row then a test row, 2 min a step "
         f"({timing['total_s']:g} s)",
-        "streaming on for the whole session, so the voltage trace exists for every step",
+        "streaming on for the whole session, so the TD recording (band power from the time-domain signal) exists for every step",
         "an off-stimulation baseline before the first step and after the last",
         ("an impedance test before and after, at a FIXED measurement current, not the device's "
-         "automatic low-current mode, which reads spuriously high (decision 133)"),
-        (f"the other side is HELD at its own current in force while this side's ladder runs "
-         f"({held_src})"),
+         "automatic low-current mode, which reads spuriously high"),
+        (_held_condition("other", held_src, held_other_side_detail)
+         if (held_other_side_detail or {}).get("above_ceiling") else
+         (f"the other side is HELD at its own current in force while this side's ladder runs "
+          f"({held_src})")),
         "note the wall-clock time of each current change on the clinic sheet",
     ]
     sources = {
@@ -592,18 +723,18 @@ def side_plan(side, *, rate_in_force_hz, rate_source, pulse_width_us, pulse_widt
                    f"research synthesis §1; open item 30)"),
         "step_timing": (f"a {RAMP_ROW_S:g} s ramp row then a {hold['seconds']:g} s test row, "
                         f"{timing['total_s']:g} s (2 min) a step (the PI's ruling, 2026-09-14)"),
-        "hold": (f"within_visit.PRE_CHANGE_WINDOW_S ({SETTLED_WINDOW_S:g} s) + within_visit.RAMP_EXCLUDE_S "
-                 f"({POST_RAMP_MARGIN_S:g} s, decisions 141 and 144) + {SLACK_S:g} s slack; pieces of "
-                 f"within_visit.CHUNK_S ({PIECE_S:g} s), within_visit.MIN_CHUNKS_PRE_CHANGE "
-                 f"({MIN_PIECES_PER_SETTING}) required"),
-        "bands": (f"{CENTRES_SOURCE}; harmonics |250 − rate|, rate/2, rate/4, 3·rate/4 (research "
-                  f"synthesis §1); ±{HARMONIC_HALF_WIDTH_HZ:g} Hz"),
+        "hold": (f"{SETTLED_WINDOW_S:g} s of settled signal before a change + {POST_RAMP_MARGIN_S:g} s "
+                 f"after the ramp + {SLACK_S:g} s slack; read in {PIECE_S:g} s pieces, at least "
+                 f"{MIN_PIECES_PER_SETTING} per setting (decisions 141, 144)"),
+        "bands": (f"{CENTRES_SOURCE}; harmonics from every whole multiple of the rate folded by the "
+                  f"device's 250 Hz sampling, "
+                  f"plus rate/2, rate/4 and 3·rate/4 (decision 124); "
+                  f"±{HARMONIC_HALF_WIDTH_HZ:g} Hz, advisory (the PI, 2026-09-06)"),
         "yield.settled_points_from_session": "the ladder's step count (one settled point per step)",
-        "yield.record_today": ("the stored pooled current-to-power table (within_visit_pooled_shape) and "
-                               "the stored per-run points table (three_source_run_points), both "
-                               "written by the Closed-Loop page, read as stim_optimizer"),
-        "yield.margin": ("ClosedLoopDeployment.post_ramp.margin_becomes_available over the stored "
-                         "per-run points table; the floor is amplitude_effect.MIN_POINTS_CURVATURE"),
+        "yield.record_today": ("the stored pooled current-to-power table and the stored per-run points "
+                               "table, both written by the Closed-Loop page"),
+        "yield.margin": ("the stored per-run points table; the margin switches on once one run holds "
+                         "enough steps to read a curve (the minimum number of points for curvature)"),
         "conditions": "research synthesis §1; decision 133 (impedance); the PI's ruling of 2026-09-14",
     }
     return {
@@ -637,25 +768,372 @@ def _yield_sentence(n_points, n_up, rec, margin) -> str:
               + (f" (at most {per_run} currents in any one run)" if per_run is not None else "")))
     session = (f"this session yields {n_points} settled points, {n_up} distinct currents on the "
                f"way up")
-    # S7 SETTLED (decision 196, 2026-09-17): the post-move exclusion margin is 0 s by measurement.
-    # On the 2026-09-16 titration session at 55 Hz (31 settings held 107-168 s on L 1-3+) the
-    # first 3 s after a current move read 1.000 of the same setting's own last-30 s level (95 %
-    # 0.86-1.16), and every earlier window on the record's 58 long holds read 0.98-1.02. Nothing
-    # is excluded; the switch in `post_ramp` stays off and this sentence no longer waits on it.
-    m = ("the post-move margin is 0 s, measured on the 2026-09-16 session (the first 3 s after a "
-         "move read 1.00 of the settled level), so no piece of recording is excluded")
+    m = (f"the configured post-move exclusion margin is {POST_RAMP_MARGIN_S:g} s; "
+         "interpret the yield against this configured processing window")
     return f"{today}; {session}; {m}."
 
 
-def plan_for_sides(sides_inputs, *, margin, in_force=None, joint_is_safe=None) -> dict:
+
+# ---------------------------------------------------------------------------------------------
+# THE EXPLORATORY LADDER for a stimulation configuration the sensing rule requires and the
+# record has never powered. The required stimulating contacts follow the device sensing rule.
+# Two things the session has to answer, in two parts: (A) how the band power on the sensing pair
+# moves with current -- the same 0.5 mA up / 1.0 mA down ladder as the ordinary session, at the
+# RATE of the cell where the pain-positive bands were found, with the first-exposure stop rule;
+# (B) what the current does to pain over minutes -- three timed holds, off / on / off, a rating
+# every minute, the patient not told the current, the biomarker still streaming.
+# ---------------------------------------------------------------------------------------------
+#: The three holds of part B: minutes each, and how often a rating is taken.
+HOLD_MINUTES_EACH = 5.0
+HOLD_RATING_EVERY_MIN = 1.0
+#: The first-exposure stop rule (decision 165: a side-effect score of 2 is its own rung, cost 2.0;
+#: decision 164: moderate or severe steps never seed "tolerated").
+FIRST_EXPOSURE_STOP_RULE = ("stop the up leg at the first step with a side-effect score of 2 or "
+                            "more; the last step below it is the top current the "
+                            "patient tolerated, and the down leg and the holds start from there")
+
+
+# The stimulating rings a sensing pair REQUIRES, the flanking rule run backwards (decision
+# 217): in `DecodeCommon.sensing_rule` since 2026-09-26; this name stays for its callers.
+try:
+    from modules.DecodeCommon import sensing_rule as _sensing_rule
+except ImportError:                                   # pragma: no cover - host spelling
+    from DecodeCommon import sensing_rule as _sensing_rule
+stim_rings_for_sensing_pair = _sensing_rule.stim_rings_for_sensing_pair
+
+
+def _rings_label(side, rings) -> str:
+    s = "L" if str(side) == "Left" else "R"
+    return f"{s} C+" + "".join(f"{r}-" for r in sorted(int(r) for r in rings or ()))
+
+
+def configuration_exposure(es, side, rings) -> dict:
+    """What the record holds for THIS stimulation configuration on THIS side, read from the
+    epoch table (`adapter.build_design_matrix`'s frame: one row per unbroken setting, its cathode
+    per side, its hours and the pain reports inside it): epochs, hours, the currents it carried,
+    the reports, and whether it ever carried current at all."""
+    from .bravo_service import stim_rings
+    want = {int(r) for r in (rings or ())}
+    col_c, col_a = f"cathode_{side}", f"amp_mA_{side}"
+    out = {"side": str(side), "rings": sorted(want), "epochs": 0, "hours": 0.0, "reports": 0,
+           "amp_min_mA": None, "amp_max_mA": None, "first": None, "last": None, "ever_powered": None,
+           "sentence": ""}
+    label = _rings_label(side, want)
+    if es is None or len(es) == 0 or col_c not in getattr(es, "columns", []):
+        out["sentence"] = f"no epoch table was supplied, so the record for {label} is unknown"
+        return out
+    from .bravo_service import stim_contacts_short
+    mask = np.array([stim_rings(c) == want for c in es[col_c]], dtype=bool)
+    sub = es.loc[mask]
+    out["epochs"] = int(len(sub))
+    if not len(sub):
+        out["ever_powered"] = False
+        out["sentence"] = f"{label} has never been programmed on this side: no epoch in the record"
+        return out
+    # an epoch on a PART of a ring (one segment, "1a-2a") stimulates the same rings but not the
+    # whole contact; it is counted, and said separately, so a one-day segment trial does not
+    # read as the full configuration having carried current
+    labels = [stim_contacts_short(c, side) for c in sub[col_c]]
+    partial = np.array([any(ch.isalpha() for ch in (l or "").split("C+")[-1]) for l in labels], dtype=bool)
+    amps = pd.to_numeric(sub[col_a], errors="coerce")
+    full_amps = amps[~partial]
+    out["epochs_full_rings"] = int((~partial).sum()); out["epochs_partial_rings"] = int(partial.sum())
+    out["amp_max_full_rings_mA"] = _f(np.nanmax(full_amps)) if full_amps.notna().any() else None
+    out["partial_sentence"] = None
+    if partial.any():
+        ps = sub.loc[partial]
+        out["partial_sentence"] = (f"{_n(int(partial.sum()), 'stretch')} of unchanged settings on part of a ring only ({', '.join(sorted(set(l for l, q in zip(labels, partial) if q)))}) "
+                                   f"carried up to {np.nanmax(amps[partial]):g} mA for "
+                                   f"{float(np.nansum(pd.to_numeric(ps.get('dur_h'), errors='coerce'))):.0f} h with "
+                                   f"{int(np.nansum(pd.to_numeric(ps.get('n'), errors='coerce')))} report(s)")
+    out["hours"] = float(np.nansum(pd.to_numeric(sub.get("dur_h"), errors="coerce"))) if "dur_h" in sub else 0.0
+    out["reports"] = int(np.nansum(pd.to_numeric(sub.get("n"), errors="coerce"))) if "n" in sub else 0
+    out["amp_min_mA"] = _f(np.nanmin(amps)) if amps.notna().any() else None
+    out["amp_max_mA"] = _f(np.nanmax(amps)) if amps.notna().any() else None
+    t0 = pd.to_datetime(sub["t0"], utc=True, errors="coerce") if "t0" in sub else None
+    if t0 is not None and t0.notna().any():
+        out["first"] = str(t0.min().date()); out["last"] = str(t0.max().date())
+    # "ever powered" means the FULL rings carried current; a segment trial is said beside it
+    out["ever_powered"] = bool(out["amp_max_full_rings_mA"] is not None and out["amp_max_full_rings_mA"] > 0)
+    span = f"{out['first']} to {out['last']}" if out["first"] else "undated"
+    # Count powered stretches separately and use their end time, not their start, in prose.
+    pw = (~partial) & (amps.fillna(0.0).to_numpy() > 0)
+    ps_ = sub.loc[pw]
+    out["epochs_powered"] = int(pw.sum())
+    out["epochs_zero_mA"] = int(((~partial) & ~(amps.fillna(0.0).to_numpy() > 0)).sum())
+    out["hours_powered"] = float(np.nansum(pd.to_numeric(ps_.get("dur_h"), errors="coerce"))) if "dur_h" in ps_ else 0.0
+    out["reports_powered"] = int(np.nansum(pd.to_numeric(ps_.get("n"), errors="coerce"))) if "n" in ps_ else 0
+    out["first_powered"] = out["last_end"] = None
+    if len(ps_) and "t0" in ps_:
+        s0 = pd.to_datetime(ps_["t0"], utc=True, errors="coerce")
+        s1 = (pd.to_datetime(ps_["t_end"], utc=True, errors="coerce") if "t_end" in ps_
+              else s0 + pd.to_timedelta(pd.to_numeric(ps_.get("dur_h"), errors="coerce"), unit="h"))
+        if s0.notna().any():
+            out["first_powered"] = str(s0.min().date())
+        if s1.notna().any():
+            out["last_end"] = str(s1.max().date())
+    if out["ever_powered"]:
+        pspan = (f"{out['first_powered']} to {out['last_end']}" if out["first_powered"] and out["last_end"]
+                 else "undated")
+        out["sentence"] = (f"{label} carried up to {out['amp_max_full_rings_mA']:g} mA over "
+                           f"{_n(out['epochs_powered'], 'stretch')} of unchanged settings, "
+                           f"{out['hours_powered']:.0f} h ({out['hours_powered'] / 24.0:.0f} days), {pspan}, with "
+                           f"{_n(out['reports_powered'], 'pain report')} inside"
+                           + (f"; {out['epochs_zero_mA']} more at 0 mA" if out["epochs_zero_mA"] else ""))
+    else:
+        out["sentence"] = (f"{label} was programmed for {_n(out['epochs_full_rings'], 'stretch')} of unchanged settings, "
+                           f"{span}, at 0.0 mA only: the full rings have never carried current, so nothing in the "
+                           f"record says what this configuration does to the band power or to pain")
+    if out["partial_sentence"]:
+        out["sentence"] += f"; {out['partial_sentence']}"
+    return out
+
+
+def acute_pain_holds(top_mA, *, minutes_each=HOLD_MINUTES_EACH,
+                     rating_every_min=HOLD_RATING_EVERY_MIN) -> dict:
+    """Part B: three timed holds, off / on / off, at the top current the patient tolerated on the
+    day (planned here as the ladder's top; the sheet is corrected on the day), a pain rating every
+    minute, the patient not told the current. The biomarker reads in a 60 s test row; a change in
+    pain needs minutes, and a washout after it is what makes the change believable."""
+    top = _f(top_mA)
+    if top is None or top <= 0:
+        return {"holds": [], "minutes_each": float(minutes_each), "rating_every_minutes": float(rating_every_min),
+                "ratings_per_hold": 0, "total_minutes": 0.0, "blind": True,
+                "why": "no top current, so no holds can be written"}
+    per = int(round(float(minutes_each) / float(rating_every_min)))
+    holds = [{"order": 1, "state": "off", "current_mA": 0.0, "minutes": float(minutes_each)},
+             {"order": 2, "state": "on", "current_mA": top, "minutes": float(minutes_each)},
+             {"order": 3, "state": "off", "current_mA": 0.0, "minutes": float(minutes_each)}]
+    return {"holds": holds, "minutes_each": float(minutes_each),
+            "rating_every_minutes": float(rating_every_min), "ratings_per_hold": per,
+            "total_minutes": float(minutes_each) * 3.0, "blind": True,
+            "why": (f"three holds of {minutes_each:g} min, off then on then off, the on hold at the "
+                    f"top current the patient tolerated on the day (planned at {top:g} mA, the "
+                    f"ladder's top); a rating every {rating_every_min:g} min ({per} per hold, {3 * per} "
+                    f"in all); the patient is kept blind to the current so the ratings answer the "
+                    f"current and not the announcement; streaming stays on, so the band power on "
+                    f"the sensing pair is read through every hold")}
+
+
+def _hold_row(step, block, *, contacts, amp, rate_hz, pw, minutes, note) -> dict:
+    row = {c: None for c in SHEET_COLUMNS}
+    row.update({"Contacts": contacts, "Amp (mA)": amp,
+                "Rate (Hz)": (None if rate_hz is None else round(float(rate_hz), 3)),
+                "PW (µs)": pw, "Duration (s)": float(minutes) * 60.0,
+                "General Notes / Pt Verbal Notes": note})
+    row["block"] = str(block); row["step"] = int(step); row["row_kind"] = "hold"
+    return row
+
+
+def _and_list(items) -> str:
+    """"a", "a and b", "a, b and c" -- so a sentence naming bands reads as a sentence."""
+    xs = [str(x) for x in items]
+    if not xs:
+        return ""
+    if len(xs) == 1:
+        return xs[0]
+    return ", ".join(xs[:-1]) + " and " + xs[-1]
+
+
+def configuration_plan(side, *, rings, contact, rate_source, pulse_width_us, pulse_width_source,
+                       ceiling_mA, ceiling_source, exposure, held_other_side_mA,
+                       held_other_side_source, in_force_rings=None, other_side_contacts=None,
+                       other_side_pw=None, rate_in_force_hz=None, min_rate_hz=PA.MIN_ADAPTIVE_RATE_HZ,
+                       start_step=1, held_other_side_detail=None) -> dict:
+    """The exploratory ladder for one side at a stimulation configuration (`rings`) other than the
+    one in force, built for the sensing pair `contact` (a readiness-screen cell: `channel`,
+    `rate_hz`, `qualifying_centers_hz`, ...). Every field beside its source, as in `side_plan`."""
+    side = str(side)
+    rings = {int(r) for r in (rings or ())}
+    in_force_rings = {int(r) for r in (in_force_rings or ())}
+    contacts_short = _rings_label(side, rings)
+    c = dict(contact or {})
+    # THE SESSION RUNS AT THE RATE IN FORCE (the PI, 2026-09-22, ruling 3; decision 233), not at the
+    # rate of the cell where the pain-positive bands were found. Until that ruling the cell's rate
+    # was held, because at 55 Hz the half-rate harmonic lands on one of the watched bands; his call
+    # is to stimulate at 55 Hz and read that band with the harmonic stated. The cell's own rate is
+    # reported beside it (`cell_rate_hz`) so the difference is never silent.
+    rate = rate_to_hold(rate_in_force_hz, min_rate_hz=min_rate_hz)
+    rate["cell_rate_hz"] = _f(c.get("rate_hz"))
+    if rate["cell_rate_hz"] is not None and abs(rate["cell_rate_hz"] - rate["rate_hz"]) > 1e-9:
+        rate["why"] += (f"; the bands this session watches were found at {rate['cell_rate_hz']:g} Hz "
+                        f"on the stored grid, and the session runs at {rate['rate_hz']:g} Hz by the "
+                        f"PI's ruling of 2026-09-22")
+    lad = ladder(ceiling_mA)
+    hold = hold_per_step()
+    timing = step_timing(test=hold)
+    watch = sorted(float(v) for v in (c.get("qualifying_centers_hz") or []) if _f(v) is not None)
+    bands = harmonic_avoidance(rate["rate_hz"])
+    clear = {float(v) for v in bands.get("clear_hz") or []}
+    bands["watch_hz"] = watch
+    bands["watch_clear"] = bool(watch) and all(v in clear for v in watch)
+    # WHICH of the watched bands sits on a harmonic, not merely that one does: the clinician needs to
+    # know which reading to discount at the ladder, and at the rate in force that is the whole point
+    # of the ruling. Named, never refused (decision 220).
+    on_harm = [v for v in watch if v not in clear]
+    bands["watch_on_harmonic_hz"] = on_harm
+    bands["watch_clear_hz"] = [v for v in watch if v in clear]
+    _harms = bands.get("harmonics_hz") or {}
+    _names_map = bands.get("harmonic_names") or {}
+    def _nearest_harmonic(v):
+        if not _harms:
+            return None, None
+        k = min(_harms, key=lambda kk: abs(float(_harms[kk]) - v))
+        return k, float(_harms[k])
+    _pieces = []
+    for _k in sorted({_nearest_harmonic(v)[0] for v in on_harm if _nearest_harmonic(v)[0]}):
+        _hz = _harms.get(_k)
+        _label = _names_map.get(_k, _k.replace("_", "-"))
+        _members = [v for v in on_harm if _nearest_harmonic(v)[0] == _k]
+        _pieces.append(f"{_hz:g} Hz ({_label}) lies inside the {2 * HARMONIC_HALF_WIDTH_HZ:g} Hz "
+                       f"width of " + _and_list([f"{v:g}" for v in _members]) + " Hz")
+    bands["watch_why"] = (
+        f"the {len(watch)} band centre(s) that rise with pain on "
+        f"{c.get('display_short') or c.get('channel')} on the stored grid"
+        + (f" (found at {rate['cell_rate_hz']:g} Hz)" if _f(rate.get("cell_rate_hz")) is not None else "")
+        + f", the ones this session watches for a fall with current at {rate['rate_hz']:g} Hz")
+    bands["watch_why"] += (
+        "; all of them clear of the stimulation rate's folded landings at this rate" if bands["watch_clear"]
+        else (f"; at {rate['rate_hz']:g} Hz " + "; ".join(_pieces)
+              + ", so those bands carry a folded multiple of the stimulation rate -- advisory, not a "
+                "refusal (the PI, 2026-09-06): take care with their response to current, it does not "
+                "mean they measure the stimulator rather than the brain"
+              + (", and " + _and_list([f"{v:g}" for v in bands["watch_clear_hz"]]) + " Hz as clear"
+                 if bands["watch_clear_hz"] else ", and none of the watched bands is clear")))
+    ex = dict(exposure or {})
+    first = {"ever_powered": ex.get("ever_powered"), "sentence": ex.get("sentence"),
+             "stop_rule": FIRST_EXPOSURE_STOP_RULE,
+             "why": ("this configuration has never carried current on this side, so the up leg is a "
+                     "first exposure: every step is a side-effect check before it is a measurement"
+                     if ex.get("ever_powered") is False else
+                     "this configuration has carried current before; the stop rule still applies")}
+    holds = acute_pain_holds(lad.get("top_mA"))
+    held_mA = _f(held_other_side_mA)
+    held_src = str(held_other_side_source) if held_other_side_source else "no reading for the other side"
+    other = "Right" if side == "Left" else "Left"
+    pw = _f(pulse_width_us)
+    # the sheet rows: part A, two rows a step; part B, one row a hold
+    rows = []
+    contacts_pair = _bilateral_str(_strip_side_prefix(contacts_short) if side == "Left" else _strip_side_prefix(other_side_contacts),
+                                   _strip_side_prefix(other_side_contacts) if side == "Left" else _strip_side_prefix(contacts_short))
+    pw_pair = _bilateral(pw if side == "Left" else other_side_pw, other_side_pw if side == "Left" else pw)
+    step = int(start_step)
+    block_l = f"exploratory_{side.lower()}_ladder"; block_h = f"exploratory_{side.lower()}_holds"
+    for cur in lad["steps_mA"]:
+        amp = _bilateral(cur if side == "Left" else held_mA, held_mA if side == "Left" else cur)
+        rows.extend(_sheet_row_pair(step, block_l, contacts=contacts_pair, amp=amp, rate_hz=rate["rate_hz"],
+                                    pw=pw_pair, timing=timing))
+        step += 1
+    for h in holds["holds"]:
+        amp = _bilateral(h["current_mA"] if side == "Left" else held_mA, held_mA if side == "Left" else h["current_mA"])
+        every = ("every minute" if float(holds["rating_every_minutes"]) == 1.0
+                 else f"every {holds['rating_every_minutes']:g} min")
+        note = (f"hold {h['order']} of 3, stimulation {h['state']}: a pain rating {every} "
+                f"({holds['ratings_per_hold']} in all), the patient "
+                f"not told the current" + ("; the on hold is at the top current tolerated on the day"
+                                            if h["state"] == "on" else ""))
+        rows.append(_hold_row(step, block_h, contacts=contacts_pair, amp=amp, rate_hz=rate["rate_hz"],
+                              pw=pw_pair, minutes=h["minutes"], note=note))
+        step += 1
+    sess = session_time_estimate(int(lad["n_steps"]))
+    sess["holds_minutes"] = holds["total_minutes"]
+    sess["total_minutes"] = float(sess["total_minutes"]) + float(holds["total_minutes"])
+    sess["why"] = sess["why"] + f"; plus the three holds, {holds['total_minutes']:g} min"
+    conditions = [
+        f"stimulate on {contacts_short}: the device allows sensing on {c.get('display_short') or c.get('channel')} "
+        f"only while the contacts it flanks stimulate together",
+        f"rate {rate['rate_hz']:g} Hz, the rate in force on this side today (the PI, 2026-09-22)"
+        + (f"; the bands it watches were found at {rate['cell_rate_hz']:g} Hz on the stored grid"
+           if _f(rate.get("cell_rate_hz")) not in (None, rate["rate_hz"]) else "")
+        + (f", and at {rate['rate_hz']:g} Hz the stimulator's own harmonics fall inside "
+           + _and_list([f"{v:g}" for v in (bands.get("watch_on_harmonic_hz") or [])]) + " Hz"
+           + (", leaving " + _and_list([f"{v:g}" for v in (bands.get("watch_clear_hz") or [])])
+              + " Hz clear" if (bands.get("watch_clear_hz") or []) else ", leaving none of them clear")
+           if (bands.get("watch_on_harmonic_hz") or []) else ""),
+        "streaming on for the whole session on the sensing pair, so the TD recording (band power from the time-domain signal) exists for every step and every hold",
+        FIRST_EXPOSURE_STOP_RULE,
+        "each ladder step is two clinic-sheet rows: a ramp row then a test row, 2 min a step; a pain rating at the end of every test row",
+        f"then three {holds['minutes_each']:g}-minute holds, off / on / off, a rating every {holds['rating_every_minutes']:g} min, the patient blind to the current",
+        _held_condition(other, held_src, held_other_side_detail),
+        "an off-stimulation baseline before the first step and after the last hold; an impedance test before and after at a fixed measurement current",
+        "note the wall-clock time of each change on the clinic sheet",
+    ]
+    sources = {
+        "stimulation": (f"the inverse of the sensing rule (decision 217): {c.get('display_short') or c.get('channel')} "
+                        f"needs stimulation on rings {sorted(rings)}; in force today: rings {sorted(in_force_rings) or 'none'}"),
+        "sensing_pair": "the readiness screen's best cell for this side (bravo_service._best_contact_for_side)",
+        "rate_hz": ("the rate in force on this side today (the PI, 2026-09-22), "
+                    + (f"lifted to the adaptive minimum ({min_rate_hz:g} Hz)" if rate["lifted"]
+                       else f"held for the whole session; the watched bands come from {rate_source}")),
+        "pulse_width_us": str(pulse_width_source),
+        "ceiling_mA": str(ceiling_source),
+        "first_exposure": "the epoch table (adapter.build_design_matrix), cathode per side per epoch; decisions 164 and 165 for the stop rule",
+        "ladder": (f"0 mA up to the ceiling in {STEP_MA:g} mA steps, then down in {DOWN_STEP_MA:g} mA drops "
+                   f"(the PI's ruling, 2026-09-14), stopped early by the first-exposure rule"),
+        "hold": (f"{SETTLED_WINDOW_S:g} s of settled signal + {POST_RAMP_MARGIN_S:g} s after the ramp + {SLACK_S:g} s slack"),
+        "acute_pain_holds": (f"{HOLD_MINUTES_EACH:g} min each, a rating every {HOLD_RATING_EVERY_MIN:g} min, off / on / off "
+                             f"(the PI's ask of 2026-09-21: the acute effect on pain)"),
+        "bands": f"{CENTRES_SOURCE}; the cell's own bands that rise with pain; harmonics of {rate['rate_hz']:g} Hz ±{HARMONIC_HALF_WIDTH_HZ:g} Hz",
+        "held_other_side": held_src,
+        "conditions": "decisions 133, 164, 165, 217; the PI's ruling of 2026-09-14 on the two-row step; the PI's ask of 2026-09-21",
+    }
+    return {
+        "side": side,
+        "stimulation": {"contacts_short": contacts_short, "rings": sorted(rings),
+                        "in_force_rings": sorted(in_force_rings),
+                        "differs_from_in_force": rings != in_force_rings},
+        "sensing_pair": {"channel": c.get("channel"), "display_short": c.get("display_short"),
+                         "why": (f"the device allows this pair only while the contacts it flanks "
+                                 f"({', '.join(str(r) for r in sorted(rings))}) stimulate together")},
+        "contact": {k: c.get(k) for k in ("channel", "display_short", "rate_hz", "n_qualifying", "n_bands",
+                                          "n_responding", "n_pain_positive", "qualifying_centers_hz", "deployable")},
+        "rate_hz": rate["rate_hz"], "rate_in_force_hz": rate["rate_in_force_hz"],
+        # the rate of the cell where the watched bands were found, beside the rate the session runs
+        # at, so a reader never has to assume they are the same (decision 233, ruling 3)
+        "cell_rate_hz": rate.get("cell_rate_hz"), "rate_lifted": rate["lifted"],
+        "rate_why": rate["why"], "pulse_width_us": pw, "ceiling_mA": _f(ceiling_mA),
+        "held_other_side": _held_block(held_mA, held_src, held_other_side_detail),
+        "first_exposure": first, "ladder": lad, "hold": hold, "step_timing": timing, "bands": bands,
+        "acute_pain_holds": holds, "conditions": conditions, "sheet_rows": rows,
+        "session_time": sess, "sources": sources,
+        "purpose": (f"Two answers from one visit: (A) how the band power on {c.get('display_short') or c.get('channel')} "
+                    f"at {', '.join(f'{v:g}' for v in watch) or 'the watched centres'} Hz moves with current on "
+                    f"{contacts_short}, from the ladder's settled steps; (B) whether pain changes over minutes "
+                    f"when that current is switched on and off, from the three blind holds."),
+    }
+
+
+def plan_for_sides(sides_inputs, *, margin, in_force=None, joint_is_safe=None, proposed=None,
+                   ceilings=None) -> dict:
     """`{side: side_plan(...)}` for every side in `sides_inputs` (a mapping side -> kwargs for
     :func:`side_plan` minus `side`, `margin`, `held_other_side_mA`, `held_other_side_source`),
     plus the shared margin block, the optional joint-corners block, and the flat `sheet_rows`
     list. `in_force` (`bravo_service.in_force_by_side`'s output) supplies each side's current in
     force -- used to hold the OTHER side steady during a ladder (2026-09-14) and to read each
-    side's programmed contacts and pulse width for the sheet."""
+    side's programmed contacts and pulse width for the sheet.
+
+    `ceilings` (decision 308) is each side's safe ceiling, ``{side: (mA, provenance)}`` or
+    ``{side: mA}``; a side it does not name takes that side's own ``ceiling_mA`` from
+    `sides_inputs`, then the safety module's fallback. The HELD side is held at its current in force
+    only when that is at or below its ceiling; above it, it is held at the ceiling and every block
+    that names the held current says so."""
     in_force = dict(in_force or {})
     other_side = {"Left": "Right", "Right": "Left"}
+    ceil_by = SC.ceiling_mA_by_side(dict(
+        {s: (kw or {}).get("ceiling_mA") for s, kw in (sides_inputs or {}).items()
+         if (kw or {}).get("ceiling_mA") is not None},
+        **{str(k): v for k, v in (ceilings or {}).items() if v is not None}))
+
+    def _held_for(o):
+        """(current to hold, its source sentence, the ceiling detail) for the other side `o`."""
+        if o and isinstance(in_force.get(o), dict) and in_force[o].get("amplitude_mA") is not None:
+            src = (f"the {o} side's own setting in force today "
+                   f"({in_force[o].get('source') or 'the settings stream'})")
+            d = SC.held_at_or_below_ceiling(in_force[o]["amplitude_mA"], ceil_by[o], side=o,
+                                            source=src)
+            return d["current_mA"], src, d
+        return None, "no reading for the other side", None
+
     out = {"available": True, "sides": {}, "margin": dict(margin or {}),
            "protocol_source": PROTOCOL_SOURCE,
            "hold_s": hold_per_step()["seconds"], "step_mA": STEP_MA,
@@ -664,13 +1142,10 @@ def plan_for_sides(sides_inputs, *, margin, in_force=None, joint_is_safe=None) -
     for side, kw in sides_inputs.items():
         side = str(side)
         o = other_side.get(side)
-        held_mA, held_src = None, "no reading for the other side"
-        if o and isinstance(in_force.get(o), dict) and in_force[o].get("amplitude_mA") is not None:
-            held_mA = in_force[o]["amplitude_mA"]
-            held_src = (f"the {o} side's own setting in force today "
-                        f"({in_force[o].get('source') or 'the settings stream'})")
+        held_mA, held_src, detail = _held_for(o)
         out["sides"][side] = side_plan(side, margin=margin, held_other_side_mA=held_mA,
-                                       held_other_side_source=held_src, **kw)
+                                       held_other_side_source=held_src,
+                                       held_other_side_detail=detail, **kw)
 
     cl = (sides_inputs.get("Left") or {}).get("ceiling_mA")
     cr = (sides_inputs.get("Right") or {}).get("ceiling_mA")
@@ -688,4 +1163,51 @@ def plan_for_sides(sides_inputs, *, margin, in_force=None, joint_is_safe=None) -
                                          timing=out["step_timing"])
     n_steps_total = sum(1 for r in out["sheet_rows"] if r.get("row_kind") == "ramp")
     out["session_time"] = session_time_estimate(n_steps_total)
+    # THE EXPLORATORY LADDER(S) (2026-09-21): one per side whose best sensing pair needs a
+    # stimulation configuration other than the one in force; its rows go after the others.
+    out["proposed"] = {}
+    for side, kw in (proposed or {}).items():
+        side = str(side)
+        o = other_side.get(side)
+        of = dict(in_force.get(o) or {}) if o else {}
+        last_step = max([int(r.get("step") or 0) for r in out["sheet_rows"]] + [0])
+        # the held side read here, through the same ceiling check as the plain ladders, whatever
+        # the caller put in `kw` (decision 308: one place decides what the other side is held at)
+        kw = dict(kw)
+        kw["held_other_side_mA"], kw["held_other_side_source"], kw["held_other_side_detail"] = _held_for(o)
+        p = configuration_plan(side, other_side_contacts=of.get("contacts_short"),
+                               other_side_pw=of.get("pulse_width_us"), start_step=last_step + 1, **kw)
+        out["proposed"][side] = p
+        out["sheet_rows"].extend(p["sheet_rows"])
     return out
+
+
+# ---------------------------------------------------------------------------------------------
+# Visit-specific overrides must be supplied privately for the intended participant.
+# Shape: {"visit_date", "stated", "sides": {side: {"contacts_raw", "contacts_short",
+# "ceiling_mA", "sensing_channel"}}, "sheet_note"}. The safety model ceiling is unchanged.
+VISIT_PLAN_BY_UID = {}
+
+
+def apply_visit_plan(visit, in_force, ceilings):
+    """`(in_force, ceilings)` with each side named in `visit["sides"]` given the visit's contacts
+    and maximum current. Copies; the caller's mappings are not changed."""
+    f2 = {k: dict(v or {}) for k, v in (in_force or {}).items()}
+    c2 = dict(ceilings or {})
+    for side, s in ((visit or {}).get("sides") or {}).items():
+        row = f2.setdefault(side, {})
+        row["contacts_raw"] = s["contacts_raw"]
+        row["contacts_short"] = s["contacts_short"]
+        c2[side] = (float(s["ceiling_mA"]), str(visit.get("stated") or "the visit plan"))
+    return f2, c2
+
+
+def with_visit_note(rows, visit):
+    """The rows with the visit's note in the first row's notes column (sensing pair, contacts,
+    maxima), so the clinician sees it at the top of the sheet."""
+    rows = [dict(r) for r in (rows or [])]
+    note = (visit or {}).get("sheet_note")
+    if rows and note:
+        col = "General Notes / Pt Verbal Notes"
+        rows[0][col] = note if not rows[0].get(col) else f"{note} {rows[0][col]}"
+    return rows

@@ -14,47 +14,129 @@
  * Laid out again 2026-09-12 after the PI's review: a two-column grid (the check's name at 14 px
  * bold with its folded sentence under it; the evidence at 13-14 px), comfortable row spacing, the
  * per-side symbols labelled at 13 px with a legend line saying what each symbol means.
+ *
+ * The design review of 2026-09-26 (the PI: "yes to all six, build them"): the headline answers the
+ * card's own title ("Closed loop: may it start ...?") with "No: ..." or "Yes: ...", because the
+ * page's status line now carries "closed loop cannot start" and the page said it four times; the
+ * sentence pointing at the readiness table is gone (it pointed and said nothing else); the band
+ * chart folds under its own check; "resolved" is "proven better"; "adaptive" is "closed loop";
+ * "once time is removed" says what is removed, the differences between clinic visits.
+ *
+ * THE MINIMALIST REDESIGN OF 2026-09-26 (SPEC.md sections 2.3 and 5.3, §3): each check carries its
+ * glyph -- ✓ passes (ink), ✕ blocks (red), ○ could not be checked (grey, counted apart, never a
+ * pass) -- and, inside the choice check, ▲ for "not proven" (measured, too small to call). Colours
+ * and sizes come from the shared tokens; the check's sentence folds under its name.
  */
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
-import PAL from "views/Reports/ClosedLoopSim/palette";
-import { TickGlyph, CrossGlyph, AmberGlyph, NotTestedGlyph } from "views/Reports/ClosedLoopSim/glyphs";
+import { SVG_TEXT } from "views/Reports/figureStyle";
 
 import BandResponseStrip from "./BandResponseStrip";
 import { num, fmtHz, fmtMa, fmtOf, contactLabel } from "./stimFormat";
-import { TYPE, SMALL, SizedFold } from "./typeScale";
+import { T, TYPE, SMALL, MONO as MONO_BASE, WEIGHT, WRAP, Mark, SizedFold } from "./typeScale";
 
-const MONO = { fontFamily: PAL.mono, fontSize: TYPE.num, color: "#1A1A1A" };
+const MONO = { ...MONO_BASE, whiteSpace: "normal" };
 const NOTE = { ...SMALL, whiteSpace: "nowrap" };
 
 /** Plain-language names for the four conditions (their code names are in the tooltip). */
 export const CHECK_LABELS = {
-  rate_at_or_above_adaptive_minimum: "Rate at or above the adaptive minimum",
-  openloop_choice_resolved: "Rate and pulse width resolved against their own uncertainty",
-  adaptive_band_passes_lfp_response: "A sensed band inside 8–30 Hz responds to stimulation current",
+  rate_at_or_above_adaptive_minimum: "Rate at or above the closed-loop minimum",
+  openloop_choice_resolved: "Rate and pulse width proven better, beyond their own uncertainty",
+  // Plain words first, the mechanism after (panel C item 5; report C §5.3; the house rule: say what
+  // it does, then name it). The 8–30 Hz range stays, in brackets, for whoever needs it.
+  adaptive_band_passes_lfp_response: "Does a usable recording site's power change with current? (a band inside 8–30 Hz)",
   amplitude_limits_inside_envelope_and_under_ceiling: "Closed-loop current limits inside the delivered range and under the ceiling",
 };
 
-function verdictState(c) {
+export function verdictState(c) {
   const v = String((c && c.verdict) || "").trim().toUpperCase();
   if (v === "PASS" || (c && c.passed === true)) return true;
   if (v === "FAIL" || (c && c.passed === false)) return false;
   return null;
 }
-function Glyph({ state }) {
-  if (state === true) return <TickGlyph label="passes" size={18} />;
-  if (state === false) return <CrossGlyph label="fails" size={18} />;
-  return <NotTestedGlyph label="not assessed" size={18} />;
+/**
+ * RED MEANS ONE THING (the PI's ruling of 2026-09-26, TASTE_AUDIT.md D14): of the four checks, a
+ * failing rate check (below the minimum rate the device needs for closed loop) and a failing
+ * current-limits check (limits above the safe ceiling) are the device refusing or the ceiling, red
+ * ✕; a failing "proven better" check or band-response check is a statistical or evidence result,
+ * ink ✕, never red.
+ */
+export const REFUSED_CHECKS = new Set([
+  "rate_at_or_above_adaptive_minimum",
+  "amplitude_limits_inside_envelope_and_under_ceiling",
+]);
+export const failState = (name) => (REFUSED_CHECKS.has(name) ? "refused" : "blocked");
+
+const AMP_LIMITS = "amplitude_limits_inside_envelope_and_under_ceiling";
+const finiteNum = (v) => (v === null || v === undefined || v === "" ? null
+  : (Number.isFinite(Number(v)) ? Number(v) : null));
+
+/**
+ * Why a failing current-limits check failed, one short name per cause, read from the check's own
+ * evidence (`stage_gate.check_amplitude_limits`: `checked[side]` = the limits and the delivered
+ * envelope, `defaulted`, the ceiling per side). Only a PROPOSED upper limit above its side's ceiling
+ * is the ceiling (a defaulted one above it is history and the check is not assessed); an empty
+ * delivered range, a maximum not above the minimum and a limit beyond the delivered currents each
+ * have their own name (2026-09-26). A response without the evidence falls back to the check's
+ * sentence.
+ */
+export function amplitudeLimitCauses(c) {
+  const ev = (c && c.evidence) || {};
+  const checked = ev.checked || null;
+  const out = [];
+  const push = (x) => { if (!out.includes(x)) out.push(x); };
+  if (!checked) {
+    const d = String((c && c.detail) || "");
+    if (/exceeds the declared ceiling/i.test(d)) push("above_ceiling");
+    if (/not finite/i.test(d)) push("no_range_delivered");
+    if (/max > min/i.test(d)) push("no_range");
+    if (/above the highest amplitude ever delivered|below the lowest amplitude delivered/i.test(d)) push("beyond_delivered");
+    return out;
+  }
+  const defaulted = new Set(Array.isArray(ev.defaulted) ? ev.defaulted : []);
+  Object.entries(checked).forEach(([side, v]) => {
+    const lo = finiteNum(v && v.amp_min_mA), hi = finiteNum(v && v.amp_max_mA);
+    const env = Array.isArray(v && v.envelope) ? v.envelope : [];
+    const eLo = finiteNum(env[0]), eHi = finiteNum(env[1]);
+    const ceil = finiteNum(((ev.ceiling_by_side || {})[side] || {}).ceiling_mA) ?? finiteNum(ev.ceiling_mA);
+    if (lo === null || hi === null) { push("no_range_delivered"); return; }
+    if (!(hi > lo)) push("no_range");
+    if (ceil !== null && hi > ceil + 1e-9 && !defaulted.has(side)) push("above_ceiling");
+    if ((eHi !== null && hi > eHi + 1e-9) || (eLo !== null && lo < eLo - 1e-9)) push("beyond_delivered");
+  });
+  return out;
+}
+
+/** The short name of each cause (five words or fewer). */
+export const AMP_LIMIT_CAUSE_NAME = {
+  above_ceiling: "Current limits above ceiling",
+  no_range_delivered: "No delivered current range",
+  no_range: "Current limits have no range",
+  beyond_delivered: "Limit beyond delivered currents",
+};
+
+/** A failing check's state: red ("refused") for the rate check and for a current limit above the
+ *  ceiling; ink ("blocked") for every other failure. */
+export function conditionFailState(c) {
+  if (!c) return "blocked";
+  if (c.name === AMP_LIMITS) return amplitudeLimitCauses(c).includes("above_ceiling") ? "refused" : "blocked";
+  return failState(c.name);
+}
+
+function Glyph({ state, name, condition }) {
+  if (state === true) return <Mark state="pass" label="passes" size={TYPE.lead} />;
+  if (state === false) return <Mark state={condition ? conditionFailState(condition) : failState(name)} label="fails" size={TYPE.lead} />;
+  return <Mark state="notChecked" label="not assessed" size={TYPE.lead} />;
 }
 function Sub({ ok, text }) {
   // A per-side sub-answer inside a check: resolved = tick, not resolved = amber (measured and too
   // small to call, never the failure ink), unknown = dashed.
   return (
     <MDBox display="inline-flex" alignItems="center" gap={0.6} mr={2}>
-      {ok === true ? <TickGlyph label="resolved" size={14} />
-        : (ok === false ? <AmberGlyph label="not resolved" size={14} /> : <NotTestedGlyph label="not assessed" size={14} />)}
-      <span style={{ fontSize: TYPE.body, color: "#1A1A1A", whiteSpace: "nowrap" }}>{text}</span>
+      {ok === true ? <Mark state="pass" label="proven better" />
+        : (ok === false ? <Mark state="caution" label="not proven" /> : <Mark state="notChecked" label="not assessed" />)}
+      <span style={{ fontSize: TYPE.body, color: T.ink, whiteSpace: "nowrap" }}>{text}</span>
     </MDBox>
   );
 }
@@ -63,9 +145,9 @@ function SubLegend() {
   const item = { display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" };
   return (
     <MDBox display="flex" flexWrap="wrap" columnGap={2} rowGap={0.4} mt={0.6} sx={SMALL}>
-      <span style={item}><TickGlyph label="" size={13} /> resolved: the gain exceeds its own uncertainty</span>
-      <span style={item}><AmberGlyph label="" size={13} /> not resolved: measured, too small to call</span>
-      <span style={item}><NotTestedGlyph label="" size={13} /> not assessed: the comparison could not be formed</span>
+      <span style={item}><Mark state="pass" label="" size={TYPE.small} /> proven better: the gain exceeds its own uncertainty</span>
+      <span style={item}><Mark state="caution" label="" size={TYPE.small} /> not proven: measured, too small to call</span>
+      <span style={item}><Mark state="notChecked" label="" size={TYPE.small} /> not assessed: the comparison could not be formed</span>
     </MDBox>
   );
 }
@@ -74,21 +156,21 @@ function SubLegend() {
 function BandTicks({ verdicts, best }) {
   const keys = Object.keys(verdicts || {}).map(Number).filter((k) => Number.isFinite(k)).sort((a, b) => a - b);
   if (!keys.length) return null;
-  const W = 560, H = 44, PAD = 18;
+  const W = 520, H = 44, PAD = 18;   // 520 px so it fits the evidence column on a laptop
   const lo = 8, hi = 30;
   const x = (c) => PAD + ((c - lo) / (hi - lo)) * (W - 2 * PAD);
   return (
     <svg width={W} height={H} role="img" aria-label="which band centres respond">
-      <line x1={x(lo)} x2={x(hi)} y1={H - 18} y2={H - 18} stroke="#D8D8D8" />
-      {[8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30].map((t) => (
-        <text key={t} x={x(t)} y={H - 3} fontSize={TYPE.axis} fill="#7A7A7A" textAnchor="middle">{t}</text>
+      <line x1={x(lo)} x2={x(hi)} y1={H - 18} y2={H - 18} stroke={T.graphic} />
+      {[10, 15, 20, 25, 30].map((t) => (
+        <text key={t} x={x(t)} y={H - 3} {...SVG_TEXT} textAnchor="middle">{t}</text>
       ))}
       {keys.map((c) => {
         const responds = String(verdicts[c] || verdicts[String(c)] || "").toUpperCase().startsWith("RESPONDS");
         const isBest = best != null && Math.abs(Number(best) - c) < 1e-9;
         return responds
-          ? <circle key={c} cx={x(c)} cy={H - 30} r={isBest ? 6 : 4} fill={PAL.pass} stroke={isBest ? "#1A1A1A" : "none"} strokeWidth="1.2" />
-          : <rect key={c} x={x(c) - 4} y={H - 34} width={8} height={8} fill={PAL.fail} />;
+          ? <circle key={c} cx={x(c)} cy={H - 30} r={isBest ? 6 : 4} fill={T.ink} stroke={isBest ? T.surface : "none"} strokeWidth="1" />
+          : <circle key={c} cx={x(c)} cy={H - 30} r={4} fill={T.surface} stroke={T.graphic} strokeWidth="1.5" />;
       })}
     </svg>
   );
@@ -116,7 +198,7 @@ function Numbers({ c, lfp }) {
           <MDBox display="flex" flexWrap="wrap" alignItems="center" rowGap={0.6}>
             {["Left", "Right"].filter((h) => per[h]).map((h) => (
               <MDBox key={h} display="inline-flex" alignItems="center" mr={3}>
-                <span style={{ ...MONO, fontWeight: 600, marginRight: 10 }}>{h[0]}</span>
+                <span style={{ ...MONO, fontWeight: WEIGHT.strong, marginRight: 10 }}>{h[0]}</span>
                 <Sub ok={per[h].rate_resolved === true ? true : (per[h].rate_resolved === false ? false : null)} text="rate" />
                 <Sub ok={per[h].pw_resolved === true ? true : (per[h].pw_resolved === false ? false : null)} text="pulse width" />
               </MDBox>
@@ -134,7 +216,8 @@ function Numbers({ c, lfp }) {
       const rows = Array.isArray(ev.verdict_rows) ? ev.verdict_rows : null;
       // PER SIDE (review S3, 2026-09-12): the check is judged on each frozen side's own sensing
       // evidence, by the readiness screen's rule (decision 199: at least one band that falls with
-      // current once time is removed AND rises with pain on the Biomarkers grid). One block per
+      // current after removing differences between clinic visits AND rises with pain on the
+      // Biomarkers grid). One block per
       // side, each with its
       // own count, strip and the contact it was read on; a side with no evidence says so.
       const per = ev.per_hemisphere && typeof ev.per_hemisphere === "object" ? ev.per_hemisphere : null;
@@ -151,10 +234,10 @@ function Numbers({ c, lfp }) {
               return (
                 <MDBox key={h} mb={1.2}>
                   <MDBox display="flex" alignItems="baseline" columnGap={1.5} flexWrap="wrap">
-                    <span style={{ ...MONO, fontWeight: 600 }}>{h[0]}</span>
+                    <span style={{ ...MONO, fontWeight: WEIGHT.strong }}>{h[0]}</span>
                     <span style={{ ...MONO, whiteSpace: "nowrap" }}>
                       {b.n_tested
-                        ? `${fmtOf(b.n_era_negative_significant, b.n_tested)} fall with current once time is removed · ${b.n_pain_positive == null ? "rise with pain: not known" : `${fmtOf(b.n_pain_positive, b.n_tested)} rise with pain`} · ${fmtOf(b.n_qualifying, b.n_tested)} do both${Array.isArray(b.qualifying_centers_hz) && b.qualifying_centers_hz.length ? ` (${b.qualifying_centers_hz.map((v) => Number(v)).join(", ")} Hz)` : ""}`
+                        ? `${fmtOf(b.n_era_negative_significant, b.n_tested)} fall with current (clinic-visit differences removed) · ${b.n_pain_positive == null ? "rise with pain: not known" : `${fmtOf(b.n_pain_positive, b.n_tested)} rise with pain`} · ${fmtOf(b.n_qualifying, b.n_tested)} do both${Array.isArray(b.qualifying_centers_hz) && b.qualifying_centers_hz.length ? ` (${b.qualifying_centers_hz.map((v) => Number(v)).join(", ")} Hz)` : ""}`
                         : state}
                     </span>
                     {b.n_tested ? <span style={NOTE}>{state}</span> : null}
@@ -162,16 +245,18 @@ function Numbers({ c, lfp }) {
                       <span style={NOTE}>{`${Math.round(num(b.n_power_unavailable))} not measurable`}</span>
                     )}
                   </MDBox>
+                  {/* The chart folds under its own check (the design review of 2026-09-26, S5):
+                      the counts above say what it shows; the bars say it band by band. */}
                   {Array.isArray(b.verdict_rows) && b.verdict_rows.length > 0 && (
-                    <MDBox mt={0.6}>
+                    <SizedFold show={`Show the ${b.verdict_rows.length} bands, drawn`} hide="Hide the bands" dense mt={0.4}>
                       <BandResponseStrip rows={b.verdict_rows} minSep={ev.min_sep_d} best={b.best_center_hz} />
-                    </MDBox>
+                    </SizedFold>
                   )}
                   <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.4 }}>
                     {sel && sel.selected
                       ? <>read on <span style={{ whiteSpace: "nowrap" }}>{contactLabel({ display_short: sel.selected_display_short }, k ? k[0] : null)}</span>
                         {sel.pinned_rate_hz != null ? <> at <span style={{ whiteSpace: "nowrap" }}>{fmtHz(sel.pinned_rate_hz)}</span></> : null}
-                        {b.laterality === "contralateral" ? <span style={{ color: PAL.warnText }}> · a contact on the other side (none on this side passed)</span> : null}</>
+                        {b.laterality === "contralateral" ? <span style={{ color: T.caution }}> · <span aria-hidden="true">▲ </span>a contact on the other side (none on this side passed)</span> : null}</>
                       : (b.reason || (sel && sel.selection_note) || "no sensing contact could be used on this side")}
                   </MDTypography>
                 </MDBox>
@@ -179,8 +264,7 @@ function Numbers({ c, lfp }) {
             })}
             {lfp && (
               <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.2 }}>
-                {lfp.n_cells_screened != null ? `${lfp.n_cells_screened} contact-and-rate combinations screened` : ""}
-                {lfp.n_cells_unbuildable != null ? `, ${lfp.n_cells_unbuildable} could not be built` : ""}
+                {screenedLine(lfp)}
                 {" · one side's sensing contact licenses only that side"}
               </MDTypography>
             )}
@@ -195,19 +279,18 @@ function Numbers({ c, lfp }) {
               <span style={NOTE}>{`${Math.round(num(ev.n_power_unavailable))} not measurable`}</span>
             )}
           </MDBox>
-          <MDBox mt={0.6}>
+          <SizedFold show="Bands, drawn" hide="Hide the bands" dense mt={0.4}>
             {rows
               ? <BandResponseStrip rows={rows} minSep={ev.min_sep_d} best={ev.best_center_hz} />
               : <BandTicks verdicts={ev.verdicts} best={null} />}
-          </MDBox>
+          </SizedFold>
           {lfp && (
             <MDTypography variant="caption" component="div" sx={{ ...SMALL, mt: 0.4 }}>
               {lfp.selected
                 ? <>read on <span style={{ whiteSpace: "nowrap" }}>{contactLabel({ display_short: lfp.selected_display_short }, Array.isArray(lfp.selected_key) ? lfp.selected_key[0] : null)}</span>
                   {lfp.pinned_rate_hz != null ? <> at <span style={{ whiteSpace: "nowrap" }}>{fmtHz(lfp.pinned_rate_hz)}</span></> : null}</>
                 : "no sensing contact could be used"}
-              {lfp.n_cells_screened != null ? ` · ${lfp.n_cells_screened} contact-and-rate combinations screened` : ""}
-              {lfp.n_cells_unbuildable != null ? `, ${lfp.n_cells_unbuildable} could not be built` : ""}
+              {lfp.n_cells_screened != null || lfp.n_cells_unbuildable != null ? ` · ${screenedLine(lfp)}` : ""}
               {passing.length ? ` · responding centres ${passing.map((v) => Number(v).toFixed(1)).join(", ")} Hz` : ""}
             </MDTypography>
           )}
@@ -226,7 +309,9 @@ function Numbers({ c, lfp }) {
           <span style={{ ...MONO, whiteSpace: "nowrap" }}>
             {["Left", "Right"].filter((h) => checked[h]).map((h) => `${h[0]} ${fmtMa(checked[h].amp_min_mA)}–${fmtMa(checked[h].amp_max_mA)}`).join(" · ")}
           </span>
-          {ev.ceiling_by_side
+          {/* The ceiling is stated once on the page, in the next-visit card (the design review of
+              2026-09-26); here it is printed only when no history line below already names it. */}
+          {Object.keys(ev.history_above_ceiling || {}).length ? null : ev.ceiling_by_side
             // 2026-09-12: the ceiling is the current the PI stated as not acceptable, per side,
             // with its provenance; an older response carries only the one number.
             ? (<span style={NOTE} title={["Left", "Right"].filter((h) => ev.ceiling_by_side[h]).map((h) => `${h}: ${ev.ceiling_by_side[h].provenance}`).join(" · ")}>
@@ -239,15 +324,15 @@ function Numbers({ c, lfp }) {
               returns "not assessed" and names both numbers here; a reader must not take the
               4.8 mA as the plan asking for an unsafe current. */}
           {Object.entries(ev.history_above_ceiling || {}).map(([h, v]) => (
-            <span key={h} style={{ ...NOTE, color: PAL.warnText, flexBasis: "100%" }}>
-              {`${h[0]}: ${fmtMa(v.delivered_max_mA)} delivered in the past is above today's ${fmtMa(v.ceiling_mA)} ceiling — history, not a proposal; no limit has been proposed yet`}
+            <span key={h} style={{ ...NOTE, whiteSpace: "normal", color: T.caution, flexBasis: "100%" }}>
+              <span aria-hidden="true">▲ </span>{`${h[0]}: ${fmtMa(v.delivered_max_mA)} delivered in the past is above today's ${fmtMa(v.ceiling_mA)} ceiling — history, not a proposal; no limit has been proposed yet`}
             </span>
           ))}
           {/* Review 2026-09-15, S2: the side-effect-versus-current statistic the gate recomputes on
               every request (decision 166), printed with its n whether the check passes or fails,
               so "does not move with current" is never read without the 15 rows behind it. */}
           {ev.side_effect_vs_current && (
-            <span style={{ ...NOTE, flexBasis: "100%" }}>
+            <span style={{ ...NOTE, whiteSpace: "normal", flexBasis: "100%" }}>
               {ev.side_effect_vs_current.sentence
                 ? `Side effects versus current: ${ev.side_effect_vs_current.sentence}`
                 : `Side effects versus current: not assessable${ev.side_effect_vs_current.reason ? ` (${ev.side_effect_vs_current.reason})` : ""}`}
@@ -261,48 +346,79 @@ function Numbers({ c, lfp }) {
   }
 }
 
+/** The checks' answer in counts ("No: 2 of 4 checks block, 1 not assessed"), one home: the checks
+ *  card's headline and the closed section's answer on the page (2026-09-26). */
+export function gateHeadline(plan) {
+  const gate = (plan && plan.gate) || {};
+  const conditions = Array.isArray(gate.conditions) ? gate.conditions : [];
+  const nFail = Array.isArray(gate.failed) ? gate.failed.length : conditions.filter((c) => verdictState(c) === false).length;
+  const nNot = Array.isArray(gate.not_assessed) ? gate.not_assessed.length : conditions.filter((c) => verdictState(c) === null).length;
+  const n = num(gate.n_conditions) ?? conditions.length;
+  if (!conditions.length) return "The check did not run";
+  return gate.passed === true
+    ? `Yes: ${n} of ${n} checks pass`
+    : `No: ${nFail} of ${n} checks block${nNot ? `, ${nNot} not assessed` : ""}`;
+}
+
+/** How many contact-and-rate combinations were looked at and how many had no usable recording, with
+ *  the commonest reason the server gives (page review 2026-10-02: "12 screened, 12 could not be
+ *  built" read as a contradiction beside the assessed counts). All unbuilt reads "none could be
+ *  built", not a count that looks like a subset. */
+export function screenedLine(lfp) {
+  const screened = lfp.n_cells_screened;
+  const bad = lfp.n_cells_unbuildable;
+  const reasons = Object.entries(lfp.unbuildable_reasons || {}).sort((a, b) => b[1] - a[1]);
+  const why = reasons.length ? ` (${reasons[0][0]}${reasons.length > 1 ? `, +${reasons.length - 1} more` : ""})` : "";
+  if (screened == null && bad == null) return "";
+  if (bad == null) return `${screened} contact-and-rate combinations screened`;
+  if (screened != null && bad >= screened && screened > 0) return `none of ${screened} combinations could be built${why}`;
+  const head = screened != null ? `${screened} combinations screened, ` : "";
+  return `${head}${bad} could not be built${why}`;
+}
+
 export default function ClosedLoopChecks({ plan }) {
   const gate = (plan && plan.gate) || {};
   const conditions = Array.isArray(gate.conditions) ? gate.conditions : [];
   const lfp = (plan && plan.lfp_evidence) || {};
-  const nFail = Array.isArray(gate.failed) ? gate.failed.length : conditions.filter((c) => verdictState(c) === false).length;
-  const nNot = Array.isArray(gate.not_assessed) ? gate.not_assessed.length : conditions.filter((c) => verdictState(c) === null).length;
-  const n = num(gate.n_conditions) ?? conditions.length;
   const passed = gate.passed === true;
-  const color = passed ? PAL.pass : (conditions.length ? PAL.fail : PAL.neutral);
-  const headline = !conditions.length
-    ? "The check did not run"
-    : (passed
-      ? `Closed loop may start: ${n} of ${n} checks pass`
-      : `Closed loop may not start: ${nFail} of ${n} checks block${nNot ? `, ${nNot} not assessed` : ""}`);
+  // The answer in ink when it passes; when a check blocks, red with ✕ only if a failing check is
+  // the device refusing or the ceiling, otherwise ink with ✕ (D14); grey when nothing ran.
+  const refusedFail = conditions.some((c) => verdictState(c) === false && conditionFailState(c) === "refused");
+  const color = passed ? T.ink : (conditions.length ? (refusedFail ? T.refused : T.ink) : T.notChecked);
+  // The card's title asks "Closed loop: may it start on the frozen setting?"; the headline answers
+  // it. The page's status line says "closed loop cannot start" in words; this says why, in counts.
+  const headline = gateHeadline(plan);
   return (
     <MDBox>
       <MDBox display="flex" alignItems="center" gap={1}>
-        {conditions.length ? (passed ? <TickGlyph label="may start" size={20} /> : <CrossGlyph label="may not start" size={20} />) : null}
-        <MDTypography variant="h6" sx={{ fontSize: TYPE.section, color }}>{headline}</MDTypography>
+        {conditions.length ? (passed ? <Mark state="pass" label="may start" size={TYPE.lead} /> : <Mark state={refusedFail ? "refused" : "blocked"} label="may not start" size={TYPE.lead} />) : null}
+        <MDTypography variant="h6" component="p" sx={{ fontSize: TYPE.lead, fontWeight: WEIGHT.strong, color, m: 0, ...WRAP.balance }}>{headline}</MDTypography>
       </MDBox>
+      {/* The two readiness cards stay two cards (panel C item 5). The sentence that pointed from
+          here to the readiness table is gone (the design review of 2026-09-26): it said nothing
+          but where another card is. */}
       {/* Two columns: the check (symbol, name, folded sentence) and its evidence. */}
-      <MDBox mt={1.5} sx={{ display: "grid", gridTemplateColumns: "minmax(300px, 1fr) minmax(360px, 1.5fr)",
-        columnGap: "28px", rowGap: "22px", alignItems: "start" }}>
+      <MDBox mt={2} sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "minmax(0, 1fr) minmax(0, 1.5fr)" },
+        columnGap: "32px", rowGap: "24px", alignItems: "start" }}>
         {conditions.map((c, i) => {
           const st = verdictState(c);
           return [
-            <MDBox key={`${i}-l`} display="flex" alignItems="flex-start" gap={1}>
-              <MDBox pt={0.2} sx={{ flex: "0 0 auto" }}><Glyph state={st} /></MDBox>
+            <MDBox key={`${i}-l`} display="flex" alignItems="flex-start" gap={1} sx={{ minWidth: 0 }}>
+              <MDBox pt={0.2} sx={{ flex: "0 0 auto" }}><Glyph state={st} name={c.name} condition={c} /></MDBox>
               <MDBox>
                 <MDTypography variant="caption" component="div" title={c.name}
-                  sx={{ fontSize: TYPE.num, fontWeight: 700, color: "#2A2A2A", lineHeight: 1.35 }}>
+                  sx={{ fontSize: TYPE.body, fontWeight: WEIGHT.strong, color: T.ink, lineHeight: 1.5 }}>
                   {CHECK_LABELS[c.name] || String(c.name || "").replace(/_/g, " ")}
-                  {c.overridden ? <span style={{ color: PAL.warnText, marginLeft: 6 }}>[overridden]</span> : null}
+                  {c.overridden ? <span style={{ color: T.caution, marginLeft: 6 }}><span aria-hidden="true">▲ </span>[overridden]</span> : null}
                 </MDTypography>
-                <SizedFold show="Sentence" hide="Hide" dense mt={0.3}>
-                  <MDTypography variant="caption" color="text" component="div" sx={{ fontSize: TYPE.body }}>
+                <SizedFold show="Check" hide="Hide" dense mt={0.3}>
+                  <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2 }}>
                     {c.detail || "no reason was returned"}
                   </MDTypography>
                 </SizedFold>
               </MDBox>
             </MDBox>,
-            <MDBox key={`${i}-n`} pt={0.2}><Numbers c={c} lfp={c.name === "adaptive_band_passes_lfp_response" ? lfp : null} /></MDBox>,
+            <MDBox key={`${i}-n`} pt={0.2} sx={{ minWidth: 0 }}><Numbers c={c} lfp={c.name === "adaptive_band_passes_lfp_response" ? lfp : null} /></MDBox>,
           ];
         })}
       </MDBox>

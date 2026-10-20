@@ -20,24 +20,65 @@ SQL Table Definitions
 
 import os
 from uuid import uuid4
-import datetime
+import ipaddress
+import math
+import threading
+import time
 
 from django.shortcuts import render
-from django.http.response import HttpResponseRedirect
+from django.http.response import HttpResponse, HttpResponseRedirect
+from django.conf import settings
 import rest_framework.views as RestViews
 import rest_framework.parsers as RestParsers
 
-from django.views.decorators.csrf import ensure_csrf_cookie 
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils.decorators import method_decorator
 
 from Server import models
 
 ConsecutiveError = {}
+_RATE_LIMIT_LOCK = threading.Lock()
+
 
 def get_client_ip(request):
-    # Uvicorn resolves the trusted proxy chain. Never accept a client-supplied
-    # alternate header here; the historical X-Forward-For spelling is spoofable.
-    return request.META.get('REMOTE_ADDR')
+    """Use Caddy's overwritten client header only from an explicitly trusted peer.
+
+    No general X-Forwarded-For trust: a direct client may supply any such header.
+    A missing or malformed peer/header yields the peer address or no identity.
+    """
+    try:
+        peer = ipaddress.ip_address(request.META.get("REMOTE_ADDR", ""))
+    except ValueError:
+        return None
+    trusted = getattr(settings, "BRAVO_TRUSTED_PROXY_CIDRS", ())
+    for cidr in trusted:
+        try:
+            network = ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            continue
+        if peer in network:
+            try:
+                return str(ipaddress.ip_address(request.META.get("HTTP_X_BRAVO_CLIENT_IP", "")))
+            except ValueError:
+                # Never aggregate visitors under a trusted proxy when its required
+                # client header is missing. Deployment checks must catch that setup error.
+                return None
+    return str(peer)
+
+
+def _homepage_retry_after(ip, now):
+    """A short per-worker burst limit; never create permanent blacklist records."""
+    if ip is None:
+        return 0
+    with _RATE_LIMIT_LOCK:
+        for key in list(ConsecutiveError):
+            if now - ConsecutiveError[key]["LastRequest"] >= 10:
+                del ConsecutiveError[key]
+        entry = ConsecutiveError.setdefault(ip, {"LastRequest": now, "Count": 0})
+        entry["Count"] += 1
+        if entry["Count"] > 10:
+            return max(1, math.ceil(10 - (now - entry["LastRequest"])))
+    return 0
 
 class StaticProxy(RestViews.APIView):
     def get(self, request):
@@ -49,36 +90,19 @@ class Homepage(RestViews.APIView):
     @method_decorator(ensure_csrf_cookie)
     def get(self, request):
 
-        requestTime = datetime.datetime.now().timestamp()
         requestIpAddr = get_client_ip(request)
-
-        if models.BlacklistRecords.exists(ip_address=requestIpAddr):
+        if requestIpAddr and models.BlacklistRecords.exists(ip_address=requestIpAddr):
             return render(request, "404.html")
-        
-        if str(request.user) == "AnonymousUser":
-            if not requestIpAddr in ConsecutiveError.keys():
-                ConsecutiveError[requestIpAddr] = {
-                    "LastRequest": requestTime,
-                    "Count": 1
-                }
 
-            else:
-                if requestTime - ConsecutiveError[requestIpAddr]["LastRequest"] < 10:
-                    ConsecutiveError[requestIpAddr]["Count"] += 1
-                else:
-                    ConsecutiveError[requestIpAddr]["LastRequest"] = requestTime
-                    ConsecutiveError[requestIpAddr]["Count"] = 1
-                
-                if ConsecutiveError[requestIpAddr]["Count"] > 10:
-                    models.BlacklistRecords(ip_address=requestIpAddr, reason="Frequent Request").save()
-        
-        AllKeys = list(ConsecutiveError.keys())
-        for key in AllKeys:
-            if requestTime - ConsecutiveError[key]["LastRequest"] > 30:
-                del ConsecutiveError[key]
+        if not request.user.is_authenticated:
+            retry_after = _homepage_retry_after(requestIpAddr, time.monotonic())
+            if retry_after:
+                response = HttpResponse("Too many requests. Please try again shortly.", status=429)
+                response["Retry-After"] = str(retry_after)
+                return response
 
         context = {}
-        
-        # If Development Uncomment the following: 
+
+        # If Development Uncomment the following:
         # return render(request, "index_dev.html", context=context)
         return render(request, "index.html", context=context)

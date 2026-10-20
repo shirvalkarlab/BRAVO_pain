@@ -1,0 +1,138 @@
+{
+  "_fixture_provenance": "Independently authored calibration display example: k=100, bridge ratio=2, composed k=50. Six invented blocks, four eligible. No empirical fit claimed.",
+  "available": true,
+  "table_date": "2000-01-01",
+  "deployed": {
+    "k": 100,
+    "bridge_ratio": 2,
+    "bridge_lsb_per_device_uv2": 50
+  },
+  "transform": {
+    "n": 4,
+    "r": 1,
+    "median_fold_error": 1,
+    "k_interval": [
+      95,
+      105
+    ],
+    "k_interval_method": "synthetic interval",
+    "scatter_mad": 5,
+    "scatter_mad_frac": 0.05,
+    "proportionality": {
+      "sentence": "Synthetic proportionality display example."
+    },
+    "blocks": [
+      {
+        "side": "Left",
+        "channel": "ZERO_THREE_LEFT",
+        "uv2": 1,
+        "lsb": 100,
+        "center_hz": 15.5,
+        "date": "20000101",
+        "td_seconds": 6,
+        "n_lfp_points": 8,
+        "median_ma": 1,
+        "status": "kept"
+      },
+      {
+        "side": "Right",
+        "channel": "ZERO_THREE_RIGHT",
+        "uv2": 2,
+        "lsb": 200,
+        "center_hz": 15.5,
+        "date": "20000101",
+        "td_seconds": 6,
+        "n_lfp_points": 8,
+        "median_ma": 1,
+        "status": "kept"
+      },
+      {
+        "side": "Left",
+        "channel": "ZERO_THREE_LEFT",
+        "uv2": 3,
+        "lsb": 300,
+        "center_hz": 15.5,
+        "date": "20000101",
+        "td_seconds": 6,
+        "n_lfp_points": 8,
+        "median_ma": 1,
+        "status": "kept"
+      },
+      {
+        "side": "Right",
+        "channel": "ZERO_THREE_RIGHT",
+        "uv2": 4,
+        "lsb": 400,
+        "center_hz": 15.5,
+        "date": "20000101",
+        "td_seconds": 6,
+        "n_lfp_points": 8,
+        "median_ma": 1,
+        "status": "kept"
+      },
+      {
+        "side": "Left",
+        "channel": "ZERO_THREE_LEFT",
+        "uv2": 5,
+        "lsb": 500,
+        "center_hz": 15.5,
+        "date": "20000101",
+        "td_seconds": 6,
+        "n_lfp_points": 8,
+        "median_ma": 1,
+        "status": "gated"
+      },
+      {
+        "side": "Right",
+        "channel": "ZERO_THREE_RIGHT",
+        "uv2": 6,
+        "lsb": 600,
+        "center_hz": 15.5,
+        "date": "20000101",
+        "td_seconds": 6,
+        "n_lfp_points": 8,
+        "median_ma": 1,
+        "status": "gated"
+      }
+    ],
+    "june_reference": {
+      "k": 110,
+      "n": 2,
+      "last_date": "19991231"
+    }
+  },
+  "bridge": {
+    "ratio": 2.1,
+    "n_surveys": 2,
+    "n": 6,
+    "n_pairs": 6,
+    "per_centre": [
+      {
+        "center_hz": 10.5,
+        "ratio": 2,
+        "n": 2
+      },
+      {
+        "center_hz": 15.5,
+        "ratio": 2.1,
+        "n": 2
+      },
+      {
+        "center_hz": 20.5,
+        "ratio": 2.2,
+        "n": 2
+      }
+    ],
+    "per_channel": [
+      {
+        "channel": "ZERO_THREE_LEFT",
+        "ratio": 1.9
+      },
+      {
+        "channel": "ZERO_THREE_RIGHT",
+        "ratio": 2.3
+      }
+    ],
+    "per_channel_centre": []
+  }
+}

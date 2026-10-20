@@ -18,6 +18,7 @@ import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
+import FoldArrow from "../paper/FoldArrow";
 
 export default function Fold({ show, hide, defaultOpen = false, children, mt = 0.6, dense = false,
   onChange = null }) {
@@ -27,21 +28,24 @@ export default function Fold({ show, hide, defaultOpen = false, children, mt = 0
   // page's three-source panel met this, decision 123), so the Stim Optimizer page mounts its
   // surfaces on first reveal rather than on first render. Children stay mounted, as before.
   const toggle = () => setOpen((o) => { const n = !o; if (onChange) onChange(n); return n; });
+  // Drawn as the redesign's fold row (SPEC 2026-09-26 section 4 rule 4): one 14 px row in the body
+  // ink, "▸ Label", the arrow turning when open. `dense` is kept for callers and changes nothing:
+  // no text on the page is smaller than 12 px.
   return (
-    <MDBox mt={mt}>
+    <MDBox mt={mt} data-dense={dense ? "" : undefined}>
       <MDTypography variant="caption" component="button" type="button"
         onClick={toggle} aria-expanded={open}
-        sx={{ fontSize: dense ? 10.5 : 11, color: PAL.accent, cursor: "pointer", display: "inline-flex",
-          alignItems: "center", gap: 0.5, background: "none", border: 0, padding: 0,
-          fontFamily: "inherit", "&:hover": { textDecoration: "underline" },
+        sx={{ fontSize: PAL.fs.body, lineHeight: "22px", color: PAL.ink2, cursor: "pointer",
+          display: "inline-flex", alignItems: "center", gap: 1, background: "none", border: 0,
+          padding: 0, fontFamily: "inherit", textAlign: "left",
+          "&:hover": { textDecoration: "underline" },
           "&:focus-visible": { outline: `2px solid ${PAL.accent}`, outlineOffset: 2,
-            borderRadius: "3px" } }}>
-        <span aria-hidden="true" style={{ display: "inline-block", fontSize: 9,
-          transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
-        {open ? (hide || "Hide") : show}
+            borderRadius: "4px" } }}>
+        <FoldArrow open={open} />
+        {show}
       </MDTypography>
       <Collapse in={open} unmountOnExit={false}>
-        <MDBox mt={0.4}>{children}</MDBox>
+        <MDBox mt={1}>{children}</MDBox>
       </Collapse>
     </MDBox>
   );

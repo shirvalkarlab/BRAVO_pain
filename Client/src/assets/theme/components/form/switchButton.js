@@ -70,14 +70,15 @@ const switchButton = {
     thumb: {
       backgroundColor: white.main,
       boxShadow: md,
-      border: `${borderWidth[1]} solid ${grey[400]}`,
+      // Outline at least 3:1 (the PI's ruling D3, 2026-09-26): grey[500] is the graphic grey.
+      border: `${borderWidth[1]} solid ${grey[500]}`,
     },
 
     track: {
       width: pxToRem(32),
       height: pxToRem(15),
-      backgroundColor: grey[400],
-      border: `${borderWidth[1]} solid ${grey[400]}`,
+      backgroundColor: grey[500],
+      border: `${borderWidth[1]} solid ${grey[500]}`,
       opacity: 1,
     },
 

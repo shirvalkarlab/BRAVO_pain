@@ -14,8 +14,8 @@ Re-runnability
 Everything is a pure function of the design-matrix CSV plus the declared parameters. A data
 refresh is::
 
-    from modules.StimOptimizer.routines import plots
-    plots.render_all("rcs08_bo_design_matrix.csv", outdir="figs",
+    from StimOptimizer.routines import plots
+    plots.render_all("design_matrix.csv", outdir="figs",
                      # Pass the TRUE horizon of the matrix you are handing in. This example is
                      # illustrative only — do not copy the date. The module default is the string
                      # "UNDECLARED", deliberately conspicuous, so a stale horizon can never be
@@ -54,15 +54,7 @@ from .preference import PreferenceGP
 
 # --- canonical configuration -------------------------------------------------------------
 FREQ_GRID = [10, 20, 30, 40, 55, 70, 85, 110, 125, 130, 145, 165]          # Hz
-# Upper bound 4.9 mA: PI-declared ceiling (2026-08-30). Chosen as the highest amplitude the search
-# is permitted to propose, just above the 4.8 mA actually delivered during the July-August 2026
-# escalation, so the grid can represent every setting on record without proposing beyond the
-# clinician's stated limit. Lower bound stays 0.0 because a hemisphere genuinely runs at 0 mA in
-# this record. Do not raise this to represent a higher delivered amplitude without a new PI limit.
-# Upper bound tracks objective.AMP_HARD_LIMIT_MA (5.0 mA as of 2026-09-02). This MUST follow the
-# declared limit: a grid that stops below it leaves the highest permitted amplitudes outside the
-# search space, so the surrogate can neither score nor propose them. That exact defect occurred once
-# already here, when the grid stopped at 4.0 while 4.8 mA had been delivered.
+# Search bounds follow the declared clinical limit, including off stimulation at zero.
 AMP_GRID = np.round(np.arange(0.0, OBJ.AMP_HARD_LIMIT_MA + 0.01, 0.1), 2)  # mA, per hemisphere
 FIXED_LENGTH_SCALE = (0.823, None)   # frequency pinned at one octave, amplitude FITTED
 # Retained only as an explicit override for a caller who wants a NON-current reference. The
@@ -74,7 +66,8 @@ KAPPA = 2.0
 BETA = 2.0
 PREF_MARGIN = 0.15
 
-# Participant-specific provenance and examples are maintained outside source control.
+# Seed safety from explicitly stated participant/side ceilings, not programmed limits:
+# a configured range is not evidence of a side-effect threshold.
 
 # Declared provenance. The CALLER should pass the true horizon; this default is deliberately
 # labelled as unset so a stale value can never be silently stamped onto a figure.
@@ -99,22 +92,6 @@ GOODNESS = "lower J = better"
 
 
 # --- context ------------------------------------------------------------------------------
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
-
-
-
-
-
-
-LIMIT_ANCHORS = np.array([[55., 2.0], [55., 1.8], [55., 1.9], [10., 1.9], [110., 4.0],
-                          [110., 3.2], [130., 3.2], [125., 2.5], [165., 2.5], [110., 2.2],
-                          [55., 1.6], [10., 2.0]])
-
 @dataclass
 class FigureContext:
     """Everything the five figures need, computed once."""
@@ -149,7 +126,7 @@ class FigureContext:
     @property
     def stamp(self):
         m = self.meta
-        return (f"RCS08 · PROVISIONAL · outcome: {m.get('primary_item','?')} · "
+        return (f"{m.get('participant_label', 'participant')} · PROVISIONAL · outcome: {m.get('primary_item','?')} · "
                 f"{m.get('hemisphere','?')} hemisphere amplitude · "
                 f"data horizon: {m['data_horizon']} · wash-in {m['washin_min']:g} min · "
                 f"{m['n_epochs_fitted']} epochs / {m['n_reports_total']:.0f} reports · "
@@ -174,8 +151,41 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
                   n_batches=3, q=4, min_tolerated_h=72.0,
                   data_horizon=DATA_HORIZON, washin_min=WASHIN_MIN,
                   hemisphere="Left", primary_item=None,
-                  random_state=0) -> FigureContext:
-    """Fit every model the figures need from one design matrix."""
+                  random_state=0, participant_label="participant") -> FigureContext:
+    """Fit every model the figures need from one design matrix.
+
+    Parameters
+    ----------
+    design_csv
+        Path to the epoch-level design matrix, or a DataFrame. Needs the columns
+        :func:`objective.build_objective` requires.
+    fixed_length_scale
+        Per-dimension length-scale pinning. The default ``(0.823, None)`` pins FREQUENCY at one
+        octave — it is not identifiable from this design (OBJECTIVE_SPEC amendment 2026-08-29) —
+        and leaves AMPLITUDE free to be fitted. Pinning both would make leave-one-out folds
+        inherit the full-data amplitude hyperparameter, which would invalidate any calibration
+        claim drawn from them.
+    data_horizon, washin_min
+        Declared provenance, stamped onto every figure. ``washin_min`` is the post-change
+        exclusion window that defines an epoch's report set; it is a protocol parameter, not a
+        modelling one, and the figures are only interpretable against a stated value.
+    hemisphere
+        ``"Left"`` or ``"Right"`` — which hemisphere's amplitude forms the second search
+        dimension, read from ``amp_mA_<hemisphere>``. The two hemispheres are fitted as SEPARATE
+        surfaces rather than as a joint 3-D surface, for the same reason the two pain sites are
+        separate optimizers: the two sides are usable on different epoch subsets, so a joint fit
+        would impose one shared length scale on two dimensions with different support. Run one
+        context per hemisphere and compare them side by side.
+    primary_item
+        Pain metric name passed through to :func:`objective.build_objective` (e.g. ``"left_leg"``,
+        ``"back"``). ``None`` uses the module default, which is the left leg.
+    safety_ceiling
+        ``(ceiling_mA, provenance)`` from ``safety_ceiling.ceiling_for`` -- the current above which
+        this side is not acceptable, stated by the PI. The safety model is seeded with severity 3
+        at that current on every grid rate and severity 0 at every setting this side sustained
+        (``safety_ceiling.safety_seed``). ``None`` means the module hard limit, with a provenance
+        that says no ceiling was stated.
+    """
     es = pd.read_csv(design_csv) if not isinstance(design_csv, pd.DataFrame) else design_csv.copy()
     grid = SUR.ParameterGrid(freq_grid, amp_grid)
     gx = grid.grid_X()
@@ -230,7 +240,11 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
     sgp = SUR.SafetyGP(grid, random_state=random_state).fit(Xs, sev, sv)
     smu, ssd = sgp.predict(gx)
     sub = smu + float(beta) * ssd
-    safe = sgp.safe_mask(beta=beta)
+    # The stated ceiling is also a HARD bound (decision 308): the model is seeded with severity 3
+    # at it, which bounds the safe set only softly, so every cell above it is taken out of the safe
+    # set, the batches and the queue by construction.
+    within_ceiling = gx[:, 1] <= float(seed_meta["safety_ceiling_mA"]) + 1e-9
+    safe = np.asarray(sgp.safe_mask(beta=beta), bool) & within_ceiling
 
     # Keep the incumbent's OWN posterior SD, not just its mean. Comparing a candidate's k-sigma band
     # against a point estimate of the incumbent understates the uncertainty of the comparison and can
@@ -244,11 +258,13 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
     pgp, pmu, psd, i_pref, pref_meta = _fit_illustrative_preference(
         grid, fit, margin=pref_margin, length_scale=fixed_length_scale, amp_col=amp_col)
 
-    batches, ceilings = _simulate_forward(gp, grid, sgp, safe, n_reports, incumbent_mu,
+    batches, ceilings, forward_note = _simulate_forward(gp, grid, sgp, safe, n_reports, incumbent_mu,
                                           beta=beta, n_batches=n_batches, q=q,
-                                          incumbent_amp=float(incumbent_xy[1]))
+                                          incumbent_amp=float(incumbent_xy[1]),
+                                          within_ceiling=within_ceiling)
     traj = _trajectory(fit, batches, grid, sgp, beta=beta, amp_col=amp_col)
     queue, qmeta = ACQ.exploration_queue(mu, sd, n_reports, incumbent_mu, kappa=kappa)
+    queue = queue[within_ceiling[queue]] if queue.size else queue
 
     safeS = grid.as_surface(safe.astype(float)).astype(bool)
     contiguous = [int(np.flatnonzero(~row)[0]) if (~row).any() else row.size for row in safeS]
@@ -260,6 +276,7 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
         # What the safety model was told: the stated ceiling, its provenance, the anchors.
         **seed_meta,
         primary_item=str(D["primary_item"].iloc[0]) if "primary_item" in D.columns else "unknown",
+        participant_label=str(participant_label),
         data_horizon=str(data_horizon), washin_min=float(washin_min),
         beta=float(beta), kappa=float(kappa), q=int(q), n_batches=int(n_batches),
         n_epochs=int(len(D)), n_epochs_fitted=int(len(fit)),
@@ -277,9 +294,14 @@ def build_context(design_csv, *, freq_grid=FREQ_GRID, amp_grid=AMP_GRID,
         n_safe=int(safe.sum()), n_cells=int(len(grid)),
         safe_amps=[float(a) for a in np.unique(gx[safe, 1])],
         safe_contiguous_ceiling=oper_ceiling,
-        safe_global_max_amp=float(sgp.max_safe_amplitude(beta=beta)),
+        # the safety model's own reach, never read above the stated ceiling (decision 308)
+        safe_global_max_amp=float(min(sgp.max_safe_amplitude(beta=beta),
+                                      float(seed_meta["safety_ceiling_mA"]))),
         safe_is_contiguous=bool(all(int(row.sum()) == c for row, c in zip(safeS, contiguous))),
         expansion_ceilings=[float(c) for c in ceilings],
+        # why the forward simulation stopped short of ``n_batches``, or None (decision 308: under a
+        # ceiling below everything tolerated, no untested cell may be left to propose)
+        forward_simulation_note=forward_note,
         i_star=i_star, x_star=[float(v) for v in gx[i_star]],
         mu_star=float(mu[i_star]), sd_star=float(sd[i_star]),
         queue_size=int(queue.size), n_unexplored=int((n_reports < 3).sum()),
@@ -332,32 +354,40 @@ def _fit_illustrative_preference(grid, fit, *, margin, length_scale, amp_col="am
 
 
 def _simulate_forward(gp, grid, sgp, safe, n_reports, incumbent_mu, *, beta, n_batches, q,
-                      incumbent_amp):
+                      incumbent_amp, within_ceiling=None):
     """Forward-simulate ``n_batches`` within-visit batches of size ``q``.
 
     Between batches the surrogate is conditioned on kriging-believer fantasy observations at the
     selected cells — the posterior mean is substituted for the outcome that has not been
     measured. Nothing here is an observation, and the J values shown for these points are
     predictions, not results. The per-batch amplitude ceiling follows the no-side-effect
-    expansion cap of +0.4 mA per batch from the incumbent amplitude.
+    expansion cap of +0.4 mA per batch from the incumbent amplitude, and never above the side's
+    stated ceiling (``within_ceiling``, decision 308).
     """
     model = gp
     nrep = np.asarray(n_reports, float).copy()
     gx = grid.grid_X()
-    batches, ceilings = [], []
+    batches, ceilings, note = [], [], None
     for b in range(int(n_batches)):
         capped = sgp.expansion_capped_mask(worst_severity="none",
                                            prev_max_amp=incumbent_amp + 0.4 * b, beta=beta)
+        if within_ceiling is not None:
+            capped = np.asarray(capped, bool) & np.asarray(within_ceiling, bool)
         edge = float(gx[capped, 1].max()) if capped.any() else float("nan")
-        bm = ACQ.select_batch_within_visit(model, grid, q=q, safe_mask=capped, n_reports=nrep,
-                                           incumbent_mu=incumbent_mu, t=1 + q * b,
-                                           expansion_edge_amp=edge)
+        try:
+            bm = ACQ.select_batch_within_visit(model, grid, q=q, safe_mask=capped, n_reports=nrep,
+                                               incumbent_mu=incumbent_mu, t=1 + q * b,
+                                               expansion_edge_amp=edge)
+        except ValueError as exc:
+            # nothing left to propose under the ceiling: say so and stop, rather than lose the arm
+            note = f"stopped after {b} of {int(n_batches)} batches: {exc}"
+            break
         batches.append(bm)
         ceilings.append(edge)
         idxs = [m.index for m in bm]
         model = model.with_fantasy(gx[idxs], float(np.median(gp.y_var_)))
         nrep[idxs] += 10.0     # fantasy: each prospective setting is assumed to yield 10 reports
-    return batches, ceilings
+    return batches, ceilings, note
 
 
 def _trajectory(fit, batches, grid, sgp, *, beta, amp_col="amp_mA_Left"):
@@ -1313,6 +1343,3 @@ def render_all(design_csv, outdir=".", *, which=(1, 2, 3, 4, 5), dpi=200, html=T
     meta_path.write_text(json.dumps(ctx.meta, indent=2, sort_keys=True))
     paths.append(str(meta_path))
     return ctx, paths
-
-
-# Retained active Aditya interfaces.

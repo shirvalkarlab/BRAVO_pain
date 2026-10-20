@@ -1,4 +1,3 @@
-import { currentTargetText } from "utils/participantTargets";
 /**
 =========================================================
 * UF BRAVO Platform
@@ -213,9 +212,9 @@ function MedtronicCircadianRhythm({dataToRender, annotations, timelineRange, cir
     xData = xData.map((a) => math.round(((a-timezoneOffset*60) % 86400) / 600) * 600000);
     events = events.map((a) => math.round(((a-timezoneOffset*60) % 86400) / 600) * 600000);
     const inRange = (time, ref, window) => {
-      if (Math.abs(time - ref) < window) return true;
-      if (Math.abs(time+86400 - ref) < window) return true;
-      if (Math.abs(time-86400 - ref) < window) return true;
+      if (math.abs(time - ref) < window) return true; 
+      if (math.abs(time+86400 - ref) < window) return true; 
+      if (math.abs(time-86400 - ref) < window) return true; 
       return false
     }
 
@@ -369,16 +368,10 @@ function MedtronicCircadianRhythm({dataToRender, annotations, timelineRange, cir
     };
   }, [fig, renderData, circadianState]);
 
-  const onResize = useCallback((width) => {
+  const onResize = useCallback(() => {
     if (!fig) return;
 
-    const compact = width < 600;
-    fig.setLayoutProps({margin: {l: compact ? 52 : 70, r: compact ? 52 : 70, t: 40, b: 65}});
-    fig.getAxes().forEach((axis) => {
-      fig.setAxisProps({nticks: compact ? 4 : 8, automargin: true, tickfont: {size: 11}}, "x", axis);
-      fig.setAxisProps({automargin: true, tickfont: {size: 11}, title: {font: {size: 12}, standoff: 8}}, "y", axis);
-    });
-    fig.render();
+    fig.refresh();
   }, [fig]);
 
   const {ref} = useResizeDetector({
@@ -395,7 +388,6 @@ function MedtronicCircadianRhythm({dataToRender, annotations, timelineRange, cir
           <Autocomplete
             disableClearable
             value={timerange.device}
-            getOptionLabel={currentTargetText}
             options={channelSelector}
             onChange={(event, value) => setTimerange({...timerange, device: value})}
             renderInput={(params) => (
@@ -409,7 +401,7 @@ function MedtronicCircadianRhythm({dataToRender, annotations, timelineRange, cir
         </MDBox>
       ) : null}
       {activeChannel === "Time-based Assessment" ? (
-      <MDBox p={2} display="flex" flexDirection={{xs: "column", sm: "row"}} gap={1} sx={{minWidth: 0, flexWrap: "wrap"}}>
+      <MDBox p={2} display={"flex"} flexDirection={"row"}>
         <MDTypography variant={"p"} fontSize={20} pr={2}>
           {"From"}
         </MDTypography>
@@ -438,9 +430,7 @@ function MedtronicCircadianRhythm({dataToRender, annotations, timelineRange, cir
         </LocalizationProvider>
       </MDBox>
       ) : null}
-      <MDBox style={{width: "100%", minWidth: 0}}>
-        <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: 600, width: "100%", minWidth: 0, display: ""}}/>
-      </MDBox>
+      <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: 600, width: "100%", display: ""}}/>
     </MDBox>
   ), [renderData, timerange]);
 }

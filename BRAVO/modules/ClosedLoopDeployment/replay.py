@@ -86,7 +86,7 @@ import warnings
 
 import numpy as np
 
-from modules.StimOptimizer.routines import percept_adaptive
+from StimOptimizer.routines import percept_adaptive
 
 from . import types
 
@@ -154,12 +154,6 @@ DEFAULT_PARAMS = {
 AT_LIMIT_TOL_MA = 0.05
 
 
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
 def _longest_run_at_level_s(amp, dt_s, level, *, tol=AT_LIMIT_TOL_MA):
     """Duration of the LONGEST CONTINUOUS stretch within ``tol`` of ``level``, in seconds.
 
@@ -170,10 +164,10 @@ def _longest_run_at_level_s(amp, dt_s, level, *, tol=AT_LIMIT_TOL_MA):
     if amp is None or level is None or dt_s is None or not np.isfinite(dt_s) or dt_s <= 0:
         return None
     a = np.asarray(amp, dtype=float).ravel()
-    if not np.isfinite(a).any() or not np.isfinite(level):
+    a = a[np.isfinite(a)]
+    if a.size == 0 or not np.isfinite(level):
         return None
-    # Missing observations break an excursion; removing them would join separate runs.
-    at = np.isfinite(a) & (np.abs(a - float(level)) <= float(tol))
+    at = np.abs(a - float(level)) <= float(tol)
     if not at.any():
         return 0.0
     # run lengths of the True blocks, without a Python loop over samples
@@ -340,6 +334,15 @@ def _average_to_device_grid(t, p, dt, averaging_s):
 # --------------------------------------------------------------------------------------------
 # The controller
 # --------------------------------------------------------------------------------------------
+def _plan_limits(plan):
+    """``(low, high)`` from ``plan.amplitude_limits()`` when the plan has it, else the two capture
+    currents (a duck-typed plan from a caller outside this package)."""
+    f = getattr(plan, "amplitude_limits", None)
+    if callable(f):
+        return f()
+    return getattr(plan, "capture_amp_low", None), getattr(plan, "capture_amp_high", None)
+
+
 def dual_threshold(power_series, plan, params=None) -> types.ReplayResult:
     """Simulate the Dual Threshold controller over an observed band-power series.
 
@@ -349,7 +352,8 @@ def dual_threshold(power_series, plan, params=None) -> types.ReplayResult:
 
     ``plan`` is a :class:`types.ThresholdPlan`. Its ``upper`` and ``lower`` are the LFP power
     thresholds. Its ``capture_amp_low`` and ``capture_amp_high`` are used as the adaptive amplitude
-    limits unless ``params`` overrides them, which is discussed below.
+    limits unless ``params`` overrides them, which is discussed below -- each held at or below the
+    participant's safe ceiling when one was applied (``plan.amplitude_limits()``, decision 306).
 
     ``params`` overrides any of :data:`DEFAULT_PARAMS`, plus ``dt_s`` when the series has no time
     base. The resolved parameters are echoed on the result so a trajectory can always be traced back
@@ -414,10 +418,14 @@ def dual_threshold(power_series, plan, params=None) -> types.ReplayResult:
     # ---- amplitude limits -------------------------------------------------------------------
     amp_low = p_in["amp_low_mA"]
     amp_high = p_in["amp_high_mA"]
+    # The limits the card recommends: the capture currents held at or below the participant's safe
+    # ceiling (decision 306; `ThresholdPlan.amplitude_limits`), so the replay never commands a
+    # current the card would not let a clinician program.
+    _lim_low, _lim_high = _plan_limits(plan)
     if amp_low is None:
-        amp_low = plan.capture_amp_low
+        amp_low = _lim_low
     if amp_high is None:
-        amp_high = plan.capture_amp_high
+        amp_high = _lim_high
     if amp_low is None or amp_high is None:
         raise ValueError(
             "no adaptive amplitude limits are available: the ThresholdPlan carries "
@@ -744,6 +752,12 @@ def dual_threshold_segments(t_s, power, plan, params=None, *,
                             gap_factor=SEGMENT_GAP_FACTOR):
     """Replay the controller over each CONTIGUOUS stretch of a gappy record, then aggregate.
 
+    WHY THIS EXISTS RATHER THAN A LOOSER TOLERANCE IN ``dual_threshold``. That function refuses a
+    non-uniform sample interval, and it is right to: the controller advances its ramp by a rate
+    times an interval, so feeding it a series whose interval jumps would silently attribute a
+    month-long recording gap to the ramp and march the amplitude to a limit that nothing in the
+    data supports. A chronic record can consist of short streaming bursts separated by long gaps.
+
     Loosening the tolerance would convert a correct refusal into a wrong number. Splitting the
     record at its gaps keeps the refusal intact and asks a question that is actually answerable:
     what would the control law have done during each stretch when the signal was genuinely being
@@ -760,7 +774,8 @@ def dual_threshold_segments(t_s, power, plan, params=None, *,
     result records how little of the elapsed span contributed, so the number cannot be quoted
     without it.
 
-    Returns a ``types.ReplayResult`` whose ``params`` carries the segmentation record."""
+    Returns a ``types.ReplayResult`` whose ``params`` carries the segmentation record.
+    """
     t = np.asarray(t_s, float).ravel()
     p = np.asarray(power, float).ravel()
     if t.size != p.size:
@@ -792,7 +807,20 @@ def dual_threshold_segments(t_s, power, plan, params=None, *,
             t_s=None, state=None, frac_time_at_upper=None, frac_time_at_lower=None,
             n_transitions=None, saturated=None, params={"n_segments": 0},
             note="the time base has no positive interval, so no replay was run.")
-    # Participant-specific provenance and examples are maintained outside source control.
+    # CAN THIS RECORD REPRESENT THE DEVICE'S RAMP AT ALL? This is checked before any segmentation,
+    # because it is a property of the sampling cadence rather than of any individual segment, and
+    # because failing it makes every downstream number meaningless in a way that is easy to miss.
+    #
+    # The device moves the amplitude gradually: the transition-up duration is 2.5 minutes and the
+    # transition-down duration 5 minutes by default. A replay advances the ramp by a rate times the
+    # sample interval, so if the samples arrive FARTHER APART than the transition duration, one
+    # step of the replay traverses the entire amplitude range. The simulated controller then jumps
+    # between the two limits instantaneously, which is not the control law the device implements —
+    # it is a bang-bang controller with the same thresholds. Every time-at-limit fraction computed
+    # that way describes an amplitude trajectory the device would never produce.
+    #
+    # A cadence coarser than the transition duration cannot resolve the ramp. Report that limit
+    # rather than inventing time-at-limit fractions; denser observed data is required.
     p_in = dict(DEFAULT_PARAMS)
     if params:
         p_in.update({k: v for k, v in params.items() if k in DEFAULT_PARAMS})
@@ -879,8 +907,11 @@ def dual_threshold_segments(t_s, power, plan, params=None, *,
                 "median_interval_s": med, "span_s": span,
                 "coverage_frac": (observed / span) if span > 0 else None,
                 "ramp_resolvable": True, "transition_up_s": ramp_up_s,
-                "amp_low_mA": getattr(plan, "capture_amp_low", None),
-                "amp_high_mA": getattr(plan, "capture_amp_high", None)},
+                # the limits the segments ran between: the capped pair (decision 306)
+                "amp_low_mA": ((params or {}).get("amp_low_mA") if (params or {}).get("amp_low_mA")
+                               is not None else _plan_limits(plan)[0]),
+                "amp_high_mA": ((params or {}).get("amp_high_mA") if (params or {}).get("amp_high_mA")
+                                is not None else _plan_limits(plan)[1])},
         note=(f"Aggregated over {n_used} contiguous segments ({skipped} skipped for holding fewer "
               f"than {min_segment_steps} steps), weighted by the number of controller steps in "
               f"each. The record was split at gaps larger than {gap_factor:g} times the median "
@@ -891,6 +922,3 @@ def dual_threshold_segments(t_s, power, plan, params=None, *,
               f"are unrepresented and are not missing at random, since streaming starts when the "
               f"participant or the clinic starts it. The underlying power was also recorded under "
               f"the participant's actual programming rather than under closed-loop control."))
-
-
-# Retained active Aditya interfaces.

@@ -37,12 +37,6 @@ PermissionDefinitions = {
         "Edit": False,
         "Upload": True,
         "Delete": False,
-    },
-    "Viewer": {
-        "AddEvent": False,
-        "Edit": False,
-        "Upload": False,
-        "Delete": False,
     }
 }
 

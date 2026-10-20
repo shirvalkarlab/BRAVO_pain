@@ -1,38 +1,141 @@
-/** Candidate choices live only in this tab. Evidence is revalidated by the server on entry. */
-const KEY_PREFIX = "bravo.bandCandidate.";
-const choices = new Map();
+/**
+ * BandCandidate handoff store (DESIGN_biomarker_pipeline_v2 §6).
+ *
+ * The discovery/Biomarkers view emits a validated BandCandidate; the Closed-Loop Simulation /
+ * threshold-deployment view consumes it. The two views are decoupled through the §6 contract —
+ * no shared React context — so the handoff rides localStorage, keyed per participant, with a JSON
+ * download/upload as the explicit persistence escape hatch the design calls for.
+ *
+ * Keying per participant prevents a committed band from one patient leaking into another's
+ * deployment view. The stored envelope wraps the raw band_candidate with a committed_at stamp and
+ * the participant uid so a downloaded file is self-describing.
+ *
+ * THE SERVER HOLDS THE RECORD SINCE 2026-09-23 (the PI's ruling 8, decision 233). Browser storage
+ * alone meant another browser, or a cleared one, opened on "No band has been committed", and nothing
+ * recorded which band was chosen, when or by whom. `/api/queryClosedLoopChosenBand` keeps an
+ * append-only record; browser storage is now a mirror of it, still read first so the page draws at
+ * once, then replaced by the server's answer. When the server cannot be asked, or a save does not
+ * land, the status says so: the browser copy is never presented as the record.
+ */
+import { SessionController } from "database/session-control";
 
-function _envelope(participantUid, bandCandidate, details = {}) {
+const ENDPOINT = "/api/queryClosedLoopChosenBand";
+
+const KEY_PREFIX = "bravo.bandCandidate.";
+
+function _key(participantUid) {
+  return KEY_PREFIX + String(participantUid || "unknown");
+}
+
+function _envelope(participantUid, bandCandidate) {
   return {
-    schema: "bandcandidate_envelope_v2",
+    schema: "bandcandidate_envelope_v1",
     participant_uid: participantUid || null,
     committed_at: new Date().toISOString(),
     band_candidate: bandCandidate,
-    InputManifest: details.InputManifest || null,
-    request_params: details.requestParams || {},
   };
 }
 
-export function commitBandCandidate(participantUid, bandCandidate, details = {}) {
-  const envelope = _envelope(participantUid, bandCandidate, details);
-  choices.set(String(participantUid), envelope);
+/** Persist a committed BandCandidate for a participant. Returns the stored envelope. */
+export function commitBandCandidate(participantUid, bandCandidate) {
+  const envelope = _envelope(participantUid, bandCandidate);
+  try {
+    window.localStorage.setItem(_key(participantUid), JSON.stringify(envelope));
+  } catch (e) {
+    // Storage full / disabled (private mode): the download path is the fallback.
+    // eslint-disable-next-line no-console
+    console.warn("commitBandCandidate: localStorage write failed", e);
+  }
+  _writeSide(participantUid, envelope);
   return envelope;
 }
 
-export function loadBandCandidate(participantUid) {
-  // Retire old persistent evidence rather than silently reviving it after a data/QC change.
-  try { window.localStorage.removeItem(KEY_PREFIX + String(participantUid)); } catch (e) { /* optional storage */ }
-  return choices.get(String(participantUid)) || null;
+function _writeLocal(participantUid, envelope) {
+  try {
+    window.localStorage.setItem(_key(participantUid), JSON.stringify(envelope));
+  } catch (e) {
+    /* storage full or disabled: the server copy is the record */
+  }
+  _writeSide(participantUid, envelope);
 }
 
+/** Read the committed BandCandidate envelope for a participant, or null if none. */
+export function loadBandCandidate(participantUid) {
+  try {
+    const raw = window.localStorage.getItem(_key(participantUid));
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Clear the committed BandCandidate for a participant, and the band kept for each side. */
 export function clearBandCandidate(participantUid) {
-  choices.delete(String(participantUid));
-  try { window.localStorage.removeItem(KEY_PREFIX + String(participantUid)); } catch (e) { /* optional storage */ }
+  try {
+    window.localStorage.removeItem(_key(participantUid));
+    SIDES.forEach((side) => window.localStorage.removeItem(_sideKey(participantUid, side)));
+  } catch (e) {
+    /* no-op */
+  }
+}
+
+/*
+ * ONE BAND PER SIDE (the PI, 2026-10-08): with "2 independent controllers" each side senses its own
+ * band, so Band selection takes one on the left and one on the right. The server's record is the
+ * same append-only table, read per side (`chosen_band.current_by_side`): the band on a side is the
+ * newest one ticked on that side since the last clear. The band ticked last is still THE band of
+ * the page (every section below the decision is about it); the other side's band is used only by
+ * the stimulator the wiring drives from that side. Mirrored here per side, as the band is.
+ */
+export const SIDES = ["Left", "Right"];
+
+function _sideKey(participantUid, side) {
+  return `${_key(participantUid)}.side.${side}`;
+}
+
+/** The sensing side of a band record: its own `hemisphere`, else the side its pair's name carries. */
+export function bandSide(bandCandidate) {
+  const bc = bandCandidate || {};
+  const h = String(bc.hemisphere || "");
+  if (h === "Left" || h === "Right") return h;
+  const name = String(bc.contact || "").toUpperCase();
+  if (name.endsWith("LEFT")) return "Left";
+  if (name.endsWith("RIGHT")) return "Right";
+  return null;
+}
+
+function _writeSide(participantUid, envelope) {
+  const side = envelope && bandSide(envelope.band_candidate);
+  if (!side) return;
+  try {
+    window.localStorage.setItem(_sideKey(participantUid, side), JSON.stringify(envelope));
+  } catch (e) {
+    /* storage full or disabled: the server copy is the record */
+  }
+}
+
+/** `{ Left, Right }`, each this browser's copy of the band chosen on that side, or null. The band
+ *  of the page counts for its own side even when no side copy was ever written. */
+export function loadBandsBySide(participantUid) {
+  const out = { Left: null, Right: null };
+  SIDES.forEach((side) => {
+    try {
+      const raw = window.localStorage.getItem(_sideKey(participantUid, side));
+      out[side] = raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      out[side] = null;
+    }
+  });
+  const main = loadBandCandidate(participantUid);
+  const side = main && bandSide(main.band_candidate);
+  if (side) out[side] = main;
+  return out;
 }
 
 /** Trigger a browser download of the committed envelope as a .json file. */
-export function downloadBandCandidate(participantUid, bandCandidate, details = {}) {
-  const envelope = _envelope(participantUid, bandCandidate, details);
+export function downloadBandCandidate(participantUid, bandCandidate) {
+  const envelope = _envelope(participantUid, bandCandidate);
   const bc = bandCandidate || {};
   const contact = (bc.contact || "band").toString();
   const ctr = bc.center_freq_hz != null ? `${Number(bc.center_freq_hz).toFixed(1)}Hz` : "";
@@ -51,14 +154,165 @@ export function downloadBandCandidate(participantUid, bandCandidate, details = {
   return fname;
 }
 
-/** Uploaded evidence is never trusted: only a same-participant selection can be revalidated. */
-export function parseUploadedCandidate(text, participantUid) {
+/** Parse an uploaded envelope or bare BandCandidate JSON; returns {band_candidate, ...} or null. */
+export function parseUploadedCandidate(text) {
   try {
     const obj = JSON.parse(text);
-    if (!participantUid || !obj || String(obj.participant_uid) !== String(participantUid)) return null;
-    const bc = obj.band_candidate;
-    if (!bc || typeof bc.contact !== "string" || !bc.contact ||
-        bc.center_freq_hz == null || !Number.isFinite(Number(bc.center_freq_hz))) return null;
-    return obj;
-  } catch (e) { return null; }
+    if (obj && obj.band_candidate) return obj;            // full envelope
+    if (obj && obj.schema_version === "bandcandidate_v1") {
+      return { band_candidate: obj, participant_uid: null, committed_at: null };  // bare candidate
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Where the chosen band shown on the page is held, for the page to say so: `where` is "server" when
+ * the server's record says it, "browser" when only this browser does (with the `reason`).
+ */
+function _status(where, { saved = where === "server", reason = null, record = null } = {}) {
+  return {
+    where, saved, reason,
+    chosenBy: record ? record.chosen_by || null : null,
+    // "browser_storage" means the band was chosen in a browser before the server kept a record, and
+    // `chosenBy` is then who carried it over, not who chose it.
+    source: record ? record.source || null : null,
+    recordedUtc: record ? record.recorded_utc || null : null,
+  };
+}
+
+function _why(err) {
+  return (err && err.message) || String(err || "the server did not answer");
+}
+
+/**
+ * Ask the server for the chosen band and bring this browser into line with it. Resolves to
+ * `{ envelope, status }`; never rejects.
+ *
+ * - the server holds a band: it is shown and mirrored here;
+ * - the server's newest row is a clear: this browser is cleared too;
+ * - the server has never heard of a band and this browser holds one (chosen before the record
+ *   existed): it is sent once as "browser_storage", keeping the time it was chosen;
+ * - the server cannot be asked: this browser's copy, labelled as held in this browser only.
+ *
+ * The answer also carries `bySide`, `{ Left, Right }`: the band chosen on each side (the server's
+ * `by_side`, mirrored here), or this browser's copies when the server's are not to hand.
+ */
+export async function syncChosenBand(participantUid) {
+  const out = await _syncMain(participantUid);
+  return { ...out, bySide: _bySideAfterSync(participantUid, out) };
+}
+
+function _bySideAfterSync(participantUid, out) {
+  const server = out.serverBySide;
+  delete out.serverBySide;
+  if (out.status && out.status.where === "server" && !out.envelope) return { Left: null, Right: null };
+  if (server) {
+    const bySide = { Left: null, Right: null };
+    SIDES.forEach((side) => {
+      const rec = server[side];
+      if (rec && rec.band_candidate) {
+        bySide[side] = rec;
+        _writeSide(participantUid, rec);
+      } else {
+        try { window.localStorage.removeItem(_sideKey(participantUid, side)); } catch (e) { /* */ }
+      }
+    });
+    const side = out.envelope && bandSide(out.envelope.band_candidate);
+    if (side) bySide[side] = out.envelope;
+    return bySide;
+  }
+  return loadBandsBySide(participantUid);
+}
+
+async function _syncMain(participantUid) {
+  const local = loadBandCandidate(participantUid);
+  let data;
+  try {
+    const res = await SessionController.query(ENDPOINT, { ParticipantId: participantUid, Action: "read" });
+    data = (res && res.data) || {};
+  } catch (err) {
+    return { envelope: local, status: _status("browser", { reason: _why(err) }) };
+  }
+  if (!data.available) {
+    return { envelope: local, status: _status("browser", {
+      reason: data.reason || "the server could not read its record" }) };
+  }
+  if (data.record && data.record.band_candidate) {
+    _writeLocal(participantUid, data.record);
+    return { envelope: data.record, status: _status("server", { record: data.record }),
+      serverBySide: data.by_side || null };
+  }
+  const history = data.history || [];
+  if (history.length) {                       // the newest row is a clear
+    clearBandCandidate(participantUid);
+    return { envelope: null, status: _status("server") };
+  }
+  if (local && local.band_candidate) {        // chosen before the server kept a record
+    return _send(participantUid, local, {
+      ParticipantId: participantUid, Action: "choose", BandCandidate: local.band_candidate,
+      Source: "browser_storage", CommittedAt: local.committed_at,
+    });
+  }
+  return { envelope: null, status: _status("server") };
+}
+
+async function _send(participantUid, localEnvelope, body) {
+  try {
+    const res = await SessionController.query(ENDPOINT, body);
+    const data = (res && res.data) || {};
+    if (data.saved && data.record) {
+      _writeLocal(participantUid, data.record);
+      return { envelope: data.record, status: _status("server", { record: data.record }) };
+    }
+    return { envelope: localEnvelope, status: _status("browser", {
+      reason: data.reason || "the server did not record it" }) };
+  } catch (err) {
+    return { envelope: localEnvelope, status: _status("browser", { reason: _why(err) }) };
+  }
+}
+
+/**
+ * Record a chosen band: in this browser at once (so the page moves immediately) and on the server.
+ * `source` is "grid" or "upload". Resolves to `{ envelope, status }`; never rejects.
+ */
+export async function recordChosenBand(participantUid, bandCandidate, source) {
+  const local = commitBandCandidate(participantUid, bandCandidate);
+  return _send(participantUid, local, {
+    ParticipantId: participantUid, Action: "choose", BandCandidate: bandCandidate, Source: source,
+  });
+}
+
+/** Record that no band is chosen: here and on the server. Resolves to `{ status }`. */
+export async function recordClearedBand(participantUid) {
+  clearBandCandidate(participantUid);
+  try {
+    const res = await SessionController.query(ENDPOINT, { ParticipantId: participantUid, Action: "clear" });
+    const data = (res && res.data) || {};
+    return { status: data.saved ? _status("server")
+      : _status("browser", { reason: data.reason || "the server did not record the clear" }) };
+  } catch (err) {
+    return { status: _status("browser", { reason: _why(err) }) };
+  }
+}
+
+/** The one line under the page title saying where the chosen band is held; null for nothing to say. */
+export function chosenBandRecordText(status, hasBand) {
+  if (!status) return null;
+  if (status.where === "browser") {
+    return hasBand
+      ? `The chosen band is held in this browser only; the server did not record it (${status.reason}).`
+      : `The server's record of the chosen band could not be read (${status.reason}).`;
+  }
+  if (!hasBand) return null;
+  const when = status.recordedUtc ? new Date(status.recordedUtc).toLocaleString() : null;
+  const by = status.chosenBy ? `by ${status.chosenBy}` : null;
+  if (status.source === "browser_storage") {
+    return "The chosen band is recorded on the server: carried over from this browser's own copy"
+      + `${when ? ` on ${when}` : ""}${by ? `, ${by}` : ""}.`;
+  }
+  const detail = [when, by].filter(Boolean).join(", ");
+  return `The chosen band is recorded on the server${detail ? ` (${detail})` : ""}.`;
 }

@@ -3,17 +3,20 @@ import MDTypography from 'components/MDTypography';
 import ComparisonChart from './ComparisonChart';
 import TrialPhaseLegend from './TrialPhaseLegend';
 import {localTime} from './data';
-import {comparisonCoverage,medicationConditionPlot,medicationTimeline,orderedMedicationConditions} from './comparisonData';
+import {comparisonCoverage,medicationConditionPlot,medicationTimeline,medicationDisplayScope,orderedMedicationConditions} from './comparisonData';
 
 export default function Medications({comparison,metrics,today,phases}) {
   if(!comparison?.available) return <Alert severity="info">{comparison?.message || 'Medication comparisons are not available for this participant.'}</Alert>;
-  const timeline = medicationTimeline(comparison.episodes,today,comparison.provenance?.period_start,phases);
-  const phaseRange = {start:Number.isFinite(comparison.provenance?.period_start)?localTime(comparison.provenance.period_start).slice(0,10):timeline.traces.flatMap(t=>t.x).sort()[0]?.slice(0,10),end:today};
+  const scope=medicationDisplayScope(comparison.provenance);
+  if(!scope.valid) return <Alert severity="warning">The medication documentation range is invalid. Historical medication plots are withheld until its dates are corrected.</Alert>;
+  const timeline = medicationTimeline(comparison.episodes,today,comparison.provenance?.period_start,phases,scope.end);
+  const phaseRange = {start:Number.isFinite(comparison.provenance?.period_start)?localTime(comparison.provenance.period_start).slice(0,10):timeline.traces.flatMap(t=>t.x).sort()[0]?.slice(0,10),end:scope.bounded&&scope.lastDay<today?scope.lastDay:today};
   return <Stack spacing={3}>
+    {scope.bounded&&<Alert severity="info">Historical medication documentation is limited to {localTime(scope.start).slice(0,10)} through {scope.lastDay} Pacific. Ongoing flags describe the source notes; medication use after this period is unverified. The display limit does not mark a medication stop date.</Alert>}
     <Alert severity="info">Stage 1 onward · Documented medication availability and regimens. PRN availability does not confirm that a dose was taken. Regimens may overlap, and the same survey can contribute to more than one condition; these comparisons do not isolate a medication effect.</Alert>
     <MDTypography variant="body2">{comparisonCoverage(comparison.provenance,true)}</MDTypography>
     <Card sx={{p:3}}><MDTypography variant="h4">Medication timeline</MDTypography>
-      <MDTypography variant="body2">Thicker lines show primary regimens; thinner lines show supportive treatments. Dotted lines indicate PRN availability. Arrows mark earlier starts or ongoing regimens; an open diamond marks a known endpoint when the other date is missing.</MDTypography>
+      <MDTypography variant="body2">Thicker lines show primary regimens; thinner lines show supportive treatments. Dotted lines indicate PRN availability. Arrows mark earlier starts or ongoing regimens; an open diamond marks a known endpoint when the other date is missing. Regimens without either date remain in the documented-regimen list below the timeline.</MDTypography>
       {comparison.episodes.length?<><TrialPhaseLegend phases={phases} range={phaseRange}/><ComparisonChart plot={timeline} label="Documented medication regimens over time"/>
         <details><summary>All documented medication regimens</summary><ul>{comparison.episodes.map(episode=><li key={episode.id}>{episode.drug_class} · {episode.name} · {episode.dose} · {episode.frequency}{episode.prn?' · PRN available':''}</li>)}</ul></details>
       </>:<Alert severity="info">No documented medication intervals are available.</Alert>}

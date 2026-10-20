@@ -1,111 +1,43 @@
-"""The clinic and at-home testing sheets: the finest stimulation record this study has.
+"""Parse clinic and at-home testing sheets for within-visit stimulation exposure.
 
-The lab's own testing sheets do record it, at one-second resolution. They are therefore the
-canonical source for within-visit amplitude, in the same way that the JSON — not the printed session
-report — turned out to be canonical for chronic amplitude (see MEGA_HANDOFF on the dual-schema
-gotcha). This module holds the provenance, the parsing traps, and the exposure-window rule.
+Device session-boundary snapshots do not resolve changes inside a clinic visit. Testing sheets
+provide the finer-grained record, but their observed timestamps and nominal durations must both
+be considered. A flat reconstructed exposure epoch does not prove that no within-visit changes
+occurred.
 
-FIVE PARSING TRAPS, every one of which has already produced a wrong number in this project.
+Parsing rules retained from the source review:
+* Read the workbook and named tab, not a flattened text rendering.
+* Support row-oriented and transposed layouts; bound blocks using populated rate cells.
+* Tolerate the timestamp header typo "Timastamp" and verify pulse-width units.
+* In bilateral slash or ampersand pairs, the first value is Left (PI rule 2026-09-05).
+* Some workbooks place timed amplitude/contact observations in a Notes tab.
+* Planned settings and delivered settings are different; missing device coverage cannot
+  establish whether a worksheet step occurred.
 
-1. Read the WORKBOOK, not a text rendering. The Drive connector's `read_file_content` flattens all
-   tabs into one document WITHOUT naming them, silently omits the Stim Testing tab on some sheets,
-   and rounds timestamps to the second. Downloading the .xlsx and opening the tab by name gives
-   genuine Excel time values at sub-second precision (12:19:06.627000). An early parse of this data
-   locked onto whichever table appeared first in the flattened text — the clinical observation
-   table on two sheets — and reported 746 steps of unprovable provenance.
-
-2. Orientation is not uniform. Twenty-eight sheets put a header row at row index 10 with columns
-   Amp (mA) / Rate (Hz) / PW (us) / Duration (s) / Timestamp. July 2025 is TRANSPOSED: field names
-   run down column 0 (AmpInmA, RateInHz, PulseWidthInMicroSeconds, TimeToRunInSeconds) with steps
-   across columns, in eight blocks (Left GPi A-D, Right Med Thal A-D).
-
-3. Two header typos that must be tolerated rather than corrected upstream. The 2025-09-04 sheet
-   spells its timestamp column "Timastamp", and labels pulse width "PW (ms)" while the values are
-   microseconds. Keying on names with a typo-tolerant match recovered 38 steps that were otherwise
-   invisible.
-
-4. A bilateral cell means LEFT then RIGHT. Only 22 of 449 amplitude cells carry explicit "L x / R y"
-   labels; the rest are bare pairs like "0.0/2.5" or "0.5&2.5". PI ruling 2026-09-05: for BOTH the
-   slash and the ampersand form, the value before the separator is the left hemisphere. This is not
-   cosmetic — 199 of the 673 steps with both sides populated are asymmetric (29.6%), and the two
-   hemispheres have been found to move in opposite directions against left-leg pain, so reversing
-   the convention would invert a conclusion rather than blur one. Note also that an inequality
-   computed over the raw columns counts NaN != NaN as True and inflates this figure; restrict to
-   rows where both values are present.
-
-5. July 2025 keeps its step times in the NOTES tab, not the Stim Testing tab. The Activity column
-   holds free text of the form "1.5mA c+2-": the amplitude precedes "mA" and the contacts follow,
-   with "OFF" meaning zero. Hemisphere comes from two markers in the same column, "starting on L
-   side" at 12:59:49 and "switching over to R side now" at 13:50:24. Its transposed Stim Testing
-   rows also run PAST the end of each real block into unrelated content — one continues into a cell
-   holding "13:20:02.326000", from which a naive numeric extraction yields an amplitude of 13.0 mA,
-   above the device ceiling. Requiring the rate cell to be populated for the same column bounds each
-   block correctly.
-
-FOUR RATES APPEAR IN THE SHEETS THAT THE DEVICE EXPORT NEVER RECORDED: 25, 85, 100 and 180 Hz,
-against the chronic stream's 10, 55, 110, 125, 130, 145 and 165. The 100 Hz case is in the sheet
-itself, not a parser fault (July 2025 records 100.0 Hz for Right Groups C and D at 1.0 and 1.5 mA).
-UNRESOLVED and consequential: either those settings were delivered and the export missed them, or
-the sheets carry planned values that were never delivered. It cannot be settled from the sheets."""
+Participant-specific audit measurements are retained only in private provenance.
+"""
 import numpy as np
 
-from modules.Biomarkers.routines.analytics import harmonic_landings_hz, DEVICE_TD_FS_HZ
+from Biomarkers.routines.analytics import harmonic_landings_hz, DEVICE_TD_FS_HZ
 
 # -------------------------------------------------------------------------------------------------
 # THE EXPOSURE WINDOW
 # -------------------------------------------------------------------------------------------------
-#: Nominal step duration is NOT what happened. Across 637 comparable step pairs the sheets' own
-#: Duration (s) column has a median of 60 s while the observed interval between consecutive
-#: timestamps has a median of 98 s; the ratio's median is 1.12 but its 90th percentile is 4.25. In
-#: 23% of steps the observed interval is SHORTER than the nominal duration and in 24% it is more
-#: than twice as long. Neither number alone is a safe exposure window, so take the intersection.
+#: Nominal duration and the observed interval to the next step can differ. Neither alone is a
+#: safe exposure window, so the operative rule uses their intersection.
 USE_INTERSECTION_OF_NOMINAL_AND_OBSERVED = True
 
-# Participant-specific provenance and examples are maintained outside source control.
+#: The sheets' own warning, printed in the Stim Testing tab: "*NOTE STIM TAKES 30-45 s TO RAMP UP".
+#:
+#: THIS IS A RECORD OF WHAT THE SHEET CLAIMS, NOT A SETTING. It is kept because the claim is on the
+#: sheet and a reader needs to be able to see it, and because parsing code may want to compare a
+#: step's duration against it. Nothing should use it as an exclusion window.
+#:
+#: This worksheet warning is not a measured exclusion interval. The operative exclusion is
+#: `StimOptimizer.routines.within_visit.RAMP_EXCLUDE_S`; its policy provenance is separate.
 RAMP_WARNING_S = 45.0
 
-#: MEASURED, 2026-09-05, and it contradicts the warning above for artifact-sensitive work. Aligning
-#: 13,102 three-second tiles to their step onset across 370 steps and all six sensing channels, then
-#: normalising each step to its own first nine seconds:
-#:
-#:   * At the stimulation frequency (52.5-57.5 Hz bands during 55 Hz stimulation) power tracks
-#:     amplitude with the right sign and timing — up on an increase, DOWN within 9-18 s on a
-#:     decrease (-0.26 log10), and flat to within 0.016 log10 when the amplitude did not change.
-#:   * That rise is a spike CONFINED to the stimulation frequency: peak slope 0.81 log10 per 100 s
-#:     at 57.5 Hz against a median of -0.003 in bands away from the harmonic landings.
-#:   * It is still climbing at 150 s, reaching +1.16 log10 (a 14-fold rise). Checked against the
-#:     obvious composition confound — contributing steps fall from 24 to 6 across the time bins
-#:     while the mean increment rises from 1.27 to 2.87 mA — and restricted to the same six steps
-#:     present in every bin the curve is still monotone: +0.07, +0.04, +0.10, +0.09, +0.16, +0.48,
-#:     +0.92, +1.16.
-#:
-#: So a 45 s exclusion is sufficient for bands away from the stimulation harmonics and is NOT
-#: sufficient for bands near them. Whether the cause is a slower device ramp than documented, a
-#: clinician stepping the amplitude up manually over minutes while logging only the final value, or
-#: electrode polarisation settling is NOT established, and six steps on two channels cannot settle
-#: it. The policy below therefore excludes the affected BANDS rather than extending the time window,
-#: because extending the window far enough would discard almost every step.
-ARTIFACT_STILL_RISING_AT_S = 150.0
 
-#: Which steps survive. Using min(nominal, observed) minus a 45 s ramp: 563 of 820 steps (69%)
-#: retain any settled time at all; EVERY 30 s step is lost (all 169 of them) along with the 10 s and
-#: 15 s steps; 60 s steps survive with a median of only 15 s, which is five 3 s tiles; and the total
-#: usable settled signal is 16.2 hours, or 19,325 tiles. PRACTICAL CONSEQUENCE for protocol design:
-#: a future session that wants amplitude-response data must use 120 s steps or longer, because a
-#: 30 s step contributes nothing once the ramp is removed.
-TOTAL_SETTLED_HOURS_AT_45S_RAMP = 16.2
-
-
-
-# Aditya canonical compatibility imports/constants.
-
-
-from modules.StimOptimizer.routines.within_visit import (        # noqa: E402  (re-export, not a cycle)
-    AMP_ARM_BIN_MA,
-    MIN_SETTLED_TILES,
-    amplitude_arm_bins,
-    step_settled_medians,
-)
 
 def settled_window(t0, nominal_s=None, observed_s=None, ramp_s=RAMP_WARNING_S):
     """The interval during which a step's programmed amplitude can be treated as delivered.
@@ -114,7 +46,7 @@ def settled_window(t0, nominal_s=None, observed_s=None, ramp_s=RAMP_WARNING_S):
     settled time. ``hi`` is ``t0 + min(nominal_s, observed_s)`` for the reason recorded at
     USE_INTERSECTION_OF_NOMINAL_AND_OBSERVED, and ``lo`` is ``t0 + ramp_s``.
 
-    The ramp exclusion is a floor, not a guarantee: see ARTIFACT_STILL_RISING_AT_S. For any estimate
+    The ramp exclusion is a floor, not a guarantee. For any estimate
     that touches the stimulation frequency or its aliases, drop those bands with
     ``amplitude_response_band_mask`` instead of relying on this window.
     """
@@ -142,7 +74,16 @@ def amplitude_response_band_mask(rate_hz, centers_hz, *, tol_hz=BAND_HALF_HZ,
 
     WHY THIS IS EXCLUSIONARY HERE WHILE THE SAME LANDINGS ARE ONLY ADVISORY IN THE BIOMARKER SCAN.
     The two modules ask different questions of the same frequencies and the evidence points opposite
-    ways, so the difference is deliberate rather than an inconsistency:"""
+    ways, so the difference is deliberate rather than an inconsistency:
+
+      * For the PAIN-biomarker question landings are advisory: flag them for review rather
+        than treating proximity alone as proof that an association is an artifact.
+      * For the AMPLITUDE-RESPONSE question they are exclusionary: stimulation artifact can
+        scale with the current being estimated and contaminate the dose-response slope.
+
+    Build the mask PER RATE. Pooling landings across rates can cover the whole frequency axis
+    and remove the specificity of this screen.
+    """
     c = np.asarray(centers_hz, dtype=float)
     if rate_hz is None or not np.isfinite(rate_hz) or rate_hz <= 0:
         return np.ones(c.shape, dtype=bool)
@@ -190,45 +131,11 @@ JOIN_VALIDATED_BY_ARTIFACT_POSITIVE_CONTROL = True
 #:   * Bands: those within BAND_HALF_HZ of a landing for THAT rate are dropped, per
 #:     amplitude_response_band_mask.
 #:
-#: YIELD, and it is thin. 563 steps carry a settled window across 28 visits (16.2 h), but only 248
-#: of them contain any tiles, giving 446 step-level observations over 20 visits, and the median
-#: observation rests on just 5 tiles — a direct consequence of 60 s steps retaining only ~15 s after
-#: the ramp. Just 4 strata cleared the minimum: ONE_THREE_LEFT and ZERO_THREE_RIGHT, at 55 and
-#: 110 Hz, time-domain source only. Montage-PSD observations existed but no montage stratum had
-#: enough visits.
-#:
-#: RESULT. Inside 7.8-30 Hz and away from the harmonic landings there are 54 cells, of which 20 are
-#: resolved and, after removing the degenerate intervals described below, 6 are resolved NEGATIVE
-#: and 12 resolved POSITIVE. The negative cells — the direction the Dual Threshold control law
-#: requires — are:
-#:
-#:     ONE_THREE_LEFT   110 Hz  26.5 Hz  beta -0.0656  CI [-0.0754, -0.0558]  16 steps,  5 visits
-#:     ONE_THREE_LEFT   110 Hz  24.5 Hz  beta -0.0527  CI [-0.0724, -0.0330]  16 steps,  5 visits
-#:     ONE_THREE_LEFT   110 Hz  23.5 Hz  beta -0.0354  CI [-0.0465, -0.0242]  16 steps,  5 visits
-#:     ZERO_THREE_RIGHT 110 Hz  14.5 Hz  beta -0.0265  CI [-0.0483, -0.0046]  35 steps,  6 visits
-#:     ZERO_THREE_RIGHT 110 Hz  15.5 Hz  beta -0.0198  CI [-0.0340, -0.0055]  35 steps,  6 visits
-#:     ONE_THREE_LEFT   110 Hz  14.5 Hz  beta -0.0041  CI [-0.0078, -0.0005]  16 steps,  5 visits
-#:
-#: units are log10 LSB power per mA. This MATTERS because the earlier between-epoch screen of all
-#: 108 channel-by-band cells found the amplitude slope resolved-positive in every one of the 36
-#: cells where it resolved and negative in none — so the within-visit design reverses the sign for
-#: the candidate band on the candidate channel. It is the design difference that did it, not new
-#: data.
-#:
-#: THREE LIMITS, all of which bound the claim rather than decorate it.
-#:
-#: 1. THE INTERVALS ARE NOT TRUSTWORTHY AT THESE CLUSTER COUNTS. Every stratum produced at least
-#:    one interval of exactly zero width, and 6 of 116 resolved cells have intervals narrower than
-#:    0.005 log10 — including two of the eight raw negatives (15.5 Hz at width 0.00024, 25.5 Hz at
-#:    0.00418), which are excluded above. This is the same collapse the inference lane documented on
-#:    2026-09-04: when clusters barely exceed parameters the cluster-robust variance tends to zero
-#:    and manufactures certainty. With 5 to 12 visits per stratum the POINT ESTIMATES are the
-#:    finding here and the intervals are indicative only. A wild cluster bootstrap at the visit
-#:    level is the correct remedy and has not been run.
-#: 2. THE RATE IS WRONG FOR THE CANDIDATE. Every negative cell is at 110 Hz. The candidate
-#:    configuration is programmed at 165 Hz, which appears in NO fitted stratum, and rate freezes
-#:    once BrainSense sensing is configured. So nothing here licenses 165 Hz, and a D19 decision for
-#:    the candidate cannot be taken from these numbers.
+#: Participant-specific yield, fitted slopes and configuration observations are private.
+#: Interpret sparse-cluster confidence intervals cautiously: when cluster counts barely exceed
+#: the fitted parameter count, robust variance can collapse. A visit-level wild cluster
+#: bootstrap is a possible remedy and must be reported explicitly when actually performed.
+#: Results at one stimulation rate do not license a candidate at a different rate.
 #: 3. MULTIPLICITY IS UNCORRECTED AND THE BANDS OVERLAP. 98 centres at 1 Hz spacing with 5 Hz wide
 #:    bands share 80% of their content, so the six negative cells are nearer two or three
 #:    relationships (a 23.5-26.5 Hz cluster on ONE_THREE_LEFT, a 14.5-15.5 Hz cluster on each
@@ -238,38 +145,16 @@ MIN_VISITS_FOR_CLUSTER_ROBUST = 8
 #: described above used 4 and should not have; it is recorded here so the next run does not repeat
 #: it. Cells whose interval is narrower than this are degenerate rather than precise:
 DEGENERATE_CI_WIDTH_LOG10 = 0.005
-# Participant-specific provenance and examples are maintained outside source control.
+# `within_visit_band_scores` WAS HERE AND WAS DELETED ON 2026-09-10, BY THE PI'S DECISION AFTER
+# SEEING WHAT IT ACTUALLY SAID. It scored every band across within-visit amplitude steps using the
+# visit as both era and cluster -- a third grouping of the same raw pairs the per-run amplitude table
+# and the pooled-across-visits table already treat two other ways. Everything it computed existed in
+# wired code: the harmonic-landing flag through `three_source_response` and `analytics`, the slope
+# and separation through `lfp_response`. Only its grouping was its own.
+#
+# The historical audit results remain private. This grouping had no production caller and no
+# decision protecting it; its removal preserves the wired amplitude and pooled response paths.
+#
+# The lesson kept rather than the code: a third statistical grouping is only worth its maintenance
+# if somebody reads it. This one was written, tested, proven, and reached by nothing for months.
 
-
-
-# Retained active Aditya interfaces.
-def within_visit_band_scores(power_by_center, amp_mA, visits, *, response_fn,
-                             rate_hz=None, bin_mA=AMP_ARM_BIN_MA):
-    """Score every band's amplitude response on within-visit steps.
-
-    ``power_by_center`` maps a band centre in Hz to one power value per step, ``visits`` supplies
-    the era AND the cluster — the visit is the repeat unit here, because amplitude varies WITHIN a
-    visit, which is precisely what the chronic epochs could not offer and what makes era blocking
-    informative rather than absorptive."""
-    amp = amplitude_arm_bins(amp_mA, bin_mA)
-    vis = np.asarray(visits)
-    landings = ([float(d["lands_at_hz"]) for d in harmonic_landings_hz(float(rate_hz), 5.0, 32.5)]
-                if rate_hz is not None else [])
-    rows = []
-    for c in sorted(power_by_center):
-        p = np.asarray(power_by_center[c], dtype=float)
-        if p.shape != amp.shape:
-            raise ValueError(f"band {c}: power {p.shape} does not match amplitude {amp.shape}")
-        r = response_fn(p, amp, era=vis, cluster=vis)
-        rows.append({
-            "center_hz": float(c),
-            "on_harmonic_landing": bool([x for x in landings if abs(x - float(c)) <= BAND_HALF_HZ]),
-            "responds": r.responds, "direction_ok": r.direction_ok,
-            "separation_d": r.separation_d,
-            "slope_log_per_mA": r.slope_log_per_mA, "slope_p": r.slope_p,
-            "slope_unadjusted": r.slope_unadjusted,
-            "amp_low_mA": r.amp_low_mA, "amp_high_mA": r.amp_high_mA,
-            "n_low": r.n_low, "n_high": r.n_high, "n_eras": r.n_eras,
-            "n_steps": int(amp.size),
-        })
-    return rows
