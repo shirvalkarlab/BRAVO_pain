@@ -752,7 +752,7 @@ export default function FilterData() {
                     size="small"
                     startIcon={downloading ? <CircularProgress size={14} color="inherit" /> : <DownloadIcon />}
                     onClick={handleDownloadAll}
-                    disabled={displayResults.length === 0 || downloading}
+                    disabled={SessionController.isReadOnly?.() || displayResults.length === 0 || downloading}
                   >
                     {downloading ? "Downloading…" : "Download All Data"}
                   </MDButton>

@@ -64,6 +64,7 @@ export default function GoogleHealthDashboard() {
   const [authPeriod, setAuthPeriod] = useState([]);
 
   useEffect(() => {
+    if (SessionController.isReadOnly?.()) { setAuthenticated(1); return; }
     SessionController.query("/api/requestGoogleHealthAuth", {
       RequestType: "RequestURL",
       ParticipantId: participant_uid
@@ -95,7 +96,7 @@ export default function GoogleHealthDashboard() {
   }, [authenticated])
 
   useEffect(() => {
-    if (!authenticated || !authPeriod) return;
+    if (SessionController.isReadOnly?.() || !authenticated || !authPeriod) return;
     SessionController.query("/api/requestGoogleHealthAuth", {
       RequestType: "SetAuthPeriod",
       ParticipantId: participant_uid,
@@ -116,7 +117,7 @@ export default function GoogleHealthDashboard() {
       
       {authenticated ? (
         <MDBox>
-          <Card sx={{marginTop: 5}}>
+          {!SessionController.isReadOnly?.() && <Card sx={{marginTop: 5}}>
             <MDBox p={2}>
               <Grid container spacing={2}>
                 <Grid item xs={12}>
@@ -137,7 +138,7 @@ export default function GoogleHealthDashboard() {
                     {"Add Date Periods"} 
                   </MDButton>
                   
-                  <MDButton variant="contained" color="error" style={{marginTop: 5, marginLeft: 5}} onClick={() => {
+                  <MDButton disabled={SessionController.isReadOnly?.()} variant="contained" color="error" style={{marginTop: 5, marginLeft: 5}} onClick={() => {
                     SessionController.query("/api/requestGoogleHealthAuth", {
                       RequestType: "DeleteAuthentication",
                       ParticipantId: participant_uid
@@ -199,7 +200,7 @@ export default function GoogleHealthDashboard() {
                 })}
               </Grid>
             </MDBox>
-          </Card>
+          </Card>}
           <Card sx={{marginTop: 5}}>
             <MDBox p={2}>
               <Grid container spacing={2}>
@@ -215,7 +216,7 @@ export default function GoogleHealthDashboard() {
                   </MDTypography>
                 </Grid>
                 <Grid item xs={12}>
-                  <MDButton variant="contained" color="info" style={{marginTop: 5}} onClick={() => {
+                  <MDButton disabled={SessionController.isReadOnly?.()} variant="contained" color="info" style={{marginTop: 5}} onClick={() => {
                     setAlert(<LoadingProgress />)
                     SessionController.query("/api/queryGoogleHealthData", {
                       RequestType: "RefreshGoogleHealthData",
@@ -254,7 +255,7 @@ export default function GoogleHealthDashboard() {
         </MDBox>
       ) : (
         <MDBox>
-          <Card sx={{marginTop: 5}}>
+          {!SessionController.isReadOnly?.() && <Card sx={{marginTop: 5}}>
             <MDBox p={2}>
               <Grid container spacing={2}>
                 <Grid item xs={12}>
@@ -288,7 +289,7 @@ export default function GoogleHealthDashboard() {
                       onChange={(event) => setGoogleHealthTokenURL(event.target.value)}
                       fullWidth
                     />
-                    <MDButton variant="contained" color="info" style={{minWidth: 200, marginLeft: 15}} onClick={() => {
+                    <MDButton disabled={SessionController.isReadOnly?.()} variant="contained" color="info" style={{minWidth: 200, marginLeft: 15}} onClick={() => {
                       setAlert(<LoadingProgress />)
                       SessionController.query("/api/requestGoogleHealthAuth", {
                         RequestType: "VerifyToken",
@@ -308,7 +309,7 @@ export default function GoogleHealthDashboard() {
                 ) : null}
               </Grid>
             </MDBox>
-          </Card>
+          </Card>}
         </MDBox>
       )}
 

@@ -28,6 +28,7 @@ import { SessionController } from "database/session-control";
 import Logo from "assets/img/logo.png";
 
 import routes from "routes";
+import { isReadOnlyUser, viewerRouteAllowed } from "database/viewerAccess";
 import Profile from "views/Dashboard/Profile";
 
 // Loaded on demand (they render inside the <Suspense> below): the offline report draws a Plotly
@@ -86,7 +87,7 @@ export default function App() {
     
     return allRoutes.children.map((route) => {
       if (route.route) {
-        return <Route exact path={route.route} element={route.component} key={route.key} />;
+        return <Route exact path={route.route} element={isReadOnlyUser(user) && !viewerRouteAllowed(route.route) ? <Navigate to="/database" replace /> : route.component} key={route.key} />;
       } 
       return null;
     })
@@ -115,8 +116,8 @@ export default function App() {
         {getRoutes(routes)}
         <Route path="/reports/*" element={<Navigate to="/patient-overview" />} />
         <Route path="/experimental/*" element={<Navigate to="/patient-overview" />} />
-        <Route exact path="/survey/:surveyId/edit" element={<SurveyEditor />} />
-        <Route exact path="/survey/:surveyId" element={<SurveyViewer />} />
+        <Route exact path="/survey/:surveyId/edit" element={isReadOnlyUser(user) ? <Navigate to="/database" replace /> : <SurveyEditor />} />
+        <Route exact path="/survey/:surveyId" element={isReadOnlyUser(user) ? <Navigate to="/database" replace /> : <SurveyViewer />} />
         <Route path="*" element={<Navigate to="/index" />} />
       </Routes>
     </Suspense>

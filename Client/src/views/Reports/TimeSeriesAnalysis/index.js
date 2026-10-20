@@ -408,7 +408,7 @@ function TimeSeriesAnalysis() {
                           <MDButton size="large" variant="contained" color="primary" style={{marginBottom: 3}} onClick={() => exportCurrentStream()}>
                             {dictionaryLookup(dictionary.FigureStandardText, "Export", language)}
                           </MDButton>
-                          <MDButton size="large" variant="contained" color="info" style={{marginBottom: 3}} onClick={() => {
+                          <MDButton disabled={SessionController.isReadOnly?.()} size="large" variant="contained" color="info" style={{marginBottom: 3}} onClick={() => {
                             for (let i in data.Analysis) {
                               SessionController.query("/api/queryTimeseriesAnalysis", {
                                 RequestType: "DeleteCache",
@@ -534,7 +534,7 @@ function TimeSeriesAnalysis() {
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
               />
-              <SpeedDialAction
+              <SpeedDialAction disabled={SessionController.isReadOnly?.()}
                 key={"ChangeSettings"}
                 icon={<SettingsIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
                 tooltipTitle={"Edit Processing Configurations"}
@@ -546,7 +546,7 @@ function TimeSeriesAnalysis() {
                 tooltipTitle={"Edit Layout"}
                 onClick={() => setLayoutOptions({...layoutOptions, open: true})}
               />
-              <SpeedDialAction
+              <SpeedDialAction disabled={SessionController.isReadOnly?.()}
                 key={"ClearCache"}
                 icon={<CachedIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
                 tooltipTitle={"Clear Cache (Reprocessing)"}

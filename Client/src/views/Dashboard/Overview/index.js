@@ -125,7 +125,7 @@ export default function DashboardOverview() {
 
   useEffect(() => {
     SessionController.query("/api/queryParticipants", {
-      ParticipantGroupId: user.InstituteId
+      ...(SessionController.isReadOnly?.() ? {} : {ParticipantGroupId: user.InstituteId})
     }).then((response) => {
       setAvailableParticipants(response.data);
     }).catch((error) => {
@@ -192,12 +192,12 @@ export default function DashboardOverview() {
               </Grid>
               <Grid item xs={12} md={4}>
                 <MDBox display="flex" flexDirection="column">
-                  <MDButton variant="gradient" color="info" style={{margin: 2}} onClick={() => setUploadInterface({show: true, uploadDataType: "Medtronic JSON Files"})}>
+                  <MDButton disabled={SessionController.isReadOnly?.()} variant="gradient" color="info" style={{margin: 2}} onClick={() => setUploadInterface({show: true, uploadDataType: "Medtronic JSON Files"})}>
                     <MDTypography variant="h5" color="white">
                       {"Upload Data"}
                     </MDTypography>
                   </MDButton>
-                  <MDButton variant="gradient" color="success" style={{margin: 2}} onClick={() => setNewParticipantEditor(true)}>
+                  <MDButton disabled={SessionController.isReadOnly?.()} variant="gradient" color="success" style={{margin: 2}} onClick={() => setNewParticipantEditor(true)}>
                     <MDTypography variant="h5" color="white">
                       {"Add New Participant"}
                     </MDTypography>

@@ -125,7 +125,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
       <DatabaseLayout>
         <MDBox pt={3}>
           <MDBox display="flex" flexDirection="row" justifyContent="space-between" alignItems="start" style={{marginBottom: 10}}>
-            <MDButton size="large" variant="contained" color="info" style={{marginBottom: 3}} onClick={() => refreshData()}>
+            <MDButton size="large" variant="contained" color="info" style={{marginBottom: 3}} disabled={SessionController.isReadOnly?.()} onClick={() => refreshData()}>
               {dictionaryLookup(dictionary.FigureStandardText, "Refresh", language)}
             </MDButton>
           </MDBox>

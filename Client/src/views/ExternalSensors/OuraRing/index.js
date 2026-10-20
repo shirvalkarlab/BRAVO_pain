@@ -68,9 +68,10 @@ export default function OuraRingDashboard() {
   const [personalAccessToken, setPersonalAccessToken] = useState("");
   const [authPeriod, setAuthPeriod] = useState([]);
   const [managedConnection, setManagedConnection] = useState(false);
-  const [canRefresh, setCanRefresh] = useState(true);
+  const [canRefresh, setCanRefresh] = useState(!SessionController.isReadOnly?.());
 
   useEffect(() => {
+    if (SessionController.isReadOnly?.()) { setManagedConnection(true); setCanRefresh(false); setAuthenticated(1); return; }
     SessionController.query("/api/requestOuraRingAuth", {
       RequestType: "RequestURL",
       ParticipantId: participant_uid
@@ -158,7 +159,7 @@ export default function OuraRingDashboard() {
                     {"Add Date Periods"} 
                   </MDButton>
                   
-                  <MDButton variant="contained" color="error" style={{marginTop: 5, marginLeft: 5}} onClick={() => {
+                  <MDButton disabled={SessionController.isReadOnly?.()} variant="contained" color="error" style={{marginTop: 5, marginLeft: 5}} onClick={() => {
                     SessionController.query("/api/requestOuraRingAuth", {
                       RequestType: "DeleteAuthentication",
                       ParticipantId: participant_uid
@@ -248,7 +249,7 @@ export default function OuraRingDashboard() {
                   </MDTypography>
                 </Grid>
                 <Grid item xs={12}>
-                  {canRefresh && <MDButton variant="contained" color="info" style={{marginTop: 5}} onClick={() => {
+                  {canRefresh && <MDButton disabled={SessionController.isReadOnly?.()} variant="contained" color="info" style={{marginTop: 5}} onClick={() => {
                     setAlert(<LoadingProgress />)
                     SessionController.query("/api/queryOuraRingData", {
                       RequestType: "RefreshOuraRingData",
@@ -314,7 +315,7 @@ export default function OuraRingDashboard() {
                       onChange={(event) => setPersonalAccessToken(event.target.value)}
                       fullWidth
                     />
-                    <MDButton variant="contained" color="info" style={{minWidth: 200, marginLeft: 15}} onClick={() => {
+                    <MDButton disabled={SessionController.isReadOnly?.()} variant="contained" color="info" style={{minWidth: 200, marginLeft: 15}} onClick={() => {
                       setAlert(<LoadingProgress />)
                       SessionController.query("/api/requestOuraRingAuth", {
                         RequestType: "VerifyToken",

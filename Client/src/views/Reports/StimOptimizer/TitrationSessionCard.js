@@ -589,7 +589,7 @@ function TitrationSessionCard({ plan, participantUid, homeSchedule = null }) {
   const answer = plan.available
     ? `One clinic session${oneRate !== null ? ` at ${fmtHz(oneRate)}` : ""}: each side stepped up from 0 mA in ${num(plan.step_mA) ?? 0.5} mA steps and back down, ${num(plan.hold_s) ?? 60} s a step, recording${minutes !== null ? `, ~${Math.round(minutes)} min` : ""}.`
     : null;
-  const exportControls = (
+  const exportControls = SessionController.isReadOnly?.() ? null : (
     <MDBox display="flex" alignItems="center" gap={1} flexWrap="wrap">
       <TextField type="date" size="small" value={sessionDate} label="Visit date"
         onChange={(e) => { setSessionDate(e.target.value); setExportState({ status: "idle" }); }}

@@ -1,3 +1,4 @@
+import { SessionController } from "database/session-control";
 /**
  * The ⋯ menu at the right of the Closed-Loop page's controls row (SPEC 2026-09-26 section 4 rule 2:
  * "Developer actions (load a saved band file, clear, stored results) go in one ⋯ menu").
@@ -44,10 +45,10 @@ export default function DeveloperMenu({ onLoad, onClear, children }) {
       <div id={id} hidden={!open} role="group" aria-label="More actions"
         style={{ ...CARD, boxShadow: SHADOW.overlay, position: "absolute", right: 0, top: 40,
           zIndex: 10, padding: 16, width: 300 }}>
-        <button type="button" style={ITEM} onClick={() => { setOpen(false); if (onLoad) onLoad(); }}>
+        <button type="button" disabled={SessionController.isReadOnly?.()} style={ITEM} onClick={() => { setOpen(false); if (onLoad) onLoad(); }}>
           Load a saved band file
         </button>
-        {onClear ? (
+        {onClear && !SessionController.isReadOnly?.() ? (
           <button type="button" style={ITEM} onClick={() => { setOpen(false); onClear(); }}>
             Clear the chosen band
           </button>

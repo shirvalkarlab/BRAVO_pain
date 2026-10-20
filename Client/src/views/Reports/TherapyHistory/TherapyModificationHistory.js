@@ -644,7 +644,7 @@ function TherapyModificationHistory({therapyHistoryRaw, availableDevices, device
           && ((timelineMenu.eventId === "Pre" && ["Pre-visit Therapy", "Past Therapy"].includes(option.Type)) 
           || (timelineMenu.eventId === "Post" && ["Post-visit Therapy"].includes(option.Type)))
         ).map((option, index) => (
-          <MenuItem key={option.Id} onClick={() => {
+          <MenuItem disabled={SessionController.isReadOnly?.()} key={option.Id} onClick={() => {
             setTherapyGroups((prev) => {
               return prev.map((group) => {
                 if (getDateString(group.Date) === getDateString(option.Date) && group.GroupId === option.GroupId) {

@@ -348,13 +348,13 @@ function NeuralActivitySnapshot() {
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
               />
-              <SpeedDialAction
+              <SpeedDialAction disabled={SessionController.isReadOnly?.()}
                 key={"ChangeSettings"}
                 icon={<SettingsIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
                 tooltipTitle={"Edit Processing Configurations"}
                 onClick={() => setDrawerOpen({...drawerOpen, open: true})}
               />
-              <SpeedDialAction
+              <SpeedDialAction disabled={SessionController.isReadOnly?.()}
                 key={"ClearCache"}
                 icon={<CachedIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
                 tooltipTitle={"Clear Cache (Reprocessing)"}

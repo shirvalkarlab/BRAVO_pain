@@ -88,7 +88,7 @@ export default function SignIn() {
         <MDBox pt={4} pb={3} px={3}>
           <MDBox component="form" role="form">
             <MDBox mb={2}>
-              <MDInput type="email" id="email" label={dictionary.Login.Email[language]} value={authInfo.email} 
+              <MDInput type="text" id="email" label="Email or username" value={authInfo.email}
                 onChange={(event) => setAuthInfo({...authInfo, email: event.currentTarget.value})} autoComplete="off" fullWidth/>
             </MDBox>
             <MDBox mb={2}>

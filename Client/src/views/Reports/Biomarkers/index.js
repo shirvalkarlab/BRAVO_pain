@@ -1,3 +1,4 @@
+import { useInitialViewerRequest } from "database/useInitialViewerRequest";
 /**
  * The Biomarkers page: "Brain signal vs. pain" (Shirvalkar Lab).
  *
@@ -260,6 +261,12 @@ function Biomarkers() {
     AllowWindowReuse: allowWindowReuse, MaxPerRating: maxPerRating, RefractoryMin: refractoryMin,
     MatchExtentSec: matchExtentSec, IncludeClinicSheetRatings: includeClinicSheetRatings,
   });
+  // A fresh shared viewer must be able to load the default saved analysis without
+  // the administrator-only Recompute action. This uses the normal read request;
+  // it does not invalidate a server result or start a provider refresh.
+  useInitialViewerRequest(SessionController.isReadOnly?.(), participant_uid,
+    requestParams, setRequestParams, snapshot);
+
   const compute = () => {
     setMatchingRun({ settings: runSettings(), ranAt: Date.now() });
     setRequestParams(snapshot());

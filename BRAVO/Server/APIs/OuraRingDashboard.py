@@ -38,6 +38,7 @@ from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.conf import settings
 
 from Server import models
+from Server.read_only import is_read_only
 from modules.HelperFunctions import sanitize_input, get_or_none, PKCE_code_challenger
 from modules import Database, DataCurator
 from modules.OURA import DataManager as OuraDataManager
@@ -67,6 +68,8 @@ class OuraRingAuthHandler(RestViews.APIView):
 
         device = models.OuraRingDevice.find(owner=Participant)
         if not device:
+            if is_read_only(request.user):
+                return Response(status=200, data={"message": "No stored wearable data is available."})
             device = models.OuraRingDevice.create(owner=Participant)
 
         if request.data["RequestType"] == "RequestURL" and device.auth.get("managed_token_file") is True:
@@ -178,6 +181,8 @@ class QueryOuraRingData(RestViews.APIView):
         Participant = models.Participant.find(uid=request.data["ParticipantId"])
         device = models.OuraRingDevice.find(owner=Participant)
         if not device:
+            if is_read_only(request.user):
+                return Response(status=200, data={"message": "No stored wearable data is available."})
             device = models.OuraRingDevice.create(owner=Participant)
 
         if len(device.auth.keys()) == 0:

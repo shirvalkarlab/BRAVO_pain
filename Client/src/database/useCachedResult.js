@@ -30,6 +30,7 @@ import {
   settingsKey, subscribe,
 } from "database/resultCache";
 import { SessionController } from "database/session-control";
+import { accountScope } from "database/viewerAccess";
 
 /**
  * Ask the server for its boot token and hand it to the cache.
@@ -100,10 +101,11 @@ export function useCachedResult({ moduleKey, uid, settings, fetcher, enabled = t
     fetchInFlight.current = true;
     setLoading(true);
     setErr(null);
+    const scopeAtStart = accountScope(SessionController.getUser?.());
     return Promise.resolve()
       .then(() => fetcherRef.current())
       .then((bundle) => {
-        if (!alive.current) return null;
+        if (!alive.current || scopeAtStart !== accountScope(SessionController.getUser?.())) return null;
         const stored = putResult(moduleKey, uid, key, bundle, { why: why || null });
         clearUpstreamChanged(moduleKey, uid);
         setEntry({

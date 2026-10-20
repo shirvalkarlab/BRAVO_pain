@@ -267,7 +267,7 @@ function TimeSeriesAnalysisTable({data, getRecordingData, updateRecordingData, a
                     <MDTypography variant="h6" style={{marginBottom: 0}} fontSize={12} fontWeight={"bold"}>
                       {analysis.Type}
                     </MDTypography>
-                    <MDButton variant={"contained"} color="secondary" onClick={() => {
+                    <MDButton disabled={SessionController.isReadOnly?.()} variant={"contained"} color="secondary" onClick={() => {
                       if (analysis.Therapy) {
                         setEditRecordingName({show: true, analysisId: [analysis.Id, analysis.Therapy[0].Id], tags: analysis.Metadata.Tags, name: analysis.Name})
                       } else {

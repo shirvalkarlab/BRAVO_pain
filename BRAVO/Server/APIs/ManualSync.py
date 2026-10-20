@@ -1,7 +1,7 @@
 """Admin-only fixed mailbox endpoint; no subprocess or provider execution."""
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect
-from rest_framework.authentication import SessionAuthentication
+from Server.authentication import ReadOnlySessionAuthentication
 from rest_framework.parsers import JSONParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -13,7 +13,7 @@ from modules import Database, ManualSyncProtocol as protocol
 
 class ManualSync(APIView):
     # Host-side operations require a browser session with CSRF, never API-key bypass.
-    authentication_classes = [SessionAuthentication]
+    authentication_classes = [ReadOnlySessionAuthentication]
     parser_classes = [JSONParser]
     permission_classes = [IsAuthenticated]
 

@@ -29,10 +29,15 @@ import {
   MATCHING_DEFAULTS, MATCHING_DEFAULTS_VERSION, REPLACED_DEFAULTS, CONTROL_REQUEST_KEYS,
 } from "./matchingDefaults";
 
+import { SessionController } from "database/session-control";
+
 const CONTROLS_PREFIX = "bravo.biomarkerControls.";
 
 // ---- controls (localStorage, per participant) ------------------------------------------------
-function _ckey(uid) { return CONTROLS_PREFIX + String(uid || "unknown"); }
+function _ckey(uid) {
+  const viewer = SessionController.isReadOnly?.() ? `viewer.${SessionController.getUser().Email}.` : "";
+  return CONTROLS_PREFIX + viewer + String(uid || "unknown");
+}
 
 const _same = (a, b) => (typeof a === "number" || typeof b === "number"
   ? Number(a) === Number(b) : a === b);

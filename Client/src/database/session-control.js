@@ -13,6 +13,8 @@
 
 import { retryOnGatewayError } from "./retryOnGatewayError";
 import axios from "axios";
+import { invalidateAll } from "./resultCache";
+import { accountScope, isReadOnlyUser } from "./viewerAccess";
 
 import { ERRORCODE } from "./api-codes";
 import { dictionary } from "assets/translation.js";
@@ -273,12 +275,14 @@ export const SessionController = (function () {
     const response = await query("/api/querySessions", {
       session: session,
     });
-    session = {...session, ...response.data.session};
+    // Shared viewers retain browser-local display preferences; they do not update the account.
+    const localPreferences = Object.fromEntries(SERVER_SESSION_KEYS.filter(key => key in session).map(key => [key, session[key]]));
+    session = {...session, ...response.data.session, ...(isReadOnlyUser(response.data.user) ? localPreferences : {})};
     localStorage.setItem("sessionContext", JSON.stringify(session));
 
     session["TimeSeriesAnalysisLayout"] = {};
 
-    user = response.data.user;
+    setUser(response.data.user);
     return getSession();
   };
 
@@ -297,7 +301,7 @@ export const SessionController = (function () {
   // nothing there but cost a request, 17-20 on every first load (page review 2026-10-02, 4.7).
   const SERVER_SESSION_KEYS = ["language", "miniSidenav", "darkMode"];
   const setSession = (type, value, update) => {
-    if (update && SERVER_SESSION_KEYS.includes(type)) {
+    if (update && !isReadOnlyUser(user) && SERVER_SESSION_KEYS.includes(type)) {
       query("/api/updateSessions", {[type]: value}).catch((error) => console.log(error));
     }
     session[type] = value;
@@ -338,15 +342,17 @@ export const SessionController = (function () {
   };
 
   const nullifyUser = () => {
-    user = {};
+    setUser({});
     session = {};
     if (localStorage.getItem("sessionContext")) {
-      localStorage.setItem("sessionContext", session);
+      localStorage.removeItem("sessionContext");
     }
   };
 
   const setUser = (account) => {
-    user = account;
+    const changed = accountScope(user) !== accountScope(account);
+    user = account || {};
+    if (changed) invalidateAll("the account or access scope changed");
   };
 
   const getUser = () => {
@@ -390,6 +396,7 @@ export const SessionController = (function () {
     nullifyUser: nullifyUser,
     logout: logout,
     getUser: getUser,
+    isReadOnly: () => isReadOnlyUser(user),
     setUser: setUser,
 
     setParticipantUID: setParticipantUID,

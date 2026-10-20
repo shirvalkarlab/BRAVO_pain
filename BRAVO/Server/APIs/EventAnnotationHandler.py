@@ -35,6 +35,7 @@ from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.conf import settings
 
 from Server import models
+from Server.read_only import is_read_only
 from modules.HelperFunctions import sanitize_input, get_or_none
 from modules import Database, Event
 from modules.SurveyForms import RedcapForm
@@ -299,6 +300,9 @@ class QueryParticipantSurveyRecords(RestViews.APIView):
             try:
                 Links = models.ParticipantLinkRel.find_all(participant=Participant)
                 AllLinks = [i.get_info() for i in Links]
+                if is_read_only(request.user):
+                    # Link Id is a survey submission passcode, not a display identifier.
+                    AllLinks = [{**link, "Id": ""} for link in AllLinks]
             except Exception as e:
                 print(traceback.format_exc())
                 return Response(status=400, data={"message": str(e)})

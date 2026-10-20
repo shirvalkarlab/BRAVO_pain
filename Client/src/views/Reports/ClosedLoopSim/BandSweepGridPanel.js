@@ -1,3 +1,4 @@
+import { SessionController } from "database/session-control";
 /**
  * Choose a band -- the calibrated grid Biomarkers already built, as one compact heat map, redrawn
  * 2026-09-11 on the PI's brief ("the calibrated grid at the top is really ugly and takes up too
@@ -472,7 +473,7 @@ function SideColumn({ side, channels, sweeps, refused, chosen, active, offNote, 
               </div>,
               <div key={`${id}-use`} style={{ textAlign: "center" }}>
                 <input type="radio" id={id} name={`cl-use-band-${participantUid}-${side}`} checked={on}
-                  disabled={!active || row.can_choose_band === false} title={row.cannot_choose_why || undefined}
+                  disabled={SessionController.isReadOnly?.() || !active || row.can_choose_band === false} title={row.cannot_choose_why || undefined}
                   onChange={() => onChoose(channel, row)}
                   aria-label={`use the ${fmtHz(row.band_center_hz)} Hz band on ${labelOf(channel)}`}
                   style={{ width: 16, height: 16, margin: 0, cursor: active ? "pointer" : "default",

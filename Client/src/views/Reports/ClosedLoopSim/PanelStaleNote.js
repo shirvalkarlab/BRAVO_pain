@@ -1,3 +1,4 @@
+import { SessionController } from "database/session-control";
 /**
  * The one-line staleness disclosure carried by each analyst panel.
  *
@@ -55,7 +56,7 @@ export default function PanelStaleNote({ stale, staleReasons, loading, onRecompu
           </MDTypography>
         ) : null}
       </MDBox>
-      {stale && onRecompute ? (
+      {stale && onRecompute && !SessionController.isReadOnly?.() ? (
         <MDBox flex="0 0 auto">
           <MDButton size="small" variant="outlined" onClick={onRecompute}
             sx={{ textTransform: "none", fontSize: PAL.fs.body, minHeight: 36, borderRadius: "4px",
