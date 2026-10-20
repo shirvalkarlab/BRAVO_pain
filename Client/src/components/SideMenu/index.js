@@ -26,6 +26,7 @@ import {
 } from "context";
 
 import { dictionary } from "assets/translation";
+import { isReadOnlyUser, viewerRouteAllowed } from "database/viewerAccess";
 
 const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
   const [openCollapse, setOpenCollapse] = useState(false);
@@ -108,7 +109,7 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
   const renderRoute = ({ type, name, icon, title, collapse, noCollapse, key, hide, href, route, report_type }) => {
     let returnValue;
 
-    if (hide) return;
+    if (hide || (isReadOnlyUser(user) && !viewerRouteAllowed(route))) return;
 
     var nameString = "";
     if (Object.keys(dictionary.Routes).includes(name)) {
@@ -259,7 +260,7 @@ const SideMenu = ({ color, brand, brandName, routes, ...rest }) => {
             );
           }
 
-          if (!route) return null;
+          if (!route || (isReadOnlyUser(user) && !viewerRouteAllowed(route))) return null;
 
           return <NavLink to={route.replace(":participant_uid",participant_uid)} key={`${reportName}-${key}`}>
             <SidenavCollapse

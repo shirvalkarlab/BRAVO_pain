@@ -53,6 +53,16 @@ jobs:
               summary = files[name]["summary"]
               assert summary["num_branches"] > 0 and summary["covered_branches"] / summary["num_branches"] >= 0.95, (name, summary)
           PYTHON
+      - name: Shared viewer policy and authentication branch coverage
+        run: |
+          PYTHONPATH=BRAVO:BRAVO/modules uv run --frozen pytest tests/core/test_read_only_policy.py tests/core/test_viewer_authentication.py -q --cov=BRAVO/Server --cov-config=/dev/null --cov-branch --cov-report=json:viewer-coverage.json
+          uv run --frozen python - <<'PYTHON'
+          import json
+          files = json.load(open("viewer-coverage.json"))["files"]
+          for name in ("BRAVO/Server/read_only.py", "BRAVO/Server/authentication.py"):
+              summary = files[name]["summary"]
+              assert summary["num_branches"] > 0 and summary["covered_branches"] / summary["num_branches"] >= 0.95, (name, summary)
+          PYTHON
       - name: Core integration and authorization regressions (separate settings process)
         run: PYTHONPATH=BRAVO:BRAVO/modules uv run --frozen pytest tests/core -q
       - name: Aditya presentation contracts (separate Django settings process)

@@ -65,6 +65,7 @@ export default function Profile() {
   const [alert, setAlert] = useState(null);
 
   useEffect(() => {
+    if (SessionController.isReadOnly?.()) return;
     setAlert(<LoadingProgress />);
     SessionController.query("/api/queryProfile").then((response) => {
       setProfile(response.data);
@@ -76,6 +77,12 @@ export default function Profile() {
 
   useEffect(() => {
   }, [activeInstitute]);
+
+  if (SessionController.isReadOnly?.()) return <DatabaseLayout><MDBox py={3}>
+    <MDTypography variant="h3">{user.Name}</MDTypography>
+    <MDTypography>Read-only lab viewer · {user.Institute}</MDTypography>
+    <MDTypography>Access is managed by the administrator. Display choices stay in this browser.</MDTypography>
+  </MDBox></DatabaseLayout>;
 
   return (
     <DatabaseLayout>

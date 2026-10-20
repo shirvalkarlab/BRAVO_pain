@@ -1,3 +1,4 @@
+import { SessionController } from "database/session-control";
 /**
 =========================================================
 * UF BRAVO Platform
@@ -406,11 +407,11 @@ export default function GenericTimeline({data, availableChannels, annotations, h
             anchorPosition={ contextMenu !== null ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined }
             disableScrollLock={true}
           >
-            <MenuItem onClick={() => {
+            <MenuItem disabled={SessionController.isReadOnly?.()} onClick={() => {
               setContextMenu(null);
               setEventInfo({...eventInfo, name: "", show: true});
             }}>{"Add New Event"}</MenuItem>
-            <MenuItem onClick={() => {
+            <MenuItem disabled={SessionController.isReadOnly?.()} onClick={() => {
               setContextMenu(null);
               handleDeleteEvent(eventInfo);
             }}>{"Delete Event"}</MenuItem>

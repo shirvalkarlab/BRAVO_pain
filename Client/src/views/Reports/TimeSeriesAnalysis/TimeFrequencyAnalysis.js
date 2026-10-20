@@ -1,3 +1,4 @@
+import { SessionController } from "database/session-control";
 /**
 =========================================================
 * UF BRAVO Platform
@@ -335,11 +336,11 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
           }
           disableScrollLock={true}
         >
-          <MenuItem onClick={() => {
+          <MenuItem disabled={SessionController.isReadOnly?.()} onClick={() => {
             setContextMenu(null);
             if (eventInfo.time) setEventInfo({...eventInfo, name: "", show: true});
           }}>{"Add New Event"}</MenuItem>
-          <MenuItem onClick={() => {
+          <MenuItem disabled={SessionController.isReadOnly?.()} onClick={() => {
             setContextMenu(null);
             handleDeleteEvent(eventInfo);
             }}>{"Delete Event"}</MenuItem>
@@ -354,7 +355,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
               return {data: null, playing: false};
             });
             }}>{"Playback Signal"}</MenuItem>
-          <MenuItem onClick={() => {
+          <MenuItem disabled={SessionController.isReadOnly?.()} onClick={() => {
             setContextMenu(null);
             if (eventInfo.channel) {
               setDataAlignment({...dataAlignment, alignment: eventInfo.current_alignment, show: true})

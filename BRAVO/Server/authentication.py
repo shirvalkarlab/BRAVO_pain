@@ -1,8 +1,27 @@
-from rest_framework.authentication import BaseAuthentication, SessionAuthentication
+from rest_framework.authentication import BaseAuthentication, SessionAuthentication, BasicAuthentication
+from rest_framework.exceptions import AuthenticationFailed
 from . import models
+from .read_only import is_read_only, enforce_read_only
 
 
-class CsrfExemptSessionAuthentication(SessionAuthentication):
+class ReadOnlySessionAuthentication(SessionAuthentication):
+    """Enforce the viewer contract after identity and CSRF verification."""
+    def authenticate(self, request):
+        result = super().authenticate(request)
+        if result is not None:
+            enforce_read_only(request, result[0])
+        return result
+
+
+class ReadOnlyBasicAuthentication(BasicAuthentication):
+    def authenticate(self, request):
+        result = super().authenticate(request)
+        if result is not None and is_read_only(result[0]):
+            raise AuthenticationFailed("Shared viewers must sign in using a browser session.")
+        return result
+
+
+class CsrfExemptSessionAuthentication(ReadOnlySessionAuthentication):
     """Session auth that does NOT enforce CSRF.
 
     DRF's stock SessionAuthentication enforces CSRF on any request that already carries a
@@ -22,6 +41,8 @@ class BRAVOAPIAuthentication(BaseAuthentication):
             if not user or not user.is_active:
                 return None
             
+            if is_read_only(user):
+                raise AuthenticationFailed("Shared viewers cannot use API credentials.")
             request.csrf_processing_done = True
             user.api_access = True
             return (user, None)
@@ -38,6 +59,8 @@ class BRAVOAPIAuthentication(BaseAuthentication):
             if not user or not user.is_active:
                 return None
             
+            if is_read_only(user):
+                raise AuthenticationFailed("Shared viewers cannot use API credentials.")
             request.csrf_processing_done = True
             user.api_access = True
             return (user, None)

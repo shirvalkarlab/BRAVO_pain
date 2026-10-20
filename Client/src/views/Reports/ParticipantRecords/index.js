@@ -114,6 +114,7 @@ function ParticipantSurveyRecords() {
       return;
     }
     setContextState(dispatch, "report", "SurveyReports");
+    if (SessionController.isReadOnly?.()) { loadForms(); return; }
     // Silently auto-import every server-side REDCap export that matches this participant, THEN load
     // the form list. The import is content-aware server-side: a no-op when nothing changed, and a
     // re-import when the upstream export was refreshed with new reports -- so the user never has to
@@ -294,10 +295,10 @@ function ParticipantSurveyRecords() {
             disableClearable
           />
           <MDBox display="flex" flexDirection="row">
-            <MDButton variant="contained" color="success" style={{minWidth: 200, marginRight: 12}} onClick={() => openImportDialog()}>
+            <MDButton disabled={SessionController.isReadOnly?.()} variant="contained" color="success" style={{minWidth: 200, marginRight: 12}} onClick={() => openImportDialog()}>
               {"Import REDCap CSV"}
             </MDButton>
-            <MDButton variant="contained" color="info" style={{minWidth: 200}} onClick={() => setNewLinkDialog(() => {
+            <MDButton disabled={SessionController.isReadOnly?.()} variant="contained" color="info" style={{minWidth: 200}} onClick={() => setNewLinkDialog(() => {
               return {active: {}, options: availableForms.forms, show: true}
             })}>
               {"Link New Form"} 
@@ -367,7 +368,7 @@ function ParticipantSurveyRecords() {
                       </MDTypography>
                       
                       {availableForms.active.Type === "Redcap Linked Survey" ? (
-                        <MDButton variant="contained" color="error" style={{minWidth: 200}} onClick={() => setAlert(<MuiAlertDialog open={true} type={"warning"}
+                        <MDButton disabled={SessionController.isReadOnly?.()} variant="contained" color="error" style={{minWidth: 200}} onClick={() => setAlert(<MuiAlertDialog open={true} type={"warning"}
                           title={"Remove Form Link"}
                           message={"Are you sure you want to remove the link to this form for the participant? This will delete any existing records."}
                           denyButton={true}
@@ -393,7 +394,7 @@ function ParticipantSurveyRecords() {
                         </MDButton>
                       ) : null}
                       {availableForms.active.LinkCode ? (
-                        <MDButton variant="contained" color="success" style={{minWidth: 200}} onClick={() => setNewRecordDialog((newRecordDialog) => {
+                        <MDButton disabled={SessionController.isReadOnly?.()} variant="contained" color="success" style={{minWidth: 200}} onClick={() => setNewRecordDialog((newRecordDialog) => {
                           return {...newRecordDialog, show: true}
                         })}>
                           {"Add New Record"} 

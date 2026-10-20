@@ -110,7 +110,7 @@ function AOMPXFileTable({data, deleteData, downloadData, children}) {
                 <MDButton variant="contained" color="success" size="small" onClick={() => downloadData(source.Id)}>
                   {"Download"}
                 </MDButton>
-                <MDButton variant="contained" color="error" size="small" onClick={() => deleteData(source.Id)}>
+                <MDButton disabled={SessionController.isReadOnly?.()} variant="contained" color="error" size="small" onClick={() => deleteData(source.Id)}>
                   {"Delete"}
                 </MDButton>
               </TableCell>

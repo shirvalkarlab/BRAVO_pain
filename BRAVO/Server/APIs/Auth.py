@@ -32,6 +32,7 @@ from django.conf import settings
 from modules.HelperFunctions import sanitize_input, get_or_none, get_token
 from modules import Database, Auth
 from Server import models
+from Server.read_only import is_read_only
 
 class UserRegister(RestViews.APIView):
     
@@ -85,6 +86,8 @@ class UserLogin(RestViews.APIView):
         
         user = authenticate(request, username=request.data["Email"], password=request.data["Password"])
         if user is not None:
+            if is_read_only(user) and "DesktopAuthentication" in request.data:
+                return Response(status=403, data={"message": "Shared viewers use browser sign-in only."})
             if "Persistent" in request.data:
                 if request.data["Persistent"]:
                     request.session.set_expiry(3600 * 24 * 30)  # 30 days
@@ -125,7 +128,8 @@ class QueryProfile(RestViews.APIView):
     
     def post(self, request):
         userInfo = request.user.get_info()
-        userInfo["APIKey"] = request.user.api_token
+        if not is_read_only(request.user):
+            userInfo["APIKey"] = request.user.api_token
         userInfo["Institutes"] = [{"Id": institute.uid, "Name": institute.name} for institute in models.Institute.find_all(members=request.user)]
         userInfo["Studies"] = [{"Id": study.uid, "Name": study.name} for study in models.Study.find_all(members=request.user)]
 

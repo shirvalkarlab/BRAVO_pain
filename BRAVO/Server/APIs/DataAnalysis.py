@@ -37,6 +37,7 @@ from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.conf import settings
 
 from Server import models
+from Server.read_only import is_read_only
 from modules.HelperFunctions import sanitize_input, get_or_none, json_compliant_handler
 from modules import Database, DataCurator, DataAnalysis
 from modules.AsyncJobScheduler import ProcessingScheduler
@@ -1461,8 +1462,13 @@ class QueryBurstAnalysis(RestViews.APIView):
             BurstWaveform = []
             for recordingId in request.data["RecordingIds"]:
                 recording = models.Recording.find(uid=recordingId)
+                if is_read_only(request.user) and (recording is None or recording.source.owner_id != request.data["ParticipantId"]):
+                    return Response(status=403)
                 ProcessedData = models.Recording.find(original=recording, type="BurstActivityPreprocessing", metadata=userConfig)
                 if not ProcessedData:
+                    if is_read_only(request.user):
+                        # A viewer can inspect existing burst results, never enqueue preprocessing.
+                        continue
                     job = ProcessingScheduler.ScheduleSlurmJob(request.user, recordingId, "BurstAnalysis", {
                         **userConfig,
                         "ParticipantId": request.data["ParticipantId"],

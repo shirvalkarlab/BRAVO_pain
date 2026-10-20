@@ -83,6 +83,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
       RequestType: "RequestAll"
     }).then((response) => {
       if (response.data.Timelines.length == 0) {
+        if (SessionController.isReadOnly?.()) { setAlert(null); return; }
         SessionController.query("/api/queryChronicTimeline", {
           ParticipantId: participant_uid, 
           RequestType: "DeleteCache"
@@ -244,7 +245,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                               <MDButton size="large" variant="contained" color="primary" style={{marginBottom: 3}} onClick={() => exportCurrentStream()}>
                                 {dictionaryLookup(dictionary.FigureStandardText, "Export", language)}
                               </MDButton>
-                              <MDButton size="large" variant="contained" color="info" style={{marginBottom: 3}} onClick={() => {
+                              <MDButton disabled={SessionController.isReadOnly?.()} size="large" variant="contained" color="info" style={{marginBottom: 3}} onClick={() => {
                                 SessionController.query("/api/queryChronicTimeline", {
                                   ParticipantId: participant_uid, 
                                   RequestType: "DeleteCache"
@@ -336,7 +337,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
               />
-              <SpeedDialAction
+              <SpeedDialAction disabled={SessionController.isReadOnly?.()}
                 key={"ClearCache"}
                 icon={<CachedIcon sx={{display: "flex", justifyContent: "center", alignItems: "center", fontSize: 30}}/>}
                 tooltipTitle={"Clear Cache (Reprocessing)"}

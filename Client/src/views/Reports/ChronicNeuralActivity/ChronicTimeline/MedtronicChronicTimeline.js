@@ -1,3 +1,4 @@
+import { SessionController } from "database/session-control";
 /**
 =========================================================
 * UF BRAVO Platform
@@ -497,14 +498,14 @@ export default function MedtronicChronicTimeline({data, surveyResults, available
             anchorPosition={ contextMenu !== null ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined }
             disableScrollLock={true}
           >
-            <MenuItem onClick={() => {
+            <MenuItem disabled={SessionController.isReadOnly?.()} onClick={() => {
               setContextMenu(null);
               setEventInfo({...eventInfo, name: "", hasEndDate: false, 
                 enddate: moment(new Date(eventInfo.time)), 
                 endtime: moment(new Date(eventInfo.time)),
                 show: true});
             }}>{"Add New Event"}</MenuItem>
-            <MenuItem onClick={() => {
+            <MenuItem disabled={SessionController.isReadOnly?.()} onClick={() => {
               setContextMenu(null);
               handleDeleteEvent(eventInfo);
             }}>{"Delete Event"}</MenuItem>

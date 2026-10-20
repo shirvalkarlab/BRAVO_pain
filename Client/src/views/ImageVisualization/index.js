@@ -212,6 +212,7 @@ function ImageVisualization() {
     for (let i in controlItems) {
       if (controlItems[i].id == item.Id) {
         controlItems[i].color = color.hex;
+        if (SessionController.isReadOnly?.()) return setControlItems([...controlItems]);
         SessionController.query("/api/queryImageSourceFiles", {
           RequestType: "UpdateModel",
           ParticipantId: participant_uid,
@@ -334,7 +335,7 @@ function ImageVisualization() {
                               {downloadedItem ? (<IconButton variant="contained" color={downloadedItem.show ? "info" : "light"} onClick={() => addModel(item)}>
                                 <FaEye fontSize={10} />
                               </IconButton>) : null}
-                              {downloadedItem && item.DataType === "Electrodes" ? (<IconButton variant="contained" color={"info"} onClick={() => setEditTargetEntry({item: item.Id, name: item.Name, targetPoint: downloadedItem.targetPt, entryPoint: downloadedItem.entryPt, show: true})}>
+                              {downloadedItem && item.DataType === "Electrodes" ? (<IconButton disabled={SessionController.isReadOnly?.()} variant="contained" color={"info"} onClick={() => setEditTargetEntry({item: item.Id, name: item.Name, targetPoint: downloadedItem.targetPt, entryPoint: downloadedItem.entryPt, show: true})}>
                                 <FaPen fontSize={10} />
                               </IconButton>) : null}
                               {downloadedItem && item.type === "volume" ? (<IconButton variant="contained" color={cameraLock ? "light" : "info"} onClick={lockCamera}>

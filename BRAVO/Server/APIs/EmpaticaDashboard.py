@@ -38,6 +38,7 @@ from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.conf import settings
 
 from Server import models
+from Server.read_only import is_read_only
 from modules.HelperFunctions import sanitize_input, get_or_none, json_compliant_handler, lttb_optimized, minimum_change_eliminator
 from modules import Database, DataCurator
 from modules.Empatica import DataManager
@@ -93,6 +94,8 @@ class QueryEmpaticaData(RestViews.APIView):
         Participant = models.Participant.find(uid=ParticipantId)
         device = models.FitbitDevice.find(owner=Participant)
         if not device:
+            if is_read_only(request.user):
+                return Response(status=200, data={"message": "No stored wearable data is available."})
             device = models.FitbitDevice.create(owner=Participant)
         
         if len(device.auth.keys()) == 0:

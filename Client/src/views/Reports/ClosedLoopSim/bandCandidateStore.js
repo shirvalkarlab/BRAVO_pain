@@ -24,7 +24,8 @@ const ENDPOINT = "/api/queryClosedLoopChosenBand";
 const KEY_PREFIX = "bravo.bandCandidate.";
 
 function _key(participantUid) {
-  return KEY_PREFIX + String(participantUid || "unknown");
+  const viewer = SessionController.isReadOnly?.() ? `viewer.${SessionController.getUser().Email}.` : "";
+  return KEY_PREFIX + viewer + String(participantUid || "unknown");
 }
 
 function _envelope(participantUid, bandCandidate) {
@@ -228,7 +229,7 @@ function _bySideAfterSync(participantUid, out) {
 }
 
 async function _syncMain(participantUid) {
-  const local = loadBandCandidate(participantUid);
+  const local = SessionController.isReadOnly?.() ? null : loadBandCandidate(participantUid);
   let data;
   try {
     const res = await SessionController.query(ENDPOINT, { ParticipantId: participantUid, Action: "read" });
@@ -279,6 +280,7 @@ async function _send(participantUid, localEnvelope, body) {
  * `source` is "grid" or "upload". Resolves to `{ envelope, status }`; never rejects.
  */
 export async function recordChosenBand(participantUid, bandCandidate, source) {
+  if (SessionController.isReadOnly?.()) throw new Error("This lab account has read-only access.");
   const local = commitBandCandidate(participantUid, bandCandidate);
   return _send(participantUid, local, {
     ParticipantId: participantUid, Action: "choose", BandCandidate: bandCandidate, Source: source,
@@ -287,6 +289,7 @@ export async function recordChosenBand(participantUid, bandCandidate, source) {
 
 /** Record that no band is chosen: here and on the server. Resolves to `{ status }`. */
 export async function recordClearedBand(participantUid) {
+  if (SessionController.isReadOnly?.()) throw new Error("This lab account has read-only access.");
   clearBandCandidate(participantUid);
   try {
     const res = await SessionController.query(ENDPOINT, { ParticipantId: participantUid, Action: "clear" });

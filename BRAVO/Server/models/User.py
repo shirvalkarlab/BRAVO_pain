@@ -24,6 +24,7 @@ import json
 import datetime
 
 from modules.HelperFunctions import current_time, get_token, uuid4_hex, get_permission
+from Server.read_only import is_read_only
 
 def newToken():
     return get_token(64)
@@ -87,7 +88,8 @@ class PlatformUser(AbstractBaseUser):
         Studies = [study.get_info(self) for study in Study.find_all(members=self)]
         info = {"Email": self.email, "Name": self.user_name, 
                 "Institute": self.institute.name if self.institute else "", "InstituteId": self.institute.uid if self.institute else "", 
-                "Studies": Studies, "StudyName": "Disabled", "StudyId": ""}
+                "Studies": Studies, "StudyName": "Disabled", "StudyId": "",
+                "ReadOnly": is_read_only(self)}
         
         if "ActiveStudy" in self.configuration.keys():
             study = Study.find(uid=self.configuration["ActiveStudy"], members=self)
@@ -149,6 +151,8 @@ class Institute(models.Model):
         self.members.remove(user)
 
     def has_permission(self, user, type="View"):
+        if is_read_only(user) and type != "View":
+            return False
         if type == "View":
             return self.members.filter(uid=user.uid).exists()
         else:
@@ -242,6 +246,10 @@ class Study(models.Model):
             "Members": [{"Name": member.user_name, "Email": member.email} for member in self.members.all()],
             "Participants": []
         }
+
+        if is_read_only(user):
+            info.pop("InviteCode", None)
+            info.pop("Members", None)
 
         for participant in self.participants.all():
             data_rel = StudyDataRel.find(study=self, participant=participant)

@@ -1,3 +1,4 @@
+import { SessionController } from "database/session-control";
 /**
  * The decision card: the one card a clinician reads at the programmer (decision 302).
  *
@@ -324,7 +325,7 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
           </MDTypography>
         ) : null}
 
-        {mismatch && onRecompute ? (
+        {mismatch && onRecompute && !SessionController.isReadOnly?.() ? (
           <MDButton size="small" variant="contained" onClick={onRecompute} disabled={loading} sx={{ ...PRIMARY, mt: 2 }}>
             {`Recompute for ${mismatch.chosen}`}
           </MDButton>

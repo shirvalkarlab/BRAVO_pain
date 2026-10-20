@@ -126,7 +126,8 @@ const VIEW_STATE = new Map();
 
 // The user's stimulation program, per participant, in this browser only (decision 467). Storage may
 // be refused (a private window); the page then starts from the device's program each time.
-const STIM_PROGRAM_KEY = (uid) => `bravo:stimProgram:${uid}`;
+const viewerStorageScope = () => SessionController.isReadOnly?.() ? `viewer:${SessionController.getUser().Email}:` : "";
+const STIM_PROGRAM_KEY = (uid) => `bravo:stimProgram:${viewerStorageScope()}${uid}`;
 function loadStimProgram(uid) {
   try {
     const raw = window.localStorage.getItem(STIM_PROGRAM_KEY(uid));
@@ -137,7 +138,7 @@ function saveStimProgram(uid, program) {
   try { window.localStorage.setItem(STIM_PROGRAM_KEY(uid), JSON.stringify(program)); } catch (e) { /* kept for this visit only */ }
 }
 // The sense-to-control wiring (the PI, 2026-10-08), the same way: per participant, this browser only.
-const WIRING_KEY = (uid) => `bravo:wiring:${uid}`;
+const WIRING_KEY = (uid) => `bravo:wiring:${viewerStorageScope()}${uid}`;
 function loadWiring(uid) {
   try { return window.localStorage.getItem(WIRING_KEY(uid)) || null; } catch (e) { return null; }
 }
@@ -145,10 +146,10 @@ function saveWiring(uid, key) {
   try { window.localStorage.setItem(WIRING_KEY(uid), key); } catch (e) { /* kept for this visit only */ }
 }
 
-function readViewState(uid) { return VIEW_STATE.get(String(uid || "unknown")) || {}; }
+function readViewState(uid) { return VIEW_STATE.get(viewerStorageScope() + String(uid || "unknown")) || {}; }
 
 function writeViewState(uid, patch) {
-  const k = String(uid || "unknown");
+  const k = viewerStorageScope() + String(uid || "unknown");
   VIEW_STATE.set(k, { ...(VIEW_STATE.get(k) || {}), ...patch });
 }
 

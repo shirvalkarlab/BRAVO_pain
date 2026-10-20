@@ -17,6 +17,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import DashboardLayout from "./DashboardLayout";
 import DashboardNavbar from "components/Navbars/DashboardNavbar";
 import Footer from "components/Footers/DashboardFooter";
+import { Alert } from "@mui/material";
 import MuiAlertDialog from "components/MuiAlertDialog";
 
 import { SessionController } from "database/session-control";
@@ -37,6 +38,7 @@ export default function DatabaseLayout({children}) {
 
   return <>
     <DashboardLayout navbar={<>{alert}<DashboardNavbar fixedNavbar /></>}>
+      {SessionController.isReadOnly?.() && <Alert severity="info" sx={{mt: 2}}>Lab viewer — read-only access. Browse the available data and change local display filters. Imports, saved settings and account changes are managed by the administrator.</Alert>}
       {children}
     </DashboardLayout>
     <Footer />

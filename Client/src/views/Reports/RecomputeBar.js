@@ -1,3 +1,4 @@
+import { SessionController } from "database/session-control";
 /**
  * The Recompute control shared by the three analysis views.
  *
@@ -95,7 +96,7 @@ export default function RecomputeBar({
       </MDBox>
 
       <MDBox flex="0 0 auto">
-        <MDButton size="small" disabled={!!loading} onClick={onRecompute}
+        <MDButton size="small" disabled={SessionController.isReadOnly?.() || !!loading} onClick={onRecompute}
           variant={stale && !loading ? "contained" : "outlined"}
           color={stale && !loading ? "warning" : "secondary"}>
           {loading ? "Recomputing\u2026" : stale ? "Recompute" : "Recompute anyway"}

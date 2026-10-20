@@ -175,11 +175,11 @@ TEMPLATES = [
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'Server.authentication.BRAVOAPIAuthentication',
-        'rest_framework.authentication.BasicAuthentication',
+        'Server.authentication.ReadOnlyBasicAuthentication',
         # DEBUG/local: skip CSRF enforcement so a stale browser cookie can't 403 every request
         # (incl. /api/login). Production uses the stock CSRF-enforcing SessionAuthentication.
         ('Server.authentication.CsrfExemptSessionAuthentication' if DEBUG
-         else 'rest_framework.authentication.SessionAuthentication'),
+         else 'Server.authentication.ReadOnlySessionAuthentication'),
     ]
 }
 

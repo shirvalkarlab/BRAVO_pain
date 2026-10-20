@@ -236,12 +236,12 @@ export default function ParticipantOverview() {
                     </Grid>
                     <Grid item xs={12}>
                       <Divider variant="middle" />
-                      <MDButton variant="contained" color="warning" fullWidth 
+                      <MDButton disabled={SessionController.isReadOnly?.()} variant="contained" color="warning" fullWidth
                         onClick={() => setEditParticipantInfo(true)}
                       >
                         {dictionary.ParticipantOverview.EditParticipantInfo[language]}
                       </MDButton>
-                      <MDButton variant="contained" color="info" fullWidth 
+                      <MDButton disabled={SessionController.isReadOnly?.()} variant="contained" color="info" fullWidth
                         onClick={() => setUploadView({show: true, participant: participant_uid})}
                       >
                         {"Upload Data to Participant"}
@@ -316,12 +316,12 @@ export default function ParticipantOverview() {
                           <TableCell key={"viewedit"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                             <MDBox style={{display: "flex", flexDirection: "row"}}>
                               <Tooltip title="Delete Device" placement="top">
-                                <IconButton variant="contained" color="error" onClick={() => removeDevice(device.Id)}>
+                                <IconButton disabled={SessionController.isReadOnly?.()} variant="contained" color="error" onClick={() => removeDevice(device.Id)}>
                                   <FaXmark fontSize={10} />
                                 </IconButton>
                               </Tooltip>
                               <Tooltip title="Edit Device" placement="top">
-                                <IconButton variant="contained" color="info" onClick={() => setEditDeviceInfo({deviceInfo: device, show: true})}>
+                                <IconButton disabled={SessionController.isReadOnly?.()} variant="contained" color="info" onClick={() => setEditDeviceInfo({deviceInfo: device, show: true})}>
                                   <FaPen fontSize={10} />
                                 </IconButton>
                               </Tooltip>
@@ -393,7 +393,7 @@ export default function ParticipantOverview() {
                   {dictionary.Routes[report] ? dictionary.Routes[report][language] : report}
                 </MDTypography>
               </Grid>
-              {report === "DataManager" ? (
+              {report === "DataManager" && !SessionController.isReadOnly?.() ? (
                 <Grid item xs={6} md={4} lg={3} xl={2} display={"flex"} alignItems={"stretch"}>
                   <Card sx={{width: "100%"}}>
                     <MDBox p={2} mx={3} display="flex" justifyContent="center">
