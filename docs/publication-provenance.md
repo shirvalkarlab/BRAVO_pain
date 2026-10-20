@@ -2,7 +2,7 @@
 
 This publication updates the lab repository's existing `aditya` lineage from
 `fd4a60b6e92dd04da9edbf265181ad4802a2f8ac`. It is a reviewed tree snapshot of
-integration source `f79d381de29f46d0b6b7a0e10f15b505a7fff605`, not a merge of the
+integration source `effa7a838a6e4bbf1de535dff1bae8b5e09a3217`, not a merge of the
 private integration history.
 
 The integration combines Fixel `development` at
