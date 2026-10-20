@@ -4,15 +4,17 @@ The shared site is [BRAVO on Jetstream](https://bravo-aditya.mde260021.projects.
 Access requires an individual authorized account. This is a research application;
 a chart or candidate is not a clinical programming instruction.
 
-The previously accepted application is `1bb21e6ef8075c3a9d419888ab2e4adcc881d6ba`.
-The network-recovery source snapshot `05ce6fa6244bff65151af6b6d3ccc27215734329` is
-under final deployment verification. Do not interpret this pending checkpoint as
-confirmation that the new fix is installed. This page will be updated after
-actual live acceptance.
+The public source incorporates the network-recovery follow-up
+`f79d381de29f46d0b6b7a0e10f15b505a7fff605`. Deployment of this latest follow-up is
+under final verification. Do not interpret this pending checkpoint as confirmation
+that the follow-up is installed. This page will be updated after actual live
+acceptance.
 
 The fix handles transient browser connection errors with one bounded safe-read
 retry and prevents duplicate focus/visibility events from discarding a successful
-timeline response. It never retries chosen-band writes. Local tests and an actual
+timeline response. The follow-up disables upstream idle connection reuse and
+prevents a historical sync completion from replaying on page mount. It never
+retries chosen-band writes. Local tests and an actual
 browser against a synthetic failing server verified recovery; the underlying
 cause of every historical connection drop remains unconfirmed.
 

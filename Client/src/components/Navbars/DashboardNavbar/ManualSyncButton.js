@@ -27,7 +27,17 @@ export default function ManualSyncButton({ participantUid }) {
     polling.current = token;
     try {
       const response = await SessionController.query("/api/manualSync", { ParticipantId: participantUid, RequestType: "Status" });
-      if (current(token)) { snapshotOwner.current=token; setSnapshot(response.data); if (clearError) setError(""); }
+      if (current(token)) {
+        // A first status read describes history, not a new completion. The page
+        // already loads stored data on mount; replaying this job would discard
+        // that in-flight read and queue a duplicate full payload.
+        if (!token.statusSeen) {
+          const job = response.data.Job;
+          notified.current = job ? `${job.job_id}:${job.updated_at}:${job.state}` : null;
+          token.statusSeen = true;
+        }
+        snapshotOwner.current=token; setSnapshot(response.data); if (clearError) setError("");
+      }
     } catch (failure) {
       if (!current(token)) return;
       if (failure.response?.status === 403) setSnapshot({ CanSync: false });

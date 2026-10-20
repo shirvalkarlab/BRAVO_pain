@@ -29,6 +29,25 @@ the policy does not replay a sync/import job, provider mutation or band change.
 
 ## Evidence and limits
 
+Further live inspection identified an upstream HTTP connection reset returning
+502 from Caddy, without an application worker restart or OOM. The installed
+Caddy configuration used its 120-second upstream idle timeout, while Gunicorn's
+two-second keepalive was passed to Uvicorn. Caddy documents this mismatch as a
+cause of resets and 502 responses for POST requests. The follow-up configuration
+disables idle connection reuse only between Caddy and the application; public
+HTTPS, authentication and write semantics remain unchanged.
+See [Caddy's HTTP transport documentation](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#the-http-transport).
+
+A second duplicate-read trigger was found in the sync button. On page mount,
+the initial status response could replay a historical completed job as a new
+completion, suppressing the initial timeline response and queueing another full
+read. The first successful status response now establishes the mount's baseline.
+An observed running job completing, or a newly started job completing, still
+refreshes the views once. Tests cover historical succeeded/failed jobs, remounts,
+account isolation and recovery after an uncertain Start response without
+replaying the Start request. Deployment of these follow-up changes is recorded
+in [release status](release-status.md) after acceptance.
+
 The precise underlying cause of every historical connection drop remains
 unconfirmed. The change addresses demonstrated client recovery and refresh-ordering
 failures; it does not claim to eliminate connectivity failures themselves.

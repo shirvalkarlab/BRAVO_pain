@@ -157,15 +157,49 @@ test("failed device review, last success, close and view refresh are explicit", 
   } finally { window.location = location; }
 });
 
-test.each(['succeeded','failed'])('terminal %s emits one scoped read-refresh event without claiming other streams succeeded',async(state)=>{
+test.each(['succeeded','failed'])('historical %s status never emits completion on mount or remount',async(state)=>{
  const events=[];const listener=event=>events.push(event.detail);window.addEventListener(SYNC_COMPLETED_EVENT,listener);
  const terminal=snapshot(state);if(state==='failed')terminal.Job.streams.oura.state='failed';
- SessionController.query.mockImplementation(()=>Promise.resolve({data:JSON.parse(JSON.stringify(terminal))}));
+ SessionController.query.mockResolvedValue({data:terminal});
  const view=render(<ManualSyncButton participantUid="a"/>);await act(async()=>{});
+ expect(events).toEqual([]);
+ view.rerender(<ManualSyncButton participantUid="a"/>);await act(async()=>{});expect(events).toHaveLength(0);
+ // An uncertain/duplicate Start returning the same old job is not a new completion.
+ fireEvent.click(screen.getByRole('button',{name:'Sync all streams'}));await act(async()=>{});expect(events).toHaveLength(0);
+ view.unmount();render(<ManualSyncButton participantUid="a"/>);await act(async()=>{});expect(events).toHaveLength(0);
+ window.removeEventListener(SYNC_COMPLETED_EVENT,listener);
+});
+
+test.each(['succeeded','failed'])('observed running job emits one scoped %s completion',async(state)=>{
+ jest.useFakeTimers();const events=[];const listener=event=>events.push(event.detail);window.addEventListener(SYNC_COMPLETED_EVENT,listener);
+ SessionController.query.mockResolvedValueOnce({data:snapshot('running')}).mockResolvedValue({data:snapshot(state)});
+ const view=render(<ManualSyncButton participantUid="a"/>);await act(async()=>{});expect(events).toHaveLength(0);
+ await act(async()=>jest.advanceTimersByTime(5000));
  expect(events).toEqual([{participantUid:'a',scope:'account-a',state}]);
- view.rerender(<ManualSyncButton participantUid="a"/>);await act(async()=>{});expect(events).toHaveLength(1);
+ view.rerender(<ManualSyncButton participantUid="a"/>);await act(async()=>jest.advanceTimersByTime(10000));expect(events).toHaveLength(1);
+ window.removeEventListener(SYNC_COMPLETED_EVENT,listener);
+});
+
+test.each(['succeeded','failed'])('a newly started job already %s in its response emits completion once',async(state)=>{
+ const events=[];const listener=event=>events.push(event.detail);window.addEventListener(SYNC_COMPLETED_EVENT,listener);
+ const terminal=snapshot(state);terminal.Job.job_id='b'.repeat(32);
+ SessionController.query.mockResolvedValueOnce({data:snapshot('succeeded')}).mockResolvedValue({data:terminal});
+ render(<ManualSyncButton participantUid="a"/>);await act(async()=>{});expect(events).toHaveLength(0);
+ fireEvent.click(screen.getByRole('button',{name:'Sync all streams'}));await act(async()=>{});
+ expect(events).toEqual([{participantUid:'a',scope:'account-a',state}]);
+ fireEvent.click(screen.getByRole('button',{name:'Close'}));await waitFor(()=>expect(screen.queryByRole('dialog')).toBeNull());
  fireEvent.click(screen.getByRole('button',{name:'Sync all streams'}));await act(async()=>{});expect(events).toHaveLength(1);
- if(state==='failed')expect(screen.queryByText(/All four streams are updated/)).toBeNull();
+ window.removeEventListener(SYNC_COMPLETED_EVENT,listener);
+});
+
+test('uncertain Start can recover a new terminal job through Status without replaying the write',async()=>{
+ const events=[];const listener=event=>events.push(event.detail);window.addEventListener(SYNC_COMPLETED_EVENT,listener);
+ SessionController.query.mockResolvedValueOnce({data:snapshot()}).mockRejectedValueOnce(new Error('offline'))
+   .mockResolvedValueOnce({data:snapshot('succeeded')});
+ render(<ManualSyncButton participantUid="a"/>);await act(async()=>{});
+ fireEvent.click(screen.getByRole('button',{name:'Sync all streams'}));await act(async()=>{});
+ expect(events).toEqual([{participantUid:'a',scope:'account-a',state:'succeeded'}]);
+ expect(SessionController.query.mock.calls.map(([,body])=>body.RequestType)).toEqual(['Status','Start','Status']);
  window.removeEventListener(SYNC_COMPLETED_EVENT,listener);
 });
 
@@ -183,8 +217,8 @@ test('changing account cannot publish old job completion into the new account or
 test('accepted old terminal snapshot is not re-emitted when account scope changes before replacement status',async()=>{
  const events=[];const listener=event=>events.push(event.detail);window.addEventListener(SYNC_COMPLETED_EVENT,listener);
  let finish;SessionController.query.mockResolvedValueOnce({data:snapshot('succeeded')}).mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
- const view=render(<ManualSyncButton participantUid="a"/>);await act(async()=>{});expect(events).toHaveLength(1);
- mockScope='account-b';view.rerender(<ManualSyncButton participantUid="a"/>);await act(async()=>{});expect(events).toHaveLength(1);
- await act(async()=>finish({data:snapshot()}));expect(events).toHaveLength(1);
+ const view=render(<ManualSyncButton participantUid="a"/>);await act(async()=>{});expect(events).toHaveLength(0);
+ mockScope='account-b';view.rerender(<ManualSyncButton participantUid="a"/>);await act(async()=>{});expect(events).toHaveLength(0);
+ await act(async()=>finish({data:snapshot()}));expect(events).toHaveLength(0);
  window.removeEventListener(SYNC_COMPLETED_EVENT,listener);
 });
