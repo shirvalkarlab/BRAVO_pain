@@ -24,8 +24,12 @@ import importlib
 import importlib.abc
 import importlib.machinery
 import sys
+import threading
 
 _PREFIX = "modules."
+# DecodeCommon itself can be imported under both roots before its aliases are
+# installed. Share the registration lock even across those two helper objects.
+_REGISTRATION_LOCK = sys.__dict__.setdefault("_bravo_import_alias_lock", threading.RLock())
 
 
 class _AliasLoader(importlib.abc.Loader):
@@ -65,7 +69,13 @@ def alias_both_spellings(package_name):
         canonical, alias = package_name, package_name[len(_PREFIX):]
     else:
         canonical, alias = package_name, _PREFIX + package_name
-    if any(getattr(f, "bravo_alias", None) == alias for f in sys.meta_path):
-        return
-    sys.modules.setdefault(alias, sys.modules[canonical])
-    sys.meta_path.insert(0, _AliasFinder(alias, canonical))
+    with _REGISTRATION_LOCK:
+        # Concurrent cold imports may execute both package initializers. The
+        # first registration chooses the canonical spelling; installing the
+        # reverse finder would make every later submodule import recurse.
+        if any(getattr(f, "bravo_alias", None) in (alias, canonical) for f in sys.meta_path):
+            return
+        # The other initializer may already have inserted a provisional module
+        # object. Both imports must return the first registered canonical object.
+        sys.modules[alias] = sys.modules[canonical]
+        sys.meta_path.insert(0, _AliasFinder(alias, canonical))

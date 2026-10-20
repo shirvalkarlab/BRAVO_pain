@@ -48,6 +48,17 @@ account isolation and recovery after an uncertain Start response without
 replaying the Start request. Deployment of these follow-up changes is recorded
 in [release status](release-status.md) after acceptance.
 
+Cold-start acceptance also exposed an import recursion in the wiring comparison.
+Concurrent imports under the short and `modules.` package names could install
+opposite alias finders; a later simulation import then looped between them before
+any comparison ran. Registration now uses a shared lock, keeps the first
+canonical module object and refuses a reverse finder. Isolated regressions cover
+both import orders, repeated registration, simultaneous cold imports and shared
+submodule identity; the helper has 100% statement and branch coverage. The wiring
+simulation tests also pass. An isolated image check must import the actual wiring
+dependencies after Django startup under both package orders before cutover;
+live wiring acceptance remains pending until recorded in [release status](release-status.md).
+
 The precise underlying cause of every historical connection drop remains
 unconfirmed. The change addresses demonstrated client recovery and refresh-ordering
 failures; it does not claim to eliminate connectivity failures themselves.
