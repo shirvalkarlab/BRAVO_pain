@@ -23,6 +23,11 @@ administrator-managed imports. Canonical analytical readers can populate derived
 caches and perform their existing read-only provider queries. Read-only does not
 mean that sessions, cache files, or access logs never change.
 
+Visible Aditya views check saved-data revisions every minute and reread changes.
+Returning to the tab/window or selecting **Refresh view** also reads current saved
+data. The shared viewer does not receive another account's manual-sync event; its
+revision checks pick up completed updates without granting synchronization rights.
+
 Viewers cannot upload, import or delete data; run synchronization; edit annotations,
 participant/device details, shared processing settings or saved chosen bands;
 start background preprocessing; connect provider accounts; create studies or
@@ -45,7 +50,28 @@ non-creation of missing wearable devices. CI also verifies every API route uses 
 guarded authentication class and requires at least 95% branch coverage in the
 viewer policy and authentication adapters.
 
-Twenty independent sessions are an acceptance target, not a claim that twenty
-uncached heavy analyses will finish instantly. Deployment acceptance must record
-the exact version, representative authenticated report reads, a bounded concurrent
-read check, and unchanged owner access/services/timers before giving out the login.
+The October 20 deployment passed a bounded check with **20 independent browser
+sessions and 40 concurrent lightweight reads**, with no failed requests. Logging
+out one session left the others signed in. A separate check launched **20 complete
+chart reads concurrently: ten REDCap and ten Oura**. All succeeded with unchanged
+saved payloads; the slowest response took about a minute. This supports simultaneous
+viewing, with a real waiting-time limit: full charts are not instant under load.
+It is not a guarantee for twenty uncached heavy analyses or provider requests.
+
+Live shared-viewer reads retained the same saved payloads as the authorized owner
+for the tested survey, wearable, neural, therapy, chosen-band and control-result
+endpoints. Safe denial probes confirmed that blocked operations return permission
+errors. Owner access and the independent application's services and timers were
+preserved. All seven Aditya tabs populated in the shared-viewer browser. Prasad's
+Biomarkers and Stimulation Optimizer populated, and Closed-loop completed with the
+expected absence of a scored recommendation when matching ratings were unavailable.
+Recompute controls were disabled. Native Therapy History completed with device
+selection and dated history. This bounded browser check does not certify every
+optional native report or heavy uncached analysis.
+
+The owner's initial Closed-loop load and the viewer's initial Stimulation Optimizer
+load reported network errors and recovered after fresh reloads during acceptance.
+An initial viewer neural read also failed and recovered using **Refresh view**. The existing bounded retry and refresh behavior
+remain in place; this release does not claim to eliminate all network or provider
+errors. If a view fails, allow its retry, then use **Refresh view** or reload. A
+successful refresh confirms a read, not a fresh upstream import.

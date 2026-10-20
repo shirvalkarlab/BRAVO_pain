@@ -4,6 +4,28 @@ Use the [lab user guide](user-guide.md) for navigation and [release status](rele
 for the shared site's accepted version. This public repository contains code and
 synthetic tests, not an installation backup or working provider credentials.
 
+## Shared viewer operation
+
+The shared read-only account is configured by the administrator, with its password
+distributed privately. Keep the server-owned `SharedReadOnly` flag and Viewer
+membership; never grant Admin to reveal a blocked control. Individual authorized
+accounts retain their existing editing and import permissions.
+
+Viewers can use **Refresh view** to read saved updates. **Sync all streams** remains
+administrator-only, and normal daily jobs remain responsible for scheduled imports.
+Canonical analytical readers may populate derived caches and make their existing
+read-only provider requests. Read-only does not imply that sessions, caches or
+access logs never change.
+
+The deployed release passed a bounded check with 20 independent sessions and 40
+concurrent lightweight reads, with no failed requests and isolated logout. A
+separate check of twenty concurrent full-chart reads (ten REDCap and ten Oura) also
+succeeded; the slowest response took about a minute. Full charts are not instant
+under load, and this is not a guarantee for twenty fresh heavy computations. Monitor actual demand
+before changing workers or resource limits. Rotate shared credentials privately
+when withdrawing access; keep them out of repositories, issues and public receipts.
+See the [shared viewer guide](shared-viewer.md) and [release status](release-status.md).
+
 ## Storage and configuration
 
 Use separate database, cache and file locations for each installation. Never point

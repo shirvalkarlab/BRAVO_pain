@@ -1,9 +1,10 @@
 # Public Aditya snapshot provenance
 
 This publication updates the lab repository's existing `aditya` lineage from
-`fd4a60b6e92dd04da9edbf265181ad4802a2f8ac`. It is a reviewed tree snapshot of
-integration source `effa7a838a6e4bbf1de535dff1bae8b5e09a3217`, not a merge of the
-private integration history.
+`fd4a60b6e92dd04da9edbf265181ad4802a2f8ac`. The earlier release was published as a
+reviewed tree snapshot through [PR #14](https://github.com/shirvalkarlab/BRAVO_pain/pull/14),
+with its release documentation updated in [PR #15](https://github.com/shirvalkarlab/BRAVO_pain/pull/15).
+The public branch does not merge the private integration history.
 
 The integration combines Fixel `development` at
 `6f5d23a0056e0b0e0891561d214290a3476f89b8`, reviewed Prasad application changes from
@@ -11,6 +12,14 @@ The integration combines Fixel `development` at
 The [initial import manifest](source-import-manifest.json) records the original
 path-level import, not every subsequent file hash. Licenses and attribution remain
 part of the source tree.
+
+The shared-viewer follow-up was published through
+[PR #16](https://github.com/shirvalkarlab/BRAVO_pain/pull/16), public candidate
+`712e362ed15d01deaba5a15ab54ec3a6d44ea77c`, merged as
+`86bbad6dbbe15263b01d486c47b7fe95c30003b0`. It adds reviewed access-control,
+interface, synthetic-test and generic-documentation changes on the existing lab
+lineage, retaining the publication differences below. No private ancestry or
+account credentials were imported.
 
 ## Public snapshot differences
 

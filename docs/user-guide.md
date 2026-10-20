@@ -1,8 +1,12 @@
 # Using BRAVO
 
 [Open BRAVO on Jetstream](https://bravo-aditya.mde260021.projects.jetstream-cloud.org/)
-and sign in with your individual account. If you need access, contact the site
-administrator privately. A local clone has neither the shared site's accounts nor
+and sign in with your individual account or the shared read-only lab account.
+Credentials are supplied privately by the site administrator. The shared account
+uses separate browser sessions, so one person signing out does not sign everyone
+out. It permits viewing and **Refresh view**, but not edits, uploads, saved-band
+changes or **Sync all streams**; see the [shared viewer guide](shared-viewer.md).
+A local clone has neither the shared site's accounts nor
 data. The old laptop/Tailscale address is not required.
 
 ## Find the modules
@@ -16,6 +20,10 @@ select **View**. The default category does not list every report.
 | Brain Data | Therapy History; Neural Activity Snapshot; Time-Series Analysis; Chronic Neural Activity; Multi-Modality Timeline Report; Chronic Events |
 | Surveys and Questionnaires | Form Records; Pain Score Visualization |
 | External Sensors | Oura Ring Dashboard and other configured sensor dashboards |
+
+The shared viewer can open authorized read-only reports. Editing, administration
+and analysis-building requests are blocked by the server; some overview cards may
+still be visible. Use an individually authorized account for those actions.
 
 ## Aditya - All Data Streams
 
@@ -53,7 +61,8 @@ refresh after a manual sync finishes, including partial failures. Returning to
 the window checks freshness without discarding a successful in-flight read.
 Selected measures and date filters remain selected; widen dates if necessary.
 
-**Sync all streams** is an administrator action. It requests fresh neural files,
+**Sync all streams** is an administrator action and is unavailable to the shared
+viewer. It requests fresh neural files,
 clinic workbooks, REDCap surveys and Oura observations and shows each stream's
 status. A duplicate click while a job is active returns that job. Closing the
 status panel does not cancel the work. Files copied with import pending is not

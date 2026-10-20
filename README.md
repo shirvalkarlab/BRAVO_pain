@@ -1,8 +1,11 @@
 # BRAVO · Aditya Jetstream
 
 [Open the shared BRAVO site](https://bravo-aditya.mde260021.projects.jetstream-cloud.org/).
-Sign in with your individual BRAVO account. Access is arranged privately through
-the site administrator; this repository does not contain credentials or data.
+Sign in with your individual account or the shared read-only lab account. Access
+and credentials are arranged privately through the site administrator; this
+repository contains neither credentials nor data. The shared viewer can browse
+authorized reports and refresh saved views; editing and synchronization require
+an individual account with the appropriate permissions.
 The former laptop and Tailscale link are no longer required.
 
 This `aditya` branch combines the Fixel development platform, Prasad's pain
@@ -14,6 +17,8 @@ clinical configuration, source data, operational receipts and private Git histor
 
 - [Lab user guide](docs/user-guide.md): find the custom modules, understand tabs,
   refresh data and interpret missing results.
+- [Shared viewer guide](docs/shared-viewer.md): read-only permissions, simultaneous
+  sessions and refresh behavior.
 - [Release status](docs/release-status.md): source version, deployed version,
   validation and known limits.
 - [Operations guide](docs/operations-guide.md): sync, configuration and recovery.
