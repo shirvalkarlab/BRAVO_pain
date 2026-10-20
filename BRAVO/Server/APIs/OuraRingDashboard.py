@@ -41,6 +41,7 @@ from Server import models
 from modules.HelperFunctions import sanitize_input, get_or_none, PKCE_code_challenger
 from modules import Database, DataCurator
 from modules.OURA import DataManager as OuraDataManager
+from modules.OURA.ManagedToken import ManagedOuraError
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -68,10 +69,13 @@ class OuraRingAuthHandler(RestViews.APIView):
         if not device:
             device = models.OuraRingDevice.create(owner=Participant)
 
+        if request.data["RequestType"] == "RequestURL" and device.auth.get("managed_token_file") is True:
+            return Response(status=200, data={"ManagedByServer": True, "DatePeriods": device.date_periods,
+                "CanRefresh": Participant.institute.has_permission(request.user, "Upload")})
+
         if request.data["RequestType"] == "RequestURL":
             if len(device.auth.keys()) > 0:
-                return Response(status=200, data=device.date_periods, headers={
-                    "X-BRAVO-Managed-Sync": "true" if device.auth.get("managed_sync") else "false"})
+                return Response(status=200, data=device.date_periods)
             
         if request.data["RequestType"] == "RequestURL":
             if len(device.auth.keys()) > 0:
@@ -87,6 +91,8 @@ class OuraRingAuthHandler(RestViews.APIView):
             return Response(status=200, data={"OAuthURL": OuraAuthURL})
 
         elif request.data["RequestType"] == "VerifyToken":
+            if device.auth.get("managed_token_file") is True:
+                return Response(status=400, data={"message": "This Oura connection is managed by the server administrator."})
             if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "ParticipantId", "AccessToken"]):
                 return Response(status=400, data={"message": "Malformed Input"})
 
@@ -121,12 +127,16 @@ class OuraRingAuthHandler(RestViews.APIView):
         
             
         elif request.data["RequestType"] == "DeleteAuthentication":
+            if device.auth.get("managed_token_file") is True:
+                return Response(status=400, data={"message": "This Oura connection is managed by the server administrator."})
             #DataManager.deleteFitbitData(Participant)
             device.auth = {}
             device.save()
             return Response(status=200)
             
         elif request.data["RequestType"] == "SetAuthPeriod":
+            if device.auth.get("managed_token_file") is True:
+                return Response(status=400, data={"message": "This Oura date range is managed by the server administrator."})
             if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "ParticipantId", "DatePeriods"]):
                 return Response(status=400, data={"message": "Malformed Input"})
 
@@ -173,24 +183,16 @@ class QueryOuraRingData(RestViews.APIView):
         if len(device.auth.keys()) == 0:
             return Response(status=400, data={"message": "Verification Failed"})
 
-        if request.data["RequestType"] == "RequestSummary":
-            return Response(status=200, data=OuraDataManager.storedDataSummary(Participant))
-        elif request.data["RequestType"] == "RequestOverview":
+        if request.data["RequestType"] == "RequestOverview":
             Data = OuraDataManager.loadOuraRingData(Participant)
             return Response(status=200, data=Data)
         elif request.data["RequestType"] == "RefreshOuraRingData":
             if not Participant.institute.has_permission(request.user, "Upload"):
                 return Response(status=403)
-            if device.auth.get("managed_sync"):
-                from modules import RCS08ManualSync, RCS08Sync
-                if Participant.name != RCS08Sync.PARTICIPANT_NAME:
-                    return Response(status=400, data={"message": "No managed sync is configured for this participant."})
-                try:
-                    state = RCS08ManualSync.queue_request(str(request.user.uid))
-                except RCS08ManualSync.ManualSyncAlreadyActive as exc:
-                    return Response(status=409, data={"message": str(exc), **exc.state})
-                return Response(status=202, data=state)
-            OuraDataManager.refreshOuraRingData(device)
+            try:
+                OuraDataManager.refreshOuraRingData(device)
+            except ManagedOuraError as exc:
+                return Response(status=503, data={"message": str(exc)})
             return Response(status=200)
 
         return Response(status=200)

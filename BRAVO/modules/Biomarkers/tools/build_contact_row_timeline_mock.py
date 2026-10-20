@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""Design mock-up generator: chronic + streaming LFP timeline laid out by RECORDING CONTACT.
-
-WHAT THIS DEMONSTRATES (the design that motivated the BiomarkerTimeline rework):
-  - The chronic 24/7 LFP is NOT a single fixed channel. Over time the Percept is reprogrammed to
-    sense from different bipolar contacts (e.g. 0-3, 1-3, 0-2) AND different center frequencies.
-    Stamping one channel/frequency per recording hides that history.
-  - Here every chronic trend point is assigned to whichever bipolar contact was the PROGRAMMED
-    sensing channel at its timestamp (read from GroupHistory), so the signal lives in the row of
-    the contact it truly came from. One row per (hemisphere, contact).
-  - The frequency ribbon under each row shows the real programmed-band history (from GroupHistory),
-    NOT a single 'latest' value -- so the center frequency leaves the title entirely.
-  - On-demand streaming (BrainSenseLfp) is folded into the SAME contact rows, distinguished from
-    chronic by mark: chronic = thin continuous line, streaming = diamond + vertical range bar
-    (p10-p90 of each brief recording). Streaming contact identity comes from TherapySnapshot.
-  - Active-window shading tints each contact's row only where it was the programmed channel.
-
-Requires: plotly, kaleido==0.2.1 (PNG export uses the headless-Chromium flags set below), numpy."""
+'.'
 import os, sys, glob, json, argparse
 import numpy as np
 from datetime import datetime
@@ -52,13 +36,6 @@ CMAP_STREAM = {"ZERO_THREE": "0-3", "ONE_THREE": "1-3", "ZERO_TWO": "0-2",
 CORD = ["0-3", "1-3", "0-2", "0-1", "2-3", "1-2", "?"]
 SIX_H = 6 * 3600
 SENTINEL = 1e6  # LFP power is physically << 1e6; larger values are uint32 no-data sentinels.
-
-
-
-# Aditya canonical compatibility imports/constants.
-
-
-
 
 
 def snap(hz):
@@ -133,7 +110,7 @@ def contact_from_stream_sc(sc, hemi):
 
 
 def load_dataset(jsons_dir):
-    """Generic implementation; participant-specific examples are kept outside source control."""
+    'See the implementation and synthetic regression tests for this contract.'
     files = sorted(glob.glob(os.path.join(jsons_dir, "*.json")) +
                    glob.glob(os.path.join(jsons_dir, "Stage 1", "*.json")))
     sched = {"Left": [], "Right": []}
@@ -429,7 +406,7 @@ def render(sched, chronic, stream, out_base):
                       font=dict(family="Roboto, Helvetica, Arial", size=12, color="#344767"),
                       xaxis=dict(domain=[0, 1], range=[gmin, gmax], anchor="y", showgrid=True,
                                  gridcolor="#E8E8EC", tickfont=dict(size=13)),
-                      title=dict(text="<b>RCS08 chronic + streaming LFP by recording contact</b> — "
+                      title=dict(text="<b>Recorded chronic + streaming LFP by recording contact</b> — "
                                       "signal lives in the contact it came from; frequency ribbon shows "
                                       "the programmed band over time", x=0.5, font=dict(size=13.5)))
     fig.write_html(out_base + ".html", include_plotlyjs="cdn")
@@ -442,7 +419,7 @@ def render(sched, chronic, stream, out_base):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--jsons", required=True, help="Folder of RCS08 Percept JSON exports.")
+    ap.add_argument("--jsons", required=True, help="Folder of authorized Percept JSON exports.")
     ap.add_argument("--out", default="./contact_row_timeline", help="Output basename (.html/.png appended).")
     args = ap.parse_args()
     sched, chronic, stream = load_dataset(args.jsons)
@@ -456,6 +433,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# Retained active Aditya interfaces.

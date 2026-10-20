@@ -13,16 +13,16 @@ Coded by www.creative-tim.com
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-// Material Dashboard 2 React Base Styles
-import colors from "assets/theme/base/colors";
+// Values come from the design tokens (SPEC.md section 2.5, 2026-09-26): radius 4 for inputs,
+// buttons and chips, 6 for cards. The older keys (xs, lg, xl, xxl) are kept because components
+// import them; they now draw at 4 or 6. `section` stays fully round, for circular badges.
+import { T, RADIUS } from "assets/theme/base/tokens";
 
 // Material Dashboard 2 React Helper Functions
 import pxToRem from "assets/theme/functions/pxToRem";
 
-const { grey } = colors;
-
 const borders = {
-  borderColor: grey[300],
+  borderColor: T.rule,
 
   borderWidth: {
     0: 0,
@@ -34,12 +34,13 @@ const borders = {
   },
 
   borderRadius: {
-    xs: pxToRem(1.6),
-    sm: pxToRem(2),
-    md: pxToRem(6),
-    lg: pxToRem(8),
-    xl: pxToRem(12),
-    xxl: pxToRem(16),
+    none: 0,
+    xs: pxToRem(RADIUS.sm),
+    sm: pxToRem(RADIUS.sm),
+    md: pxToRem(RADIUS.md),
+    lg: pxToRem(RADIUS.md),
+    xl: pxToRem(RADIUS.md),
+    xxl: pxToRem(RADIUS.md),
     section: pxToRem(160),
   },
 };

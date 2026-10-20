@@ -1,0 +1,118 @@
+/**
+ * The coverage sentence at the top of the Binarization card (the PI, 2026-09-21): how many pain
+ * reports have ANY neural sample within the match window, and within two wider windows, so a reader
+ * sees what the window admits and what it leaves out. Counted in the browser from the sample index
+ * and the pain series the card already holds, so it follows the slider live.
+ */
+import "@testing-library/jest-dom";
+import { render as rtlRender, screen, fireEvent } from "@testing-library/react";
+
+import { reportCoverage, computeMatchedScanModel } from "./binarizationModel";
+import BinarizationPreview from "./BinarizationPreview";
+import MatchWindowBand from "./MatchWindowBand";
+import { wrap } from "testUtils/render";
+
+jest.mock("plotly.js-dist", () => {
+  const noop = () => {};
+  return { react: () => Promise.resolve(), purge: noop, restyle: noop, relayout: noop, newPlot: noop };
+});
+
+const H = 3600;
+// five reports one hour apart; samples: one 30 s BEFORE report 0, one 5 min AFTER report 1,
+// one 30 min before report 2 (streaming), nothing near reports 3 and 4 except a sample 90 min after 4
+const painSeries = { t: [0, H, 2 * H, 3 * H, 4 * H], y: [5, 6, 7, 8, 9] };
+const scanIndex = [
+  { t: -30, channel: "ZERO_THREE_LEFT", source: "Indefinite stream" },
+  { t: H + 300, channel: "ZERO_THREE_LEFT", source: "Patient event" },
+  { t: 2 * H - 1800, channel: "ONE_THREE_LEFT", source: "BrainSense streaming" },
+  { t: 4 * H + 5400, channel: "ZERO_THREE_RIGHT", source: "Montage" },
+];
+
+describe("reportCoverage", () => {
+  it("counts distinct reports with any sample within the window and two wider windows, either direction", () => {
+    const c = reportCoverage({ scanIndex, painSeries, toleranceMin: 2 });
+    expect(c.n_reports).toBe(5);
+    expect(c.tolerance_min).toBe(2);
+    expect(c.n_within_window).toBe(1);          // report 0 (30 s before)
+    expect(c.n_within_10).toBe(2);              // + report 1 (5 min after)
+    expect(c.n_within_60).toBe(3);              // + report 2 (30 min before); report 4's sample is 90 min away
+    expect(c.n_within_window_prior).toBe(1);    // the sample precedes report 0
+  });
+
+  it("a wider window at the slider makes the window count the largest of the three", () => {
+    const c = reportCoverage({ scanIndex, painSeries, toleranceMin: 120 });
+    expect(c.n_within_window).toBe(5);          // report 3 sits 90 min after report 2's sample and 90 min before report 4's
+    expect(c.n_within_10).toBe(2);
+    expect(c.n_within_60).toBe(3);              // report 3's nearest sample is 90 min away
+    expect(c.n_within_window_prior).toBe(4);    // 0, 1 (the -30 s sample is 60.5 min before it), 2 and 3
+  });
+
+  it("returns null counts without inputs", () => {
+    expect(reportCoverage({ scanIndex: [], painSeries, toleranceMin: 2 })).toBeNull();
+    expect(reportCoverage({ scanIndex, painSeries: null, toleranceMin: 2 })).toBeNull();
+  });
+
+  it("the card's top band prints the sentence in bold above the match window, the split and the direction", () => {
+    const { container } = rtlRender(wrap(
+      <MatchWindowBand coverage={reportCoverage({ scanIndex, painSeries, toleranceMin: 2 })} metricLabel="Left Leg VAS"
+        matchTolerance={2} setMatchTolerance={() => {}} strategy="tertile" setStrategy={() => {}}
+        strategyOptions={[{ key: "tertile", label: "Tertile (low/high, drop middle)" }]} percentileLow={33} percentileHigh={67}
+        matchDirection="prior" setMatchDirection={() => {}} scanIndex={scanIndex} painSeries={painSeries} />));
+    const el = container.querySelector('[data-testid="report-coverage"]');
+    expect(el).not.toBeNull();
+    // Three stacked lines, one per clause (the PI, 2026-10-02); the first clause is the window set
+    // on the slider (here 2 min), the other two are fixed at 10 and 60 min.
+    const lines = [...el.querySelectorAll("[data-coverage-line]")].map((l) => l.textContent);
+    expect(lines).toEqual([
+      "1 of 5 Left Leg VAS reports have a band-power reading within ±2 min",
+      "2 within ±10 min",
+      "3 within ±60 min"]);
+    expect(el.textContent.trim()).toBe(lines.join(""));
+    const all = container.textContent;
+    expect(all.indexOf("reports have a band-power reading")).toBeLessThan(all.indexOf("Match window"));
+    expect(all.indexOf("Match window")).toBeLessThan(all.indexOf("Split into high and low pain"));
+    expect(all.indexOf("Split into high and low pain")).toBeLessThan(all.indexOf("Match direction"));
+    // The settings sit behind one large "Adjust matching parameters" button, closed by default,
+    // with the settings in force printed beside it (the PI, 2026-09-26); open it as a reader would.
+    expect(container.querySelector('[data-testid="matching-panel"]').hidden).toBe(true);
+    expect(container.querySelector('[data-testid="matching-summary"]').textContent).toMatch(/^Paired within ±2 min/);
+    fireEvent.click(screen.getByRole("button", { name: /Adjust matching parameters/ }));
+    expect(container.querySelector('[data-testid="matching-panel"]').hidden).toBe(false);
+    // The cuts and the three directions in plain words (SPEC.md section 6, 2026-09-26).
+    expect(all).toContain("Low: ratings at or below the 33rd percentile");
+    expect(all).toContain("High: at or above the 67th");
+    for (const label of ["Each report picks its nearest recordings", "Each recording picks its nearest report",
+      "Each recording picks the next report after it"]) {
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+    }
+    expect(screen.getByRole("button", { name: "Each recording picks the next report after it" })).toHaveAttribute("aria-pressed", "true");
+    expect(container.querySelector('[data-testid="timing-histogram"]')).not.toBeNull();
+    expect(all).toContain("samples inside ±2 min on the side before the report");
+  });
+
+  it("the preview no longer carries the sentence or the window control (they live in the band)", () => {
+    const scanModel = computeMatchedScanModel({ scanIndex, painSeries, toleranceMin: 2, strategy: "median",
+      percentileLow: 33, percentileHigh: 67, matchDirection: "prior" });
+    const { container } = rtlRender(wrap(
+      <BinarizationPreview points={[]} strategy="median" percentileLow={33} percentileHigh={67}
+        metricLabel="Left Leg VAS" metricKey="left_leg_vas" totalReports={5} loading={false}
+        matchTolerance={2} scanModel={scanModel} matchedLoading={false}
+        matchDirty={false} setPercentileLow={() => {}} setPercentileHigh={() => {}} setStrategy={() => {}}
+        showDescriptions={false} />));
+    expect(container.querySelector('[data-testid="report-coverage"]')).toBeNull();
+    expect(container.textContent).not.toContain("Match window");
+  });
+});
+
+describe("clinic-sheet ratings in the coverage sentence (decision 436)", () => {
+  it("says how many of the reports came from clinic sheets when the switch adds any", () => {
+    const cov = { ...reportCoverage({ scanIndex, painSeries, toleranceMin: 2 }), n_clinic: 2 };
+    const { container } = rtlRender(wrap(
+      <MatchWindowBand coverage={cov} metricLabel="Left Leg VAS"
+        matchTolerance={2} setMatchTolerance={() => {}} strategy="tertile" setStrategy={() => {}}
+        strategyOptions={[{ key: "tertile", label: "Tertile (low/high, drop middle)" }]} percentileLow={33} percentileHigh={67}
+        matchDirection="prior" setMatchDirection={() => {}} scanIndex={scanIndex} painSeries={painSeries} />));
+    const first = container.querySelector('[data-coverage-line="window"]').textContent;
+    expect(first).toBe("1 of 5 Left Leg VAS reports (2 from clinic sheets) have a band-power reading within ±2 min");
+  });
+});

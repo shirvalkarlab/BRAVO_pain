@@ -7,13 +7,8 @@ two thresholds, the device is not really working as a Dual Threshold controller:
 threshold with a second number typed in for show, and the amplitude will sit at one end or the
 other almost all the time. A second, separate way the same thing happens: the pair can be placed
 well off the level the signal actually sits at, so the signal spends nearly all its time on one
-side of the whole pair even though the pair itself is wide enough. The contest found real,
-measured examples of both: the device's own programmed pair (167 / 166) leaves 0.3% of readings
-between the two numbers, and the stored pair on the L 1-3+ contact is placed about sixty device
-units below the level the signal actually sits at
-(``artifacts/contest_2026-09-13_fopdt_lambda.md``, "the stored pair today is centred 61 units
-below the level the signal actually sits at"). This file checks both, plainly, for whichever pair
-is on the card.
+side of the whole pair even though the pair itself is wide enough. This file checks both
+conditions for whichever pair is on the card; participant-specific examples remain private.
 
 WHAT IT DELIBERATELY DOES NOT DO. It does not run the controller: no onset, no persistence rule,
 no transitions. It counts where the raw averaged readings land relative to the two numbers.
@@ -39,10 +34,6 @@ import numpy as np
 #: Below this fraction of averaged readings landing between the two thresholds, the pair is
 #: judged a single threshold in all but name (synthesis section 4, T4's own wording).
 MIN_BETWEEN_FRAC = 0.10
-
-
-
-# Aditya canonical compatibility imports/constants.
 
 
 def _windowed_average(grid_power: np.ndarray, *, dt_s: float, averaging_s: float) -> np.ndarray:
@@ -171,9 +162,8 @@ def threshold_occupancy_two_clocks(t, power, *, upper, lower, averaging_s, progr
     """The occupancy at the card's recommended averaging AND at the averaging the device runs
     today (T3 of the 2026-09-15 review, decision 200).
 
-    Decision 153 measured that the fraction of readings between the pair and the off-centre
-    warning both flip between 3 s and 30 s on the same band, and the card said nothing about
-    the clock it was answered on. The payload is :func:`threshold_occupancy` at ``averaging_s``
+    The fraction between thresholds and the off-centre warning depend on the averaging clock,
+    which must be explicit (decision 153). The payload is :func:`threshold_occupancy` at ``averaging_s``
     (every field unchanged, so nothing that reads it moves), plus ``programmed_clock`` -- the
     same check at ``programmed_averaging_s`` -- ``clocks_differ``, and a ``why`` that carries
     both sentences when the two clocks differ. ``programmed_averaging_s`` ``None`` means the
@@ -211,6 +201,3 @@ def threshold_occupancy_two_clocks(t, power, *, upper, lower, averaging_s, progr
               f"{float(out['averaging_s']):.0f} s).")
     out["why"] = out["why"] + " " + second
     return out
-
-
-# Retained active Aditya interfaces.

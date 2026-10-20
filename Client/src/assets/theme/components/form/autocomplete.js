@@ -31,7 +31,6 @@ const autocomplete = {
   styleOverrides: {
     popper: {
       boxShadow: lg,
-      maxWidth: "calc(100vw - 32px)",
       padding: pxToRem(8),
       fontSize: size.sm,
       color: text.main,
@@ -49,8 +48,6 @@ const autocomplete = {
       padding: `${pxToRem(4.8)} ${pxToRem(16)}`,
       borderRadius: borderRadius.md,
       fontSize: size.sm,
-      whiteSpace: "normal",
-      overflowWrap: "anywhere",
       color: text.main,
       transition: "background-color 300ms ease, color 300ms ease",
 
@@ -88,9 +85,7 @@ const autocomplete = {
       color: white.main,
 
       "& .MuiChip-label": {
-        lineHeight: 1.4,
-        whiteSpace: "normal",
-        overflowWrap: "anywhere",
+        lineHeight: 1.2,
         padding: `0 ${pxToRem(10)} 0 ${pxToRem(4)}`,
       },
 

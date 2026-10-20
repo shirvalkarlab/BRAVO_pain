@@ -1,4 +1,3 @@
-import { useAnalysisQuery } from "../Biomarkers/queryAnalysis";
 /**
 =========================================================
 * UF BRAVO Platform -- Pain Scores report (Shirvalkar Lab)
@@ -7,7 +6,7 @@ import { useAnalysisQuery } from "../Biomarkers/queryAnalysis";
 * from /api/queryPainScores, as a grid of per-metric charts (small multiples).
 */
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import Plotly from "plotly.js-dist";
@@ -21,10 +20,6 @@ import DatabaseLayout from "layouts/DatabaseLayout";
 
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context.js";
-
-import { pointTimeMs, inActiveStage } from "./painScorePoints";
-
-const EMPTY = [];
 
 const PALETTE = ["#E53935", "#1A73E8", "#00897B", "#FB8C00", "#8E24AA",
   "#3949AB", "#43A047", "#F4511E", "#6D4C41", "#00ACC1"];
@@ -41,24 +36,34 @@ function stageShapes(stages, active) {
   if (!stages) return [];
   return stages
     .filter((s) => !active || active.includes(s.key))
-    .map((s) => ({ type: "rect", xref: "x", yref: "paper", x0: new Date(pointTimeMs({ t: s.start })), x1: new Date(pointTimeMs({ t: s.end })), y0: 0, y1: 1,
+    .map((s) => ({ type: "rect", xref: "x", yref: "paper", x0: s.start, x1: s.end, y0: 0, y1: 1,
       fillcolor: hexA(s.color, 0.13), line: { width: 0 }, layer: "below" }));
 }
 
-const MetricChart = memo(function MetricChart({ metric, color, stages, stageActive }) {
+// A point is hidden only if it falls inside an INACTIVE stage; un-staged points always show.
+function inActiveStage(t, stages, active) {
+  if (!stages || !stages.length) return true;
+  const ms = typeof t === "string" ? Date.parse(t) : new Date(t).getTime();
+  let owning = null;
+  for (const s of stages) {
+    if (ms >= Date.parse(s.start) && ms < Date.parse(s.end)) { owning = s; break; }
+  }
+  if (!owning) return true;
+  return !active || active.includes(owning.key);
+}
+
+function MetricChart({ metric, color, stages, stageActive }) {
   const ref = useRef(null);
   useEffect(() => {
-    const node = ref.current;
-    return () => { if (node) Plotly.purge(node); };
-  }, []);
-  useEffect(() => {
     if (!ref.current) return;
-    const pts = metric.points.filter((p) => inActiveStage(pointTimeMs(p), stages, stageActive));
-    const x = pts.map((p) => new Date(pointTimeMs(p)));
+    const pts = metric.points.filter((p) => inActiveStage(p.t, stages, stageActive));
+    const x = pts.map((p) => new Date(p.t));
     const y = pts.map((p) => p.v);
-    // Observed ratings only: disconnected markers never bridge excluded or missing surveys.
+    // Connected dots-and-lines, matching the Record Timeline look: the actual reported values are
+    // shown directly (markers) joined by straight segments (line) — no moving-average smoothing,
+    // which previously distorted the trajectory. connectgaps:false leaves real gaps unbridged.
     const traces = [
-      { x, y, name: metric.label, type: "scatter", mode: "markers",
+      { x, y, name: metric.label, type: "scatter", mode: "lines+markers",
         line: { color, width: 2 }, marker: { size: 5, color }, connectgaps: false,
         hovertemplate: `${metric.label}: %{y:.2f}<extra></extra>` },
     ];
@@ -68,17 +73,14 @@ const MetricChart = memo(function MetricChart({ metric, color, stages, stageActi
       yaxis: { range: [metric.range[0], metric.range[1] * 1.02], title: { text: metric.label, font: { size: 12 } } },
       shapes: stageShapes(stages, stageActive),
     }, { responsive: true, displaylogo: false });
+    return () => { if (ref.current) Plotly.purge(ref.current); };
   }, [metric, color, stages, stageActive]);
   return <div ref={ref} style={{ width: "100%" }} />;
-});
+}
 
 // All metrics on one normalized [0,1] axis (each scaled by its own range) to compare trajectories.
-const NormalizedOverlay = memo(function NormalizedOverlay({ metrics, active, stages, stageActive }) {
+function NormalizedOverlay({ metrics, active, stages, stageActive }) {
   const ref = useRef(null);
-  useEffect(() => {
-    const node = ref.current;
-    return () => { if (node) Plotly.purge(node); };
-  }, []);
   useEffect(() => {
     if (!ref.current || !metrics.length) return;
     const traces = [];
@@ -86,11 +88,11 @@ const NormalizedOverlay = memo(function NormalizedOverlay({ metrics, active, sta
       if (active && !active.includes(m.key)) return;  // metric toggle affects the overlay only
       const [lo, hi] = m.range;
       const color = PALETTE[i % PALETTE.length];
-      const pts = m.points.filter((p) => inActiveStage(pointTimeMs(p), stages, stageActive));
+      const pts = m.points.filter((p) => inActiveStage(p.t, stages, stageActive));
       traces.push({
-        x: pts.map((p) => new Date(pointTimeMs(p))),
+        x: pts.map((p) => new Date(p.t)),
         y: pts.map((p) => (hi > lo ? (p.v - lo) / (hi - lo) : null)),
-        name: m.label, type: "scatter", mode: "markers",
+        name: m.label, type: "scatter", mode: "lines+markers",
         line: { color, width: 2 }, marker: { size: 5, color }, connectgaps: false,
         hovertemplate: `${m.label}: %{y:.2f}<extra></extra>`,
       });
@@ -98,21 +100,18 @@ const NormalizedOverlay = memo(function NormalizedOverlay({ metrics, active, sta
     Plotly.react(ref.current, traces, {
       height: 400, margin: { l: 52, r: 16, t: 12, b: 40 },
       xaxis: { type: "date", title: "Time" },
-      yaxis: { title: "Normalized position within each metric range (0–1)", range: [-0.03, 1.05] },
+      yaxis: { title: "Normalized (0 = best, 1 = worst of range)", range: [-0.03, 1.05] },
       legend: { orientation: "h", y: -0.2 }, hovermode: "x unified",
       shapes: stageShapes(stages, stageActive),
     }, { responsive: true, displaylogo: false });
+    return () => { if (ref.current) Plotly.purge(ref.current); };
   }, [metrics, active, stages, stageActive]);
   return <div ref={ref} style={{ width: "100%" }} />;
-});
+}
 
 // Pearson correlation heatmap: every metric vs every other metric.
-const CorrelationHeatmap = memo(function CorrelationHeatmap({ correlation }) {
+function CorrelationHeatmap({ correlation }) {
   const ref = useRef(null);
-  useEffect(() => {
-    const node = ref.current;
-    return () => { if (node) Plotly.purge(node); };
-  }, []);
   useEffect(() => {
     if (!ref.current || !correlation || !correlation.matrix || correlation.matrix.length < 2) return;
     const labels = correlation.labels;
@@ -135,12 +134,12 @@ const CorrelationHeatmap = memo(function CorrelationHeatmap({ correlation }) {
       annotations: ann, xaxis: { tickangle: -40, automargin: true },
       yaxis: { autorange: "reversed", automargin: true },
     }, { responsive: true, displaylogo: false });
+    return () => { if (ref.current) Plotly.purge(ref.current); };
   }, [correlation]);
   return <div ref={ref} style={{ width: "100%" }} />;
-});
+}
 
 function PainScores() {
-  const queryAnalysis = useAnalysisQuery();
   const navigate = useNavigate();
   const [controller, dispatch] = usePlatformContext();
   const { participant_uid } = useParams();
@@ -153,23 +152,20 @@ function PainScores() {
   useEffect(() => {
     if (!participant_uid) { navigate("/database", { replace: false }); return; }
     setContextState(dispatch, "report", "SurveyReports");
-    setData(false);
     setAlert(<LoadingProgress />);
-    queryAnalysis("/api/queryPainScores", { ParticipantId: participant_uid })
+    SessionController.query("/api/queryPainScores", { ParticipantId: participant_uid })
       .then((response) => {
         setData(response.data);
-        setOverlayActive((response.data.metrics || EMPTY).map((m) => m.key));
-        setStageActive((response.data.stages || EMPTY).map((s) => s.key));
+        setOverlayActive((response.data.metrics || []).map((m) => m.key));
+        setStageActive((response.data.stages || []).map((s) => s.key));
         setAlert(null);
       })
       .catch((error) => { SessionController.displayError(error, setAlert); });
-    return () => queryAnalysis.cancel("/api/queryPainScores");
   }, [participant_uid]);
 
-  const metrics = (data && data.metrics) || EMPTY;
-  const stages = (data && data.stages) || EMPTY;
-  const activeStages = useMemo(() => stageActive || stages.map((s) => s.key), [stageActive, stages]);
-  const activeMetrics = useMemo(() => overlayActive || metrics.map((m) => m.key), [overlayActive, metrics]);
+  const metrics = (data && data.metrics) || [];
+  const stages = (data && data.stages) || [];
+  const activeStages = stageActive || stages.map((s) => s.key);
   const toggleOverlay = (key) => setOverlayActive((cur) => {
     const base = cur || metrics.map((m) => m.key);
     return base.includes(key) ? base.filter((k) => k !== key) : [...base, key];
@@ -238,7 +234,7 @@ function PainScores() {
                         );
                       })}
                     </Stack>
-                    <NormalizedOverlay metrics={metrics} active={activeMetrics}
+                    <NormalizedOverlay metrics={metrics} active={overlayActive || metrics.map((m) => m.key)}
                       stages={stages} stageActive={activeStages} />
                   </MDBox>
                 </Card>

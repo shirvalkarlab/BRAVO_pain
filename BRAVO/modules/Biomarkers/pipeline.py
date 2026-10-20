@@ -50,36 +50,8 @@ from . import adapter
 _log = logging.getLogger(__name__)
 
 
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
-
-
-
-
-
-
-
-
-from .routines.local_time import local_calendar_day
-
-
 def rating_group_from_identity(session_df, labels):
-    """Grouping factor for rating-aware statistics: one group per MATCHED REPORT.
-
-    Extracted from ``run_timedomain_branch`` so it can be tested directly — the three tests added
-    with the original fix all exercised ``adapter.align_pros``, leaving this half of it backed only
-    by a live measurement.
-
-    Returns an int array, one entry per epoch: a distinct code per distinct matched report, and -1
-    for an epoch that has no matched report or no usable label.
-
-    There is deliberately NO value-matching fallback. If the session/epoch alignment this depends on
-    does not hold, the grouping is left unset and a warning is logged, because reverting to a
-    grouping that clusters on the outcome is worse than having no grouping at all."""
+    'Grouping factor for rating-aware statistics: one group per MATCHED REPORT.'
     labels = np.asarray(labels, dtype=float)
     rating_group = np.full(len(labels), -1, dtype=int)
     has_col = "matched_pro_time" in getattr(session_df, "columns", ())
@@ -99,7 +71,7 @@ def rating_group_from_identity(session_df, labels):
     return rating_group
 
 # Per-source code versions; stamped into every output file. Bump when a source's math changes.
-STREAMING_CODE_VERSION = "streaming_psd-0.1.0"
+STREAMING_CODE_VERSION = "streaming_psd-0.2.0_raw_power"   # 0.1.0 correlated decibels; decision 204
 CHRONIC_CODE_VERSION = "chronic_threshold-0.1.0"
 
 
@@ -265,7 +237,8 @@ def _available_frequencies(cv_ch):
     out = []
     for hz in sorted(set(np.round(fhz[finite], 1))):
         m = finite & (np.round(fhz, 1) == hz)
-        # Each band comes from these same finite samples, so its mask is nonempty.
+        if not m.any():
+            continue
         labeled = m & np.isin(pl, (0.0, 1.0))
         days_all = day[m].dropna()
         days_lab = day[labeled].dropna()
@@ -308,7 +281,8 @@ def _decode_by_frequency(cv_ch, label_metric, *, min_labeled=8):
     out = {}
     for hz in sorted(set(np.round(fhz[finite], 1))):
         sub = cv_ch[np.round(fhz, 1) == hz]
-        # Unique finite bands are drawn from this frame, so each slice has samples.
+        if len(sub) == 0:
+            continue
         # Daily pain aggregation for the binarization preview (one row per CALIFORNIA calendar day
         # at this band -- the day rule the cut itself uses, review B1).
         day = _local_day(sub["timestamp"])
@@ -317,7 +291,8 @@ def _decode_by_frequency(cv_ch, label_metric, *, min_labeled=8):
         daily = []
         dser = pd.Series(pain, index=day)
         for d, grp in dser.groupby(level=0):
-            # pandas groupby drops missing dates by default.
+            if d is None or pd.isna(d):
+                continue
             vals = grp.to_numpy(dtype=float)
             vals = vals[np.isfinite(vals)]
             if vals.size == 0:
@@ -473,21 +448,8 @@ def _build_freq_epochs(ch_list):
 # cut are excluded from selection so a high-frequency artifact can never win the max|R| search.
 MAX_BIOMARKER_FREQ_HZ = 50.0
 
-# The FDR threshold the biomarker SELECTION actually screens at. This is a shared constant rather
-# than a default repeated in two signatures because the permutation null has to replay the very
-# same screen: `select_biomarker_band` was screening at q < 0.05 while `_selection_statistic` was
-# being called with q_threshold=0.10, so the "selection-corrected" null was replaying a screen that
-# admitted a different set of survivors than the screen that chose the reported band. A family
-# whose membership rule differs from the selection's membership rule is a different family, which
-# is exactly the defect F8 part 2 is about.
+# The FDR threshold the biomarker SELECTION actually screens at.
 BIOMARKER_FDR_Q = 0.05
-
-# Minimum number of valid (feature, label) pairs a cell needs to be a member of the family.
-# `streaming_psd.pearson_corr_psd_label` skips a cell when fewer than 3 pairs survive its outlier
-# filter, so 3 is the selection grid's own membership floor. The permutation family previously used
-# a floor of 4, which silently excluded any 3-pair cell that the selection could nevertheless have
-# chosen — a second way for the selected cell to fall outside the permuted family.
-SELECTION_MIN_PAIRS = 3
 
 # Back-compat alias (old name referenced the streaming version).
 CODE_VERSION = STREAMING_CODE_VERSION
@@ -516,8 +478,11 @@ def _autocorr_adjusted_pgrid(result):
     the whole FDR family — and hence band SELECTION and the fdr_significant flag — anti-conservative.
     Here we recompute each cell's t and df CONSISTENTLY with the Bartlett/Bretherton effective N
     (stats_utils.effective_n), on the SAME transformed feature actually correlated (result['feature'],
-    not the raw psd). The block-permutation perm_p in _band_inference remains the headline
-    significance for the SELECTED band; this only makes the multiple-comparison gate honest.
+    not the raw psd). This only makes the multiple-comparison gate honest; the SELECTED band's r/p/
+    fdr_q from `select_biomarker_band` are still selection-biased descriptive numbers (winner's
+    curse), not an unbiased effect size -- the block-permutation correction that used to sit on top
+    of this (`_band_inference`, `n_perm=1000`) was deleted 2026-09-27 (open item N-12): nothing on
+    any page read its fields, and it cost 34-37% of every Recompute.
     """
     feat = np.asarray(result["feature"], dtype=float)          # (E, C, F) — the correlated feature
     labels = np.asarray(result["labels"], dtype=float)
@@ -553,11 +518,11 @@ def select_biomarker_band(result, q_threshold=BIOMARKER_FDR_Q, ignore_band=None)
 
     Returns (chan_index, freq_index, r, p, freq_hz, fdr_q, fdr_significant) or None.
     NOTE: the returned `r`/`p`/`fdr_q` are CONDITIONAL on this band being the max|R| winner over the
-    whole (channel x freq) grid — i.e. selection-biased (winner's curse). The only selection-corrected
-    significance statement is the block-permutation perm_p computed in _band_inference. Callers should
-    present r/p/fdr_q as descriptive and lead with perm_p — but only after checking
-    `perm_family_matches_selection`, because perm_p is a selection-corrected p for THIS band only
-    when the permuted family is the family this function searched (see the F8 part 2 block there).
+    whole (channel x freq) grid — i.e. selection-biased (winner's curse). Callers must present them
+    as descriptive, not as an unbiased effect size. A selection-corrected significance statement
+    (a block-permutation perm_p) used to be computed on top of this in `_band_inference`; it was
+    deleted 2026-09-27 (open item N-12) because nothing on any page read it, at a real cost (34-37%
+    of every Recompute, per the consolidation audit's own timing).
 
     Rigor fix: the per-test p over ~101 freqs x channels is BOTH multiple-comparison inflated AND
     anti-conservative under serial correlation. We therefore (1) recompute each cell's p on the
@@ -596,8 +561,9 @@ def select_biomarker_band(result, q_threshold=BIOMARKER_FDR_Q, ignore_band=None)
 # ---------------------------------------------------------------------------
 def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
                           label_metric="nrs", label_reduce="min",
-                          transform="log", stim_amplitudes=None,
-                          match_tolerance_min=None):
+                          transform="raw", stim_amplitudes=None,
+                          match_tolerance_min=None, max_per_rating=None, refractory_min=0.0,
+                          match_direction="nearest"):
     """Time-domain (250 Hz streaming) PSD<->pain branch -> SourceRun with a td_* timeline.
 
     `align` is accepted for signature back-compat but no longer changes the timeline: the
@@ -618,6 +584,9 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
         pro_df, target="session", recordings=recordings,
         metrics=metrics, stim_amplitudes=stim_amplitudes,
         match_tolerance_min=match_tolerance_min,
+        # the page's own matching settings, applied to sessions per report (the PI, 2026-09-21)
+        max_per_rating=max_per_rating, refractory_min=refractory_min,
+        match_direction=match_direction,
     )
     label_col = f"{label_metric}_{label_reduce}"
     labels = session_df[label_col].to_numpy(dtype=float)
@@ -659,13 +628,12 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
             if col in session_df.columns:
                 timeline[f"td_{col}"] = session_df[col].to_numpy()
 
-    summary = {"band": band}
+    summary = {"band": band,
+               # the matcher's shared-report count, a warning and never a cap (the PI, 2026-09-21)
+               "report_sharing": report_sharing_for_summary(session_df)}
     if band is not None:
         c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig = band
         ch = format_channel(result["chan_order"][c_idx])
-        summary.update(_band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig,
-                                       session_df.get("stim_amplitude"),
-                                       rating_group=_rating_group))
         summary.update({"channel": ch["short"], "channel_raw": ch["raw"]})
     
     # Inject rating_group into the detail so deduplication works for TD-only channels.
@@ -682,10 +650,10 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
     # distinct pain VALUES (single digits) rather than the number of matched reports (dozens).
     #
     # Two consequences, both on the panel's *rigorous* statistics:
-    #   * `_cluster_robust_logit_p` clustered on a handful of clusters instead of dozens. Sandwich
+    #   * the cluster-robust logistic p (a helper since deleted, 2026-09-21) clustered on a handful of clusters instead of dozens. Sandwich
     #     variance with that few clusters is unreliable, and it is the p-value the plate presents as
     #     the pseudoreplication-corrected headline (the ringed survivors).
-    #   * `_cv_logistic_auc`'s StratifiedGroupKFold grouped on those same collapsed groups — i.e.
+    #   * the cross-validated logistic AUC's (also deleted) StratifiedGroupKFold grouped on those same collapsed groups — i.e.
     #     the CV folds were defined BY THE OUTCOME, so whole pain levels were held out together.
     #     Grouping on the value of the thing you are predicting is not a defensible fold structure.
     #
@@ -702,574 +670,15 @@ def run_timedomain_branch(recordings, pro_df, chan_order, *, align="session",
             "timeline": timeline, "detail": result, "summary": summary}
 
 
-def _maxabs_corr(X, y, min_n=4):
-    """Max |Pearson r| over the columns of X (N x M) vs y (N,), with PAIRWISE deletion of NaNs per
-    column (so a feature column with zero->NaN gaps still contributes on its own finite rows, exactly
-    like the per-cell selection/FDR). Columns with < min_n valid pairs or zero variance are ignored.
-    Fully vectorized so it can be the statistic for the block-permutation family-max null.
-
-    Matching the feature grid used for r/FDR (not the raw psd) makes perm_p a significance statement
-    about the SAME quantity that was selected and reported — no cross-space ambiguity."""
-    X = np.asarray(X, dtype=float)
-    y = np.asarray(y, dtype=float)
-    M = np.isfinite(X) & np.isfinite(y)[:, None]              # (N, K) valid-pair mask per column
-    n = M.sum(axis=0).astype(float)                          # per-column valid count
-    Xz = np.where(M, X, 0.0)
-    yz = np.where(M, y[:, None], 0.0)
-    sx = Xz.sum(axis=0); sy = yz.sum(axis=0)
-    sxx = (Xz * Xz).sum(axis=0); syy = (yz * yz).sum(axis=0); sxy = (Xz * yz).sum(axis=0)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        cov = sxy - sx * sy / n
-        vx = sxx - sx * sx / n
-        vy = syy - sy * sy / n
-        rr = cov / np.sqrt(vx * vy)
-    rr = rr[(n >= min_n) & np.isfinite(rr)]
-    return float(np.max(np.abs(rr))) if rr.size else np.nan
-
-
-def _rating_level_perm_matrix(y, rating_group, n_perm, rng, block=None):
-    """Circular-block permutation at the RATING level, broadcast back to epochs.
-
-    Construction: take one value per rating in time order, circular-block permute THAT vector (block
-    length from the rating-level autocorrelation, so serial dependence between successive reports is
-    preserved), then broadcast each permuted rating value back to every epoch sharing that report.
-
-    Returns ``(Yp, info)`` with ``Yp`` of shape ``(n_perm, n_grouped_epochs)`` and ``info`` recording
-    the grouped-row mask, the number of ratings and the block length. Callers MUST compute the
-    observed statistic on the same ``info["rows"]`` subset, or the observed value and its null come
-    from different data (the same defect F8 flags elsewhere)."""
-    y = np.asarray(y, dtype=float)
-    g = np.asarray(rating_group, dtype=int)
-    rows = np.isfinite(y) & (g >= 0)
-    if rows.sum() < 4:
-        return None, {"rows": rows, "n_ratings": 0, "block": None,
-                      "reason": "fewer than 4 epochs carry both a finite label and a rating id"}
-    gg, yy = g[rows], y[rows]
-    # unique ratings in FIRST-APPEARANCE (time) order, since the rows arrive time-ordered
-    _, first_idx = np.unique(gg, return_index=True)
-    uniq = gg[np.sort(first_idx)]
-    pos = {int(v): k for k, v in enumerate(uniq)}
-    inv = np.array([pos[int(v)] for v in gg], dtype=int)      # epoch -> rating slot
-    G = uniq.size
-    if G < 4:
-        return None, {"rows": rows, "n_ratings": int(G), "block": None,
-                      "reason": f"only {G} distinct ratings; a permutation null needs at least 4"}
-    # one value per rating. Constant within a rating by construction; mean is a no-op that also
-    # tolerates a frame where it is not exactly constant.
-    y_rating = np.array([float(np.nanmean(yy[inv == k])) for k in range(G)])
-    if block is None:
-        block = stats_utils.block_length_for(y_rating, G)
-    perm_g = stats_utils.circular_block_perm_matrix(G, int(block), int(n_perm), rng)   # (P, G)
-    Yp = y_rating[perm_g][:, inv]                                                       # (P, n_rows)
-    return Yp, {"rows": rows, "n_ratings": int(G), "block": int(block),
-                "n_epochs_used": int(rows.sum()), "reason": None}
-
-
-def _neff_from_r_and_p(r, p):
-    """Recover each cell's effective N by inverting the two-sided t-test that produced ``p``.
-
-    The selection rule screens on an autocorrelation-adjusted p-grid, so replicating that rule inside
-    a permutation needs each cell's effective N. We recover it once from the observed pair rather
-    than recomputing the autocorrelation adjustment per permutation: the null should vary the labels
-    while holding the SCREENING GEOMETRY fixed, because a null in which the screen itself moves is a
-    null for a different procedure than the one that was run.
-
-    Inverting t = r * sqrt((n-2)/(1-r^2)) with p = 2*(1 - CDF_t(|t|, n-2)) has no closed form in n,
-    so each cell is solved numerically. Cells whose r or p is not finite return NaN and are excluded
-    from the screen, exactly as they are in the observed selection.
-    """
-    from scipy import optimize, stats as _st
-    r = np.asarray(r, float).ravel()
-    p = np.asarray(p, float).ravel()
-    out = np.full(r.size, np.nan)
-    for i in range(r.size):
-        ri, pi = r[i], p[i]
-        if not (np.isfinite(ri) and np.isfinite(pi)) or abs(ri) >= 1.0 or not (0.0 < pi <= 1.0):
-            continue
-
-        def f(n, ri=ri, pi=pi):
-            n = max(3.0 + 1e-9, float(n))
-            t = abs(ri) * np.sqrt((n - 2.0) / max(1e-12, 1.0 - ri * ri))
-            return 2.0 * _st.t.sf(t, df=n - 2.0) - pi
-
-        try:
-            lo, hi = 3.0 + 1e-6, 1e6
-            if f(lo) * f(hi) > 0:
-                continue
-            out[i] = float(optimize.brentq(f, lo, hi, xtol=1e-3, maxiter=200))
-        except Exception:
-            continue
-    return out
-
-
-def _selection_statistic(r_abs, n_eff, q_threshold):
-    """The statistic the SELECTION RULE actually maximises, for one vector of |correlations|.
-
-    ``select_biomarker_band`` does NOT take the family maximum of |r|. It converts the correlation
-    grid to an autocorrelation-adjusted p-grid, Benjamini-Hochberg corrects it, restricts to cells
-    whose q falls below the threshold, and takes the largest |r| WITHIN THAT SURVIVING POOL —
-    falling back to the whole family only when nothing survives. Family maximum and selected value
-    therefore differ whenever the surviving pool excludes the global argmax.
-
-    A p-value is selection-corrected only if its null is the null of the statistic the selection
-    maximises. This function reproduces the rule so the permutation distribution is of the right
-    quantity rather than of a neighbouring one.
-
-    ``q_threshold`` must be the threshold ``select_biomarker_band`` actually screened at, which is
-    why both take their default from ``BIOMARKER_FDR_Q``. Replaying the screen at a different
-    threshold admits a different set of survivors and so replays a different selection rule."""
-    from scipy import stats as _st
-    r_abs = np.asarray(r_abs, float)
-    n_eff = np.asarray(n_eff, float)
-    ok = np.isfinite(r_abs) & np.isfinite(n_eff) & (n_eff > 2.0) & (r_abs < 1.0)
-    if not ok.any():
-        return np.nan
-    t = np.zeros_like(r_abs)
-    t[ok] = r_abs[ok] * np.sqrt((n_eff[ok] - 2.0) / np.maximum(1e-12, 1.0 - r_abs[ok] ** 2))
-    p = np.full(r_abs.shape, np.nan)
-    p[ok] = 2.0 * _st.t.sf(t[ok], df=n_eff[ok] - 2.0)
-    q = stats_utils.bh_fdr(np.where(ok, p, np.nan))
-    sig = ok & np.isfinite(q) & (q < q_threshold)
-    pool = sig if sig.any() else ok
-    return float(np.max(r_abs[pool]))
-
-
-def _block_perm_maxcorr_pvalue(X, y, n_perm=1000, block=None, seed=0, min_n=SELECTION_MIN_PAIRS,
-                               return_null=False, rating_group=None, obs_p=None,
-                               q_threshold=BIOMARKER_FDR_Q):
-    """FULLY VECTORIZED circular-block permutation p-value for the family max|R| statistic with
-    pairwise-NaN deletion. Replaces the per-permutation Python loop (block_perm_pvalue + _maxabs_corr
-    x n_perm) with a handful of matrix ops.
-
-    `X` (N x K) feature columns, `y` (N,) labels. Subset to label-valid rows UPSTREAM so y is finite;
-    then each column's NaN mask is FIXED across permutations (only y is permuted), which lets every
-    permutation's column correlations be computed as three matmuls. For P permutations:
-        Sxy = Yp @ Xm,  Sy = Yp @ M,  Syy = (Yp*Yp) @ M           (each P x K)
-    with Xm = mask*X, M the 0/1 column mask, and the per-column sx/sxx/n/vx precomputed once. The
-    Pearson r per (permutation, column) then follows in closed form and we take max|r| over columns.
-    Mathematically identical to looping _maxabs_corr over circular_block permutations.
-
-    Returns (empirical_p, n_perm_used); with return_null=True returns (p, used, obs, null_stats) so
-    the UI can plot the null distribution of the family max|R| against the observed value."""
-    X = np.asarray(X, dtype=float)
-    y = np.asarray(y, dtype=float)
-    rng = np.random.default_rng(seed)
-    perm_info = {"unit": "epoch", "n_ratings": None, "block": None, "n_epochs_used": int(X.shape[0])}
-
-    Yp = None
-    if rating_group is not None:
-        # RATING-LEVEL null (audit F3). Restrict BOTH the observed statistic and the null to the
-        # rows that carry a rating id, so the two come from the same data — computing the observed
-        # value on more rows than its null is the defect F8 flags elsewhere.
-        Yp, info = _rating_level_perm_matrix(y, rating_group, int(n_perm), rng, block=block)
-        if Yp is None:
-            _log.warning("Biomarkers: rating-level permutation null unavailable (%s); falling back "
-                         "to the epoch-level null, which is anti-conservative because epochs "
-                         "sharing one rating are not exchangeable.", info.get("reason"))
-        else:
-            rows = info["rows"]
-            X, y = X[rows], y[rows]
-            perm_info = {"unit": "rating", "n_ratings": info["n_ratings"], "block": info["block"],
-                         "n_epochs_used": info["n_epochs_used"],
-                         # How many rows the rating-id requirement removed. This is the one row-set
-                         # difference the reconciliation in _band_inference cannot remove, because
-                         # a row with no pain-report identity has no exchangeable unit and so
-                         # cannot take part in a rating-level null at all. When it is 0 the
-                         # permutation family and the selection grid are the SAME rows; when it is
-                         # positive the permutation family is a strict subset and the family guard
-                         # below is what tells a reader so.
-                         "n_rows_dropped_unrated": int((~rows).sum())}
-
-    N, K = X.shape
-    obs = _maxabs_corr(X, y, min_n=min_n)
-    if not np.isfinite(obs) or N < 4:
-        return ((np.nan, 0, obs, None, perm_info) if return_null else (np.nan, 0))
-    if Yp is None:
-        if block is None:
-            block = stats_utils.block_length_for(y, N)
-        perm = stats_utils.circular_block_perm_matrix(N, block, int(n_perm), rng)   # (P, N)
-        perm_info["block"] = int(block)
-
-    M = np.isfinite(X).astype(float)                  # (N, K) fixed column masks (y is finite)
-    Xm = np.where(M > 0, X, 0.0)                      # (N, K)
-    nj = M.sum(axis=0)                                # (K,)
-    sx = Xm.sum(axis=0)                               # (K,)
-    sxx = (Xm * Xm).sum(axis=0)                       # (K,)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        vx = sxx - sx * sx / nj                       # (K,)
-
-    if Yp is None:
-        Yp = y[perm]                                  # (P, N) epoch-level permuted labels
-
-    Sxy = Yp @ Xm                                     # (P, K)
-    Sy = Yp @ M                                       # (P, K)
-    Syy = (Yp * Yp) @ M                               # (P, K)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        cov = Sxy - Sy * sx[None, :] / nj[None, :]
-        vy = Syy - Sy * Sy / nj[None, :]
-        rr = cov / np.sqrt(vx[None, :] * vy)          # (P, K)
-    good = (nj >= min_n)[None, :] & np.isfinite(rr)
-    rr = np.where(good, np.abs(rr), -np.inf)
-    # Observed per-cell |r|, using the SAME covariance math as the permutations above rather than a
-    # separate correlation call, so the observed vector and the null vectors cannot drift apart in
-    # their treatment of missing values or of the min_n floor. Needed for the selection-matched null
-    # below, which has to screen the observed grid exactly as select_biomarker_band does.
-    _Yo = y[None, :]
-    with np.errstate(invalid="ignore", divide="ignore"):
-        _cov_o = (_Yo @ Xm) - (_Yo @ M) * sx[None, :] / nj[None, :]
-        _vy_o = ((_Yo * _Yo) @ M) - (_Yo @ M) ** 2 / nj[None, :]
-        _rr_o = _cov_o / np.sqrt(vx[None, :] * _vy_o)
-    rr_obs = np.where((nj >= min_n)[None, :] & np.isfinite(_rr_o), np.abs(_rr_o), np.nan).ravel()
-    # Publish the observed per-cell |r| vector so the caller can CHECK, cell for cell, that this
-    # family really is the selection grid rather than take it on trust. Reconciliation is only
-    # demonstrated by a measured agreement between this vector and the selection grid's own
-    # correlations; a comment asserting the two match is what F8 part 2 found to be wrong before.
-    perm_info["obs_abs_r_flat"] = rr_obs
-    perm_info["min_pairs"] = int(min_n)
-
-    stat = rr.max(axis=1)                             # (P,) family max|R| per permutation
-    finite = np.isfinite(stat) & (stat > -np.inf)
-    used = int(finite.sum())
-    if used == 0:
-        return ((np.nan, 0, obs, None, perm_info) if return_null else (np.nan, 0))
-    null_stats = stat[finite]
-    ge = int(np.sum(null_stats >= obs))
-
-    # F8 (second item): A SECOND NULL, FOR THE STATISTIC THE SELECTION ACTUALLY MAXIMISES.
-    # `stat` above is the family maximum of |r|. The selection rule screens by BH-corrected q first
-    # and only then takes the largest |r| among survivors, so the two are different statistics and
-    # a family-max null is not a selection-corrected null for the reported cell. When the observed
-    # p-grid is supplied we recover each cell's effective N once, then replicate the full rule
-    # inside every permutation and report that p separately. Both are published; neither replaces
-    # the other, because they answer different questions ("could searching alone produce this
-    # strongest correlation" versus "could it produce this SELECTED correlation").
-    sel_p = sel_obs = None
-    sel_used = 0
-    if obs_p is not None:
-        _neff = _neff_from_r_and_p(np.abs(rr_obs), np.asarray(obs_p, float).ravel())
-        if np.isfinite(_neff).sum() >= 2:
-            sel_obs = _selection_statistic(np.abs(rr_obs), _neff, q_threshold)
-            _sel_null = np.array([_selection_statistic(np.abs(rr[j]), _neff, q_threshold)
-                                  for j in range(rr.shape[0])], float)
-            _sf = np.isfinite(_sel_null)
-            sel_used = int(_sf.sum())
-            if sel_used > 0 and np.isfinite(sel_obs):
-                sel_p = float((int(np.sum(_sel_null[_sf] >= sel_obs)) + 1) / (sel_used + 1))
-    perm_info.update({"selection_p": sel_p, "selection_obs": sel_obs,
-                      "selection_perm_used": sel_used,
-                      "selection_rule": ("BH q < %.2f, then max |r| among survivors (falls back to "
-                                         "the whole family when none survive)" % q_threshold)})
-    p = (ge + 1) / (used + 1)                          # +1: never report p=0
-    # WINNER'S CURSE MAGNITUDE (audit F14). The null distribution of the family max|R| IS the
-    # magnitude of the selection effect, and it was already being computed here and shipped as a
-    # raw array while the plate said only `selection_biased: True`. Summarising it turns "these
-    # numbers are biased" into "this is how much of the winning |r| searching alone would produce".
-    perm_info.update({
-        "null_max_mean": float(np.mean(null_stats)),
-        "null_max_p95": float(np.quantile(null_stats, 0.95)),
-        "null_max_median": float(np.median(null_stats)),
-        "obs_minus_null_mean": float(obs - np.mean(null_stats)),
-        "obs_exceeds_null_p95": bool(obs > np.quantile(null_stats, 0.95)),
-        "family_size": int(K),
-    })
-    return (p, used, float(obs), null_stats, perm_info) if return_null else (p, used)
-
-
-def _band_inference(result, c_idx, f_idx, r, p, f_hz, fdr_q, fdr_sig, stim, n_perm=1000,
-                    rating_group=None, perm_mad_k=None):
-    """Honest inference for the selected time-domain band.
-
-    HEADLINE significance = the temporal-block PERMUTATION p (perm_p) for the family max|R|: it is
-    the ONLY statistic that corrects for BOTH the multiple comparisons / max|R| band SELECTION
-    (winner's curse) AND the temporal autocorrelation. The reported r / p / fdr_q / r_ci are all
-    CONDITIONAL on this band being the selected winner and are therefore selection-biased descriptive
-    numbers, NOT unbiased effect sizes — callers must present them as such and lead with perm_p.
-
-    All selected-band scalar diagnostics (stim-adjusted partial r, effective N, Fisher-z CI) are
-    computed on the SAME transformed feature actually correlated (result['feature']), not the raw
-    psd, so they are apples-to-apples with the headline r (rigor fix). The family-wide permutation
-    null runs on the same FEATURE grid (max|R| over every channel x freq), matching r/FDR.
-    """
-    feat = np.asarray(result["feature"], dtype=float)        # (N, C, F) — the correlated feature
-    labels = np.asarray(result["labels"], dtype=float)
-    bandpow = feat[:, c_idx, f_idx]                          # feature slice == what produced r
-    # Robust MAD outlier rejection (>=3 MADs from the median is dropped) on BOTH the band-power
-    # feature and the label, consistent with the correlation spectrum and the chronic detector, so a
-    # single artifact session cannot inflate the partial r / effective N / Fisher-z CI for the band.
-    valid = adapter.mad_outlier_mask(bandpow) & adapter.mad_outlier_mask(labels)
-    n = int(valid.sum())
-
-    # F10: LABELLED SENSITIVITY ANALYSIS FOR THE OUTLIER RULE ON THE EXPLORATION PATH.
-    #
-    # The rule's centre and scale (the median and the MAD) are estimated from the very same sample
-    # whose correlation and interval the exclusion then changes. Nothing downstream accounts for
-    # that: the Fisher-z interval and the permutation p are computed as though the retained sample
-    # had been fixed in advance, when in fact which points were retained was chosen from the data.
-    # There is no clean analytic correction for this, so the honest treatment is to make the
-    # exclusion's influence visible instead of invisible.
-    #
-    # `deployment_roc` already does this on the deployment path, where it computes the headline on
-    # the FULL sample and reports the trimmed value as a labelled sensitivity analysis. The
-    # exploration path had no counterpart: the filter was applied, the filtered r was the headline,
-    # and a reader had no way to see how much of the result rested on the exclusion. This computes
-    # the same correlation on the unfiltered sample and publishes both, plus the difference.
-    #
-    # The headline stays the FILTERED value here, unlike the deployment path, and the asymmetry is
-    # deliberate. An exploration correlation is associational, so trimming a heavy tail is
-    # defensible; a deployment threshold is an operating point the device runs against the full
-    # distribution, so trimming there would report performance on a population the device never
-    # sees. What both paths now share is that neither hides the exclusion.
-    _finite = np.isfinite(bandpow) & np.isfinite(labels)
-    _sens_r = None
-    if int(_finite.sum()) >= 4:
-        _ru = float(np.corrcoef(bandpow[_finite], labels[_finite])[0, 1])
-        _sens_r = {
-            "r_filtered": (None if r is None or not np.isfinite(r) else float(r)),
-            "r_unfiltered": (None if not np.isfinite(_ru) else _ru),
-            "n_filtered": n,
-            "n_unfiltered": int(_finite.sum()),
-            "n_excluded": int(_finite.sum()) - n,
-            "delta_r": (None if (r is None or not np.isfinite(r) or not np.isfinite(_ru))
-                        else float(r - _ru)),
-            "note": ("The outlier rule's median and MAD are estimated on the same sample the "
-                     "exclusion then alters, and neither the Fisher-z interval nor the permutation "
-                     "p accounts for that data-dependent selection. The filtered value is the "
-                     "headline because an exploration correlation is associational; the unfiltered "
-                     "value is given so the exclusion's influence is visible. A large delta_r means "
-                     "the result rests substantially on which points were dropped."),
-        }
-
-    # Stim-adjusted partial correlation. Only meaningful when stim amplitude was actually recorded
-    # AND varies (you cannot regress out a confound that is missing or constant). Distinguish those
-    # cases from a genuine "adjustment shrank it to ~0" so the card never misreads a null.
-    stim_adj = None
-    stim_note = "no stim-amplitude data recorded for these sessions"
-    if stim is not None:
-        stim_arr = np.asarray(stim, dtype=float)
-        sm = valid & np.isfinite(stim_arr)
-        if sm.sum() < 4:
-            stim_note = "no stim-amplitude data recorded for these sessions"
-        elif np.nanstd(stim_arr[sm]) == 0:
-            stim_note = "stim amplitude constant across sessions — no confound to adjust for"
-        else:
-            stim_adj = stats_utils.partial_corr(bandpow, labels, stim_arr)
-            stim_note = None if (stim_adj is not None and np.isfinite(stim_adj)) else "stim adjustment degenerate"
-    n_eff = stats_utils.effective_n(bandpow[valid], labels[valid])
-    r_lo, r_hi = stats_utils.fisher_z_ci(r, n_eff)
-
-    # CI honesty notes. (a) When n_eff falls in [2,4) the Fisher-z CI is undefined (n<4 guard) even
-    # though n_effective prints a number — say why instead of showing a blank interval silently.
-    # (b) The interval is conditional on the selected band and is NOT corrected for the max|R| search
-    # (winner's curse) — perm_p is the selection-aware statement. (c) n_effective barely deflates from
-    # n when band power is near-white at the session-sampling cadence; on irregularly-spaced sessions
-    # that under-counts day-to-day pain persistence, so treat it as an UPPER bound.
-    ci_note = None
-    if np.isfinite(n_eff) and not (np.isfinite(r_lo) and np.isfinite(r_hi)):
-        ci_note = "effective n < 4: too little independent information for a Fisher-z CI"
-    else:
-        notes = ["conditional on the selected band; not corrected for the max|R| band search (see perm p)"]
-        if np.isfinite(n_eff) and n > 0 and n_eff >= 0.95 * n:
-            notes.append("effective n ≈ n (band power near-white at session cadence); on irregular "
-                         "sampling this is an upper bound, so the CI may be optimistically narrow")
-        ci_note = "; ".join(notes)
-
-    # Instrumental-line heuristic: a sharp peak confined to a single ~1 Hz frequency bin on a
-    # stimulated lead can be a stim/sensing line artifact rather than a broad neural rhythm. Flag
-    # when |R| at the selected freq is much larger than at its immediate neighbours.
-    f_set = np.asarray(result["f_set"], dtype=float)
-    corr_abs = np.abs(np.asarray(result["corr"], dtype=float)[c_idx])
-    narrow_peak = False
-    if 0 < f_idx < len(f_set) - 1:
-        nb = np.nanmax([corr_abs[f_idx - 1], corr_abs[f_idx + 1]])
-        narrow_peak = bool(np.isfinite(nb) and corr_abs[f_idx] > 0 and nb < 0.5 * corr_abs[f_idx])
-
-    # Family-max permutation null over the FULL FEATURE grid (every channel x freq), so the max|R|
-    # statistic controls for the band SEARCH on the SAME transformed feature that produced r and the
-    # FDR — no raw-vs-feature space mismatch. _maxabs_corr does pairwise NaN deletion per column, so
-    # feature cells with zero->NaN gaps still contribute on their finite rows (like selection/FDR).
-    # Restricts to label-valid rows; the block-permutation block length comes from the (now time-
-    # ordered) label autocorrelation, so the null preserves serial dependence.
-    perm_valid = np.isfinite(labels)
-    perm_p, perm_used, perm_obs, perm_null, perm_meta = (np.nan, 0, np.nan, None, {})
-    _recon = {}
-    if perm_valid.sum() >= 4:
-        # Restrict the family to the SAME ≤ MAX_BIOMARKER_FREQ_HZ band the selector searches, so the
-        # family-max null (perm_obs) is over exactly the cells a biomarker could be drawn from.
-        f_set_all = np.asarray(result["f_set"], dtype=float)
-        keep_f = f_set_all < MAX_BIOMARKER_FREQ_HZ
-
-        # Participant-specific provenance and examples are maintained outside source control.
-        _E = int(feat.shape[0])
-        _Xall = feat[:, :, keep_f].reshape(_E, -1).copy()
-        # Label keep-mask on the FULL label vector (`_mad_keep` already excludes non-finite), which
-        # is the vector pearson_corr_psd_label estimates it on.
-        _ykeep_all = streaming_psd._mad_keep(labels, k=perm_mad_k)
-        # Feature keep-mask per column, estimated on the FULL epoch stack, blanked to NaN rather
-        # than dropped: a cell's outliers are its own, and dropping rows globally would discard a
-        # row that is extreme in one channel/frequency but usable in every other. The vectorised
-        # null does pairwise NaN deletion per column, which is how the displayed r treats them too.
-        for _j in range(_Xall.shape[1]):
-            _ck = streaming_psd._mad_keep(_Xall[:, _j], k=perm_mad_k)
-            if not _ck.all():
-                _Xall[~_ck, _j] = np.nan
-        _perm_filtered = bool(int(_ykeep_all.sum()) >= 4)
-        if _perm_filtered:
-            _rows = _ykeep_all
-        else:
-            _log.warning("Biomarkers: the label MAD filter would leave %d of %d rows for the "
-                         "permutation null; running it on all label-valid rows instead, which "
-                         "makes perm_obs inconsistent with the displayed r.",
-                         int(_ykeep_all.sum()), int(_ykeep_all.size))
-            _rows = perm_valid
-        X = _Xall[_rows]
-        yv = labels[_rows]
-
-        # Rating grouping, subsetted by the SAME row mask as X and yv. Explicit argument, NOT
-        # result["rating_group"] — that key is not populated until later in run_timedomain_branch,
-        # so reading it here silently selected the epoch-level fallback (F3).
-        _rg = rating_group if rating_group is not None else result.get("rating_group")
-        _rg_perm = (np.asarray(_rg)[_rows] if _rg is not None else None)
-        # The observed autocorrelation-adjusted p-grid, flattened over exactly the cells the
-        # permutation family covers (same channel order, same frequency cap), so the selection screen
-        # inside the null lines up cell-for-cell with the observed one.
-        try:
-            _pg = _autocorr_adjusted_pgrid(result)
-            _obs_p_flat = np.asarray(_pg, float)[:, keep_f].reshape(-1)
-        except Exception as _exc:
-            _log.warning("Biomarkers: observed p-grid unavailable for the selection-matched null "
-                         "(%s: %s); reporting the family-max p only.", type(_exc).__name__, _exc)
-            _obs_p_flat = None
-        # The selection grid's own |r|, flattened over the same cells in the same order, kept so
-        # the reconciliation can be MEASURED against it below rather than asserted in a comment.
-        _corr_flat = np.abs(np.asarray(result["corr"], float)[:, keep_f].reshape(-1))
-
-        # The null permutes RATINGS, not epochs (F3), on the same rows and the same per-cell masks
-        # as the selection grid (F8). `min_n` and `q_threshold` are the selection's own values, so
-        # the family's membership rule and its FDR screen are the ones that chose the reported band.
-        perm_p, perm_used, perm_obs, perm_null, perm_meta = _block_perm_maxcorr_pvalue(
-            X, yv, n_perm=n_perm, seed=0, return_null=True, rating_group=_rg_perm,
-            obs_p=_obs_p_flat, min_n=SELECTION_MIN_PAIRS, q_threshold=BIOMARKER_FDR_Q)
-        perm_meta["outlier_filtered"] = bool(_perm_filtered)
-
-        # MEASURED RECONCILIATION. Compare the permutation family's observed per-cell |r| against
-        # the selection grid's, cell for cell. `max_abs_dev` at machine precision is the evidence
-        # that the two families are the same family; `cells_in_selection_only_max_abs_r` is the
-        # largest correlation the selection could have chosen that the permuted family does not
-        # contain, and it is the quantity that can break the guard.
-        _obs_abs = perm_meta.pop("obs_abs_r_flat", None)
-        if _obs_abs is not None and np.asarray(_obs_abs).size == _corr_flat.size:
-            _obs_abs = np.asarray(_obs_abs, float)
-            _both = np.isfinite(_obs_abs) & np.isfinite(_corr_flat)
-            _only_sel = np.isfinite(_corr_flat) & ~np.isfinite(_obs_abs)
-            _recon = {
-                "cells": int(_corr_flat.size),
-                "cells_compared": int(_both.sum()),
-                "max_abs_dev": (float(np.max(np.abs(_obs_abs[_both] - _corr_flat[_both])))
-                                if _both.any() else None),
-                "cells_in_selection_only": int(_only_sel.sum()),
-                "cells_in_selection_only_max_abs_r": (float(np.max(_corr_flat[_only_sel]))
-                                                      if _only_sel.any() else None),
-                "cells_in_permutation_only": int(
-                    (np.isfinite(_obs_abs) & ~np.isfinite(_corr_flat)).sum()),
-            }
-    return {
-        "freq_hz": f_hz, "r": r, "p": p, "fdr_q": fdr_q, "fdr_significant": bool(fdr_sig),
-        "selection_biased": True,   # r/p/fdr_q/r_ci are conditional on the max|R| winner
-        "stim_adjusted_r": (None if stim_adj is None or not np.isfinite(stim_adj) else float(stim_adj)),
-        "stim_adjusted_note": stim_note,
-        "n": n, "n_effective": (round(float(n_eff), 1) if np.isfinite(n_eff) else None),
-        "r_ci": [None if not np.isfinite(r_lo) else r_lo, None if not np.isfinite(r_hi) else r_hi],
-        "r_ci_note": ci_note,
-        "perm_p": (None if not np.isfinite(perm_p) else float(perm_p)), "perm_n": int(perm_used),
-        # The null distribution itself (family max|R| under block-permuted labels) + the observed
-        # value, so the UI can PLOT the permutation test, not just report its p. Rounded to shrink
-        # the payload; this is the strongest |R| over all contacts x freqs per shuffle.
-        "perm_obs": (None if not np.isfinite(perm_obs) else round(float(perm_obs), 4)),
-        "perm_null": ([round(float(s), 4) for s in perm_null] if perm_null is not None else None),
-        # F3 provenance: WHICH unit was permuted. "rating" is the valid null; "epoch" is
-        # anti-conservative and only appears as a logged fallback.
-        "perm_unit": perm_meta.get("unit"),
-        # F8: whether the null and its observed value used the SAME outlier filter as the
-        # displayed r. False means perm_p refers to an unfiltered statistic and is not a
-        # selection-corrected p for the reported r.
-        "perm_outlier_filtered": perm_meta.get("outlier_filtered"),
-        # F10: the outlier rule's own influence on the headline correlation, so a reader can see
-        # how much of the result rests on which points were excluded.
-        "outlier_sensitivity": _sens_r,
-        # F8 (second item): p for the statistic the SELECTION maximises, beside the family-max p.
-        "perm_selection_p": perm_meta.get("selection_p"),
-        "perm_selection_obs": perm_meta.get("selection_obs"),
-        "perm_selection_rule": perm_meta.get("selection_rule"),
-        # THE GUARD, WHICH IS NOW A CHECK ON A RECONCILED FAMILY RATHER THAN A WARNING ABOUT AN
-        # UNRECONCILED ONE. The permutation family is built from the selection grid's own per-cell
-        # masks, membership floor and FDR screen (see the long comment in the permutation block
-        # above), so the selected |r| should be a member of the permuted family by construction.
-        # The flag is kept, and kept as a measurement, because construction arguments have already
-        # been wrong here twice: it compares the reported |r| against the permuted family's own
-        # observed selection statistic and must be True. A False here means the reconciliation did
-        # not hold on this dataset — most likely because rows were dropped for lacking a
-        # pain-report identity (see perm_rows_dropped_unrated) — and in that case perm_p and
-        # perm_selection_p are NOT selection-corrected p-values for the reported cell.
-        "perm_family_matches_selection": (
-            None if (perm_meta.get("selection_obs") is None or r is None or not np.isfinite(r))
-            else bool(abs(r) <= float(perm_meta["selection_obs"]) + 1e-9)),
-        "perm_family_caveat": (
-            "The permutation family is built from the selection grid: the same MAD masks estimated "
-            "on the same full epoch stack, the same minimum-pairs floor and the same FDR screen "
-            "threshold that chose the reported band. perm_family_max_abs_dev_from_corr reports the "
-            "largest cell-for-cell disagreement between the permuted family's observed |r| and the "
-            "selection grid's, and perm_rows_dropped_unrated reports the only row-set difference "
-            "that cannot be removed (rows with no pain-report identity have no exchangeable unit "
-            "for a rating-level null). If perm_family_matches_selection is False the selected |r| "
-            "lies outside the permuted family, so perm_p and perm_selection_p are NOT "
-            "selection-corrected p-values for the reported cell and must not be presented as such."),
-        # F8 part 2 evidence. These are the numbers a reader checks instead of trusting the prose:
-        # max_abs_dev at machine precision means the permuted family IS the selection grid;
-        # cells_in_selection_only_max_abs_r is the largest correlation the selection could have
-        # chosen that the permuted family does not contain.
-        "perm_family_reconciled": (
-            None if not _recon else bool(
-                _recon.get("max_abs_dev") is not None and _recon["max_abs_dev"] <= 1e-9
-                and (_recon.get("cells_in_selection_only_max_abs_r") is None
-                     or (r is not None and np.isfinite(r)
-                         and _recon["cells_in_selection_only_max_abs_r"] <= abs(r) + 1e-9)))),
-        "perm_family_max_abs_dev_from_corr": _recon.get("max_abs_dev"),
-        "perm_family_cells_compared": _recon.get("cells_compared"),
-        "perm_family_cells_in_selection_only": _recon.get("cells_in_selection_only"),
-        "perm_family_cells_in_selection_only_max_abs_r": _recon.get(
-            "cells_in_selection_only_max_abs_r"),
-        "perm_family_cells_in_permutation_only": _recon.get("cells_in_permutation_only"),
-        "perm_rows_dropped_unrated": perm_meta.get("n_rows_dropped_unrated"),
-        "perm_min_pairs": perm_meta.get("min_pairs"),
-        "perm_selection_q_threshold": BIOMARKER_FDR_Q,
-        "perm_n_ratings": perm_meta.get("n_ratings"),
-        "perm_block": perm_meta.get("block"),
-        "perm_n_epochs_used": perm_meta.get("n_epochs_used"),
-        # HOW FINELY THIS NULL CAN RESOLVE A p AT ALL (2026-09-02). At block length 1 —
-        # which is what block_length_for returns for both outcome metrics on this record — the
-        # builder returns the n circular ROTATIONS, so only n distinct nulls exist however many
-        # permutations are drawn. p is therefore quantised in steps of about 1/n with a floor near
-        # 1/(n+1), and the effective null sample size is n, not n_perm. Published because that floor
-        # sits close to 0.05 at these rating counts (about 0.0137 at 72 ratings), so a reported p
-        # near 0.05 must not be read to three decimal places or treated as finely separated from
-        # the threshold.
-        **dict(zip(("perm_n_distinct_nulls", "perm_p_floor", "perm_p_step"),
-                   (lambda t: (t[0],
-                               None if t[1] is None else round(float(t[1]), 5),
-                               None if t[2] is None else round(float(t[2]), 5)))(
-                       stats_utils.permutation_null_resolution(
-                           perm_meta.get("n_ratings") or perm_meta.get("n_epochs_used") or 0,
-                           perm_meta.get("block") or 1)))),
-        # F14: the winner's-curse magnitude, not just the flag. null_max_mean is the |r| that
-        # searching this family produces on average when there is NO real effect, so the honest
-        # read of the winning |r| is the excess over it.
-        "perm_null_max_mean": perm_meta.get("null_max_mean"),
-        "perm_null_max_p95": perm_meta.get("null_max_p95"),
-        "perm_obs_minus_null_mean": perm_meta.get("obs_minus_null_mean"),
-        "perm_obs_exceeds_null_p95": perm_meta.get("obs_exceeds_null_p95"),
-        "perm_family_size": perm_meta.get("family_size"),
-        "narrow_peak_warning": narrow_peak,
-    }
+def report_sharing_for_summary(session_df):
+    """The matcher's shared-report count off the aligned frame's `attrs`, for the time-domain
+    summary the module response carries (`summary.timedomain.report_sharing`); None when the
+    frame carries none (an empty or foreign frame)."""
+    try:
+        sh = getattr(session_df, "attrs", {}).get("report_sharing")
+    except Exception:                                      # noqa: BLE001
+        sh = None
+    return dict(sh) if isinstance(sh, dict) else None
 
 
 def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=None,
@@ -1380,8 +789,9 @@ def run_powerdomain_branch(pro_df, *, chronic, label_metric="nrs", pain_cutoff=N
     # PERMUTATION NULL for the in-sample AUC (rigor review: the bar plot's 0.5 chance line is the
     # ANALYTIC baseline; this adds an EMPIRICAL null that preserves daily pain autocorrelation, so
     # the reader can tell whether the observed separability beats chance for THIS serially-correlated
-    # series). Block-permute the labels (block = lag-1 decorrelation timescale) and recompute the
-    # undirected max(AUC,1-AUC) each shuffle. Emitted as summary["auc_perm"]; None if degenerate.
+    # series). Rotate the labels in time (decision 315; above stats_utils.EXACT_ROTATIONS_MAX
+    # labels, 1,000 distinct rotations) and recompute the undirected max(AUC,1-AUC) each time.
+    # Emitted as summary["auc_perm"]; None if degenerate.
     try:
         ap = stats_utils.auc_block_perm_null(lfp_s, pl, n_perm=1000, seed=0)
         summary["auc_perm"] = ap if ap.get("observed") is not None else None
@@ -1556,12 +966,13 @@ run_chronic_branch = run_powerdomain_branch
 
 
 def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chronic=None,
-                  align="session", label_metric="nrs", label_reduce="min", transform="log",
+                  align="session", label_metric="nrs", label_reduce="min", transform="raw",
                   pain_cutoff=None, label_strategy="kmeans",
                   kmeans_features=("left_leg_vas", "mpq_sum"),
                   low_pct=33.3333, high_pct=66.6667, daily_broadcast=True,
                   thresholds=None, train_days=7, gap_days=1, test_days=2,
-                  stim_amplitudes=None, sliding=True, match_tolerance_min=None):
+                  stim_amplitudes=None, sliding=True, match_tolerance_min=None,
+                  max_per_rating=None, refractory_min=0.0, match_direction="nearest"):
     """
     Run biomarker identification with a selectable data source.
 
@@ -1585,7 +996,9 @@ def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chroni
         return run_timedomain_branch(recordings, pro_df, chan_order, align=align,
                                      label_metric=label_metric, label_reduce=label_reduce,
                                      transform=transform, stim_amplitudes=stim_amplitudes,
-                                     match_tolerance_min=match_tolerance_min)
+                                     match_tolerance_min=match_tolerance_min,
+                                     max_per_rating=max_per_rating, refractory_min=refractory_min,
+                                     match_direction=match_direction)
 
     def _power():
         return run_powerdomain_branch(pro_df, chronic=chronic, label_metric=label_metric,
@@ -1615,7 +1028,7 @@ def run_biomarker(recordings, pro_df, chan_order, *, source="timedomain", chroni
 
 def run_streaming_biomarker(recordings, pro_df, chan_order, *, align="session",
                             label_metric="nrs", label_reduce="min",
-                            transform="log", chronic=None, stim_amplitudes=None):
+                            transform="raw", chronic=None, stim_amplitudes=None):
     """Back-compat shim -> run_biomarker(source="timedomain").
 
     Preserves the original return shape {"result", "band", "combined"} so existing callers
@@ -1678,7 +1091,7 @@ def _load_chronic_npz(path):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Biomarker identification (library mode): time-domain | chronic | both.")
-    ap.add_argument("--patient", required=True, help="Patient id, e.g. RCS08")
+    ap.add_argument("--patient", required=True, help="Patient id, e.g. SYNTHETIC01")
     ap.add_argument("--source", choices=["timedomain", "chronic", "both"], default="timedomain")
     ap.add_argument("--align", choices=["session", "chronic"], default="session")
     ap.add_argument("--pro-csv", required=True, help="Processed PRO CSV (pt_data/<pt>_redcap_proc.csv)")
@@ -1687,7 +1100,7 @@ def main(argv=None):
                     help="NPZ with key 'recordings' = list of BRAVO TimeDomain dicts (timedomain/both).")
     ap.add_argument("--chronic-npz",
                     help="NPZ with key 'chronic' = a Chronic recording dict or list (chronic/both).")
-    ap.add_argument("--transform", default="log")
+    ap.add_argument("--transform", default="raw", choices=["raw", "relative_power"])
     ap.add_argument("--label-metric", default="nrs")
     ap.add_argument("--label-strategy", choices=["kmeans", "cutoff"], default="kmeans",
                     help="Chronic pain_level labeler: 'kmeans' (notebook: clusters "
@@ -1734,6 +1147,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
-
-
-# Retained active Aditya interfaces.

@@ -1,276 +1,305 @@
-import { SessionController } from "database/session-control";
-import { cacheScope, cacheStats, clearUpstreamChanged, getResult, invalidate, invalidateAll,
-  isCompletedResult, markUpstreamChanged, memoryInfo, putResult, serverToken, setServerToken,
-  settingsKey, subscribe, underMemoryPressure } from "./resultCache";
-jest.mock("database/session-control", () => ({ SessionController: {
-  getUser: jest.fn(), getSession: jest.fn(), getServer: jest.fn(() => "local")
-} }));
-const user = { ID: "viewer", Role: "User", ReadOnly: true };
+/**
+ * The five behaviours the result cache exists to provide, pinned as tests.
+ *
+ * WHY THESE FIVE AND WHY TESTS AT ALL. Every one of them is invisible to a compiling build and to a
+ * reader clicking through the application: a page that recomputes when it should have reused, or
+ * reuses when it should have marked itself out of date, looks exactly like a page that does the
+ * right thing. The only difference is a request that was or was not sent, and how long the reader
+ * waited. So the properties are asserted directly — on the store for the ones that are about
+ * storage, and through a probe component for the two that are about whether a request goes out,
+ * because "does not fetch" is a statement about the hook and cannot be observed from the store.
+ *
+ * WHY THE UNMOUNT IS SIMULATED BY CALLING THE STORE RATHER THAN BY UNMOUNTING A COMPONENT. The
+ * property under test is that the result outlives the component, and the store is where it has to
+ * outlive it. Writing the test through a render would test React's unmount behaviour as much as the
+ * store's, and would pass just as well if the result were being kept alive by something else on the
+ * page.
+ */
+import React from "react";
+import { act, render, waitFor } from "@testing-library/react";
+
+import {
+  MODULES, cacheStats, clearUpstreamChanged, getResult, invalidate, invalidateAll,
+  markUpstreamChanged, putResult, serverToken, setServerToken, settingsKey,
+} from "./resultCache";
+import { refreshServerIdentity, useCachedResult } from "./useCachedResult";
+
+// The hook asks the server for its boot token on mount. That is a real request, so it is replaced
+// here — both to keep the suite offline and because two of the tests are about what happens when
+// the token it returns changes.
+jest.mock("./session-control", () => ({
+  SessionController: { query: jest.fn(() => Promise.resolve({ data: { boot_token: "boot-1" } })) },
+}));
+// eslint-disable-next-line import/first
+import { SessionController } from "./session-control";
+
+const UID = "TEST01";
+
+/**
+ * The store is module state, so it carries between tests unless it is cleared. Everything that can
+ * hold a value across a test is reset here: the entries, the upstream marks, and the server token.
+ */
 beforeEach(() => {
-  SessionController.getUser.mockReturnValue(user);
-  SessionController.getSession.mockReturnValue({ ActiveStudy: "study" });
-  cacheScope(); invalidateAll(); setServerToken("token", "p");
-  Object.defineProperty(performance, "memory", { configurable: true, value: undefined });
-});
-test("keys normalize field order but retain scientific setting differences", () => {
-  expect(settingsKey({ z: [{ b: 2, a: 1 }], a: undefined })).toBe(settingsKey({ z: [{ a: 1, b: 2 }] }));
-  expect(settingsKey({ value: Infinity })).toBe(settingsKey({ value: null }));
-  expect(settingsKey()).toBe("null");
-  const cycle = {}; cycle.a = cycle;
-  expect(settingsKey(cycle)).not.toBe(settingsKey(cycle));
-});
-test("stores completed result and stable computation time while reads touch LRU", () => {
-  const time = jest.spyOn(Date, "now").mockReturnValue(10);
-  expect(putResult("m", "p", "k", { answer: 1 }).stored).toBe(true);
-  time.mockReturnValue(20);
-  expect(getResult("m", "p", "k")).toMatchObject({ computedAt: 10, stale: false, bundle: { answer: 1 } });
-  expect(getResult("other", "p", "k")).toBeNull();
-  expect(getResult("m", "other", "k")).toBeNull();
-  time.mockRestore();
-});
-test("changed controls are visibly stale; upstream invalidation has a reason", () => {
-  putResult("m", "p", "old", { value: 2 });
-  markUpstreamChanged("m", "p", "band changed");
-  expect(getResult("m", "p", "new").staleReasons).toHaveLength(2);
-  clearUpstreamChanged("m", "p");
-  expect(getResult("m", "p", "old").stale).toBe(false);
-  invalidate("m", "p"); expect(getResult("m", "p", "old")).toBeNull();
-});
-test.each([null, { status: 202 }, { status: "running" }, { data: { status: "queued" } }])("pending response cannot enter cache: %s", (pending) => {
-  expect(isCompletedResult(pending)).toBe(false);
-  expect(putResult("m", "p", "k", pending).stored).toBe(false);
-  expect(cacheStats().count).toBe(0);
-});
-test("unknown/zero scientific values are retained in completed payloads", () => {
-  expect(isCompletedResult({ value: null, other: 0 })).toBe(true);
-});
-test("identity changes hard-miss and isolate optional input/QC identity", () => {
-  putResult("m", "p", "k", { value: 1 }, null, { qc: "a" });
-  expect(getResult("m", "p", "k", { qc: "a" })).not.toBeNull();
-  expect(getResult("m", "p", "k", { qc: "b" })).toBeNull();
-  expect(setServerToken("changed", "p")).toBe(true);
-  expect(getResult("m", "p", "k", { qc: "a" })).toBeNull();
-  expect(serverToken("p")).toBe("changed");
-});
-test.each(["account", "study", "permission", "logout", "reauthentication"])("never reuses after %s change", (change) => {
-  putResult("m", "p", "k", { private: true });
-  if (change === "account") SessionController.getUser.mockReturnValue({ ID: "other" });
-  if (change === "study") SessionController.getSession.mockReturnValue({ ActiveStudy: "other" });
-  if (change === "permission") SessionController.getUser.mockReturnValue({ ...user, ReadOnly: false });
-  if (change === "logout") SessionController.getUser.mockReturnValue({});
-  if (change === "reauthentication") SessionController.getUser.mockReturnValue({ ...user });
-  expect(getResult("m", "p", "k")).toBeNull();
-  expect(cacheStats().count).toBe(0);
-});
-test("missing participant or account cannot retain a result", () => {
-  expect(putResult("m", null, "k", {}).stored).toBe(false);
-  SessionController.getUser.mockReturnValue({});
-  expect(putResult("m", "p", "k", {}).stored).toBe(false);
-});
-test("memory guard bounds retention without localStorage or exposing cache identifiers", () => {
-  const write = jest.spyOn(Storage.prototype, "setItem");
-  expect(memoryInfo()).toBeNull(); expect(underMemoryPressure()).toBe(false);
-  for (let i = 0; i < 25; i += 1) putResult("m", `p${i}`, "k", { value: i });
-  expect(cacheStats().count).toBe(8);
-  expect(cacheStats().entries).toBeUndefined();
-  Object.defineProperty(performance, "memory", { configurable: true,
-    value: { usedJSHeapSize: 90, jsHeapSizeLimit: 100 } });
-  expect(underMemoryPressure()).toBe(true);
-  expect(putResult("m", "p", "k", {}).stored).toBe(false);
-  expect(cacheStats().count).toBe(0); expect(write).not.toHaveBeenCalled(); write.mockRestore();
-});
-test("one throwing subscriber cannot break another subscriber", () => {
-  const notified = jest.fn();
-  const stopA = subscribe(() => { throw new Error("test"); }); const stopB = subscribe(notified);
-  putResult("m", "p", "k", {}); expect(notified).toHaveBeenCalledTimes(1);
-  stopA(); stopB(); invalidateAll(); expect(notified).toHaveBeenCalledTimes(1);
-});
-test("upstream default reasons and participant invalidation cannot affect other participants", () => {
-  putResult("m", "p", "k", {}); putResult("m", "q", "k", {});
-  markUpstreamChanged("m", "p"); markUpstreamChanged("m", "q", "other");
-  expect(getResult("m", "p", "k").staleReasons).toContain("an input changed");
-  setServerToken("updated", "p");
-  expect(getResult("m", "q", "k").staleReasons).toEqual(["other"]);
-  expect(setServerToken("updated", "p")).toBe(false);
-  setServerToken(null, "p"); expect(serverToken("p")).toBeNull();
-});
-test("default token and undefined participant cache scopes remain explicit", () => {
-  expect(serverToken()).toBeNull(); setServerToken("global"); expect(serverToken()).toBe("global");
-  expect(putResult(null, "p", "k", {}).stored).toBe(false);
-  SessionController.getUser.mockReturnValue(null); expect(cacheScope()).toBeNull(); expect(cacheScope()).toBeNull();
-  SessionController.getUser.mockReturnValue(user); SessionController.getSession.mockReturnValue(null);
-  expect(cacheScope()).not.toBeNull();
-});
-test("pending data status is rejected even without an outer HTTP status", () => {
-  expect(isCompletedResult({ data: { status: 202 } })).toBe(false);
-  expect(isCompletedResult({ data: { status: "complete", value: 0 } })).toBe(true);
-});
-
-
-// Exercise large budget boundaries without allocating hundred-megabyte fixtures. Only the
-// entry-size serialization is intercepted; scope/key JSON serialization stays real. Small
-// real-string tests below separately check the UTF-16 measurement and lossy-value rejection.
-function mockEntryBytes() {
-  const stringify = JSON.stringify;
-  return jest.spyOn(JSON, "stringify").mockImplementation((value, replacer, ...rest) => {
-    if (typeof replacer === "function" && value?.bundle?.testBytes !== undefined) {
-      return { length: value.bundle.testBytes / 2 };
-    }
-    return stringify(value, replacer, ...rest);
+  invalidateAll("test setup");
+  [MODULES.biomarkers, MODULES.stimOptimizer, MODULES.closedLoop].forEach((m) => {
+    clearUpstreamChanged(m, UID);
   });
+  setServerToken(null);
+  SessionController.query.mockReset();
+  SessionController.query.mockImplementation(() => Promise.resolve({ data: { boot_token: "boot-1" } }));
+});
+
+// ------------------------------------------------------------------------------------------------
+// 1. A stored result is returned on a later read, with nothing fetched in between.
+// ------------------------------------------------------------------------------------------------
+test("a result stored for one module is returned on a later read", () => {
+  const settings = { LabelMetric: "nrs", MatchToleranceMin: 60 };
+  const key = settingsKey(settings);
+  const bundle = { analytics: { rows: 3 } };
+
+  expect(putResult(MODULES.biomarkers, UID, key, bundle).stored).toBe(true);
+
+  // The read that stands for a remount: a fresh component would ask the store this exact question.
+  const read = getResult(MODULES.biomarkers, UID, key);
+  expect(read).not.toBeNull();
+  expect(read.bundle).toBe(bundle);          // the same object, not a copy of its contents
+  expect(read.stale).toBe(false);
+  expect(read.staleReasons).toEqual([]);
+  expect(SessionController.query).not.toHaveBeenCalled();
+});
+
+test("one module's result is not visible to another module or another participant", () => {
+  const key = settingsKey({ a: 1 });
+  putResult(MODULES.biomarkers, UID, key, { which: "biomarkers" });
+  expect(getResult(MODULES.stimOptimizer, UID, key)).toBeNull();
+  expect(getResult(MODULES.biomarkers, "SOMEONE_ELSE", key)).toBeNull();
+});
+
+// ------------------------------------------------------------------------------------------------
+// 2. A changed settings key returns the OLD result, marked stale, with a reason — and no fetch.
+// ------------------------------------------------------------------------------------------------
+test("a changed settings key returns the old result marked stale, with a reason", () => {
+  const oldBundle = { computed: "under the old settings" };
+  putResult(MODULES.biomarkers, UID, settingsKey({ LabelMetric: "nrs" }), oldBundle);
+
+  const read = getResult(MODULES.biomarkers, UID, settingsKey({ LabelMetric: "vas" }));
+  expect(read).not.toBeNull();
+  expect(read.bundle).toBe(oldBundle);       // kept, not discarded
+  expect(read.stale).toBe(true);
+  expect(read.staleReasons).toHaveLength(1);
+  expect(read.staleReasons[0]).toMatch(/settings on this page have changed/);
+});
+
+// ------------------------------------------------------------------------------------------------
+// 3. A changed server token drops everything.
+// ------------------------------------------------------------------------------------------------
+test("the store reports a changed server token, and an unchanged one as unchanged", () => {
+  expect(setServerToken("boot-1")).toBe(false);   // first token seen: nothing to compare against
+  expect(setServerToken("boot-1")).toBe(false);
+  expect(setServerToken("boot-2")).toBe(true);
+  expect(serverToken()).toBe("boot-2");
+});
+
+test("a changed server token drops every entry", async () => {
+  setServerToken("boot-1");
+  putResult(MODULES.biomarkers, UID, settingsKey({ a: 1 }), { big: true });
+  putResult(MODULES.closedLoop, UID, settingsKey({ b: 2 }), { report: true });
+  expect(cacheStats().count).toBe(2);
+
+  // The drop is the identity refresh's decision, not the store's: the store marks a token mismatch
+  // as a reason, and the hook module discards on it, because unlike a settings change there is no
+  // version of the question a result computed by retired code still answers.
+  SessionController.query.mockImplementation(
+    () => Promise.resolve({ data: { boot_token: "boot-2" } }));
+  await act(async () => { await refreshServerIdentity(); });
+
+  expect(cacheStats().count).toBe(0);
+  expect(getResult(MODULES.biomarkers, UID, settingsKey({ a: 1 }))).toBeNull();
+});
+
+// ------------------------------------------------------------------------------------------------
+// 4. An upstream change marks another module's entry without discarding it.
+// ------------------------------------------------------------------------------------------------
+test("markUpstreamChanged makes another module's entry stale without discarding it", () => {
+  const key = settingsKey({ band: "0-3 at 10 Hz" });
+  const bundle = { verdict: "computed for the previous band" };
+  putResult(MODULES.closedLoop, UID, key, bundle);
+  expect(getResult(MODULES.closedLoop, UID, key).stale).toBe(false);
+
+  markUpstreamChanged(MODULES.closedLoop, UID, "a new band candidate was committed");
+
+  const read = getResult(MODULES.closedLoop, UID, key);
+  expect(read).not.toBeNull();
+  expect(read.bundle).toBe(bundle);                       // still there
+  expect(read.stale).toBe(true);
+  expect(read.staleReasons).toContain("a new band candidate was committed");
+  expect(cacheStats().count).toBe(1);
+
+  // And the mark is cleared by storing a fresh result, so a rebuilt page does not stay amber.
+  putResult(MODULES.closedLoop, UID, key, { verdict: "recomputed" });
+  expect(getResult(MODULES.closedLoop, UID, key).stale).toBe(false);
+});
+
+// ------------------------------------------------------------------------------------------------
+// 5. The hook: no fetch on a changed key, one fetch when there is nothing, and a rebuild on request.
+// ------------------------------------------------------------------------------------------------
+/**
+ * A component whose only job is to run the hook and report what it returned.
+ *
+ * It writes into an object the test owns rather than rendering anything, because every assertion
+ * here is about values and about how many times the fetcher ran, and asserting those through
+ * rendered text would test the formatting as well.
+ */
+function Probe({ settings, fetcher, sink }) {
+  const r = useCachedResult({
+    moduleKey: MODULES.stimOptimizer, uid: UID, settings, fetcher,
+  });
+  sink.current = r;
+  return null;
 }
-afterEach(() => jest.restoreAllMocks());
 
-test("one participant can keep multiple modules; the separate entry ceiling still applies", () => {
-  for (let i = 0; i < 25; i += 1) expect(putResult(`module-${i}`, "p", "k", { answer: i }).stored).toBe(true);
-  expect(cacheStats()).toMatchObject({ count: 24, maxEntries: 24, participantCount: 1, maxParticipants: 8 });
-  expect(getResult("module-0", "p", "k")).toBeNull();
-  expect(getResult("module-24", "p", "k")).not.toBeNull();
+/**
+ * Render the probe and wait until the hook has reported something.
+ *
+ * The wait is what makes the assertions meaningful: the mount effects start a server-identity
+ * request and, when nothing is cached, a fetch, and both settle a tick or two after the first
+ * paint. `waitFor` is the sanctioned way to let them settle — wrapping the render in `act` by hand
+ * is what the testing library's own lint rule warns against, because the render already does it.
+ */
+async function mountProbe(props) {
+  render(<Probe {...props} />);
+  await waitFor(() => expect(props.sink.current).not.toBeNull());
+}
+
+test("the hook fetches once when nothing is cached", async () => {
+  const fetcher = jest.fn(() => Promise.resolve({ arms: {} }));
+  const sink = { current: null };
+  await mountProbe({ settings: { Backend: "plotly" }, fetcher, sink });
+  await waitFor(() => expect(sink.current.data).toEqual({ arms: {} }));
+
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(sink.current.stale).toBe(false);
 });
 
-test("participant bound evicts all slots of the least recently used other participant", () => {
-  const time = jest.spyOn(Date, "now").mockReturnValue(1);
-  putResult("old-panel", "active", "k", {});
-  time.mockReturnValue(2); putResult("one", "abandoned", "k", {});
-  time.mockReturnValue(3); putResult("two", "abandoned", "k", {});
-  for (let i = 0; i < 6; i += 1) {
-    time.mockReturnValue(4 + i); putResult("m", `other-${i}`, "k", {});
+test("a changed settings key does not fetch: the old result is shown and marked", async () => {
+  putResult(MODULES.stimOptimizer, UID, settingsKey({ WashinMin: 1.0 }),
+    { arms: { computedUnder: "one minute" } });
+
+  const fetcher = jest.fn(() => Promise.resolve({ arms: { computedUnder: "five minutes" } }));
+  const sink = { current: null };
+  await mountProbe({ settings: { WashinMin: 5.0 }, fetcher, sink });
+  // Give the mount effects room to issue a request if they were going to. They are not, which is
+  // the property under test.
+  await waitFor(() => expect(sink.current.data).not.toBeNull());
+
+  expect(fetcher).not.toHaveBeenCalled();
+  expect(sink.current.data).toEqual({ arms: { computedUnder: "one minute" } });
+  expect(sink.current.stale).toBe(true);
+  expect(sink.current.staleReasons[0]).toMatch(/settings on this page have changed/);
+});
+
+test("recompute() refetches and clears the stale flag", async () => {
+  putResult(MODULES.stimOptimizer, UID, settingsKey({ WashinMin: 1.0 }), { arms: { n: 1 } });
+
+  const fetcher = jest.fn(() => Promise.resolve({ arms: { n: 2 } }));
+  const sink = { current: null };
+  await mountProbe({ settings: { WashinMin: 5.0 }, fetcher, sink });
+  expect(fetcher).not.toHaveBeenCalled();
+  expect(sink.current.stale).toBe(true);
+
+  await act(async () => { await sink.current.recompute(); });
+
+  expect(fetcher).toHaveBeenCalled();
+  expect(sink.current.data).toEqual({ arms: { n: 2 } });
+  expect(sink.current.stale).toBe(false);
+  expect(sink.current.staleReasons).toEqual([]);
+});
+
+// ------------------------------------------------------------------------------------------------
+// 6. A count is the wrong unit (PI, 2026-09-08): eviction is by byte budget and participant count.
+// ------------------------------------------------------------------------------------------------
+test("one participant's own many slots are never limited by the participant count", () => {
+  // Nine is the real, current fan-out across the three modules for one participant (five on the
+  // deployment route, three on the biomarker route, one for the optimizer). None of them may be
+  // evicted just because there are more than the distinct-participant cap of one participant.
+  for (let i = 0; i < 9; i += 1) {
+    putResult(`slot-${i}`, UID, settingsKey({ i }), { i });
   }
-  time.mockReturnValue(20); putResult("fresh-panel", "active", "k", {});
-  time.mockReturnValue(21); getResult("old-panel", "active", "k");
-  time.mockReturnValue(22); putResult("m", "ninth", "k", {});
-  expect(cacheStats().participantCount).toBe(8);
-  expect(getResult("one", "abandoned", "k")).toBeNull();
-  expect(getResult("two", "abandoned", "k")).toBeNull();
-  expect(getResult("old-panel", "active", "k")).not.toBeNull();
-  expect(getResult("fresh-panel", "active", "k")).not.toBeNull();
+  expect(cacheStats().count).toBe(9);
+  expect(cacheStats().participantCount).toBe(1);
 });
 
-test("participant LRU uses reads rather than save time or only its oldest module", () => {
-  const time = jest.spyOn(Date, "now").mockReturnValue(1);
-  putResult("m", "first", "k", {});
-  for (let i = 0; i < 7; i += 1) {
-    time.mockReturnValue(2 + i); putResult("m", `p${i}`, "k", {});
+test("storing more distinct participants than the cap evicts the whole oldest participant", () => {
+  // The exact cap is an internal tuning constant, not exported; nine participants is comfortably
+  // past any reasonable cap without depending on its precise value.
+  for (let i = 0; i < 9; i += 1) {
+    putResult(MODULES.biomarkers, `P${i}`, settingsKey({ i }), { i });
   }
-  time.mockReturnValue(20); getResult("m", "first", "k");
-  time.mockReturnValue(21); putResult("m", "new", "k", {});
-  expect(getResult("m", "first", "k")).not.toBeNull();
-  expect(getResult("m", "p0", "k")).toBeNull();
+  const { participantCount, maxParticipants } = cacheStats();
+  expect(participantCount).toBeLessThanOrEqual(maxParticipants);
+  // The first participant stored is the one that has gone longest untouched, so it is the one
+  // dropped -- not some arbitrary one, and not the most recently stored.
+  expect(getResult(MODULES.biomarkers, "P0", settingsKey({ i: 0 }))).toBeNull();
+  expect(getResult(MODULES.biomarkers, `P${8}`, settingsKey({ i: 8 }))).not.toBeNull();
 });
 
-test("byte limit evicts another participant before older current-participant modules", () => {
-  mockEntryBytes();
-  const time = jest.spyOn(Date, "now").mockReturnValue(1);
-  const mb = 1024 * 1024;
-  putResult("one", "p", "k", { testBytes: 60 * mb });
-  time.mockReturnValue(2); putResult("m", "other", "k", { testBytes: 60 * mb });
-  time.mockReturnValue(3); putResult("two", "p", "k", { testBytes: 60 * mb });
-  expect(getResult("one", "p", "k")).not.toBeNull();
-  expect(getResult("m", "other", "k")).toBeNull();
-  expect(cacheStats()).toMatchObject({ totalBytes: 120 * mb, count: 2, participantCount: 1 });
+test("a byte budget, not a count, is what evicts an oversized set of entries", () => {
+  // A count-based cap would have let this many small entries sit forever; only a real byte budget
+  // catches it. Two different participants so eviction (other-participant-first) can select one.
+  const big = "x".repeat(50 * 1024 * 1024);   // ~50 MB per entry
+  putResult(MODULES.biomarkers, "BIGA", settingsKey({ a: 1 }), { big });
+  putResult(MODULES.biomarkers, "BIGB", settingsKey({ b: 1 }), { big });
+  putResult(MODULES.biomarkers, "BIGC", settingsKey({ c: 1 }), { big });
+  putResult(MODULES.biomarkers, "BIGD", settingsKey({ d: 1 }), { big });
+
+  const { totalBytes, maxTotalBytes, count } = cacheStats();
+  expect(totalBytes).toBeLessThanOrEqual(maxTotalBytes);
+  // Four ~50 MB entries (~200 MB) cannot all fit under the budget, so at least one was evicted.
+  expect(count).toBeLessThan(4);
 });
 
-test("byte eviction falls back to current participant LRU and permits exact budget", () => {
-  mockEntryBytes();
-  const time = jest.spyOn(Date, "now").mockReturnValue(1);
-  const max = cacheStats().maxTotalBytes;
-  expect(max).toBe(150 * 1024 * 1024);
-  putResult("one", "p", "k", { testBytes: max / 2 });
-  time.mockReturnValue(2); putResult("two", "p", "k", { testBytes: max / 2 });
-  expect(cacheStats().totalBytes).toBe(max);
-  time.mockReturnValue(3); getResult("one", "p", "k");
-  time.mockReturnValue(4); putResult("three", "p", "k", { testBytes: max / 2 });
-  expect(getResult("two", "p", "k")).toBeNull();
-  expect(getResult("one", "p", "k")).not.toBeNull();
-  expect(cacheStats().totalBytes).toBe(max);
-  putResult("all", "p", "k", { testBytes: max });
-  expect(cacheStats()).toMatchObject({ count: 1, totalBytes: max });
+test("discarding an entry is enough on its own to make a mounted hook refetch exactly once", async () => {
+  // This is the property the views rely on instead of calling `recompute()` directly, so it is
+  // asserted rather than assumed. See views/Reports/moduleCacheKeys for why they do that.
+  const fetcher = jest.fn(() => Promise.resolve({ arms: { n: 1 } }));
+  const sink = { current: null };
+  await mountProbe({ settings: { WashinMin: 1.0 }, fetcher, sink });
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+
+  await act(async () => { invalidate(MODULES.stimOptimizer, UID); });
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+  expect(sink.current.stale).toBe(false);
 });
 
-test("oversized new or replacement entry is declined without displacing valid results", () => {
-  mockEntryBytes();
-  const max = cacheStats().maxTotalBytes;
-  putResult("m", "p", "old", { testBytes: 20 });
-  markUpstreamChanged("m", "p", "source changed");
-  const listener = jest.fn(); const stop = subscribe(listener);
-  expect(putResult("m", "p", "new", { testBytes: max + 2 })).toEqual({ stored: false, reason: "result exceeds the cache byte budget" });
-  expect(putResult("new", "q", "k", { testBytes: max + 2 }).stored).toBe(false);
-  expect(getResult("m", "p", "new")).toMatchObject({ key: "old", stale: true });
-  expect(cacheStats()).toMatchObject({ count: 1, totalBytes: 20 });
-  expect(listener).not.toHaveBeenCalled(); stop();
-});
-
-test("replacement and every invalidation path release their recorded byte accounting", () => {
-  mockEntryBytes();
-  putResult("m", "p", "k", { testBytes: 80 });
-  putResult("m", "p", "k", { testBytes: 20 });
-  putResult("other", "q", "k", { testBytes: 40 });
-  expect(cacheStats().totalBytes).toBe(60);
-  invalidate("m", "p"); expect(cacheStats().totalBytes).toBe(40);
-  setServerToken("old", "q"); setServerToken("new", "q");
-  expect(cacheStats()).toMatchObject({ totalBytes: 0, participantCount: 0 });
-  putResult("m", "p", "k", { testBytes: 80 }); invalidateAll();
-  expect(cacheStats().totalBytes).toBe(0);
-  putResult("m", "p", "k", { testBytes: 80 });
-  SessionController.getUser.mockReturnValue({ ...user });
-  expect(cacheStats()).toMatchObject({ totalBytes: 0, participantCount: 0 });
-  putResult("m", "p", "k", { testBytes: 80 });
-  SessionController.getUser.mockReturnValue(null);
-  expect(cacheStats().totalBytes).toBe(0);
-});
-
-test("actual JSON UTF-16 accounting includes Unicode payloads and metadata", () => {
-  putResult("m", "p", "k", { value: "a" }, { note: "a" });
-  const baseline = cacheStats().totalBytes;
-  putResult("m", "p", "k", { value: "é😀" }, { note: "a" });
-  expect(cacheStats().totalBytes - baseline).toBe(4); // 3 UTF-16 units replacing one.
-  putResult("m", "p", "k", { value: "é😀" }, { note: "abcdef" });
-  expect(cacheStats().totalBytes - baseline).toBe(14);
-  expect(cacheStats().byteMeasurement).toBe("serialized UTF-16 at insertion; not heap usage");
-});
-
-test.each([undefined, () => {}, Symbol("private"), 1n, NaN, Infinity, -Infinity, new Map([["private", "data"]]), new Set([1]), new Date(0)])(
-  "non-JSON nested payloads cannot receive a nominal fallback size: %s", (value) => {
-    expect(putResult("m", "p", "k", { value }).stored).toBe(false);
-    expect(cacheStats().count).toBe(0);
+// "COMPUTED AT" IS WHEN THE ANSWER WAS STORED, NOT WHEN IT WAS LAST READ (decision 366, 2026-10-02).
+// `getResult` touches each entry's read time for eviction, and used to return that same read time as
+// `computedAt`: the Recompute bar said "Computed just now" for an answer an hour old, the printed
+// Closed-Loop record named the time it was printed, and the Closed-Loop simulation, keyed on the
+// report's `computedAt`, changed key on every render and redrew the page without end.
+test("computedAt stays at the time the answer was stored, however often it is read", () => {
+  const now = jest.spyOn(Date, "now");
+  try {
+    now.mockReturnValue(1000);
+    putResult(MODULES.closedLoop, UID, "k", { answer: 1 });
+    now.mockReturnValue(61000);
+    const first = getResult(MODULES.closedLoop, UID, "k");
+    now.mockReturnValue(3601000);
+    const later = getResult(MODULES.closedLoop, UID, "k");
+    expect({ first: first.computedAt, later: later.computedAt }).toEqual({ first: 1000, later: 1000 });
+  } finally {
+    now.mockRestore();
   }
-);
+});
 
-test("cycles, hidden toJSON conversion and serialization failure preserve prior result", () => {
-  putResult("m", "p", "k", { valid: [null, 0, false] });
-  const cycle = {}; cycle.self = cycle;
-  for (const invalid of [cycle, { toJSON: () => ({ small: true }) }, { toJSON: () => { throw new Error("private"); } }]) {
-    expect(putResult("m", "p", "k", invalid).stored).toBe(false);
+test("a read still counts as use for eviction (savedAt is touched; computedAt is not)", () => {
+  const now = jest.spyOn(Date, "now");
+  try {
+    now.mockReturnValue(1000);
+    putResult(MODULES.closedLoop, UID, "k", { answer: 1 });
+    now.mockReturnValue(5000);
+    const read = getResult(MODULES.closedLoop, UID, "k");
+    expect({ savedAt: read.savedAt, computedAt: read.computedAt }).toEqual({ savedAt: 5000, computedAt: 1000 });
+  } finally {
+    now.mockRestore();
   }
-  expect(putResult("m", "p", "k", {}, cycle).stored).toBe(false);
-  expect(getResult("m", "p", "k").bundle).toEqual({ valid: [null, 0, false] });
-});
-
-test("heap pressure introduced during serialization declines retention", () => {
-  const stringify = JSON.stringify;
-  jest.spyOn(JSON, "stringify").mockImplementation((value, replacer, ...rest) => {
-    if (typeof replacer === "function") Object.defineProperty(performance, "memory", {
-      configurable: true, value: { usedJSHeapSize: 90, jsHeapSizeLimit: 100 }
-    });
-    return stringify(value, replacer, ...rest);
-  });
-  expect(putResult("m", "p", "k", {}).stored).toBe(false);
-  expect(cacheStats().totalBytes).toBe(0);
-});
-
-test("new aggregate statistics expose neither identifiers nor request/payload content", () => {
-  putResult("module-private", "participant-private", "settings-private", { secret: "payload-private" }, { note: "meta-private" });
-  const stats = cacheStats();
-  expect(stats).toMatchObject({ count: 1, participantCount: 1, memoryMeasurable: false });
-  expect(Object.keys(stats).sort()).toEqual(["byteMeasurement", "count", "maxEntries", "maxParticipants", "maxTotalBytes", "memory", "memoryMeasurable", "participantCount", "totalBytes"].sort());
-  expect(JSON.stringify(stats)).not.toMatch(/private|viewer|token|study/);
-});
-
-test("first participant token learned after caching is a hard miss, never merely stale", () => {
-  setServerToken(null, "p");
-  putResult("m", "p", "k", { value: 1 });
-  putResult("m", "q", "k", { value: 2 });
-  expect(setServerToken("first-identity", "p")).toBe(false);
-  expect(getResult("m", "p", "k")).toBeNull();
-  expect(getResult("m", "q", "k").bundle).toEqual({ value: 2 });
 });

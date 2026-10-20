@@ -74,3 +74,21 @@ test('zoom messages distinguish shared reset, complete ranges and unrelated upda
  expect(relayoutRange({'xaxis.range[0]':'a'})).toBeUndefined();expect(relayoutRange({'xaxis.range[1]':'b'})).toBeUndefined();expect(relayoutRange({width:300})).toBeUndefined();
  expect(hoverTime('2026-08-01 12:00:00')).toBe('2026-08-01 12:00:00');expect(hoverTime(Date.parse('2026-08-01T12:00:00Z'))).toBe('2026-08-01 12:00:00.000');
 });
+
+test('missing standard MPQ never substitutes legacy 0–72 and overall VAS remains explicitly overall',()=>{
+ const metrics=[{key:'vas_intensity',label:'Overall VAS',range:[0,100],points:[point('2026-08-01',90)]},{key:'mpq_sum',label:'MPQ Sum',range:[0,72],points:[point('2026-08-01',65)]}];
+ const traces=summarySurveyTraces(metrics,{},[],range,false,[],[]);
+ expect(traces.map(trace=>trace.y)).toEqual([[90]]);
+ expect(metrics[1]).toMatchObject({key:'mpq_sum',range:[0,72],points:[{value:65}]});
+ expect(traces[0].name).toContain('Overall VAS');expect(traces[0].name).not.toContain('Left-leg');
+ expect(traces.some(trace=>trace.name.includes('MPQ Sum'))).toBe(false);
+});
+
+
+test('standard MPQ retains its actual values and scale when legacy values are present',()=>{
+ const standard={key:'mpq_standard_0_45',label:'Standard MPQ',range:[0,45],points:[point('2026-08-01',31)]};
+ const legacy={key:'mpq_sum',label:'Legacy MPQ sum',range:[0,72],points:[point('2026-08-01',65)]};
+ const traces=summarySurveyTraces([legacy,standard],{},[],range,false,[],[]);
+ expect(traces).toHaveLength(1);expect(traces[0].y).toEqual([31]);expect(traces[0].yaxis).toBe('y2');
+ expect(summarySurveyTraces([legacy,{...standard,points:[]}],{},[],range,false,[],[]).flatMap(trace=>trace.y)).toEqual([]);
+});

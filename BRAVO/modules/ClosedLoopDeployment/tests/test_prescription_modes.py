@@ -5,18 +5,46 @@ honest if the alternative it offers is real. Each test below pins a property tha
 would make the toggle misleading rather than merely wrong.
 """
 import math
+import json
 
-import numpy as np
 import pytest
 
 from ClosedLoopDeployment import prescription as PR, types as TY
+from ClosedLoopDeployment import safe_current as SAFE, timing_recommendation as TR
+from DecodeCommon.tests.synthetic_clinical_config import install
 
 PA = pytest.importorskip("StimOptimizer.routines.percept_adaptive")
 
 
+SYNTHETIC_UID = "synthetic-prescription-participant"
+
+
+@pytest.fixture(autouse=True)
+def synthetic_configuration(monkeypatch, tmp_path):
+    path = tmp_path / "clinical.json"
+    install(monkeypatch, path, [SYNTHETIC_UID])
+    document = json.loads(path.read_text())
+    fields = document["participants"][SYNTHETIC_UID]["timing"]["fields"]
+    # Independently chosen durations exercise the transcription gloss and a two-window onset.
+    values = {"onset_upper_ms": 6000, "onset_lower_ms": 6000, "averaging_ms": 3000,
+              "transition_up_ms": 150000, "transition_down_ms": 300000,
+              "detection_blanking_ms": 6000, "adaptive_startup_delay_ms": 6000}
+    for key, value in values.items():
+        fields[key]["value_ms"] = value
+    path.write_text(json.dumps(document))
+
+
 def _plan():
-    """Generic implementation; participant-specific examples are kept outside source control."""
-    return TY.ThresholdPlan(upper=0.3956, lower=0.182, capture_amp_low=1.4, capture_amp_high=4.8)
+    """Independent synthetic thresholds and currents, bound to test-only evidence."""
+    plan = TY.ThresholdPlan(upper=0.5, lower=0.2, capture_amp_low=1.0, capture_amp_high=3.0)
+    return SAFE.apply_to_plan(plan, SYNTHETIC_UID, "Left")
+
+
+def _timing(**values):
+    rows = TR.for_participant(SYNTHETIC_UID)
+    for key, value in values.items():
+        rows[key]["value_ms"] = value
+    return rows
 
 
 def _cand():
@@ -25,22 +53,26 @@ def _cand():
 
 # --- the two provenance axes --------------------------------------------------------------------
 def test_origin_and_confirm_are_independent_axes_not_a_relabelled_status():
-    """The averaging duration is the case that PROVES the axes must be separate, and it is the
+    """The adaptive startup delay is the case that PROVES the axes must be separate, and it is the
     reason a single `status` enum was not enough.
 
-    That field is `derived` — this module computed it from the biomarker's own integration window —
-    AND its adjustable range is unpublished, so nobody can promise the A610 will accept the value.
-    Rendering it as merely "derived" would tell a clinician the number is trustworthy while
+    That field is `derived` — this module computed it from the ramp and the averaging window — AND
+    its adjustable range is documented nowhere, so nobody can promise the A610 will accept the
+    value. Rendering it as merely "derived" would tell a clinician the number is trustworthy while
     withholding that the device may silently clamp it. So origin must say `participant` while
-    confirm says `check_on_device`, and no single-axis encoding can express that.
+    confirm says `check_on_device`, and no single-axis encoding can express that. (Until 2026-09-13
+    the averaging duration was this test's case; its range is now documented, 0-30 s on the tip
+    card, so it is enterable, and the startup delay is the field still without a range.)
     """
     pr = PR.prescribe(mode=PA.DUAL, threshold_plan=_plan(), candidate=_cand(),
                       timing=PA.timing_plan(mode=PA.DUAL))
     rows = {r["parameter"]: r for r in pr.as_rows()}
 
+    sd = rows["Adaptive startup delay"]
+    assert sd["origin"] == "participant", "the module computed this from the ramp and the window"
+    assert sd["confirm"] == "check_on_device", "its adjustable range is documented nowhere"
     avg = rows["Averaging duration"]
-    assert avg["origin"] == "participant", "the module computed this from the integration window"
-    assert avg["confirm"] == "enterable", "averaging now has the confirmed 0-30 second range"
+    assert avg["origin"] == "participant" and avg["confirm"] == "enterable", "0-30 s, tip card p. 8"
 
     # and the two axes are genuinely non-redundant across the table: at least one field pairs a
     # participant origin with a non-enterable confirm, which a single enum could not encode.
@@ -99,13 +131,16 @@ def test_the_gloss_helper_boundary_and_non_numeric_inputs():
 # --- couplings ----------------------------------------------------------------------------------
 def test_the_inoperative_onset_is_reported_as_a_field_PAIR_not_as_a_row_property():
     """The most consequential fact about this configuration is not a property of any single field:
-    at the derived averaging duration the onset duration does nothing. A sixteen-row table renders
-    each field as though its value could be judged alone, so this has to travel as a coupling
-    between two named fields with both their values.
+    when the onset equals the averaging duration the onset does nothing. A sixteen-row table
+    renders each field as though its value could be judged alone, so this has to travel as a
+    coupling between two named fields with both their values.
+
+    This test explicitly supplies a complete synthetic timing table with equal 30 s onset
+    and averaging. It tests that chosen pair rather than any deployment's current settings.
     """
+    thirty = _timing(onset_upper_ms=30000.0, onset_lower_ms=30000.0, averaging_ms=30000.0)
     pr = PR.prescribe(mode=PA.DUAL, threshold_plan=_plan(), candidate=_cand(),
-                      timing=PA.timing_plan(mode=PA.DUAL),
-                      record_timing={"onset_upper_ms": {"value_ms": 4096., "why": "Synthetic one-window fixture"}})
+                      timing=PA.timing_plan(mode=PA.DUAL), record_timing=thirty)
     assert len(pr.couplings) == 1, "expected exactly the onset/averaging coupling"
     c = pr.couplings[0]
     assert len(c["fields"]) == 2 and len(c["values"]) == 2, "a coupling names BOTH fields"
@@ -125,50 +160,55 @@ def test_the_inoperative_onset_is_reported_as_a_field_PAIR_not_as_a_row_property
     assert "clinical trade" in c["resolution"] or "different feature" in c["resolution"]
 
 
-@pytest.mark.parametrize("integration_s, expect_windows, expect_coupling", [
-    # Measured from the shipping timing plan, so this table also documents WHERE the onset stops
-    # working. The onset is operative while the averaging duration is short relative to it, and
-    # becomes inoperative at an integration window of about two seconds — which is the regime the
-    # validated biomarker actually needs, at 4.096 s.
-    (0.25, 2, False),
-    (0.5, 2, False),
-    (1.0, 2, False),
-    (2.0, 2, False),
-    (4.096, 2, False),
-])
-def test_the_coupling_is_measured_from_the_chosen_pair_not_a_constant_warning(
-        integration_s, expect_windows, expect_coupling):
+@pytest.mark.parametrize("integration_s", [0.25, 0.5, 1.0, 2.0, 4.096])
+def test_the_coupling_is_measured_from_the_chosen_pair_not_a_constant_warning(integration_s):
     """The coupling must appear only when the two chosen values actually conflict, or the banner
     becomes a permanent decoration that a reader learns to ignore.
 
-    Written as a ladder rather than as one case with a conditional assertion, because a test whose
-    assertion depends on a branch can pass without ever reaching the interesting comparison. This
-    version fails if the timing plan changes such that the onset never works, or always does.
-
-    Note that Medtronic's own defaults pair a 1200 ms onset with 1200 ms averaging, which is itself
-    exactly one window, so the averaging duration has to be made short relative to the onset before
-    the coupling disappears at all.
+    Each synthetic timing record explicitly chooses onset at two averaging windows. No
+    coupling should appear at any rung; an equally explicit onset-equals-averaging record
+    must raise the warning. These tests do not assume a clinical fallback timing.
     """
     pr = PR.prescribe(mode=PA.DUAL, threshold_plan=_plan(), candidate=_cand(),
-                      timing=PA.timing_plan(mode=PA.DUAL, biomarker_integration_s=integration_s))
+                      timing=PA.timing_plan(mode=PA.DUAL, biomarker_integration_s=integration_s),
+                      record_timing=_timing(averaging_ms=integration_s * 1000,
+                                            onset_upper_ms=integration_s * 2000,
+                                            onset_lower_ms=integration_s * 2000))
     rows = {r["parameter"]: r["value"] for r in pr.as_rows()}
     onset = float(rows["Upper onset duration"])
     avg = float(rows["Averaging duration"])
+    assert math.ceil(onset / avg) == 2, f"onset {onset:.0f} ms against averaging {avg:.0f} ms"
+    assert PR.onset_windows(onset, avg)["inoperative"] is False
+    assert not pr.couplings, "the banner must track the measured conflict, not appear unconditionally"
 
-    assert math.ceil(onset / avg) == expect_windows, (
-        f"onset {onset:.0f} ms against averaging {avg:.0f} ms")
-    assert PR.onset_windows(onset, avg)["inoperative"] is expect_coupling
-    assert bool(pr.couplings) is expect_coupling, (
-        "the banner must track the measured conflict, not appear unconditionally")
+    thirty = _timing(onset_upper_ms=30000.0, onset_lower_ms=30000.0, averaging_ms=30000.0)
+    rec = PR.prescribe(mode=PA.DUAL, threshold_plan=_plan(), candidate=_cand(),
+                       timing=PA.timing_plan(mode=PA.DUAL, biomarker_integration_s=integration_s),
+                       record_timing=thirty)
+    rrows = {r["parameter"]: r["value"] for r in rec.as_rows()}
+    assert math.ceil(float(rrows["Upper onset duration"]) / float(rrows["Averaging duration"])) == 1
+    assert rec.couplings and rec.couplings[0]["severity"] == "consequential"
 
 
-def test_confirmed_tablet_range_can_support_multiple_integration_windows():
+def test_the_onset_can_be_rescued_inside_the_documented_range_at_the_validated_window():
+    """Rewritten 2026-09-13. Its predecessor pinned that NO onset a clinician could enter made the
+    onset operative at the validated 4096 ms averaging, because it took the ADAPT-PD trial's 2 s
+    setting as the device's ceiling and said "if a future device document widens that range this
+    test should fail and be revisited". The FDA approval summary (P960009/S478, Table 2) documents
+    0-6 min in Dual mode, so it did widen, and the finding inverts: the trial's values are still
+    one window, and an onset of twice the averaging duration, well inside the range, is two.
+    Corrected 2026-09-15: the clinician tablet offers 0-30 s on both Dual timers, not 6 min, and
+    the platform applies the tablet; 8192 ms is still well inside it, so the finding stands.
+    """
     avg_ms = 4096.0
     lo, hi = PA.ONSET_RANGE_DUAL_MS
-    assert (lo, hi) == (0., 30000.)
-    assert PR.onset_windows(lo, avg_ms)["inoperative"] is True
-    assert PR.onset_windows(2 * avg_ms, avg_ms)["windows"] == 2
-    assert PR.onset_windows(hi, avg_ms)["inoperative"] is False
+    assert (lo, hi) == (0.0, 30_000.0)
+    for onset in PA.ADAPT_PD_ONSET_RANGE_MS[PA.DUAL]:
+        assert lo <= onset <= hi                     # the trial's settings sit inside the range
+        assert PR.onset_windows(onset, avg_ms)["inoperative"] is True
+    assert PR.onset_windows(2.0 * avg_ms, avg_ms)["windows"] == 2
+    assert PR.onset_windows(2.0 * avg_ms, avg_ms)["inoperative"] is False
+    assert lo <= 2.0 * avg_ms <= hi
 
 
 # --- every mode, and the field sets genuinely differing -----------------------------------------
@@ -251,7 +291,11 @@ def test_duty_reads_the_amplitude_trajectory_not_the_control_state():
     ReplayResult documents and populates `state` as the CONTROL STATE — a list of the strings
     "below", "between", "above" — so `np.asarray(state, float)` raised
     `ValueError: could not convert string to float: 'below'` and took down the whole prescription
-    for any configuration whose replay returned a full trajectory."""
+    for any configuration whose replay returned a full trajectory.
+
+    A segment-aggregating path returning `state=None` can hide this bug. The synthetic full
+    trajectory below ensures the branch actually computes the amplitude statistics.
+    """
     import numpy as np
     from ClosedLoopDeployment import replay as RP, prescription as PRx, types as TY
     p = np.concatenate([np.full(40, .05), np.full(120, .9), np.full(40, .05)])
@@ -295,54 +339,55 @@ def test_longest_run_helper_uses_a_declared_tolerance_rather_than_equality():
     assert RP._longest_run_at_level_s(amp, 2.0, None) is None
 
 
-@pytest.mark.parametrize('amp, expected', [
-    ([3.0, 3.0, np.nan, 3.0, 3.0], 4.0),
-    ([3.0, np.inf, 3.0], 2.0),
-    ([np.nan, np.nan], None),
-    ([], None),
-    ([1.0, np.nan, 1.0], 0.0),
-])
-def test_longest_excursion_preserves_missing_data_breaks(amp, expected):
-    from ClosedLoopDeployment import replay as RP
-    assert RP._longest_run_at_level_s(amp, 2.0, 3.0) == expected
+# --- the four record-derived notes on the card, one wiring ----------------------------------------
+# The design rule (design_rule_note), the threshold occupancy check (occupancy_note), the
+# start-of-stretch bias check (startup_bias_note) and the robustness interval (robustness_note) each
+# hang one sentence on the card's rows. These three tests were written four times over, once in each
+# check's own test file (test_design_rule.py, test_occupancy.py, test_startup_bias.py,
+# test_robustness.py; moved here 2026-10-05); what each note says, and which rows it touches, is
+# still tested in that check's own file.
+_DR_TIMING = dict(averaging_ms=3000.0, onset_ms=30000.0)
+
+# note -> (the inputs for which the note must be None, the "nothing available" payload to attach)
+_NOTES = {
+    "design_rule_note": (
+        lambda x: PR.design_rule_note(x, upper=210.0, lower=160.0, **_DR_TIMING),
+        [{"refused": True, "reason": "x"}, None],
+        lambda pr: PR.attach_design_rule(pr, None, **_DR_TIMING)),
+    "occupancy_note": (
+        PR.occupancy_note, [{"available": False, "reason": "x"}, None],
+        lambda pr: PR.attach_occupancy(pr, {"available": False, "reason": "x"})),
+    "startup_bias_note": (
+        PR.startup_bias_note, [{"refused": True, "reason": "x"}, None],
+        lambda pr: PR.attach_startup_bias(pr, {"refused": True, "reason": "x"})),
+    "robustness_note": (
+        PR.robustness_note,
+        [{"refused": True, "reason": "x"}, None, {"refused": False, "intervals": {"onset_s": None}}],
+        lambda pr: PR.attach_robustness(pr, {"refused": True, "reason": "x"})),
+}
 
 
-def test_segment_excursion_durations_take_the_maximum_and_preserve_unknowns(monkeypatch):
-    from types import SimpleNamespace
-    from ClosedLoopDeployment import replay as RP
-    times = [0., 1., 2., 100., 101., 102.]
-    results = iter([
-        SimpleNamespace(frac_time_at_upper=.5, frac_time_at_lower=.5,
-                        longest_run_at_upper_s=2., longest_run_at_lower_s=1.,
-                        n_transitions=1, saturated=False),
-        SimpleNamespace(frac_time_at_upper=.5, frac_time_at_lower=.5,
-                        longest_run_at_upper_s=1., longest_run_at_lower_s=2.,
-                        n_transitions=1, saturated=True),
-    ])
-    monkeypatch.setattr(RP, 'dual_threshold', lambda *a, **k: next(results))
-    result = RP.dual_threshold_segments(times, np.ones(6), _plan())
-    assert result.longest_run_at_upper_s == result.longest_run_at_lower_s == 2.
-    for fraction in (None, .5):
-        monkeypatch.setattr(RP, 'dual_threshold', lambda *a, **k: SimpleNamespace(
-            frac_time_at_upper=fraction, frac_time_at_lower=None,
-            longest_run_at_upper_s=None, longest_run_at_lower_s=None,
-            n_transitions=None, saturated=None))
-        result = RP.dual_threshold_segments(times, np.ones(6), _plan())
-        assert result.longest_run_at_upper_s is None and result.longest_run_at_lower_s is None
+def _all_modes():
+    plan = _plan()
+    return PR.prescribe_all_modes(threshold_plan=plan, candidate=_cand(), power_series=None,
+                                  validated_hemispheres=("Left",), configuring_both_hemispheres=False)
 
 
-def test_segment_replay_records_invalid_and_unreplayable_timebases(monkeypatch):
-    from ClosedLoopDeployment import replay as RP
-    with pytest.raises(ValueError, match='differ in length'):
-        RP.dual_threshold_segments([0., 1.], [1.], _plan())
-    assert RP.dual_threshold_segments([0.], [1.], _plan()).params['n_segments'] == 0
-    assert 'no positive interval' in RP.dual_threshold_segments(
-        [0.], [1.], _plan(), min_segment_steps=1).note
-    refused = RP.dual_threshold_segments([0., 3., 6.], [1., 1., 1.], _plan(),
-                                         params={'transition_up_ms': 1000.})
-    assert refused.params['ramp_resolvable'] is False
-    def fail(*args, **kwargs):
-        raise ValueError('synthetic segment rejection')
-    monkeypatch.setattr(RP, 'dual_threshold', fail)
-    result = RP.dual_threshold_segments([0., 1., 2.], [1., 1., 1.], _plan())
-    assert result.params['n_segments_used'] == 0 and result.params['n_segments_skipped'] == 1
+@pytest.mark.parametrize("note", list(_NOTES))
+def test_each_note_is_none_when_its_check_was_refused_or_is_absent(note):
+    make, empty_inputs, _ = _NOTES[note]
+    for x in empty_inputs:
+        assert make(x) is None, (note, x)
+
+
+@pytest.mark.parametrize("note", list(_NOTES))
+def test_attaching_a_note_with_nothing_available_is_a_no_op(note):
+    out = _NOTES[note][2](_all_modes())
+    assert all(getattr(f, note) is None for f in out["modes"][PA.DUAL].fields)
+
+
+@pytest.mark.parametrize("note", list(_NOTES))
+def test_as_rows_carries_every_note_key(note):
+    rows = _all_modes()["modes"][PA.DUAL].as_rows()
+    assert all(note in r for r in rows)
+    assert all(r[note] is None for r in rows)

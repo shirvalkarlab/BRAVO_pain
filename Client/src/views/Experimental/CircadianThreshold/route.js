@@ -11,7 +11,9 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import AccessAlarm from "@mui/icons-material/AccessAlarm";
+import {
+  AccessAlarm, 
+} from "@mui/icons-material";
 
 import CircadianThreshold from "./index";
 

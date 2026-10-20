@@ -1,0 +1,19 @@
+[Unit]
+Description=Verify and import retained-source batches into independent BRAVO
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+RequiresMountsFor=/media/bravo-aditya
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/bravo-aditya/daily-import/host.py --config /etc/bravo-aditya/daily-target.json
+# Do not abandon a decoder and release the data lock on a wall-clock timeout.
+# A surviving named import container blocks subsequent imports and backups.
+TimeoutStartSec=0
+TimeoutStopSec=180
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

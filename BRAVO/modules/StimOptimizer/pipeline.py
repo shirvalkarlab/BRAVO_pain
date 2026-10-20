@@ -1,48 +1,4 @@
-"""One-patient runner for the StimOptimizer module.
-
-Library mode only: no Django import, no template rendering, no kaleido. Mirrors the entry-point
-shape of ``modules/Biomarkers/pipeline.py`` so the service layer can call it the same way.
-
-TWO ENTRY POINTS, AND WHICH ONE TO USE
---------------------------------------
-:func:`run`
-    The ORIGINAL flat entry point, unchanged. It fits one (frequency, amplitude) surface per arm,
-    where an arm is one pain site crossed with one hemisphere's amplitude, and emits the table and
-    figure set the existing callers and the service layer expect. Its behaviour, its arguments and
-    its return type are exactly what they were; nothing below alters it. Use it for the surface
-    fitting, the figures, and the acquisition proposals.
-
-:func:`run_two_stage`
-    The STAGED entry point, added because the device's own constraints force a sequence the flat
-    search cannot represent. Rate and pulse width freeze the moment BrainSense is configured
-    (A610 Clinician Programming Guide pp. 34-35), so closed-loop therapy adapts amplitude only and
-    the open-loop search over rate and pulse width is a PREREQUISITE stage rather than one option
-    among several. ``run_two_stage`` runs Stage 1 (``stage1_openloop``), evaluates the stage gate
-    (``routines/stage_gate``) on the configuration Stage 1 freezes, and runs Stage 2
-    (``stage2_closedloop``) only if the gate licenses it. Use it for any question about closed-loop
-    deployment.
-
-    ``run`` is not a subset of ``run_two_stage`` and neither replaces the other. ``run`` searches
-    frequency and amplitude jointly over the whole record; Stage 1 searches rate and amplitude
-    within pulse-width strata against a single common incumbent so the strata are comparable. They
-    answer different questions and can legitimately disagree about which cell is best. Read
-    ``TWO_STAGE_DESIGN.md`` before treating either as the other's cross-check.
-
-The unit of work is an **arm**: one pain site crossed with one hemisphere's amplitude. Arms are
-fitted independently and never blended. Two reasons, both empirical and both recorded in
-OBJECTIVE_SPEC:
-
-Typical use::
-
-    from modules.StimOptimizer import pipeline
-    rep = pipeline.run("rcs08_bo_design_matrix.csv", outdir="out/", data_horizon="2026-08-28")
-    print(rep.summary.to_string())
-
-Every output carries the declared ``data_horizon`` and ``washin_min`` so a refresh regenerates
-rather than invalidates. Nothing here recommends a setting on its own: ``run`` reports the
-acquisition proposal alongside the uncertainty and the stopping decision, and
-:meth:`RunReport.recommendation_is_supported` states plainly whether the surface can distinguish
-its own optimum from no effect."""
+'One-patient runner for the StimOptimizer module.'
 from __future__ import annotations
 
 import json
@@ -61,16 +17,6 @@ DEFAULT_SITES = ("left_leg", "back")
 DEFAULT_HEMISPHERES = ("Left", "Right")
 
 
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
-
-
-
-
 @dataclass
 class ArmResult:
     """One (site, hemisphere) fit and everything derived from it."""
@@ -87,16 +33,7 @@ class ArmResult:
         return f"{self.site}__{self.hemisphere}"
 
     def surface_can_resolve_its_optimum(self, k: float = 1.0):
-        """True only if the candidate BEATS the incumbent by more than the uncertainty of that
-        difference.
-
-        The variance of the difference between two GP predictions is
-        ``var1 + var2 - 2*cov``. We do not currently carry the joint covariance between the two
-        cells, so we use ``var1 + var2``. Because nearby cells on a smooth kernel are POSITIVELY
-        correlated, dropping ``-2*cov`` OVERSTATES the variance, which makes this gate strictly
-        conservative: it can withhold a recommendation it might have supported, but it cannot
-        manufacture one. Tightening it requires predicting both cells jointly with the full
-        covariance (``return_cov=True``) and is a documented next step, not a silent approximation."""
+        'True only if the candidate BEATS the incumbent by more than the uncertainty of that.'
         m = self.meta
         gain = float(m["incumbent_mu"]) - float(m["mu_star"])          # >0 means candidate is better
         # THE SHARED RULE, from routines.resolution. The propagation and the three-state answer
@@ -112,8 +49,8 @@ class ArmResult:
             # ask opposite things of a reader: the first says collect more exposure at that cell,
             # the second says a posterior is degenerate and no amount of exposure helps until the
             # fit is repaired. Typically it means a stratum that never delivered the incumbent's
-            # rate, so there is no data anywhere near the cell being compared. The slice-level
-            # method `stage1_openloop.SliceResult.resolves_its_optimum` already returns
+            # rate, so there is no data anywhere near the cell being compared. The stratum-level
+            # method `stage1_openloop.JointStratum.resolves_its_optimum` already returns
             # `bool | None` for exactly this reason; this one now matches it.
             return None
         return _RES.is_resolved(gain, m.get("sd_star"), m.get("incumbent_sd"), k=k)
@@ -379,25 +316,9 @@ class LiveEvidence:
 def live_evidence(participant, *, amp_ceiling=None,
                   channel=None, hemisphere=None, rate_hz=None, bands=None,
                   force_refresh=None, inputs=None, pain_positive_by_channel=None,
+                  stim_rings_by_side=None,
                   **build_kwargs) -> LiveEvidence:
-    """Build, screen and select LFP evidence for a participant from platform data.
-
-    This is the seam that lets the gate be evaluated against real recordings instead of against
-    ``None``. Selection is either EXPLICIT — pass ``hemisphere`` and ``rate_hz`` (and ``channel``
-    when several sensing channels exist) to demand the cell matching a specific configuration — or
-    SCREENED, which ranks the deployable cells and takes the best. Explicit selection still reports
-    the screen, so a caller pinning a cell can see whether it would have survived screening.
-
-    ``amp_ceiling`` optionally refuses a cell whose amplitude contrast reaches above the declared
-    hard limit; see :func:`routines.lfp_evidence.screen_cells`. ``pain_positive_by_channel`` is
-    the per-contact set of band centres that rise with pain on the stored Biomarkers grid
-    (``routines.pain_relationship``), the second half of the screen's rule (decision 199); left
-    ``None``, every cell is NOT ASSESSED rather than passed.
-
-    RETRACTION, 2026-09-02: this took ``energy_budget`` and ``pw_lookup`` to apply an energy-matched
-    amplitude ceiling. That model is withdrawn — the limit is a flat 5 mA, not a per-rate energy
-    budget — and both parameters are gone, so passing either raises TypeError.
-    """
+    'Implementation details are defined by the code and its regression contracts.'
     from .routines import lfp_evidence as EV, lfp_response as LR
     from . import adapter as AD
 
@@ -411,7 +332,8 @@ def live_evidence(participant, *, amp_ceiling=None,
         bands=bands, inputs=inputs, **build_kwargs)
 
     screen, best = EV.screen_cells(ev, response_fn=LR.assess_response, amp_ceiling=amp_ceiling,
-                                   pain_positive_by_channel=pain_positive_by_channel)
+                                   pain_positive_by_channel=pain_positive_by_channel,
+                                   stim_rings_by_side=stim_rings_by_side)
     if hemisphere is not None and rate_hz is not None:
         sel, note = EV.select_for(ev, rate_hz=rate_hz, hemisphere=hemisphere, channel=channel)
         key = None if sel is None else next(
@@ -477,16 +399,7 @@ def run_two_stage(design_csv, *, hemispheres=DEFAULT_HEMISPHERES, primary_item="
                   explore_outside_adaptive_reason=None, explore_outside_adaptive_by=None,
                   explore_outside_adaptive_requested=None,
                   stage1_kwargs=None, gate_kwargs=None, stage2_kwargs=None) -> TwoStageReport:
-    """Run the open-loop stage, the gate, and the closed-loop stage in that order.
-
-    This is the entry point that honours the device's sequencing. It does not replace :func:`run`;
-    see the module docstring for which to use.
-
-    Returns
-    -------
-    TwoStageReport
-        ``.can_deploy_closed_loop()`` is the headline. On this project's current data it is
-        expected to be ``False``, and the reasons in ``.gate.refusals()`` are the useful output."""
+    'Implementation details are defined by the code and its regression contracts.'
     from . import stage1_openloop as S1
     from . import stage2_closedloop as S2
     from .routines import stage_gate as GATE
@@ -516,19 +429,15 @@ def run_two_stage(design_csv, *, hemispheres=DEFAULT_HEMISPHERES, primary_item="
                 f"{name} was supplied both as a run_two_stage argument and inside gate_kwargs. "
                 "Pass it once; the named argument is the documented route.")
         gk[name] = value
-    # `lfp` MAY BE A FACTORY, and when it is, it is called with the frozen configuration.
-    #
-    # This exists because the evidence cannot honestly be chosen before the rate is frozen. Rate and
-    # pulse width freeze in the device the moment BrainSense is configured, so an LFP response
-    # measured at some other rate says nothing about the configuration Stage 2 will actually run.
-    # Passing a pre-selected cell invites exactly that mismatch: on the first live run of
-    # `run_two_stage_live` the screen returned its best cell at 165 Hz while Stage 1 had frozen
-    # 40 Hz, and the gate would have credited a 165 Hz response to a 40 Hz configuration. Accepting
-    # a callable makes the ordering structural rather than something a caller has to remember.
+    # Preserve the behavior covered by the regression tests.
     if callable(lfp):
         lfp = lfp(frozen)
     gate = GATE.evaluate_gate(frozen, lfp=lfp, amp_limits=amp_limits, **gk)
-    s2 = S2.run_stage2(frozen, gate, lfp=lfp, **(stage2_kwargs or {}))
+    # See the synthetic regression tests for this behavior.
+    s2kw = dict(stage2_kwargs or {})
+    if "ceiling_mA" in gk and "ceiling_mA" not in s2kw:
+        s2kw["ceiling_mA"] = gk["ceiling_mA"]
+    s2 = S2.run_stage2(frozen, gate, lfp=lfp, **s2kw)
 
     written = []
     if outdir is not None:
@@ -598,42 +507,9 @@ def _render(ctx, label, outdir, backend, dpi):
 def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemisphere=None,
                        rate_hz=None, bands=None, force_refresh=None, request_data=None,
                        washin_min=1.0, design=None, stream=None, evidence_inputs=None,
-                       pain_positive_by_channel=None, **two_stage_kwargs) -> TwoStageReport:
-    """Run the staged pipeline on a PARTICIPANT, with the LFP evidence built from real recordings.
-
-    WHY THIS EXISTS. The handoff carried "STILL NOT BUILT: Stage 2 does not yet CALL lfp_evidence on
-    live data" for three days, and checking it on 2026-09-05 showed the gap was narrower and worse
-    than that sentence suggests. Every piece was present and type-compatible: ``live_evidence``
-    builds and screens the cells, ``LiveEvidence.selected`` is documented as "the one cell handed to
-    the gate" and is constructed as a ``stage_gate.LfpEvidence``, and ``run_two_stage`` accepts
-    exactly that object as ``lfp=``. What was missing was any caller that put the two together —
-    the ONLY callers of ``run_two_stage`` and ``run_stage2`` anywhere in the repository were tests,
-    and the endpoint layer never invoked the staged path at all. So the device's sequencing
-    constraint was encoded, tested, and unreachable from the running system.
-
-    WIRED INTO THE REQUEST PATH, 2026-09-12. ``StimOptimizer.bravo_service.run_for_participant``
-    calls this when the request carries ``TwoStage: true`` and attaches the result under the
-    response key ``two_stage``. That caller has already built the epoch-level design matrix and the
-    dated settings stream for its own fit, so both can be handed in: ``design`` is the matrix
-    (``adapter.build_design_matrix``'s output, a DataFrame) and ``stream`` the settings stream
-    (``adapter.settings_stream``'s output). ``None`` for either means build it here, exactly as
-    before this argument existed. The two-stage path runs on the scikit-learn surrogate
-    (``routines/surrogate.py``) that Stage 1 has always used; nothing here imports PyTorch.
-
-    WHY THE DEFAULT WAS NOT MERELY HARMLESS. Left alone, the staged path runs with ``lfp=None``,
-    and the gate then reports the LFP-response condition as NOT ASSESSED, which blocks. That is the
-    safe direction, so nothing unsafe could happen — but it makes two clinically different answers
-    look identical: "no recording could be built for this configuration" and "the recordings were
-    built and the band does not respond". This function keeps them apart by carrying the screen and
-    audit frames onto the manifest whether or not a cell was selected, which is the same reason
-    ``LiveEvidence`` keeps those frames in its result rather than treating them as debug output.
-
-    ``pain_positive_by_channel`` (decision 199) is handed to both the screen that picks each
-    side's cell and the gate that judges it, so the two apply one rule.
-
-    Returns the ordinary :class:`TwoStageReport`. A gate refusal is a legitimate terminal answer and
-    on this project's current data it is the expected one.
-    """
+                       pain_positive_by_channel=None, stim_rings_by_side=None,
+                       **two_stage_kwargs) -> TwoStageReport:
+    'Implementation details are defined by the code and its regression contracts.'
     from . import adapter as _AD
 
     gk = dict(two_stage_kwargs.pop("gate_kwargs", None) or {})
@@ -645,23 +521,7 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
     box = {}
 
     def _select_after_freezing(frozen):
-        """Choose ONE evidence cell PER FROZEN SIDE, at the rate that side froze.
-
-        The first version of this function selected the evidence before running Stage 1, and on the
-        live record that produced a real mismatch: the screen's best cell was ONE_THREE_LEFT/Left at
-        165 Hz while Stage 1 froze 40 Hz on both hemispheres. Crediting a 165 Hz LFP response to a
-        40 Hz configuration would have let the gate's response condition pass on a measurement of
-        something the device will not be doing.
-
-        PER SIDE since 2026-09-12 (review S3). Until then one cell -- the screened best across
-        BOTH sides at the pinned rate -- was handed to the gate for a configuration that freezes
-        a setting per side, so one sensing contact's response could license closed loop on both
-        sides. Now each frozen side gets the best deployable cell among ITS OWN side's cells at
-        ITS OWN frozen rate, and the gate receives ``{side: cell}``; a side with no deployable
-        cell is handed nothing and the gate marks it NOT ASSESSED. Two sides freezing different
-        rates no longer refuse: each is pinned to its own rate, since nothing is attributed
-        across sides any more.
-        """
+        'Implementation details are defined by the code and its regression contracts.'
         # A NaN rate is Stage 1's "no adaptive-capable setting can be recommended" (2026-09-12);
         # there is no rate to pin evidence to on that side, so it is left out here and the gate's
         # rate condition refuses on it.
@@ -677,20 +537,8 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
                 selection_note=("Stage 1 recommended no adaptive-capable rate on any side, "
                                 "so there is no rate to pin the LFP evidence to"))
             return None
-        # A caller may narrow evidence selection, but cannot replace a frozen rate.
-        # Each side still uses its own rate; a response recorded at another rate does
-        # not support the configuration being assessed.
-        sides = [h for h in rate_by_side if hemisphere is None or str(hemisphere) == h]
-        if not sides:
-            box["refusal_class"] = "requested_hemisphere_missing"
-            box["ev"] = LiveEvidence(selection_note="Requested hemisphere has no finite frozen rate")
-            return None
-        if rate_hz is not None and (not np.isfinite(float(rate_hz))
-                or any(not np.isclose(float(rate_hz), rate_by_side[h]) for h in sides)):
-            box["refusal_class"] = "requested_rate_mismatch"
-            box["ev"] = LiveEvidence(selection_note="Requested evidence rate does not match the frozen rate on every selected side")
-            return None
-        pins = {h: rate_by_side[h] for h in sides}
+        pins = {h: (float(rate_hz) if rate_hz is not None else r) for h, r in rate_by_side.items()}
+        sides = [h for h in pins if hemisphere is None or str(hemisphere) == h]
         box["pinned_rate_hz_by_side"] = {h: pins[h] for h in sides}
         box["pinned_rate_hz"] = (float(pins[sides[0]])
                                  if sides and len({pins[h] for h in sides}) == 1 else None)
@@ -703,7 +551,8 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
                                        hemisphere=None, rate_hz=r, bands=bands,
                                        force_refresh=force_refresh, stream=stream,
                                        inputs=evidence_inputs,
-                                       pain_positive_by_channel=pain_positive_by_channel)
+                                       pain_positive_by_channel=pain_positive_by_channel,
+                                       stim_rings_by_side=stim_rings_by_side)
         per, chosen = {}, {}
         for h in sides:
             sel, key, note = select_for_side(by_rate[pins[h]], h, pins[h], channel=channel)
@@ -758,7 +607,7 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
              ev.audit["reason_unusable"].astype(str).value_counts().items()}
             if ev.audit is not None and len(ev.audit) and "reason_unusable" in ev.audit.columns
             else {}),
-        "refusal_class": box.get("refusal_class") or (
+        "refusal_class": (
             "evidence_selected" if (n_sides and n_selected == n_sides)
             else ("evidence_missing_on_some_sides" if n_selected
                   else ("no_adaptive_capable_rate" if not box.get("frozen_rates")
@@ -772,6 +621,3 @@ def run_two_stage_live(participant, *, amp_ceiling=None, channel=None, hemispher
                  "this field is what distinguishes absent data from a measured negative."),
     }
     return rep
-
-
-# Retained active Aditya interfaces.

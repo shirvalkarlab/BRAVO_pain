@@ -1,14 +1,7 @@
-from pathlib import Path
 import numpy as np
 from scipy import signal, stats
 from modules import Database, DataAnalysis
-import pickle
-
-with open(Path(__file__).parent / "BetaPeakDetector.pkl", "rb") as f:
-    BetaPeakDetectorModel = pickle.load(f)
-
-with open(Path(__file__).parent / "BetaPeakIdentifier_Classification.pkl", "rb") as f:
-    BetaPeakIdentifier_Classifier = pickle.load(f)
+from .model_assets import load_beta_peak_models
 
 def MovingAverageFilter(signal, window_size):
     window = np.ones(window_size) / window_size
@@ -47,6 +40,7 @@ def ExtractFTGPeak(Frequency, Power):
     return GammaParameters
 
 def BetaPeakDetector(data):
+    BetaPeakDetectorModel, BetaPeakIdentifier_Classifier = load_beta_peak_models()
     # data require dict({"Data": list, "SamplingRate": float})
     if type(data["Data"]) is not list:
         raise ValueError("Data must be a list of time series data.")

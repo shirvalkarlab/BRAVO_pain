@@ -77,7 +77,53 @@ function CustomizedAnalysis() {
   const [alert, setAlert] = useState(null);
 
   useEffect(() => {
-    
+    // Live analysis-progress notifications. The /socket/notification WebSocket endpoint is NOT
+    // implemented server-side (HTTP-only ASGI, no Channels consumer), so this is expected to fail;
+    // analysis state still updates on navigation/refresh. Fail QUIETLY (no console spam, no
+    // reconnect). onmessage is kept so a future Channels backend works with no frontend change.
+    let client = null;
+    try {
+      client = new WebSocket(SessionController.getServer().replace("http","ws") + "/socket/notification");
+    } catch (e) {
+      client = null;
+    }
+    if (client) {
+    client.onerror = function() {
+      // endpoint not implemented; ignore quietly
+    };
+    client.onopen = () => {
+      
+    };
+    client.onclose = () => {
+      // expected when the endpoint is absent; ignore quietly
+    };
+
+    client.onmessage = (event) => {
+      let content = JSON.parse(event.data);
+      if (content["Notification"] === "AnalysisUpdate") {
+        if (content["State"] === "StartProcessing") {
+          if (analysisIdRef.current == content["TaskID"]) {
+            setAnalysisData((analysisData) => {
+              analysisData.Analysis.ProcessingQueued = true;
+              return {...analysisData};
+            });
+          }
+        } else if (content["State"] === "EndProcessing") {
+          if (analysisIdRef.current == content["TaskID"]) {
+            setAnalysisData((analysisData) => {
+              analysisData.Analysis.ProcessingQueued = false;
+              analysisData.Configuration.Results = content["Message"];
+              return {...analysisData};
+            });
+          }
+        }
+      }
+    };
+    }
+
+    return () => {
+      if (client) { try { client.close(); } catch (e) { /* already closed */ } }
+    }
   }, []);
 
   useEffect(() => {

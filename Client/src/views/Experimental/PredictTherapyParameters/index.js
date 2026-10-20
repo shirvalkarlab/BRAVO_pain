@@ -29,10 +29,12 @@ import {
   Slider
 } from "@mui/material"
 
-import ChevronRightIcon from "@mui/icons-material/ChevronRight";
-import SettingsIcon from "@mui/icons-material/Settings";
-import KeyboardDoubleArrowUpIcon from "@mui/icons-material/KeyboardDoubleArrowUp";
-import DashboardIcon from "@mui/icons-material/Dashboard";
+import { 
+  ChevronRight as ChevronRightIcon,
+  Settings as SettingsIcon,
+  KeyboardDoubleArrowUp as KeyboardDoubleArrowUpIcon, 
+  Dashboard as DashboardIcon
+} from "@mui/icons-material";
 
 // core components
 import MDBox from "components/MDBox";
@@ -55,7 +57,6 @@ function PredictTherapyParameters() {
   const { language } = controller;
   const { participant_uid } = useParams();
 
-  const [availableModels, setAvailableModels] = useState({});
   const [surveyList, setSurveyList] = useState({active: null, options: [], list: []});
   const [thresholdList, setThresholdList] = useState({active: null, options: [], sessions: []});
   const [recordingList, setRecordingList] = useState({active: null, options: []});
@@ -71,10 +72,6 @@ function PredictTherapyParameters() {
   const queryAvailableSessions = async () => {
     setAlert(<LoadingProgress/>);
     try {
-      const availability = await SessionController.query("/api/queryAIModels", {
-        RequestType: "RequestAvailability", ParticipantId: participant_uid,
-      });
-      setAvailableModels(availability.data);
       const surveyResponse = await SessionController.query("/api/queryAIModels", {
         RequestType: "RequestQualifyRecordings",
         ModelType: "Survey-based Contact Selection (Lavu et. al., 2025)",
@@ -148,10 +145,9 @@ function PredictTherapyParameters() {
 
   const aggregatedSurveyPredictions = async () => {
     setAlert(<LoadingProgress/>);
-    try {
     let results = {};
     for (let i = 0; i < surveyList.list.length; i++) {
-      if (availableModels["Survey-based Contact Selection (Lavu et. al., 2025)"] && surveyList.list[i].Label === surveyList.active) {
+      if (surveyList.list[i].Label === surveyList.active) {
         const response = await SessionController.query("/api/queryAIModels", {
           RequestType: "RequestAIResult",
           ModelType: "Survey-based Contact Selection (Lavu et. al., 2025)",
@@ -188,7 +184,7 @@ function PredictTherapyParameters() {
 
     let results2026 = {};
     for (let i = 0; i < surveyList.list.length; i++) {
-      if (availableModels["Survey-based Contact Selection (Wong et. al., 2026)"] && surveyList.list[i].Label === surveyList.active) {
+      if (surveyList.list[i].Label === surveyList.active) {
         const response = await SessionController.query("/api/queryAIModels", {
           RequestType: "RequestAIResult",
           ModelType: "Survey-based Contact Selection (Wong et. al., 2026)",
@@ -278,7 +274,6 @@ function PredictTherapyParameters() {
     });
 
     setAlert(null);
-    } catch (error) { SessionController.displayError(error, setAlert); }
   };
 
   const matchedRequests = (request, listOfRequests) => {
@@ -363,11 +358,6 @@ function PredictTherapyParameters() {
   return (
     <DatabaseLayout>
       {alert}
-      {Object.entries(availableModels).filter(([, available]) => !available).map(([name]) => (
-        <MDTypography key={name} variant="body2" sx={{mt: 2}}>
-          {name + ": unavailable because the required model assets are not installed."}
-        </MDTypography>
-      ))}
       <MDBox pt={3}>
         <MDBox mb={3}>
           <Card sx={{width: "100%"}}>
@@ -377,7 +367,7 @@ function PredictTherapyParameters() {
               </MDTypography>
             </MDBox>
             <Grid container spacing={2}>
-              <Grid item xs={6} sx={{opacity: availableModels["Survey-based Contact Selection (Wong et. al., 2026)"] ? 1 : 0.5}}>
+              <Grid item xs={6}>
                 <MDBox px={2} pt={2} lineHeight={1}>
                   <MDTypography variant="h6" fontSize={20}>
                     {"Survey-based AI Contact Selection (Wong 2026)"}
@@ -385,7 +375,6 @@ function PredictTherapyParameters() {
                 </MDBox>
                 <MDBox px={2} pb={2} lineHeight={1}>
                   <Autocomplete
-                    disabled={!availableModels["Survey-based Contact Selection (Wong et. al., 2026)"]}
                     value={surveyList.active}
                     options={surveyList.options}
                     onChange={(event, value) => {
@@ -394,7 +383,7 @@ function PredictTherapyParameters() {
                     renderInput={(params) => (
                       <FormField
                         {...params}
-                        label="Session date"
+                        label={"Select Session Date"}
                         InputLabelProps={{ shrink: true }}
                       />
                     )}
@@ -430,7 +419,7 @@ function PredictTherapyParameters() {
                     renderInput={(params) => (
                       <FormField
                         {...params}
-                        label="Session date"
+                        label={"Select Session Date"}
                         InputLabelProps={{ shrink: true }}
                       />
                     )}
@@ -456,7 +445,7 @@ function PredictTherapyParameters() {
         <MDBox>
           <Grid container spacing={2}>
             <Grid item xs={12}>
-              <Card sx={{width: "100%", opacity: availableModels["Survey-based Contact Selection (Lavu et. al., 2025)"] ? 1 : 0.5}}>
+              <Card sx={{width: "100%"}}>
                 <Grid container>
                   <Grid item xs={12}>
                     <MDBox p={2} lineHeight={1}>
@@ -467,9 +456,9 @@ function PredictTherapyParameters() {
                   </Grid>
                   <Grid item xs={12}>
                     <MDBox p={2}>
-                      {!availableModels["Survey-based Contact Selection (Lavu et. al., 2025)"] || surveyAIResults.length === 0 ? (
+                      {surveyAIResults.length === 0 ? (
                         <MDTypography variant="body2" color="text">
-                          {availableModels["Survey-based Contact Selection (Lavu et. al., 2025)"] ? "No survey results found for the selected date." : "Unavailable: required model assets are not installed."}
+                          {"No survey results found for the selected date."}
                         </MDTypography>
                       ) : (
                         surveyAIResults.map((result, index) => (
@@ -492,7 +481,7 @@ function PredictTherapyParameters() {
               </Card>
             </Grid>
             <Grid item xs={12}>
-              <Card sx={{width: "100%", opacity: availableModels["Survey-based Contact Selection (Wong et. al., 2026)"] ? 1 : 0.5}}>
+              <Card sx={{width: "100%"}}>
                 <Grid container>
                   <Grid item xs={12}>
                     <MDBox p={2} lineHeight={1}>
@@ -503,9 +492,9 @@ function PredictTherapyParameters() {
                   </Grid>
                   <Grid item xs={12}>
                     <MDBox p={2}>
-                      {!availableModels["Survey-based Contact Selection (Wong et. al., 2026)"] || surveyAIResults2026.length === 0 ? (
+                      {surveyAIResults2026.length === 0 ? (
                         <MDTypography variant="body2" color="text">
-                          {availableModels["Survey-based Contact Selection (Wong et. al., 2026)"] ? "No survey results found for the selected date." : "Unavailable: required model assets are not installed."}
+                          {"No survey results found for the selected date."}
                         </MDTypography>
                       ) : (
                         surveyAIResults2026.map((result, index) => (

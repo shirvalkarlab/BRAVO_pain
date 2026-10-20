@@ -1,9 +1,13 @@
 """Amplitude-response evidence built from WITHIN-VISIT clinic steps, not chronic exposure epochs.
 
-  * the FULL-RECORD window fails on capture DIRECTION in all 18 bands, because the two capture arms
-    straddle two programming regimes and power therefore RISES across them; and
-  * the FIVE-ERA window fails on capture SEPARATION in 14 of 18, because restricting to recent eras
-    removes the low amplitudes and the contrast collapses from 2.9 mA to 1.0.
+Within-visit evidence complements chronic exposure epochs, where amplitude and
+calendar time may be confounded. Changing the era window can alter both capture
+direction and separation by changing which programming regimes and doses are compared.
+
+
+Within a clinic visit, fixed rate, pulse width and contacts allow the amplitude
+ladder to be assessed within that visit. This reduces the between-era confound;
+it does not establish sufficient capture separation without evaluating the data.
 
 The output is deliberately the SAME shape ``lfp_evidence.build_all`` returns, a
 ``{(channel, hemisphere, rate): LfpEvidence}`` mapping plus an audit frame, so ``screen_cells`` and
@@ -12,7 +16,8 @@ the whole gate downstream of it run unchanged. Only the evidence source is swapp
 DEPENDENCY NOTE. Nothing here imports Biomarkers. The harmonic-landing flag that accompanies the
 per-band scores needs ``Biomarkers.routines.analytics.harmonic_landings_hz`` and therefore lives in
 ``ClosedLoopDeployment.clinic_steps``, which already depends on both. Keeping the flag out of this
-file is what lets StimOptimizer stay free of that import."""
+file is what lets StimOptimizer stay free of that import.
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -21,34 +26,29 @@ import pandas as pd
 from . import stage_gate as GATE
 from .lfp_evidence import EvidenceAudit
 
-# Participant-specific provenance and examples are maintained outside source control.
+# Seconds after step onset excluded as ramp transient. The retained source default
+# is 20 s. Stimulation-frequency artefact and device amplitude settling are different
+# phenomena; a caller analyzing the stimulation-frequency band may need a longer
+# ramp_s. Assess the per-sample amplitude on the neural clock and balance transient
+# exclusion against retained settled signal. Private historical measurements do not
+# establish that this default is valid for every participant or acquisition.
+
+
 RAMP_EXCLUDE_S = 20.0
 
-#: The longest ramp actually observed in the device's own amplitude record, in seconds. Kept as a
-#: named number so that a future reader can see what ``RAMP_EXCLUDE_S`` above has to cover, and so
-#: that a test can assert the exclusion is not smaller than the thing it exists to exclude.
-LONGEST_OBSERVED_RAMP_S = 17.5
+# Amplitude bin width for capture arms, in mA. Fine programmer steps can produce too
+# few rows per exact current to satisfy MIN_ROWS_PER_ARM. The retained 0.5 mA grouping
+# is a methodological choice; report this grouping rather than implying exact-current arms.
 
-#: Ramp exclusion for a band containing the stimulation rate itself. NOT the default: see the block
-#: above. The earlier measurement found that artefact still rising at 150 s, so no exclusion this
-#: module offers makes such a band safe, and a caller who needs one should treat the band as
-#: unusable rather than pass a larger number and believe the problem is handled.
-STIM_FREQUENCY_BAND_UNSAFE_AT_ANY_EXCLUSION = True
 
-# Participant-specific provenance and examples are maintained outside source control.
 AMP_ARM_BIN_MA = 0.5
 
-# Participant-specific provenance and examples are maintained outside source control.
+# Minimum settled tiles per step before reporting a median. The retained threshold
+# is deliberately low; report the resulting thin evidence per step explicitly.
+
+
 MIN_SETTLED_TILES = 2
 
-
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
-CLUSTER_T_THRESHOLD = 2.0
 
 def amplitude_arm_bins(amp_mA, bin_mA=AMP_ARM_BIN_MA):
     """Amplitudes rounded to the declared arm bin. See :data:`AMP_ARM_BIN_MA` for why."""
@@ -58,7 +58,11 @@ def amplitude_arm_bins(amp_mA, bin_mA=AMP_ARM_BIN_MA):
     return np.round(a / float(bin_mA)) * float(bin_mA)
 
 
-# Participant-specific provenance and examples are maintained outside source control.
+# Maximum amplitude changes in one ramp before refusing a block whose current never
+# holds still. The retained source threshold is a method setting; its applicability
+# to a new acquisition must be assessed from that acquisition's step and hold evidence.
+
+
 MAX_INCREMENTS_PER_RAMP = 100
 
 
@@ -77,20 +81,24 @@ def ramp_windows_from_amplitude(amp_t, amp_mA, *, min_hold_s=20.0, burst_gap_s=1
                                 tol_mA=1e-9):
     """When did the device actually finish moving the current? Measured, not assumed.
 
+    Use the device's per-sample amplitude (BrainSenseLfp LfpData Left/Right mA) on the
+    neural signal clock to identify timing. A sheet's nominal step may be delivered as
+    a burst of smaller increments followed by a hold. Derive ramp endpoints from the
+    record rather than assuming the handwritten time marks an instantaneous change.
+
     A BURST IS ONE STEP. Consecutive changes closer together than ``burst_gap_s`` belong to the same
     ramp, and the plateau begins at the LAST of them. Treating each increment as its own step would
     turn one clinical setting into five, each with a few seconds of signal.
 
-    WHY THERE IS NO AMPLITUDE-DEPENDENT MARGIN HERE, tested at the PI's request 2026-09-06. Ramp
-    duration against the current stepped to gives r = +0.33, p = 0.108 -- not significant. It tracks
-    how many increments the device chose (r = +0.69, p = 0.0001), not how high the current is. So a
-    single flat margin after the measured ramp is what the data supports, and a per-amplitude rule
-    would add complexity for about ten seconds at the low end.
+    The source uses one flat margin after the measured ramp. It does not infer an
+    amplitude-dependent settling rule from the current reached. Validate ramp and
+    hold behavior on the actual acquisition before treating this default as applicable.
 
     Returns a DataFrame with one row per plateau: ``ramp_start``, ``ramp_end``, ``ramp_s``,
     ``n_increments``, ``mA_from``, ``mA_to``, ``hold_s``, ``plateau_end``. Pass ``ramp_end`` as
     ``step_t0`` to :func:`step_settled_stats` so the exclusion runs from the measured end of the
-    ramp rather than from a nominal onset."""
+    ramp rather than from a nominal onset.
+    """
     t = np.asarray(amp_t, dtype=float)
     a = np.asarray(amp_mA, dtype=float)
     if t.shape != a.shape:
@@ -104,7 +112,13 @@ def ramp_windows_from_amplitude(amp_t, amp_mA, *, min_hold_s=20.0, burst_gap_s=1
                                      "mA_from", "mA_to", "hold_s", "plateau_end"])
     ch = np.where(np.abs(np.diff(a)) > tol_mA)[0] + 1
     rows, i = [], 0
-    # Participant-specific provenance and examples are maintained outside source control.
+    # REFUSE RECORDINGS WITHOUT A STABLE AMPLITUDE HOLD.
+    # If changes continue with gaps shorter than burst_gap_s, the burst rule can combine
+    # an entire continuously varying recording into one apparent ramp. Such a block has
+    # no meaningful plateau for a step-response analysis. Return no step and expose the
+    # refusal explicitly instead of relying on min_hold_s to silently remove it.
+
+
     if ch.size > MAX_INCREMENTS_PER_RAMP:
         span = t[ch[-1]] - t[ch[0]] if ch.size > 1 else 0.0
         raise ContinuousAmplitudeError(
@@ -131,26 +145,16 @@ def ramp_windows_from_amplitude(amp_t, amp_mA, *, min_hold_s=20.0, burst_gap_s=1
 def amplitude_response_shape(amp_mA, power, *, min_points=8):
     """Does band power rise and then FALL across the currents tested, rather than run straight?
 
-    WHAT THE PEAK IS NOT, and I had this wrong for one turn on 2026-09-06 before the PI corrected
-    me. I first read the peak as stimulation artifact, because the affected bands coincided with the
-    folded harmonic landings. That inference was wrong and the reasons are worth recording, since it
-    is an easy trap:
+    A response that rises to a peak then falls can have a near-zero straight-line
+    slope despite substantial variation. The slope sign, polarity and two-point tests
+    cannot alone characterize such a relationship. This function evaluates the peak
+    shape explicitly without treating a zero linear slope as proof of no response.
 
-    * A stimulation artifact GROWS WITH CURRENT and keeps growing. Measured on this same visit, the
-      bands containing the 55 Hz stimulation rate itself rise MONOTONICALLY to 18.2 times their
-      starting value. A folded harmonic is that same artifact reappearing at a lower frequency, so
-      it must have the same monotonic shape. A response that comes back down cannot be it.
-    * The apparent coincidence with the harmonic landings was a THRESHOLD ARTEFACT of my own making.
-      The curvature p-values run smoothly with frequency -- 0.711 at 20 Hz, 0.261 at 21, 0.055 at
-      22, 0.026 at 23, then below 0.001 -- so the "clean split" was just where a 0.05 cutoff crossed
-      a continuous gradient.
-    * A folded harmonic lands at ONE frequency (25.0 Hz at 55 Hz stimulation). It cannot produce a
-      smoothly DRIFTING peak position across neighbouring bands, which is what the data show: the
-      peak current falls from 2.17 mA at 22 Hz to 1.72 mA at 29 Hz, r = -0.89, p = 0.0013 over the
-      nine bands where the peak is resolved.
+    A folded harmonic landing is not, by itself, proof of stimulation artifact.
+    Assess response shape and uncertainty rather than declaring a sharp boundary
+    from a significance cutoff across a smoothly changing spectrum.
 
-    So a detected peak is a real, organised amplitude response with a turning point, and the honest
-    description is that the relationship is not monotonic. Whether it is physiological is a separate
+    A detected peak describes a fitted nonmonotonic relationship with a turning point. Whether it is physiological is a separate
     question this function does not answer; a harmonic check remains worth running alongside, but a
     peak is not evidence for artifact and the absence of one is not evidence against it.
 
@@ -161,7 +165,8 @@ def amplitude_response_shape(amp_mA, power, *, min_points=8):
 
     Returns a dict: ``curves`` (bool, the quadratic term is significant), ``peaks_inside`` (bool,
     and the curve opens downward with its turning point among the currents tested), ``peak_mA``,
-    ``p_curvature``, ``r2_linear``, ``r2_quadratic``, and ``verdict`` in plain words."""
+    ``p_curvature``, ``r2_linear``, ``r2_quadratic``, and ``verdict`` in plain words.
+    """
     x = np.asarray(amp_mA, dtype=float)
     y = np.asarray(power, dtype=float)
     if x.shape != y.shape:
@@ -331,8 +336,9 @@ def amplitude_response_shape_pooled(amp_mA, power, visit, *, min_points=8):
     # The pooled straight-line slope and its cluster-robust significance -- computed here (not in
     # a second pass) because X1/beta1/V1 already exist for r2_linear above; this only reads what
     # was already fitted. Column 1 of X1 is the current itself (column 0 is the intercept, per
-    # `_design` above), so beta1[1] is the pooled slope in the same "log power per mA" units
-    # `amplitude_effect.py`'s own per-run slope uses.
+    # `_design` above), so beta1[1] is the pooled slope in DEVICE UNITS per mA -- this fit has
+    # always been on the raw band power; the comment here said "log power" until 2026-09-19, when
+    # decision 202 corrected it and moved the per-run table's own slope onto the same units.
     from scipy import stats as _st
     slope1 = float(beta1[1])
     se1 = float(np.sqrt(V1[1, 1])) if V1[1, 1] > 0 else float("nan")
@@ -392,18 +398,10 @@ def amplitude_response_shape_pooled(amp_mA, power, visit, *, min_points=8):
 #: those new plots not using the middle value of the whole settled plateau but using the average of
 #: the settled values. We've already decided that the averaging is better."
 #:
-#: WHY IT WAS THE MIDDLE VALUE BEFORE, and why changing it is now safe. The median was chosen
-#: because a capture window can contain a transient and a middle value ignores it. That reason has
-#: since been measured away for the settled portion: aligning 1-second epochs to the moment each
-#: ramp finished, across 15 plateaus, band power deviates from its own settled level by 5-20% with
-#: NO monotonic decay -- there is no transient left inside the window the exclusion hands over.
-#:
-#: WHAT THE CHANGE COSTS, stated because it is not free. Single short epochs are strongly
-#: right-skewed: at 1-second resolution the 99.5th percentile is 7 times the median across bands and
-#: 12 times at 8 Hz. A mean is pulled upward by those excursions and a median is not, so the mean of
-#: a plateau sits above its median by an amount that depends on how many excursions that plateau
-#: happened to contain. Both are computed and returned, so the difference is always inspectable
-#: rather than a matter of belief.
+#: The source uses the mean of settled tiles. A median is less sensitive to large
+#: excursions, while a mean retains their contribution. Return both summaries on
+#: identical tiles when requested so the difference is inspectable. Evidence that
+#: a particular acquisition is settled requires its own validation.
 STEP_SUMMARY = "mean"
 
 def step_settled_stats(step_t0, step_window_s, tile_t, tile_power, *,
@@ -609,10 +607,9 @@ def build_all_within_visit(steps, *, centers_hz, tiles_by_channel,
 # seconds a setting was held, counting backwards from the moment the current was changed again.
 #
 # WHY THE LAST 30 SECONDS AND NOT THE FIRST. When the programmer raises the current the device does
-# not jump to the new value, it slides up to it, and the earlier ramp work in this project measured
-# the stimulation-frequency artefact still climbing 150 seconds after a step began. The last 30
-# seconds a setting was held are therefore the most settled part of it, and they are the part
-# furthest away from the slide.
+# not jump instantaneously to the new value. The last window of the hold is furthest
+# from that transition. Still clip at the measured ramp end: position alone does not
+# establish that a short hold has settled.
 #
 # WHY THE CURRENT MUST HAVE GONE UP TO REACH THE SETTING. The PI's words: the rule "should only
 # apply when the stimulus amplitude is being monotonically increased. For example, 1, 1.1, 1.2. If
@@ -689,11 +686,49 @@ def rising_current_settings(current_mA, block=None, *, tol_mA=1e-9):
     return up_from_previous, up_to_next
 
 
+def changed_current_settings(current_mA, block=None, *, prev_current_mA=None, tol_mA=1e-9):
+    """Say, for each setting, whether the current CHANGED to reach it, and which way (decision 213,
+    the PI, 2026-09-20: "pool both legs into the slope because we want to model slope in both
+    directions").
+
+    The current before each setting is the previous setting in the same ``block``; when the caller
+    passes ``prev_current_mA`` (the device's own record of the current before the move that produced
+    each setting, which the run finder has), that is used instead, so the first setting of a
+    recording is judged like any other rather than refused for having nothing before it.
+
+    Returns three boolean arrays: ``changed`` (rose or fell by more than ``tol_mA``), ``rose``,
+    ``fell``; and a list of leg names per setting: "rising", "falling", "first" (nothing known
+    before it) or "unchanged".
+    """
+    a = np.asarray(current_mA, dtype=float)
+    n = a.size
+    b = np.zeros(n, dtype=object) if block is None else np.asarray(block, dtype=object)
+    if b.size != n:
+        raise ValueError(f"block has {b.size} entries but current_mA has {n}")
+    prev = np.full(n, np.nan)
+    for i in range(1, n):
+        if b[i] == b[i - 1]:
+            prev[i] = a[i - 1]
+    if prev_current_mA is not None:
+        given = np.asarray(prev_current_mA, dtype=float)
+        if given.size != n:
+            raise ValueError(f"prev_current_mA has {given.size} entries but current_mA has {n}")
+        prev = np.where(np.isfinite(given), given, prev)
+    tol = float(tol_mA)
+    known = np.isfinite(prev) & np.isfinite(a)
+    rose = known & ((a - prev) > tol)
+    fell = known & ((prev - a) > tol)
+    changed = rose | fell
+    leg = ["rising" if rose[i] else "falling" if fell[i] else "unchanged" if known[i] else "first"
+           for i in range(n)]
+    return changed, rose, fell, leg
+
+
 def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
                                   block=None, step_end_t=None,
                                   window_s=PRE_CHANGE_WINDOW_S,
                                   min_chunks=MIN_CHUNKS_PRE_CHANGE,
-                                  require_rise_into_setting=True,
+                                  require_change_into_setting=True, prev_current_mA=None,
                                   ramp_end_t=None, ramp_margin_s=RAMP_EXCLUDE_S):
     """One band-power vector per setting: the MEAN of the pieces in the last ``window_s`` seconds.
 
@@ -731,6 +766,11 @@ def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
         is clipped so it cannot begin before ``ramp_end_t + ramp_margin_s``; a setting whose clipped
         window then holds fewer than ``min_chunks`` pieces is refused with a reason naming the ramp.
 
+        The last-window average before the next current change assumes the setting has
+        already been held for window_s. Clip its start to the measured ramp end when the
+        hold is shorter, so the average excludes signal acquired while current was moving.
+        This rule applies per plateau and does not assume a particular visit's hold durations.
+
         THIS IS A CLIP AND NOT A NEW RULE. Where the hold is longer than the window, which is the
         common case, nothing changes and the values are identical. Passing ``ramp_end_t=None``
         reproduces the original behaviour exactly, which is why every existing test still passes
@@ -740,15 +780,19 @@ def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
         up to 75.0 s for one the device chose to deliver in 35 pieces.
     min_chunks
         How many pieces must be found in that window before an average is reported. Ten by default.
-    require_rise_into_setting
-        When True, which is the default, a setting is only measured if the current went UP to reach
-        it. Set it to False only to see what the looser rule would have given; the numbers it lets
-        through are mixtures of the setting and the higher current that preceded it.
+    require_change_into_setting, prev_current_mA
+        When True, which is the default, a setting is only measured if the current CHANGED to reach
+        it -- rose or fell (decision 213; until then only a rise counted and every down-leg step was
+        discarded). The window never reaches before the setting's own start, so a falling step's
+        number describes that step and not the higher current before it. ``prev_current_mA`` is the
+        device's own record of the current before each setting's move; with it the first setting of
+        a recording is measured too. Set the switch to False only to see what no rule would give.
 
     Returns ``(power, table)``. ``power`` is a ``(n_settings, n_bands)`` array whose refused rows
     are all missing. ``table`` is a ``pandas.DataFrame`` with one row per setting carrying the
     current, the window that was used, how many pieces were found, whether the setting was
-    accepted, and if it was refused, the plain reason why."""
+    accepted, and if it was refused, the plain reason why.
+    """
     t0 = np.asarray(step_t0, dtype=float)
     amp = np.asarray(current_mA, dtype=float)
     tt = np.asarray(tile_t, dtype=float)
@@ -776,6 +820,7 @@ def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
 
     n_bands = tp.shape[1]
     up_from_previous, up_to_next = rising_current_settings(amp, block)
+    changed_into, rose_into, fell_into, leg = changed_current_settings(amp, block, prev_current_mA=prev_current_mA)
     b = (np.zeros(n, dtype=object) if block is None else np.asarray(block, dtype=object))
 
     # When the caller did not say when each setting ended, a setting ends when the next one in the
@@ -793,7 +838,11 @@ def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
     for i in range(n):
         want_lo = t_end[i] - float(window_s)
         lo = max(want_lo, t0[i]) if np.isfinite(t_end[i]) else np.nan
-        # Participant-specific provenance and examples are maintained outside source control.
+        # Clip at the measured ramp end when supplied. Otherwise a look-back window longer
+        # than the hold can include signal acquired while current was changing. Holds longer
+        # than the window are unaffected and retain the same values.
+
+
         clipped_by_ramp = False
         if ramp_end_t is not None and np.isfinite(lo):
             floor_t = float(ramp_end[i]) + float(ramp_margin_s)
@@ -813,9 +862,10 @@ def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
             sub = np.empty((0, n_bands))
 
         reason = ""
-        if require_rise_into_setting and not up_from_previous[i]:
-            reason = ("the current did not go up to reach this setting, so the 30 seconds would "
-                      "mix this setting with the higher or equal current before it")
+        if require_change_into_setting and not changed_into[i]:
+            reason = ("the current did not change to reach this setting"
+                      + (" (nothing is known about the current before it)" if leg[i] == "first"
+                         else ", so there is no move whose settled level this window would describe"))
         elif not np.isfinite(t_end[i]):
             reason = ("the moment the current was next changed is not known, so there is no "
                       "30 second window that is certain to sit inside this setting")
@@ -839,214 +889,12 @@ def mean_power_before_next_change(step_t0, current_mA, tile_t, tile_power, *,
             t_next_change_s=float(t_end[i]) if np.isfinite(t_end[i]) else np.nan,
             window_start_s=float(lo) if np.isfinite(lo) else np.nan,
             window_shortened_by_setting_start=bool(np.isfinite(t_end[i]) and want_lo < t0[i]),
-            current_rose_into_this_setting=bool(up_from_previous[i]),
+            current_rose_into_this_setting=bool(rose_into[i]),
+            current_fell_into_this_setting=bool(fell_into[i]),
+            leg=leg[i],
             next_change_is_a_further_rise=bool(up_to_next[i]),
             n_chunks_found=n_found,
             accepted=(not reason),
             refusal_reason=reason,
         ))
     return power, pd.DataFrame(rows)
-
-
-# Retained active Aditya interfaces.
-def _band_t_cluster_robust(logp, amp, era, cluster):
-    """Cluster-robust t on the amplitude coefficient of ``logp ~ amp + C(era)``.
-
-    Hand-rolled for speed, because the permutation loop refits this thousands of times. It is the
-    SAME model ``lfp_response.assess_response`` fits with statsmodels, and a test asserts the two
-    agree on real data -- a fast reimplementation that silently disagreed with the gate's estimator
-    would make the search and the verdict answer different questions.
-    """
-    y = np.asarray(logp, dtype=float)
-    a = np.asarray(amp, dtype=float)
-    ok = np.isfinite(y) & np.isfinite(a)
-    if ok.sum() < 4:
-        return np.nan
-    y, a = y[ok], a[ok]
-    era_v = np.asarray(era)[ok]
-    clus = np.asarray(cluster)[ok]
-
-    cols = [np.ones_like(a), a]
-    levels = [u for u in pd.unique(era_v)][1:]          # drop one level as the reference
-    for u in levels:
-        cols.append((era_v == u).astype(float))
-    X = np.column_stack(cols)
-    if np.linalg.matrix_rank(X) < X.shape[1]:
-        return np.nan
-    XtX_inv = np.linalg.pinv(X.T @ X)
-    beta = XtX_inv @ (X.T @ y)
-    resid = y - X @ beta
-
-    # CR0 sandwich: sum over clusters of (X_g' u_g)(X_g' u_g)'
-    meat = np.zeros((X.shape[1], X.shape[1]))
-    for g in pd.unique(clus):
-        m = clus == g
-        Xu = X[m].T @ resid[m]
-        meat += np.outer(Xu, Xu)
-    V = XtX_inv @ meat @ XtX_inv
-
-    # STATSMODELS' FINITE-SAMPLE CORRECTION, applied so this matches the gate's estimator exactly.
-    # Raw CR0 omits it; measured against `smf.ols(...).fit(cov_type="cluster")` the two differed by
-    # a ratio of 1.134349 on a 90-row, 6-cluster construction, against a predicted
-    # sqrt(G/(G-1) * (N-1)/(N-K)) of 1.134349 -- agreement to six decimals, which identified the
-    # discrepancy as exactly this factor rather than a modelling difference.
-    #
-    # It does NOT change the family-wise p-value. N, K and G are fixed across permutations, so the
-    # factor is a constant that scales every t and therefore every cluster mass identically in the
-    # observation and in the null, and cancels in the comparison. It is applied because the
-    # cluster-forming THRESHOLD and the reported per-band t values would otherwise mean something
-    # different here than in `assess_response`, which a reader comparing the two would not expect.
-    G = int(pd.unique(clus).size)
-    N, K = X.shape[0], X.shape[1]
-    if G > 1 and N > K:
-        V = V * (G / (G - 1.0)) * ((N - 1.0) / (N - K))
-
-    se = float(np.sqrt(V[1, 1])) if V[1, 1] > 0 else np.nan
-    if not np.isfinite(se) or se == 0:
-        return np.nan
-    return float(beta[1] / se)
-
-
-def _clusters_along_axis(t, threshold):
-    """Runs of ADJACENT same-signed bands whose |t| clears the threshold, with their masses.
-
-    Adjacency is position on the ordered centre axis, so the caller must pass centres in order.
-    Returns ``[(i_start, i_stop_exclusive, mass), ...]``.
-    """
-    t = np.asarray(t, dtype=float)
-    sup = np.isfinite(t) & (np.abs(t) >= float(threshold))
-    out, i = [], 0
-    while i < t.size:
-        if not sup[i]:
-            i += 1
-            continue
-        s = np.sign(t[i])
-        j = i
-        while j < t.size and sup[j] and np.sign(t[j]) == s:
-            j += 1
-        out.append((i, j, float(np.sum(t[i:j]))))
-        i = j
-    return out
-
-
-def band_cluster_permutation(power_by_center, amp_mA, visits, *, n_perm=2000, seed=0,
-                             t_threshold=CLUSTER_T_THRESHOLD, bin_mA=AMP_ARM_BIN_MA,
-                             extra_thresholds=()):
-    """Family-wise corrected answer to "does this cell respond to amplitude ANYWHERE?"
-
-    The null permutes amplitude BETWEEN STEPS WITHIN EACH VISIT. That is the exchangeability the
-    design actually supports: visits differ in overall power level and in which amplitudes were
-    tried, so shuffling across visits would break the blocking and test a different, weaker null.
-    Shuffling within a visit tests exactly "within this visit, amplitude carries no information
-    about band power", which is the question.
-
-    Returns the observed clusters, the largest cluster's family-wise p, and the resolution floor of
-    that p. Read the module notes above before using it to justify anything: it CANNOT name a band.
-
-    ``extra_thresholds`` evaluates additional cluster-forming thresholds in the SAME permutation
-    loop and returns a p for each under ``threshold_sweep``. This is nearly free, because the
-    expensive step is refitting the per-band t values on every permuted replicate and the threshold
-    only affects how those t values are grouped afterwards. It is offered because the threshold is
-    a free parameter (limitation 3) and the honest way to handle that is to show the whole sweep
-    rather than one chosen value -- reporting the sweep is a sensitivity analysis, whereas reporting
-    the best entry of it would be selection.
-    """
-    centers = sorted(float(c) for c in power_by_center)
-    if len(centers) < 3:
-        return {"available": False, "reason": f"a cluster test over the band axis needs at least "
-                                              f"three centres, got {len(centers)}"}
-    Y = np.column_stack([np.asarray(power_by_center[c], dtype=float) for c in centers])
-    amp = amplitude_arm_bins(amp_mA, bin_mA)
-    vis = np.asarray(visits)
-    if not (Y.shape[0] == amp.size == vis.size):
-        raise ValueError(f"power rows {Y.shape[0]}, amplitude {amp.size} and visits {vis.size} "
-                         f"must all match")
-    uv = pd.unique(vis)
-    if uv.size < 2:
-        return {"available": False, "reason": f"only {uv.size} visit(s); the null permutes "
-                                              f"amplitude WITHIN visits and needs at least two"}
-    # a visit with a single amplitude contributes no permutable contrast; say so rather than
-    # letting it silently narrow the null
-    per_visit = {str(v): int(np.unique(amp[vis == v]).size) for v in uv}
-    n_informative = sum(1 for k in per_visit.values() if k >= 2)
-    if n_informative == 0:
-        return {"available": False, "reason": "no visit contains two amplitudes, so permuting "
-                                              "within visits cannot change anything",
-                "amplitudes_per_visit": per_visit}
-
-    t_obs = np.array([_band_t_cluster_robust(Y[:, j], amp, vis, vis)
-                      for j in range(len(centers))])
-    # every threshold to evaluate, primary first, de-duplicated but order-preserving
-    thresholds = [float(t_threshold)]
-    for x in extra_thresholds:
-        if float(x) not in thresholds:
-            thresholds.append(float(x))
-    obs_by_thresh = {th: _clusters_along_axis(t_obs, th) for th in thresholds}
-    obs = obs_by_thresh[float(t_threshold)]
-    if not obs:
-        return {"available": True, "n_clusters": 0, "p_fwer": None,
-                "t_per_band": {c: (None if not np.isfinite(t) else float(t))
-                               for c, t in zip(centers, t_obs)},
-                "t_threshold": float(t_threshold), "n_perm": int(n_perm),
-                "amplitudes_per_visit": per_visit,
-                "note": (f"no band reached |t| >= {t_threshold:g}, so there is no cluster to test. "
-                         f"Given limitation 2 (narrow effects accumulate little mass) this is weak "
-                         f"evidence of absence, not a demonstration that the cell is flat.")}
-
-    rng = np.random.default_rng(seed)
-    idx_by_visit = [np.flatnonzero(vis == v) for v in uv]
-    null_max = {th: np.empty(int(n_perm), dtype=float) for th in thresholds}
-    for k in range(int(n_perm)):
-        a_perm = amp.copy()
-        for ix in idx_by_visit:
-            a_perm[ix] = rng.permutation(amp[ix])
-        # the t values are computed ONCE per replicate and reused at every threshold; only the
-        # grouping differs, which is what makes the sweep nearly free
-        t_p = np.array([_band_t_cluster_robust(Y[:, j], a_perm, vis, vis)
-                        for j in range(len(centers))])
-        for th in thresholds:
-            cl = _clusters_along_axis(t_p, th)
-            null_max[th][k] = max((abs(m) for _, _, m in cl), default=0.0)
-
-    def _p_for(th):
-        cl = obs_by_thresh[th]
-        if not cl:
-            return None, None
-        big = max(cl, key=lambda c: abs(c[2]))
-        m = abs(big[2])
-        return float((1 + np.sum(null_max[th] >= m)) / (1 + int(n_perm))), big
-
-    p, biggest = _p_for(float(t_threshold))
-    sweep = {}
-    for th in thresholds:
-        p_th, big_th = _p_for(th)
-        sweep[th] = {"p_fwer": p_th, "n_clusters": len(obs_by_thresh[th]),
-                     "largest_mass": (None if big_th is None else big_th[2]),
-                     "largest_lo_hz": (None if big_th is None else centers[big_th[0]]),
-                     "largest_hi_hz": (None if big_th is None else centers[big_th[1] - 1]),
-                     "largest_n_bands": (None if big_th is None else big_th[1] - big_th[0])}
-    return {
-        "available": True,
-        "n_clusters": len(obs),
-        "clusters": [{"lo_hz": centers[i], "hi_hz": centers[j - 1], "n_bands": j - i,
-                      "mass": m, "sign": ("negative" if m < 0 else "positive")}
-                     for i, j, m in obs],
-        "largest_cluster": {"lo_hz": centers[biggest[0]], "hi_hz": centers[biggest[1] - 1],
-                            "n_bands": biggest[1] - biggest[0], "mass": biggest[2],
-                            "sign": ("negative" if biggest[2] < 0 else "positive")},
-        "p_fwer": p,
-        "p_resolution": 1.0 / (1 + int(n_perm)),
-        "t_threshold": float(t_threshold),
-        "threshold_sweep": sweep,
-        "n_perm": int(n_perm),
-        "t_per_band": {c: (None if not np.isfinite(t) else float(t))
-                       for c, t in zip(centers, t_obs)},
-        "amplitudes_per_visit": per_visit,
-        "n_visits_informative": n_informative,
-        "note": ("Family-wise corrected across the band axis. Establishes EXISTENCE of an amplitude "
-                 "response, NOT its location: the cluster's frequency limits are descriptive and "
-                 "must not be used to choose a band to program (Sassenhagen & Draschkow 2019). The "
-                 "per-band t values are cluster-robust and anti-conservative at these cluster "
-                 "counts; only the family-wise p is calibrated, because the permutation recomputes "
-                 "the same biased statistic under the null."),
-    }

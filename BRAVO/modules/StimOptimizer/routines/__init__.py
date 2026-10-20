@@ -1,1 +1,1 @@
-"""Research package integrated from Prasad 8146f069; canonical modules namespace."""
+"""Science routines for StimOptimizer. No BRAVO/Django imports below this line."""

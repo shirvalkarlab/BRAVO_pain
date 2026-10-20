@@ -3,16 +3,10 @@ low compared with the rest of that stretch, and for how long -- the measurement 
 startup delay is set from (T6, 2026-09-13; contest decision 150, ``artifacts/contest_2026-09-13_
 SYNTHESIS.md`` section 4, task 7 "The startup dip, measured in the module").
 
-WHAT THIS PORTS, AND FROM WHERE, AND WHY TWO METHODS. Two of the contest's six entries each
-measured this independently and reported different numbers on the identical participant and band
-(ONE_THREE_LEFT at 24.5 Hz): contestant D (``dwell_markov``) found a real, significant dip at the
-very first reading of a training stretch (0.104 of this participant's own scatter low, t = -2.49,
-82 stretches); contestant E (``nonlin_dyn``) found nothing (0.03, 0.01, 0.00 of the scatter for the
-first three readings, none more than 1.5 standard errors from zero). The contest's own synthesis
-took the disagreement at face value rather than picking a winner ("this disagrees with the Phase 10
-finding ... the two use different baselines and I cannot say which is right", contestant E's own
-report). BOTH are ported here exactly as each contestant coded them, from the read-only scratch
-copies (gitignored, not in this repository): ``BRAVO/_agent_bridge/_probe_tl/_contest/dwell_markov/
+WHAT THIS PORTS, AND WHY TWO METHODS. Two independent contest implementations used different
+indexing and inclusion rules. Both are retained rather than silently choosing one; participant
+measurements from the original comparison remain private. The read-only scratch sources were
+``BRAVO/_agent_bridge/_probe_tl/_contest/dwell_markov/
 d1_explore.py`` (search "startup check") and ``BRAVO/_agent_bridge/_probe_tl/_contest/nonlin_dyn/
 s3_returnmap.py`` (section "(D) start-of-stretch transient"). Neither is corrected, reconciled or
 picked as more right than the other -- see the module's own returned ``note`` field, and the
@@ -88,10 +82,6 @@ StretchTuple = Tuple[np.ndarray, np.ndarray, np.ndarray]
 # The one train/test split both contestants used (ported once; see the module docstring for why
 # it is applied to a DIFFERENT starting collection for each method, faithfully, not harmonised)
 # ---------------------------------------------------------------------------------------------
-
-# Aditya canonical compatibility imports/constants.
-
-
 def split_stretches_by_time(stretches: Sequence[StretchTuple],
                             frac: float = TRAIN_FRAC
                             ) -> Tuple[List[StretchTuple], List[StretchTuple]]:
@@ -274,6 +264,3 @@ def startup_bias_for_series(t, power, amp_obs, *, train_frac: float = TRAIN_FRAC
                 "time j times the device clock, from every stretch that reached that position, no "
                 "minimum length). Neither is corrected toward the other here."),
     }
-
-
-# Retained active Aditya interfaces.

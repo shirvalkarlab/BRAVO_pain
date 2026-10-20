@@ -25,7 +25,7 @@ channel, a (channel, band) pair, or something else -- the design doc's own Layer
 import numpy as np
 
 #: The independence rule closes decision 73's own finding: two of the four existing matching
-#: mechanisms (`per_pro_lsb`, `align_pros`) have no cap at all, letting one report or one
+#: mechanisms (`align_pros`, and the since-deleted `per_pro_lsb`) had no cap at all, letting one report or one
 #: recording be claimed by an unbounded number of matches -- the same pseudoreplication shape
 #: decision 17's impedance term was rejected for. Callers that want today's uncapped behavior can
 #: still ask for it explicitly by passing ``max_per_rating=None``.

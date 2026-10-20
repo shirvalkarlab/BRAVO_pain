@@ -15,7 +15,7 @@ and a too-close capture is a separation that is small relative to the noise. Pre
 therefore not speculation, it is arithmetic on numbers we have.
 
 WHICH NUMBERS, since 2026-09-12 (PI decision, "b and c"): the two D26 verdicts are judged on the
-POOLED TITRATION SLOPE -- band power on current across every run of rising current on the contact,
+POOLED TITRATION SLOPE -- band power on current across every run of stepped current (one side stepped up or down, the other held) on the contact,
 one baseline per run (decisions 55, 124, 126) -- and they WARN rather than block. The between-visit
 separation described in the first paragraph is still computed and reported, labelled as the
 comparison decision 124 distrusts, but it no longer decides either verdict. See
@@ -27,8 +27,23 @@ import numpy as np
 
 from .types import ThresholdPlan
 
-# Participant-specific provenance and examples are maintained outside source control.
-from modules.StimOptimizer.routines.lfp_response import (        # noqa: E402  (constant, not a cycle)
+#: Separation below which the two captured thresholds should be treated as too close. Expressed in
+#: within-state standard deviations, so it is a Cohen's-d-style quantity. This is a DECLARED
+#: threshold, not a device-published one: Medtronic documents the alert's existence and its trigger
+#: in words ("minimally responsive") but not a numeric criterion, so the module states its own and
+#: labels it rather than implying the number came from the manufacturer.
+#:
+#: IMPORTED RATHER THAN RESTATED, 2026-09-05. This constant was declared here as 1.0 while
+#: StimOptimizer's response test declared the SAME criterion as 0.5, and nothing linked them — two
+#: independent literals encoding one unpublished manufacturer rule, drifted to a factor of two
+#: apart. The consequence was a band that clears the screen and is then called too-close
+#: downstream: any cell with d between 0.5 and 1.0 passed `assess_response` and failed
+#: `threshold_placement`. Both stages must use the same criterion.
+#:
+#: PI decision: use the LOOSER criterion for both. Rather than write 0.5 in two places and invite
+#: the same drift again, this module now imports the one definition. If the floor is ever revisited,
+#: it moves in a single file.
+from StimOptimizer.routines.lfp_response import (        # noqa: E402  (constant, not a cycle)
     MIN_CAPTURE_SEPARATION_D,
 )
 
@@ -93,6 +108,15 @@ def d26_capture_verdicts(pooled_slope, *, expected_sign=-1, historical_d=None,
     """The two D26 verdicts -- "inverted capture" and "thresholds too close" -- judged on the
     POOLED TITRATION SLOPE, and reported as warnings that gate nothing.
 
+    PI decision 2026-09-12, his words "b and c". Until then both verdicts were judged on the
+    between-visit comparison this function still receives as ``historical_*``: the mean of every
+    sample recorded at the lowest therapeutic current on record against the mean at the highest,
+    pooled over every visit and month. Decisions 124 and 126 had already ruled that comparison
+    confounded by time and replaced it, as the report's current-to-power edge, with the pooled
+    slope across runs of stepped current, one baseline per run (``edges.pooled_actuation_edge``).
+    Between-visit and within-visit estimates can disagree in sign; these verdicts read the
+    pooled within-visit estimate chosen by the project.
+
     THE RULE, SINCE 2026-09-13 (PI: "Established means mean only for flexibility", read as "point
     sign decides, but flag as provisional"). BOTH verdicts are judged on the SIGN OF THE POINT
     ESTIMATE. "Inverted" is the pooled slope's sign being wrong for the control law. "Too close"
@@ -113,7 +137,8 @@ def d26_capture_verdicts(pooled_slope, *, expected_sign=-1, historical_d=None,
     ``predicted_recapture_alert`` is True when either verdict is adverse on the point sign, False
     when both are clear, and None when nothing could be assessed -- the same None the field
     carried before when the historical spread could not be measured, because a prediction made
-    from no number would be a fabrication."""
+    from no number would be a fabrication.
+    """
     hist_inverted = None
     if historical_low_mean is not None and historical_high_mean is not None:
         s = (1 if historical_high_mean > historical_low_mean
@@ -130,7 +155,7 @@ def d26_capture_verdicts(pooled_slope, *, expected_sign=-1, historical_d=None,
         "declared_minimum": MIN_CAPTURE_SEPARATION_D,
     }
     est = getattr(pooled_slope, "estimate", None)
-    have_slope = getattr(pooled_slope, "sign", None) is not None
+    have_slope = est is not None and np.isfinite(float(est))
 
     if not have_slope:
         tail = ""
@@ -141,7 +166,7 @@ def d26_capture_verdicts(pooled_slope, *, expected_sign=-1, historical_d=None,
                     + "; it is not the verdict.")
         inv = ("D26 inverted capture: not assessed -- no pooled titration slope is stored for this "
                "band, so whether power falls as current rises cannot be judged from the runs of "
-               "rising current." + tail)
+               "stepped current." + tail)
         close = ("D26 thresholds too close: not assessed -- no pooled titration slope is stored for "
                  "this band, so whether the signal's response to current can be told from no "
                  "response is unknown; the device may raise RECAPTURE THRESHOLDS." + tail)
@@ -225,7 +250,8 @@ def threshold_placement(power_low, power_high, *, amp_low, amp_high, expected_si
     captures at two amplitudes. The value added here is the set of predictions that come with them:
     whether the capture will be flagged as inverted, whether it will be flagged as too close, how
     much of the time the signal will sit in each of the three control states, and whether the
-    capture amplitudes themselves violate the artefact ceiling of D27.
+    capture amplitudes themselves violate the artefact ceiling of D27 (since decision 478 that last
+    check is record only: "not evidence based - disregard"; see ``ThresholdPlan.record_only``).
 
     ``pooled_slope`` is the report's E1 when it is the pooled titration slope (an ``EdgeEstimate``
     from ``edges.pooled_actuation_edge``), or None when no slope is stored. Since 2026-09-12 the
@@ -235,24 +261,32 @@ def threshold_placement(power_low, power_high, *, amp_low, amp_high, expected_si
     verdict sentences are judged on, and where they land, changed.
     """
     problems = []
+    record_only = []
     d = control_authority(power_low, power_high)
     a = np.asarray(power_low, float); a = a[np.isfinite(a)]
     b = np.asarray(power_high, float); b = b[np.isfinite(b)]
     lo_mean = float(np.mean(a)) if a.size else None
     hi_mean = float(np.mean(b)) if b.size else None
 
-    # Participant-specific provenance and examples are maintained outside source control.
+    # The capture THIS MODULE PROPOSES is only valid below the artefact ceiling. This is the same
+    # ceiling rule D27 applies, but to a DIFFERENT amplitude: the ledger's D27 row judges the
+    # device's own newest capture, while these amplitudes are the lowest and highest therapeutic
+    # currents on record for the cell. The sentence therefore names the proposed amplitude,
+    # rather than citing D27 as though it were the ledger row (review C10, 2026-09-12).
+    # NOT EVIDENCE BASED - DISREGARD (the PI, 2026-10-16, decision 478): the two sentences are kept,
+    # with that note, in `record_only`; they no longer reach `problems` (which block) or `warnings`.
+    _DISREGARD = "Not evidence based - disregard: "
     for label, amp in (("lower", amp_low), ("upper", amp_high)):
         if amp is not None and amp > CAPTURE_ARTEFACT_AMP_MA:
             _which = {"lower": "lowest", "upper": "highest"}[label]
-            problems.append(
+            record_only.append(_DISREGARD +
                 f"the proposed {label} capture amplitude of {amp:.2f} mA (the {_which} therapeutic "
                 f"current on record for this cell) exceeds the {CAPTURE_ARTEFACT_AMP_MA} mA artefact "
                 "ceiling, above which stimulation artefact may make the LFP appear elevated during "
                 "capture; a threshold read there would partly measure the stimulator. The ledger's "
                 "D27 row judges the device's own newest capture, which is a different amplitude.")
     if pulse_width_us is not None and pulse_width_us > CAPTURE_ARTEFACT_PW_US:
-        problems.append(
+        record_only.append(_DISREGARD +
             f"the proposed capture's pulse width {pulse_width_us:.0f} us exceeds the "
             f"{CAPTURE_ARTEFACT_PW_US:.0f} us artefact ceiling, with the same consequence for the capture.")
 
@@ -283,14 +317,12 @@ def threshold_placement(power_low, power_high, *, amp_low, amp_high, expected_si
         capture_amp_low=amp_low, capture_amp_high=amp_high,
         frac_time_below=fb, frac_time_between=fbet, frac_time_above=fab,
         predicted_recapture_alert=alert,
-        control_authority=d, problems=problems, warnings=warnings, capture_verdicts=verdicts,
+        control_authority=d, problems=problems, warnings=warnings, record_only=record_only,
+        capture_verdicts=verdicts,
         note=("Thresholds are placed at the two capture means, as the device does. Since 2026-09-12 "
               "the two D26 verdicts (inverted capture, thresholds too close) are judged on the "
-              "pooled titration slope across runs of rising current, not on the between-visit "
+              "pooled titration slope across runs of stepped current (both legs), not on the between-visit "
               "comparison of the two capture means, and they warn rather than block. The "
               "separation criterion on that comparison is declared by this module, not published "
               "by the manufacturer, who describes the alert qualitatively as the signal being "
               "minimally responsive."))
-
-
-# Retained active Aditya interfaces.

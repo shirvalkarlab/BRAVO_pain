@@ -51,44 +51,19 @@ import os
 import pickle
 import re
 import threading
-import uuid
-import contextvars
-import contextlib
-
-_CANONICAL_SCOPE = contextvars.ContextVar("bravo_canonical_cache_scope", default=None)
-
-@contextlib.contextmanager
-def canonical_scope(identity):
-    token = _CANONICAL_SCOPE.set(hashlib.sha256(str(identity).encode()).hexdigest())
-    try:
-        yield
-    finally:
-        _CANONICAL_SCOPE.reset(token)
 
 _log = logging.getLogger(__name__)
 
 #: Bumped when the shape of what gets stored changes. It is part of the file name, so an older file
 #: is never read by newer code — the old name is simply not looked for, and `clear` sweeps it.
 FORMAT_VERSION = 1
-
-#: One limit for every kind, and it is the LARGER of the two predecessors': 1,073,741,824 bytes
-#: here against the closed-loop module's 268,435,456.
-#:
-#: THE REASON IS HEADROOM, NOT REFUSAL, and an earlier version of this comment got that wrong.
-#: 268,435,456 bytes is 256 MiB, so it would NOT have refused today's 245.90 MB tile entry — it
-#: leaves between 4 and 9 percent to spare, depending on whether that measurement was decimal or
-#: binary. Single-digit headroom on the ONE entry the cache exists to hold is the problem: one more
-#: visit's recordings, or one more sensing channel, crosses it. And CROSSING IT IS SILENT — the
-#: write is refused, the tiles stay in one worker's memory, and the page simply becomes slow again
-#: with nothing a reader would think to look at. The larger cap leaves about 4.2 times the current
-#: size.
-#:
-#: A cache is a convenience and must never be the reason a disk fills on a machine that is also
-#: holding the participant's recordings, which is why there is a limit at all. Override per kind
-#: through `MAX_BYTES_BY_KIND`.
+# Preserve the behavior covered by the regression tests.
 MAX_BYTES_DEFAULT = 1024 * 1024 * 1024
 
-MAX_BYTES_BY_KIND = {}
+MAX_BYTES_BY_KIND = {
+    # See the synthetic regression tests for this behavior.
+    "decoded_recordings": 64 * 1024 * 1024 * 1024,
+}
 
 #: The subdirectory each kind lives in. A kind not named here gets a directory of its own name.
 #: `raw_lsb_tiles` keeps its historical directory AND its historical file naming, because that
@@ -145,16 +120,6 @@ _EVENTS = {"hits": 0, "misses": 0, "writes": 0, "refused_too_big": 0, "unreadabl
 _LOCK = threading.Lock()
 
 
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
-
-
-
-
 def _bump(name, n=1):
     with _LOCK:
         _EVENTS[name] = _EVENTS.get(name, 0) + n
@@ -192,8 +157,7 @@ def root_dir(root=None):
         base = os.environ.get("DATASERVER_PATH")
     if not base:
         return None
-    scope = _CANONICAL_SCOPE.get()
-    return os.path.join(str(base), "cache", "canonical", scope) if scope else os.path.join(str(base), "cache")
+    return os.path.join(str(base), "cache")
 
 
 def kind_dir(kind, *, create=True, root=None):
@@ -252,12 +216,12 @@ def _stem(kind, participant_uid, signature, root=None):
     return os.path.join(d, f"{kind}.v{FORMAT_VERSION}.{uid}.{key}")
 
 
-_EXT_FOR_FORMAT = {"parquet": ".parquet", "npz": ".npz", "pickle": ".pkl"}
+_EXT_FOR_FORMAT = {"parquet": ".parquet", "npz": ".npz", "pickle": ".pkl", "mapped": ".bmap"}
 _FORMAT_FOR_EXT = {v: k for k, v in _EXT_FOR_FORMAT.items()}
 
 
 def _existing_payload_path(stem):
-    for ext in (".parquet", ".npz", ".pkl"):
+    for ext in (".parquet", ".npz", ".pkl", ".bmap"):
         p = stem + ext
         if os.path.exists(p):
             return p
@@ -329,13 +293,7 @@ def _read_meta_file(path):
 
 
 def newest_stamp(kind, participant_uid, root=None, match=None):
-    """The newest sidecar for this kind and participant, whatever its signature, or None.
-
-    A page needs to say "last updated" before it knows whether today's key matches, so this looks
-    the participant up by name rather than by signature. ``match``, when given, is a predicate on
-    the sidecar: the newest sidecar it accepts is returned, so a kind that keeps several entries
-    per participant (KEEP_NEWEST_BY_KIND) can be read back by what its `extra` says it is for.
-    """
+    'Implementation details are defined by the code and its regression contracts.'
     d = kind_dir(kind, create=False, root=root)
     if d is None:
         return None
@@ -366,13 +324,7 @@ def newest_stamp(kind, participant_uid, root=None, match=None):
 
 
 def stamp_for_key(key, root=None):
-    """The sidecar of the entry a product key names (`kind/participant/signature_key`), or None.
-
-    For a reader that holds a key handed to it by another module and needs the chain of exactly
-    that entry, not of whichever entry of the kind is newest. The store keeps one entry per kind
-    and participant and sweeps the rest, so "the newest" and "the one named" agree only until the
-    next write; a chain copied from the wrong entry would cite inputs the product never used.
-    """
+    'Implementation details are defined by the code and its regression contracts.'
     try:
         kind, uid, skey = str(key).split("/")
     except ValueError:
@@ -457,15 +409,101 @@ def load_newest(kind, participant_uid, *, consumer=None, root=None, match=None):
         if fmt == "pickle" and isinstance(payload, dict) \
                 and "signature" in payload and "payload" in payload:
             payload = payload["payload"]
+    except MapUnavailable as exc:
+        _log.warning("CacheStore: could not map %s (%r); a miss, the entry is kept", path, exc)
+        _bump("misses")
+        return None, stamp
     except Exception as exc:                                    # noqa: BLE001
         _bump("unreadable")
         _discard_entry(stem, repr(exc))
         return None, stamp
     _bump("hits")
     return payload, stamp
+# See the synthetic regression tests for this behavior.
+_MAPPED_MAGIC = b"BRAVOMP1"
+_MAPPED_ALIGN = 64
+
+
+class MapUnavailable(OSError):
+    """The process could not map a file (out of file handles or address space). Not a sign of a
+    damaged entry, so the entry is kept and the read is a miss."""
+
+
+def _raise_open_file_limit():
+    """Each live map holds one file handle, so lift this process's soft limit to its hard limit
+    (capped at 65,536; the server's workers start at 1,024 with a hard limit of 524,288)."""
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        want = 65536 if hard == resource.RLIM_INFINITY else min(hard, 65536)
+        if soft != resource.RLIM_INFINITY and soft < want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+    except Exception:                                   # noqa: BLE001 -- the limit is a convenience
+        pass
+
+
+_raise_open_file_limit()
+
+
+def _aligned(n):
+    return (n + _MAPPED_ALIGN - 1) // _MAPPED_ALIGN * _MAPPED_ALIGN
+
+
+def _write_mapped(tmp, payload):
+    """Write ``payload`` in the mapped format and return the file size in bytes."""
+    import struct
+    buffers = []
+    skeleton = pickle.dumps(payload, protocol=5, buffer_callback=buffers.append)
+    raws = [b.raw() for b in buffers]
+    head = 8 + 16 + 16 * len(raws)
+    pos = _aligned(head + len(skeleton))
+    table = []
+    for r in raws:
+        table.append((pos, r.nbytes))
+        pos = _aligned(pos + r.nbytes)
+    with open(tmp, "wb") as fh:
+        fh.write(_MAPPED_MAGIC)
+        fh.write(struct.pack("<QQ", len(raws), len(skeleton)))
+        for off, n in table:
+            fh.write(struct.pack("<QQ", off, n))
+        fh.write(skeleton)
+        for (off, _n), r in zip(table, raws):
+            fh.write(b"\0" * (off - fh.tell()))
+            fh.write(r)
+    return os.path.getsize(tmp)
+
+
+def _read_mapped(path):
+    """The payload, its arrays views of a copy-on-write map of ``path`` (see above)."""
+    import mmap
+    import struct
+    with open(path, "rb") as fh:
+        size = os.fstat(fh.fileno()).st_size
+        if size < 24:
+            raise ValueError("the mapped file is shorter than its header")
+        try:
+            mm = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_COPY)
+        except OSError as exc:
+            raise MapUnavailable(str(exc)) from exc
+    if mm[:8] != _MAPPED_MAGIC:
+        raise ValueError("the mapped file does not start with its marker")
+    n_buf, n_skel = struct.unpack_from("<QQ", mm, 8)
+    head = 8 + 16 + 16 * n_buf
+    if head + n_skel > size:
+        raise ValueError("the mapped file is shorter than its header says")
+    view = memoryview(mm)
+    buffers = []
+    for i in range(n_buf):
+        off, n = struct.unpack_from("<QQ", mm, 24 + 16 * i)
+        if off + n > size:
+            raise ValueError("an array runs past the end of the mapped file")
+        buffers.append(view[off:off + n])
+    return pickle.loads(view[head:head + n_skel], buffers=buffers)
 
 
 def _load_payload(path, fmt):
+    if fmt == "mapped":
+        return _read_mapped(path)
     if fmt == "parquet":
         import pandas as pd
         return pd.read_parquet(path)
@@ -554,6 +592,10 @@ def load(kind, participant_uid, signature, *, consumer=None, root=None):
                 raise                       # a refusal is a decision and must not look like a miss
         except ImportError:
             pass
+        if isinstance(exc, MapUnavailable):
+            _log.warning("CacheStore: could not map %s (%r); a miss, the entry is kept", path, exc)
+            _bump("misses")
+            return None
         _log.warning("CacheStore: discarding an unusable entry %s (%r)", path, exc)
         _bump("unreadable")
         for p in (path, _meta_path(stem)):
@@ -562,25 +604,33 @@ def load(kind, participant_uid, signature, *, consumer=None, root=None):
             except OSError:
                 pass
         return None
-
-
-# --------------------------------------------------------------------------------------------
-# writing
-# --------------------------------------------------------------------------------------------
-
-# Participant-specific provenance and examples are maintained outside source control.
+# See the synthetic regression tests for this behavior.
 KEEP_NEWEST_BY_KIND = {
     "biomarker_band_sweep": 12,
     "biomarker_band_correlation": 12,
     "biomarker_band_discrimination": 12,
-    # One simulation per candidate band (closed_loop_simulation is keyed on the candidate), so
-    # switching the committed band must not evict the last one -- the decision-107 lesson again,
-    # met live on 2026-09-11 when the page's own report evicted the probe's entry.
+    # Preserve the behavior covered by the regression tests.
     "closed_loop_simulation": 6,
     # Same reasoning, same lesson, met live again on 2026-09-13 while building the design rule
     # (decision 151): fitting the L 1-3+ candidate right after L 0-2+ evicted L 0-2+'s just-written
     # entry, because the design-rule table is also keyed on the candidate.
     "closed_loop_design_rule": 6,
+    # And the robustness bootstrap, keyed on the candidate like the two above and read back by the
+    # candidate tag on its sidecar, kept ONE entry per participant until decision 309: the left and
+    # right candidates' answers evicted each other, so every switch of side rebuilt the other's
+    # (found by decision 306's agent, 2026-09-26). The decision-107 lesson a fifth time.
+    "closed_loop_robustness": 6,
+    # The band's onset (decision 417), keyed on the candidate like the three above.
+    "closed_loop_band_timing": 6,
+    # Whole answers saved on the server (decision 423), one per band, pain score and setting: the
+    # bands a reader explores and their neighbours. About 1-5 MB each.
+    "closed_loop_report": 200,
+    "deployment_summary": 200,
+    "deployment_roc": 200,
+    "deployment_roc_by_era": 200,
+    "band_lsb_power": 200,
+    # one modelled-LSB table per contact, band width and recording set (decision 433)
+    "modeled_lsb_by_centre": 48,
     # The Stim Optimizer page makes TWO requests, plain and with the two-stage plan, and each is
     # its own key; under a limit of one they evicted each other, so the second page load rebuilt
     # what the first had just stored (watched live 2026-09-12: plain, two-stage, plain again --
@@ -592,6 +642,18 @@ KEEP_NEWEST_BY_KIND = {
     # other every day -- noon ingest evicted the page's, the next Recompute reassembled (the
     # decision-51 per-recording loop plus a store write) and evicted the ingest's. Two keeps both.
     "biomarker_psd_matrix": 2,
+    # The heat maps' stability column is filed under the key of the grid it answers, so there is
+    # one entry per grid and it needs the grid kinds' twelve. Under a limit of one every background
+    # run deleted the one before it (found live 2026-09-23: "stored 132 of 132 points" dozens of
+    # times in the log, one entry on disk, and every other grid -- the page's own among them --
+    # reading "not tested" on all 132 rows). The decision-107 lesson a fourth time. 0.13 MB an
+    # entry, so about 1.6 MB a participant.
+    "biomarker_band_stability_grid": 12,
+    # The decoded recordings (decision 414): one entry per set of recording types, kept apart by
+    # `keep_group` (the types), so the time-domain set does not evict the chronic one. Each new
+    # ingest files a new entry and the superseded one of its group goes; a worker still reading a
+    # removed file keeps its pages until it lets go of them.
+    "decoded_recordings": 2,
 }
 
 
@@ -613,18 +675,7 @@ def _entry_stems(names, prefix, marker):
 
 
 def _sweep_superseded(kind, participant_uid, keep_stem, root=None, keep_newest=None):
-    """Remove this participant's older entries of the same kind once the new one has landed.
-
-    A new ingest changes the signature, so the new entry lands under a new name and the old one
-    would otherwise sit there forever. One tile entry is 245 MB, so a month of daily uploads would
-    leave seven gigabytes of files that can never be read again. Only this participant's files of
-    this kind are touched, and ONLY AFTER the replacement is safely in place.
-
-    The entry just written is always kept. Beyond it, `KEEP_NEWEST_BY_KIND` says how many of the
-    next-newest entries of this kind survive; the default of one keeps none of them, which is the
-    behaviour every kind had before that table existed. See its own note for why one is the wrong
-    answer for a kind whose key carries a choice the reader makes.
-    """
+    'Implementation details are defined by the code and its regression contracts.'
     d = kind_dir(kind, create=False, root=root)
     if d is None:
         return 0
@@ -651,14 +702,23 @@ def _sweep_superseded(kind, participant_uid, keep_stem, root=None, keep_newest=N
                     best = max(best, os.path.getmtime(os.path.join(d, n)))
                 except OSError:
                     pass
-            try:
-                with open(os.path.join(d, stem + ".meta.json"), encoding="utf8") as fh:
-                    written = str(json.load(fh).get("written_utc") or "")
-            except (OSError, ValueError, TypeError):
-                written = ""
-            return (written, best)
+            return best
         others.sort(key=_newest, reverse=True)
-        others = others[limit - 1:]
+        # See the synthetic regression tests for this behavior.
+        def _group(stem):
+            meta = _read_meta_file(os.path.join(d, stem + ".meta.json")) or {}
+            return (meta.get("extra") or {}).get("keep_group") or None
+        groups_seen = set()
+        just_written = _group(keep)
+        if just_written:
+            groups_seen.add(just_written)
+        protected = set()
+        for stem in others:
+            g = _group(stem)
+            if g and g not in groups_seen:
+                groups_seen.add(g)
+                protected.add(stem)
+        others = [s for s in others if s not in protected][limit - 1:]
 
     for stem in others:
         for name in stems[stem]:
@@ -689,6 +749,8 @@ def _write_payload(tmp, payload, fmt, signature):
         with open(tmp, "wb") as fh:
             np.savez_compressed(fh, **payload)
         return os.path.getsize(tmp)
+    if fmt == "mapped":
+        return _write_mapped(tmp, payload)
     blob = pickle.dumps({"signature": signature, "payload": payload}, protocol=5)
     with open(tmp, "wb") as fh:
         fh.write(blob)
@@ -733,9 +795,8 @@ def store(kind, participant_uid, signature, payload, *, provenance=None, trigger
         _log.warning("CacheStore: derived kind %r written with no provenance chain", kind)
     fmt = fmt or choose_format(payload)
     final = stem + _EXT_FOR_FORMAT[fmt]
-    writer_id = f"{os.getpid()}-{uuid.uuid4().hex}"
-    tmp = f"{final}.{writer_id}.tmp"
-    tmp_meta = f"{_meta_path(stem)}.{writer_id}.tmp"
+    tmp = f"{final}.{os.getpid()}.tmp"
+    tmp_meta = f"{_meta_path(stem)}.{os.getpid()}.tmp"
     limit = max_bytes if max_bytes is not None else MAX_BYTES_BY_KIND.get(kind, MAX_BYTES_DEFAULT)
     try:
         size = _write_payload(tmp, payload, fmt, signature)
@@ -767,10 +828,7 @@ def store(kind, participant_uid, signature, payload, *, provenance=None, trigger
         _bump("writes")
         if kind not in KEEP_HISTORY_KINDS:
             _sweep_superseded(kind, participant_uid, stem, root=root)
-        # THE LEDGER RECORDS THE PRODUCTION STORE ONLY. A write under a caller's own root, or under
-        # the test override, is not part of the record of what the server holds: the container
-        # test suite had written 214 rows for a participant called "test-participant" into the
-        # live table, and the ledger carries no directory, so nothing could tell them apart.
+        # Preserve the behavior covered by the regression tests.
         if root is None and DIR_OVERRIDE is None:
             try:
                 from . import ledger
@@ -882,6 +940,3 @@ def clear(kind=None, root=None):
             for k in _EVENTS:
                 _EVENTS[k] = 0
     return removed
-
-
-# Retained active Aditya interfaces.

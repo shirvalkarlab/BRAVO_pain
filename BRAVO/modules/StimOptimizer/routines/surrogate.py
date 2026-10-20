@@ -26,17 +26,61 @@ the same (standardised) units as the values on the kernel diagonal.
 """
 from __future__ import annotations
 
+import contextlib
+import logging
+import os
+
 import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 
 from .objective import SE_THRESHOLD
 
+_log = logging.getLogger(__name__)
+
+# HELD-OUT CALIBRATION FOLDS ARE REFITTED IN PARALLEL.
+# ObjectiveGP.loo_predict re-estimates hyperparameters from twelve seeded restarts
+# for each fold. Reusing full-data hyperparameters would leak held-out information.
+# Each fold is a pure function of its training rows, so workers can refit independently
+# with numerical pools limited to one thread. STIM_OPTIMIZER_LOO_JOBS controls worker
+# count; 0/1 runs serially. The reusable pool expires after five idle minutes. If a
+# process pool cannot start, fall back to the identical serial calculation.
 
 
-# Aditya canonical compatibility imports/constants.
+LOO_JOBS_ENV = "STIM_OPTIMIZER_LOO_JOBS"
+try:
+    from modules.DecodeCommon import parallel as _POOL
+except ImportError:                                   # the host runner's spelling
+    from DecodeCommon import parallel as _POOL
+#: The shared pool size (DecodeCommon.parallel, 2026-10-02): the core count less one, read once at
+#: import. It was min(15, cores - 1), sized for the Mac; on the Jetstream2 BRAVO 48 workers and 15
+#: gave the same request time (35.2 vs 35.8 s), and one size for every pool avoids rebuilding it.
+LOO_DEFAULT_JOBS = _POOL.pool_jobs()
 
 
+def _loo_n_jobs() -> int:
+    """How many worker processes the held-out folds are refitted in (1: serially, in-process)."""
+    raw = os.environ.get(LOO_JOBS_ENV, "").strip()
+    try:
+        n = int(raw) if raw else _POOL.pool_jobs()
+    except ValueError:
+        n = _POOL.pool_jobs()
+    return max(1, n)
+
+
+def _one_blas_thread():
+    try:
+        from threadpoolctl import threadpool_limits
+    except ImportError:                               # pragma: no cover - threadpoolctl ships with sklearn
+        return contextlib.nullcontext()
+    return threadpool_limits(limits=1, user_api="blas")
+
+
+def _refit_fold(proto, X_tr, y_tr, v_tr, X_te):
+    """One held-out fold in a worker process: the unfitted clone refitted on the training rows,
+    predicting the held-out rows, at one linear-algebra thread."""
+    with _one_blas_thread():
+        return proto._clone().fit(X_tr, y_tr, v_tr).predict(X_te)
 
 
 class ParameterGrid:
@@ -103,7 +147,13 @@ class ParameterGrid:
 class JointParameterGrid:
     """The discrete (rate, amplitude-Left, amplitude-Right) search space, plus the transform the
     GP sees, for a fit that models both stimulators AT ONCE (decision, 2026-09-14: "model the
-    left and right sides together because they're always on")."""
+    left and right sides together because they're always on").
+
+    This joint grid represents a shared rate column and both currents on each exposure
+    epoch. Fitting one current while ignoring the other can confound their effects on
+    the same pain report. Rate uses log2 scaling, both current axes are linear, and all
+    three are standardized to unit scale so common ARD bounds have a consistent meaning.
+    """
 
     def __init__(self, freqs, amps_left, amps_right):
         self.freqs = np.asarray(sorted(set(np.asarray(freqs, float))), float)
@@ -161,8 +211,92 @@ class JointParameterGrid:
         return (fi * len(self.amps_left) + ali) * len(self.amps_right) + ari
 
 
+class PooledPulseWidthGrid:
+    """The (rate, amplitude-Left, amplitude-Right, pulse-width-Left, pulse-width-Right) input
+    space for ONE rate's surface fitted over EVERY pulse-width pairing at once, read at the pairing
+    in force (decision 189's option A, built 2026-09-21 by the PI's ruling).
+
+    The prediction grid is the (amplitude-Left, amplitude-Right) plane at `pw_left_at` /
+    `pw_right_at`; the rate column is constant. The two pulse-width axes are standardised on the
+    LEVELS the record delivered (`pw_left_levels` / `pw_right_levels`), with the scatter floored
+    at one microsecond so a side with a single level does not divide by zero: it then sits at 0
+    on its axis and the kernel treats it as constant. The rate axis is the same log2 axis as
+    :class:`JointParameterGrid`, standardised on itself (one rate: always 0).
+    """
+
+    def __init__(self, rate_hz, amps_left, amps_right, *, pw_left_levels, pw_right_levels,
+                 pw_left_at, pw_right_at):
+        self.freqs = np.asarray([float(rate_hz)], float)
+        if self.freqs.min() <= 0:
+            raise ValueError("the rate must be positive for a log2 axis")
+        self.amps_left = np.asarray(sorted(set(np.asarray(amps_left, float))), float)
+        self.amps_right = np.asarray(sorted(set(np.asarray(amps_right, float))), float)
+        self.pw_left_levels = np.asarray(sorted(set(np.asarray(pw_left_levels, float))), float)
+        self.pw_right_levels = np.asarray(sorted(set(np.asarray(pw_right_levels, float))), float)
+        self.pw_left_at = float(pw_left_at)
+        self.pw_right_at = float(pw_right_at)
+        AL, AR = np.meshgrid(self.amps_left, self.amps_right, indexing="ij")
+        n = AL.size
+        self.raw = np.column_stack([np.full(n, self.freqs[0]), AL.ravel(), AR.ravel(),
+                                    np.full(n, self.pw_left_at), np.full(n, self.pw_right_at)])
+        lf = np.log2(self.freqs)
+        self._loc = np.array([lf.mean(), self.amps_left.mean(), self.amps_right.mean(),
+                              self.pw_left_levels.mean(), self.pw_right_levels.mean()])
+        self._scale = np.array([max(lf.std(), 1e-9), max(self.amps_left.std(), 1e-9),
+                                max(self.amps_right.std(), 1e-9),
+                                max(self.pw_left_levels.std(), 1.0),
+                                max(self.pw_right_levels.std(), 1.0)])
+
+    def __len__(self):
+        return self.raw.shape[0]
+
+    @property
+    def shape(self):
+        return (1, len(self.amps_left), len(self.amps_right))
+
+    def transform(self, X):
+        X = np.atleast_2d(np.asarray(X, float))
+        if X.shape[1] != 5:
+            raise ValueError("expected columns (freq_hz, amp_mA_Left, amp_mA_Right, pw_us_Left, pw_us_Right)")
+        if np.any(X[:, 0] <= 0):
+            raise ValueError("non-positive frequency cannot be placed on a log2 axis")
+        Z = np.column_stack([np.log2(X[:, 0]), X[:, 1], X[:, 2], X[:, 3], X[:, 4]])
+        return (Z - self._loc) / self._scale
+
+    def grid_X(self):
+        return self.raw.copy()
+
+    def as_surface(self, values):
+        """Reshape a per-cell vector into (1, n_amp_left, n_amp_right), like the joint grid."""
+        v = np.asarray(values, float)
+        if v.size != len(self):
+            raise ValueError(f"expected {len(self)} values, got {v.size}")
+        return v.reshape(self.shape)
+
+    def snap(self, X):
+        X = np.atleast_2d(np.asarray(X, float))
+        al = self.amps_left[np.abs(X[:, [1]] - self.amps_left).argmin(axis=1)]
+        ar = self.amps_right[np.abs(X[:, [2]] - self.amps_right).argmin(axis=1)]
+        return np.column_stack([np.full(len(X), self.freqs[0]), al, ar,
+                                np.full(len(X), self.pw_left_at), np.full(len(X), self.pw_right_at)])
+
+    def index_of(self, X):
+        """Row indices into ``grid_X()`` for the nearest (amplitude-Left, amplitude-Right) cell of
+        each input; the pulse widths do not enter, every cell sits at the pairing in force."""
+        S = self.snap(X)
+        ali = np.abs(S[:, [1]] - self.amps_left).argmin(axis=1)
+        ari = np.abs(S[:, [2]] - self.amps_right).argmin(axis=1)
+        return ali * len(self.amps_right) + ari
+
+
 def _make_kernel(n_dim, length_scale_bounds, nugget_bounds, fixed_length_scale=None):
     """Matern-3/2 ARD kernel plus a white nugget.
+
+    `fixed_length_scale` pins scales instead of estimating them. A weakly identified
+    frequency length scale can collapse when frequency levels are separated in time:
+    between-frequency contrasts then absorb temporal trend. An explicit scientific
+    assumption is preferable to silently interpreting a degenerate maximum-likelihood
+    fit as physiology. See OBJECTIVE_SPEC, amendment 2026-08-29.
 
     Pinning is PER DIMENSION. Pass ``None`` in a slot to leave that dimension free, e.g.
     ``fixed_length_scale=[0.823, None]`` pins frequency and fits amplitude. A dimension is pinned
@@ -170,7 +304,8 @@ def _make_kernel(n_dim, length_scale_bounds, nugget_bounds, fixed_length_scale=N
     remaining dimensions, the signal variance and the nugget are still fitted by marginal
     likelihood. Passing a scalar or a fully-specified sequence pins every dimension, which also
     means leave-one-out refits inherit the full-data hyperparameters instead of re-estimating
-    them — see :meth:`ObjectiveGP.loo_predict`."""
+    them — see :meth:`ObjectiveGP.loo_predict`.
+    """
     if fixed_length_scale is not None:
         spec = np.atleast_1d(np.asarray(fixed_length_scale, dtype=object))
         if spec.size == 1:
@@ -268,8 +403,22 @@ class ObjectiveGP:
     def hyperparameters(self):
         self._check()
         k = self.gp_.kernel_
+        # Compare fitted current-effect variance with rating noise: the constant kernel term
+        # represents surface variance and the white kernel represents noise. If the constant
+        # hits its lower bound, report no fitted current effect and attribute difference
+        # uncertainty to the rating scatter.
+
+
+        p = k.get_params(deep=True)
+        cv = [(n, v) for n, v in p.items() if n.endswith("constant_value")]
+        nl = [v for n, v in p.items() if n.endswith("noise_level")]
+        effect = float(cv[0][1]) if cv else float("nan")
+        lo = p.get(cv[0][0] + "_bounds") if cv else None
+        at_min = bool(cv and isinstance(lo, (tuple, list)) and effect <= float(lo[0]) * (1.0 + 1e-2))
         return dict(kernel=str(k), log_marginal_likelihood=float(
-            self.gp_.log_marginal_likelihood_value_))
+            self.gp_.log_marginal_likelihood_value_),
+            effect_variance=effect, noise_variance=float(nl[0]) if nl else float("nan"),
+            current_effect_at_minimum=at_min)
 
     def with_fantasy(self, X_new, var_new):
         """Copy of this GP conditioned on hypothetical observations at ``X_new``.
@@ -299,26 +448,58 @@ class ObjectiveGP:
         out.X_, out.y_, out.y_var_ = X, y, v
         return out
 
-    def loo_predict(self, groups=None):
+    def loo_predict(self, groups=None, n_jobs=None):
         """Leave-one-out (or leave-one-group-out) predictions for calibration checking.
 
         Refits from scratch on each fold, so hyperparameters are re-estimated on the training
         fold only. That is slower than the analytic LOO shortcut but it is the honest thing to
         report: the shortcut leaks the held-out point into the hyperparameters.
+
+        The folds are refitted in worker processes when ``n_jobs`` (default: ``_loo_n_jobs()``,
+        see ``LOO_JOBS_ENV``) is above one and there are two or more folds to fit; the answer is
+        the serial one bit for bit (``tests/test_loo_parallel_folds.py``).
         """
+        return self.loo_predict_many([groups], n_jobs=n_jobs)[0]
+
+    def loo_predict_many(self, groupings, n_jobs=None):
+        """:meth:`loo_predict` for several fold structures at once (``None`` in the list means one
+        row per fold), returning one ``(mu, sd)`` per structure. Every fold of every structure is
+        handed to the worker processes in ONE dispatch, so a calibration check's two folds (one
+        epoch at a time, and blocks of time) wait for each other once rather than twice."""
         self._check()
         n = len(self.y_)
-        groups = np.arange(n) if groups is None else np.asarray(groups)
-        mu = np.full(n, np.nan)
-        sd = np.full(n, np.nan)
-        for g in np.unique(groups):
-            te = groups == g
-            tr = ~te
-            if tr.sum() < 3:
-                continue
-            m = self._clone().fit(self.X_[tr], self.y_[tr], self.y_var_[tr])
-            mu[te], sd[te] = m.predict(self.X_[te])
-        return mu, sd
+        folds, results = [], []
+        for s, groups in enumerate(groupings):
+            groups = np.arange(n) if groups is None else np.asarray(groups)
+            results.append((np.full(n, np.nan), np.full(n, np.nan)))
+            for g in np.unique(groups):
+                te = groups == g
+                tr = ~te
+                if tr.sum() < 3:
+                    continue
+                folds.append((s, te, tr))
+        k = _loo_n_jobs() if n_jobs is None else max(1, int(n_jobs))
+        out = None
+        if k > 1 and len(folds) > 1:
+            try:
+                from joblib import Parallel, delayed
+                proto = self._clone()
+                out = Parallel(n_jobs=k, backend=_POOL.loky_backend())(
+                    delayed(_refit_fold)(proto, self.X_[tr], self.y_[tr], self.y_var_[tr],
+                                         self.X_[te])
+                    for _s, te, tr in folds)
+            except Exception as exc:                  # no process pool here: refit serially
+                _log.warning("held-out folds refitted serially: the worker processes failed (%s: %s)",
+                             type(exc).__name__, exc)
+                out = None
+        if out is None:
+            out = []
+            for _s, te, tr in folds:
+                m = self._clone().fit(self.X_[tr], self.y_[tr], self.y_var_[tr])
+                out.append(m.predict(self.X_[te]))
+        for (s, te, _tr), (m_te, s_te) in zip(folds, out):
+            results[s][0][te], results[s][1][te] = m_te, s_te
+        return results
 
 
 class _MonotoneMean:
@@ -502,6 +683,3 @@ class SafetyGP:
             return mask
         ceiling = float(prev_max_amp) + caps[key]
         return mask & (self.grid.grid_X()[:, 1] <= ceiling)
-
-
-# Retained active Aditya interfaces.

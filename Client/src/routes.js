@@ -46,12 +46,7 @@ import AssessmentIcon from '@mui/icons-material/Assessment';
 import TimelineIcon from '@mui/icons-material/Timeline';
 import PersonIcon from '@mui/icons-material/Person';
 import BiotechIcon from '@mui/icons-material/Biotech';
-import AccessAlarm from "@mui/icons-material/AccessAlarm";
-import People from "@mui/icons-material/People";
-import Article from "@mui/icons-material/Article";
-import IosShare from "@mui/icons-material/IosShare";
-
-import { experimentalRoutes } from "views/Experimental/plugins";
+import { AccessAlarm, People, Article, IosShare } from "@mui/icons-material";
 
 // BRAVO Platform Layouts
 const DashboardOverview = lazy(() => import('views/Dashboard/Overview'));
@@ -66,14 +61,10 @@ const FormEditor = lazy(() => import('views/Survey/Editor'));
 const FormViewer = lazy(() => import('views/Survey/Viewer'));
 const ParticipantSurveyRecords = lazy(() => import('views/Reports/ParticipantRecords'));
 const PainScores = lazy(() => import('views/Reports/PainScores'));
-const Biomarkers = lazy(() => import('views/Reports/Biomarkers'));
-const ClosedLoopSim = lazy(() => import('views/Reports/ClosedLoopSim'));
-const StimOptimizer = lazy(() => import('views/Reports/StimOptimizer'));
+const RedcapTimeline = lazy(() => import('views/Reports/RedcapTimeline'));
 const EmpaticaDataExplorer = lazy(() => import('views/ExternalSensors/Empatica'));
 const FitbitDashboard = lazy(() => import('views/ExternalSensors/Fitbit'));
 const GoogleHealthDashboard = lazy(() => import('views/ExternalSensors/GoogleHealth'));
-const OuraFreeReps = lazy(() => import('views/Reports/OuraFreeReps'));
-const RedcapTimeline = lazy(() => import('views/Reports/RedcapTimeline'));
 const OuraRingDashboard = lazy(() => import('views/ExternalSensors/OuraRing'));
 const CustomizedAnalysis = lazy(() => import('views/CustomizedAnalysis'));
 const AIHealthcare = lazy(() => import('views/Experimental/AIHealthcare'));
@@ -88,6 +79,9 @@ const TherapeuticEffects = lazy(() => import('views/Reports/TherapeuticEffects')
 const TimeSeriesAnalysis = lazy(() => import('views/Reports/TimeSeriesAnalysis'));
 const ChronicNeuralActivity = lazy(() => import('views/Reports/ChronicNeuralActivity'));
 const ChronicTimeline = lazy(() => import('views/Reports/ChronicTimeline'));
+const Biomarkers = lazy(() => import('views/Reports/Biomarkers'));
+const ClosedLoopSim = lazy(() => import('views/Reports/ClosedLoopSim'));
+const StimOptimizer = lazy(() => import('views/Reports/StimOptimizer'));
 const SourceFiles = lazy(() => import('views/Reports/SourceFiles'));
 
 // Group Analysis
@@ -397,11 +391,11 @@ const routes = {
   },
   "CustomizedAnalysis": {
     icon: <MdBuildCircle />,
-    name: "Customized Analysis",
+    name: "Choosing stimulation settings",
     children: [
       {
         key: "CustomizedAnalysis",
-        name: "Customized Analysis",
+        name: "Choosing stimulation settings",
         title: true,
         hide: true
       },
@@ -416,43 +410,36 @@ const routes = {
         hide: true
       },
       {
+        key: "RedcapTimeline",
+        name: "Aditya - All Data Streams",
+        icon: <TimelineIcon />,
+        route: "/reports/redcap-timeline/:participant_uid",
+        component: <RedcapTimeline />,
+      },
+      {
         key: "AnalysisBuilder",
-        name: "Analysis Builder",
+        name: "Analysis builder",
         icon: <MdBuildCircle />,
         route: "/analysis-builder/:participant_uid",
         component: <CustomizedAnalysis />,
       },
       {
-        key: "ouraFreeReps",
-        name: "Oura – FreeReps",
-        icon: <FaRing />,
-        route: "/reports/oura-freereps/:participant_uid",
-        component: <OuraFreeReps />,
-      },
-      {
-        key: "redcapTimeline",
-        name: "Aditya - All Data Streams",
-        icon: <TimelineIcon />,
-        route: "/reports/redcap-pretrial/:participant_uid",
-        component: <RedcapTimeline />,
-      },
-      {
         key: "biomarkers",
-        name: "Biomarker Exploration",
+        name: "Biomarkers exploration",
         icon: <TimelineIcon />,
         route: "/reports/biomarkers/:participant_uid",
         component: <Biomarkers />,
       },
       {
         key: "stimOptimizer",
-        name: "Open-Loop Stim Optimizer",
+        name: "Stim optimizer",
         icon: <TimelineIcon />,
         route: "/reports/stim-optimizer/:participant_uid",
         component: <StimOptimizer />,
       },
       {
         key: "closedLoopSim",
-        name: "Closed-Loop Research Review",
+        name: "Closed-loop deployment",
         icon: <MdBuildCircle />,
         route: "/reports/closed-loop/:participant_uid",
         component: <ClosedLoopSim />,

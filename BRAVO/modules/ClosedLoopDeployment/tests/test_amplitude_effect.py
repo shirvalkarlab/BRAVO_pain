@@ -28,11 +28,11 @@ def _panel(currents=CURRENTS, *, absent=None):
         p.absent_reason = absent
         return p
     x = np.asarray(currents, dtype=float)
-    rising = 100.0 * np.exp(0.4 * x)                                 # log-linear rise
+    rising = 100.0 + 40.0 * x                                        # +40 device units per mA
     flat = np.full(x.size, 150.0) + np.array([1, -1, 2, -2, 1, -1, 2, -2, 1, -1])[: x.size]
     peaked = 300.0 - 60.0 * (x - 2.1) ** 2                           # rise then fall, peak 2.1 mA
     peaked = np.clip(peaked, 5.0, None)
-    falling = 400.0 * np.exp(-0.3 * x)
+    falling = 400.0 - 30.0 * x                                       # -30 device units per mA
     p.current_mA = [float(v) for v in x]
     p.settled_power = [float(v) for v in rising]
     p.n_pieces = [10] * x.size
@@ -76,18 +76,18 @@ def test_the_slope_reads_a_rise_a_fall_and_no_movement_and_the_curvature_finds_t
     table = AE.table_from_build(_build(_comparison()), checked_lo_hz=7.8, checked_hi_hz=28.3,
                                 band_half_hz=2.5).set_index("band_center_hz")
     rise, flat, peak, fall = (table.loc[c] for c in CENTRES)
-    assert rise["slope_log_per_mA"] == pytest.approx(0.4, abs=1e-9)
+    assert rise["slope_per_mA"] == pytest.approx(40.0, abs=1e-9)
     assert rise["slope_p"] < 1e-6 and rise["direction"].startswith("band power rises")
-    assert fall["slope_log_per_mA"] == pytest.approx(-0.3, abs=1e-9)
+    assert fall["slope_per_mA"] == pytest.approx(-30.0, abs=1e-9)
     assert fall["direction"].startswith("band power falls")
     assert flat["slope_p"] > 0.05 and flat["direction"].startswith("no straight-line movement")
     assert bool(peak["curves"]) and bool(peak["peaks_inside"])
     assert peak["peak_mA"] == pytest.approx(2.1, abs=0.05)
     assert peak["p_curvature"] < 0.01 and peak["r2_quadratic"] > peak["r2_linear"]
     assert peak["quadratic_coefficient"] < 0
-    assert rise["fold_max_over_min"] == pytest.approx(np.exp(0.4 * 4.5), rel=1e-9)
-    assert np.isfinite(rise["smallest_detectable_slope_log_per_mA"])
-    assert rise["smallest_detectable_slope_log_per_mA"] == pytest.approx(2 * rise["slope_stderr"])
+    assert rise["fold_max_over_min"] == pytest.approx((100.0 + 40.0 * 5.0) / (100.0 + 40.0 * 0.5), rel=1e-9)
+    assert np.isfinite(rise["smallest_detectable_slope_per_mA"])
+    assert rise["smallest_detectable_slope_per_mA"] == pytest.approx(2 * rise["slope_stderr"])
 
 
 def test_too_few_currents_is_not_assessed_and_still_says_how_many_were_tested():
@@ -95,13 +95,13 @@ def test_too_few_currents_is_not_assessed_and_still_says_how_many_were_tested():
                                 checked_lo_hz=7.8, checked_hi_hz=28.3, band_half_hz=2.5)
     assert len(table) == 4
     assert (table["n_currents_tested"] == 2).all()
-    assert table["slope_log_per_mA"].isna().all()
+    assert table["slope_per_mA"].isna().all()
     assert (table["direction"] == "not assessed").all()
     assert table["curvature_verdict"].str.startswith("not assessed").all()
     # eight points are needed for a curve; five currents give a slope but no curvature verdict
     table5 = AE.table_from_build(_build(_comparison(panel=_panel(CURRENTS[:5]))),
                                  checked_lo_hz=7.8, checked_hi_hz=28.3, band_half_hz=2.5)
-    assert table5["slope_log_per_mA"].notna().all()
+    assert table5["slope_per_mA"].notna().all()
     assert table5["curvature_verdict"].str.startswith("not assessed").all()
     assert table5["p_curvature"].isna().all()
 

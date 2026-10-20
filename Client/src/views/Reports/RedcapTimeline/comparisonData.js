@@ -240,14 +240,27 @@ export function medicationConditionPlot(metric,conditions) {
   return plot;
 }
 
-export function medicationTimeline(episodes,throughDay,periodStart,phases=[]) {
+export function medicationDisplayScope(provenance={}) {
+  provenance=provenance??{};
+  if(!Object.prototype.hasOwnProperty.call(provenance,'period_end_exclusive')) return {valid:true,bounded:false};
+  const start=provenance.period_start,end=provenance.period_end_exclusive;
+  if(!Number.isFinite(start)||!Number.isFinite(end)||start>=end||!Number.isFinite(new Date(start*1000).getTime())||!Number.isFinite(new Date(end*1000).getTime())) return {valid:false,bounded:true};
+  return {valid:true,bounded:true,start,end,lastDay:localTime(end-1).slice(0,10)};
+}
+
+export function medicationTimeline(episodes,throughDay,periodStart,phases=[],periodEndExclusive) {
+  const scope=periodEndExclusive===undefined?{valid:true,bounded:false}:medicationDisplayScope({period_start:periodStart,period_end_exclusive:periodEndExclusive});
+  if(!scope.valid) throw new RangeError('Invalid medication display coverage');
   const ordered=[...episodes].sort((a,b)=>(a.drug_class_order??999)-(b.drug_class_order??999)||a.drug_class.localeCompare(b.drug_class)||a.name.localeCompare(b.name)||(a.start??0)-(b.start??0));
   const classes=[...new Set(ordered.map(episode=>episode.drug_class))];
   const {groups,positions}=groupRows(ordered);
-  const endOfView=`${throughDay} 23:59:59`;
+  const requestedEnd=`${throughDay} 23:59:59`;
+  const endOfView=scope.bounded&&localTime(scope.end)<requestedEnd?localTime(scope.end):requestedEnd;
+  const bandEnd=scope.bounded&&scope.lastDay<throughDay?scope.lastDay:throughDay;
   const traces=ordered.flatMap((episode,index)=>{
     const knownStart=Number.isFinite(episode.start),knownEnd=Number.isFinite(episode.end);
-    if(!knownStart&&!knownEnd&&!episode.ongoing) return [];
+    if(!knownStart&&!knownEnd&&(scope.bounded||!episode.ongoing)) return [];
+    if(scope.bounded&&((knownStart&&episode.start>=scope.end)||(knownEnd&&episode.end<=scope.start)||(!knownStart&&knownEnd&&episode.end>=scope.end))) return [];
     const start=knownStart?Math.max(episode.start,periodStart??episode.start):null;
     const end=knownEnd?(localTime(episode.end)<=endOfView?localTime(episode.end):endOfView):null;
     const startText=knownStart?localTime(start):null;
@@ -257,14 +270,15 @@ export function medicationTimeline(episodes,throughDay,periodStart,phases=[]) {
     const details=[episode.drug_class,episode.dose,episode.frequency,episode.route,episode.timing,episode.note].filter(Boolean).map(escapeText).join('<br>');
     const availability=episode.prn?'PRN available; use is not confirmed':'Documented regimen; use is not confirmed';
     const startLabel=knownStart?`From ${localTime(episode.start)} Pacific`:'Start date not recorded; endpoint marker only';
-    const endLabel=knownEnd?`Through ${localTime(episode.end)} Pacific`:episode.ongoing?'Documented as ongoing; shown through current day':'End date not recorded; start marker only';
-    const symbols=complete?[episode.pre_trial||start!==episode.start?'triangle-left':'circle',episode.ongoing?'triangle-right':'circle']:['diamond-open'];
+    const endLabel=knownEnd?`Documented end ${localTime(episode.end)} Pacific`:episode.ongoing?(scope.bounded?'Recorded as ongoing in historical notes; later use is unverified':'Documented as ongoing; shown through current day'):'End date not recorded; start marker only';
+    const coverageLabel=scope.bounded?`<br>Display ends before ${localTime(scope.end)} Pacific; this is a coverage limit, not a medication stop date`:'';
+    const symbols=complete?[episode.pre_trial||start!==episode.start?'triangle-left':'circle',episode.ongoing||(scope.bounded&&knownEnd&&episode.end>=scope.end)?'triangle-right':'circle']:['diamond-open'];
     return [{type:'scatter',mode:complete?'lines+markers':'markers',x,y:x.map(()=>positions[index]),showlegend:false,
       line:{width:episode.supportive?5:10,color:PALETTE[classes.indexOf(episode.drug_class)%PALETTE.length],dash:episode.prn?'dot':'solid'},
       marker:{size:10,symbol:symbols},opacity:episode.supportive?0.6:1,
-      hovertemplate:`<b>${escapeText(episode.name)}</b><br>${details}<br>${availability}<br>${startLabel}<br>${endLabel}<extra></extra>`}];
+      hovertemplate:`<b>${escapeText(episode.name)}</b><br>${details}<br>${availability}<br>${startLabel}<br>${endLabel}${coverageLabel}<extra></extra>`}];
   });
-  const boundaries=phases.filter(phase=>Number.isFinite(periodStart)&&phase.start>=periodStart&&localTime(phase.start)<=endOfView);
+  const boundaries=phases.filter(phase=>Number.isFinite(periodStart)&&phase.start>=periodStart&&(!scope.bounded||phase.start<scope.end)&&localTime(phase.start)<=endOfView);
   let headerHeight=0;
   const boundaryHeaders=boundaries.map(phase=>{
     const lines=String(phase.label).match(/.{1,28}(?:\s|$)|.{1,28}/g)||[''];
@@ -277,6 +291,6 @@ export function medicationTimeline(episodes,throughDay,periodStart,phases=[]) {
   return {traces,fitWidth:true,rowLabels:ordered.map((episode,index)=>`${index+1}. ${episode.drug_class} · ${[episode.name,episode.dose,episode.frequency].filter(Boolean).join(' · ')}`),layout:{height:Math.max(350,ordered.length*55+groups.length*25+110)+topMargin-45,margin:{l:250,r:35,t:topMargin,b:75},
     xaxis:{type:'date',title:{text:'Date · Pacific time',font:{size:17}},nticks:7,automargin:true,...(Number.isFinite(periodStart)?{range:[localTime(periodStart),endOfView]}:{})},
     yaxis:{tickmode:'array',tickvals:positions,ticktext:ordered.map(episode=>compactLabel([episode.name,episode.dose,episode.frequency].filter(Boolean).join(' · '))),range:[(positions.at(-1)??0)+0.6,-1],autorange:false,automargin:true},
-    shapes:[...trialPhaseBands(phases,{start:Number.isFinite(periodStart)?localTime(periodStart).slice(0,10):traces.flatMap(t=>t.x).sort()[0]?.slice(0,10),end:throughDay}),...classShapes(groups),...boundaries.map(phase=>({type:'line',xref:'x',yref:'paper',x0:localTime(phase.start),x1:localTime(phase.start),y0:0,y1:1,line:{color:phase.color,dash:'dash',width:1}}))],
+    shapes:[...trialPhaseBands(phases,{start:Number.isFinite(periodStart)?localTime(periodStart).slice(0,10):traces.flatMap(t=>t.x).sort()[0]?.slice(0,10),end:bandEnd}),...classShapes(groups),...boundaries.map(phase=>({type:'line',xref:'x',yref:'paper',x0:localTime(phase.start),x1:localTime(phase.start),y0:0,y1:1,line:{color:phase.color,dash:'dash',width:1}}))],
     annotations:[...classHeaders(groups),...boundaryHeaders]}};
 }

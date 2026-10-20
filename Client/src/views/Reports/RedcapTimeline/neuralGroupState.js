@@ -59,6 +59,13 @@ export function groupState(settings = {}) {
     return conflict('Group mode is closed loop but no recorded adaptive program is running');
   }
   if (!fixed && !closed) {
+    const sourceType = {standard:'Standard',interleaving:'Interleaving',brainsense:'BrainSense'}[mode];
+    if (sourceType) {
+      // Canonical program types do not establish whether adaptive delivery ran.
+      const cycleLabel = cycle.enabled === false ? 'No cycling' : cycle.enabled === true
+        ? `Cycling on ${minutes(cycle.on)} / off ${minutes(cycle.off)}` : 'Cycling not recorded';
+      return {label:`Recorded program type · ${sourceType} · Delivery state unknown · ${cycleLabel}`,order:[8]};
+    }
     return missing(recorded(shared['Mode at observation']) ? `Group mode not recognized · ${shared['Mode at observation']}` : 'Group mode not recorded');
   }
   if (fixed) {

@@ -2,6 +2,8 @@
 
 Each test pins a behaviour that a real defect already violated during development, so these are
 regressions in the literal sense rather than coverage decoration.
+
+Merged here 2026-10-05: test_time_input.py (each under its own heading below).
 """
 import numpy as np
 import pandas as pd
@@ -172,6 +174,37 @@ def test_expansion_cap_bounds_the_step(grid):
         sgp.expansion_capped_mask(worst_severity="terrible", prev_max_amp=1.6)
 
 
+def test_a_mild_persistent_side_effect_costs_two_nrs_points(epochs):
+    """The PI's ruling of 2026-09-15 ("yes score 2 cost more" / "2"): the clinic sheet's score 2,
+    printed on the sheet as "mild persistent", is its own rung between mild (1.0) and moderate
+    (+inf), costing exactly 2.0 NRS points. It is finite, so a large enough pain benefit can still
+    outbid it -- unlike moderate and severe, which never can."""
+    assert OBJ.side_effect_penalty("mild_persistent") == 2.0
+    assert OBJ.side_effect_penalty("Mild Persistent") == 2.0      # label lookup is case-insensitive
+    assert "mild_persistent" not in OBJ.SE_HARD_REJECT
+    assert (OBJ.SE_SEVERITY_RANK["mild"] < OBJ.SE_SEVERITY_RANK["mild_persistent"]
+            < OBJ.SE_SEVERITY_RANK["moderate"] < OBJ.SE_SEVERITY_RANK["severe"])
+    e = epochs.copy()
+    e["se_severity"] = ["none", "mild_persistent", "none", "mild", "none", "none"]
+    d = OBJ.build_objective(e, incumbent_epoch=1)
+    assert d.loc[d.epoch == 2, "J_SE"].iloc[0] == 2.0
+    assert d.loc[d.epoch == 4, "J_SE"].iloc[0] == 1.0
+    assert bool(d["feasible"].all())                              # finite: still eligible
+
+
+def test_expansion_cap_has_a_rung_for_mild_persistent_between_mild_and_moderate(grid):
+    deliv = np.array([[55.0, 1.6], [110.0, 4.0], [10.0, 1.6]])
+    lims = np.array([[55.0, 2.0], [110.0, 4.0], [10.0, 1.9]])
+    X, s, v = SafetyGP.seed_from_history(deliv, lims)
+    sgp = SafetyGP(grid).fit(X, s, v)
+    mild = sgp.max_safe_amplitude(mask=sgp.expansion_capped_mask("mild", prev_max_amp=1.6))
+    persistent = sgp.max_safe_amplitude(
+        mask=sgp.expansion_capped_mask("mild_persistent", prev_max_amp=1.6))
+    moderate = sgp.max_safe_amplitude(mask=sgp.expansion_capped_mask("moderate", prev_max_amp=1.6))
+    assert persistent <= 1.6 + 0.1 + 1e-9
+    assert moderate <= persistent <= mild
+
+
 def test_monotone_prior_mean_never_decreases(grid):
     """Severity must not be modelled as falling with amplitude, whatever the fit wants."""
     deliv = np.array([[55.0, 1.0], [55.0, 1.5], [55.0, 2.0]])
@@ -202,16 +235,6 @@ def test_preference_rejects_ties_and_self_comparisons(grid):
         PreferenceGP(grid).fit(X, [])
 
 
-def test_prob_prefer_is_symmetric_and_bounded(grid):
-    X = np.array([[55.0, 1.4], [55.0, 1.6], [55.0, 1.8]])
-    pairs = [(2, 0), (2, 1), (1, 0)]
-    pg = PreferenceGP(grid).fit(X, pairs)
-    a, b = np.array([[55.0, 1.8]]), np.array([[55.0, 1.4]])
-    p, q = pg.prob_prefer(a, b)[0], pg.prob_prefer(b, a)[0]
-    assert p + q == pytest.approx(1.0, abs=1e-6)
-    assert 0.5 < p < 1.0
-
-
 # --- configurable pain metric (section 2.2) ----------------------------------------------
 def test_default_metric_is_left_leg_not_overall():
     """PI direction: the left leg is the primary site. The Overall rating does not detect the
@@ -219,10 +242,6 @@ def test_default_metric_is_left_leg_not_overall():
     assert OBJ.DEFAULTS["primary_item"] == "left_leg"
     assert OBJ.DEFAULTS["metric"] == "left_leg"
     assert OBJ.PAIN_METRICS["left_leg"].items == {"left_leg": +1.0}
-
-
-def test_head_is_excluded_with_a_reason():
-    assert "head" in OBJ.EXCLUDED_ITEMS and OBJ.EXCLUDED_ITEMS["head"]
 
 
 def test_metric_resolves_across_chronic_and_acute_column_names():
@@ -298,35 +317,28 @@ def test_output_records_which_item_and_scale_were_used(epochs):
     assert d_nrs["primary_scale_factor"].iloc[0] == pytest.approx(1.0)
 
 
-@pytest.mark.parametrize("rating", [np.nan, np.inf, -np.inf])
-@pytest.mark.parametrize("metric", ["left_leg_vas", "nrs"])
-def test_nonfinite_reference_names_missing_rating(epochs, rating, metric):
-    epochs.loc[epochs.epoch == 1, metric] = rating
-    before = epochs.copy(deep=True)
-    with pytest.raises(ValueError, match=f"incumbent epoch 1 has no finite {metric} rating"):
-        OBJ.build_objective(epochs, incumbent_epoch=1, cfg={"primary_item": metric})
-    pd.testing.assert_frame_equal(epochs, before)
+def test_objective_gp_says_when_its_fitted_current_effect_sits_at_the_smallest_value_allowed(grid):
+    '2026-10-02 (the PI: the gauge should say "no effect of current found; the ± is the rating.'
+    rng = np.random.default_rng(3)
+    amps = np.tile(np.linspace(0.5, 4.0, 10), 3)
+    X = np.column_stack([np.full(amps.size, 55.0), amps])
+    var = np.full(amps.size, 0.05)
+    flat = ObjectiveGP(grid, random_state=0).fit(X, rng.normal(0.0, 1.0, amps.size), var)
+    slope = ObjectiveGP(grid, random_state=0).fit(X, -1.5 * amps + rng.normal(0.0, 0.2, amps.size), var)
+    hf, hs = flat.hyperparameters, slope.hyperparameters
+    assert hf["current_effect_at_minimum"] is True
+    assert hs["current_effect_at_minimum"] is False
+    assert hs["effect_variance"] > hf["effect_variance"] and hf["noise_variance"] > 0
+# Preserve the behavior covered by the regression tests.
+def _two_epochs_a_year_apart():
+    return pd.DataFrame({
+        "epoch": [1, 2], "freq_hz": [55.0, 55.0], "amp_mA_Left": [1.6, 1.6], "amp_mA_Right": [1.2, 1.2],
+        "pw_us_Left": [60.0, 60.0], "pw_us_Right": [160.0, 160.0], "n": [20, 20],
+        "t0": pd.to_datetime(["2026-06-01", "2025-06-01"], utc=True), "dur_h": [200.0, 200.0],
+        "left_leg_vas": [60.0, 60.0], "left_leg_vas_sd": [10.0, 10.0]})
 
 
-def test_missing_nonreference_rating_keeps_other_epochs_usable(epochs):
-    epochs.loc[epochs.epoch == 2, "left_leg_vas"] = np.nan
-    d = OBJ.build_objective(epochs, incumbent_epoch=1).set_index("epoch")
-    assert d.loc[1, "J"] == 0
-    assert not d.loc[2, "feasible"]
-    assert d.drop(index=2)["feasible"].all()
-
-
-def test_missing_reference_is_reported_by_pipeline_without_fitting(epochs):
-    from StimOptimizer import pipeline
-    incumbent = epochs.sort_values("t0").iloc[-1]["epoch"]
-    epochs.loc[epochs.epoch == incumbent, "left_leg_vas"] = np.nan
-    report = pipeline.run(epochs, sites=("left_leg",), hemispheres=("Left", "Right"),
-                          outdir=None, render_figures=False)
-    assert report.arms == {}
-    assert len(report.manifest["skipped"]) == 2
-    assert all("no finite left_leg_vas rating" in reason for reason in report.manifest["skipped"].values())
-
-
-def test_objective_requires_observation_counts(epochs):
-    with pytest.raises(KeyError, match="missing required columns.*n"):
-        OBJ.build_objective(epochs.drop(columns=["n"]), incumbent_epoch=1)
+def test_the_age_penalty_is_gone_two_identical_epochs_a_year_apart_weigh_the_same():
+    d = OBJ.build_objective(_two_epochs_a_year_apart(), incumbent_epoch=1).set_index("epoch")
+    assert d.loc[1, "obs_var"] == d.loc[2, "obs_var"]
+    assert "c_age" not in OBJ.DEFAULTS

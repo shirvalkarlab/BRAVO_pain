@@ -124,3 +124,15 @@ test('sort uses numeric ON then OFF minutes, never lexical duration ordering',()
   expect(compareGroupStates({label:'B',order:[0,0]},{label:'A',order:[0]})).toBeGreaterThan(0);
   expect(compareGroupStates({label:'Same',order:[1]},{label:'Same',order:[1]})).toBe(0);
 });
+
+
+test.each([
+ ['Standard','Off','No cycling'],
+ ['Interleaving','On · On 3 s / Off 9 s','Cycling on 0.05 min / off 0.15 min'],
+ ['BrainSense','Unknown','Cycling not recorded'],
+ ['BrainSense','On','Cycling on not recorded / off not recorded'],
+])('canonical source program type %s preserves cycling without implying delivery state',(mode,cycle,label)=>{
+ const result=groupState(settings(mode,cycle));
+ expect(result).toEqual({label:`Recorded program type · ${mode} · Delivery state unknown · ${label}`,order:[8]});
+ expect(result.label).not.toMatch(/Closed loop|Open loop/);
+});

@@ -11,11 +11,29 @@ screens on the A610 directly (2026-09-15) and gave this rule: where the tablet d
 manual or the white paper, the manual wins. Parameter by parameter, against
 `artifacts/research_2026-09-13_percept_adaptive_parameter_ranges_MANUALS.md`:
 
+- Averaging duration: tablet 0.00 ms to 30.00 s, non-overlapping. The 2020 tip card (p. 8) prints
+  0-30 s and the white paper (p. 12) says non-overlapping: AGREES. The tablet screen is the
+  adaptive-mode one, which resolves the earlier caveat that the tip card was sensing-era. The method does not infer
+  a device limit from a participant's observed settings.
+- Onset duration, upper and lower, Dual Threshold: tablet 0.00 ms to 30.00 s. The white paper and
+  the A610 manual print NO range; the FDA summary (P960009/S478 Table 2) prints "0 to 6 min". The
+  manual is silent, so the PI's rule picks no winner, and the platform applies what can actually be
+  typed: 0-30 s. The FDA figure is kept beside it as a discrepancy, never applied.
+- Transition up and down: tablet 2.0 s to 30 min. The white paper's p. 16 sliders read "2.00 secs"
+  to "30.00 mins": AGREES. The FDA summary's 250 ms is not on the slider; kept as the FDA figure.
+- Detection blanking: tablet 0.00 ms to 30.0 s. No document printed a range; the tablet is the first.
+- Sensing blanking (the per-pulse artefact blank, distinct from detection blanking): tablet 0.00 us
+  to 2.28 ms; tip card p. 8 "0-2500ms", a unit the manuals report already reads as microseconds.
+  They deviate by 220 us, so the manual wins (0-2500 us) and the tablet's figure is recorded.
+- High-pass: tablet 1 or 10 Hz. Matches D13 (`constraints.HIGHPASS_OPTIONS_HZ`).
+- Adaptive startup delay: not read off the tablet; still the one parameter with no range anywhere.
+
 WHAT THE ONSET IS. It is counted in averaged readings that stay past a threshold (decision 150): it
 HOLDS a level, it does not average over it. One device decision therefore spans at most an averaging
 window (30 s) plus an onset hold (30 s) -- the hold horizon, 60 s. A grid row longer than that is
 beyond anything the device can be set to; a row between 30 s and 60 s is a sustained level the device
-can require, not a mean it can compute."""
+can require, not a mean it can compute.
+"""
 
 RANGE_SOURCE_FDA = "FDA SSED P960009/S478 (20 Feb 2025), Table 2 'Key aDBS Configurable Parameters', p. 8"
 RANGE_SOURCE_TIP_CARD = "Medtronic BrainSense Tip Cards (2020, FIELDPORTAL1594651482409), p. 8"
@@ -44,6 +62,17 @@ SENSING_BLANKING_RANGE_US = (0.0, 2_500.0)
 SENSING_BLANKING_RANGE_US_TABLET = (0.0, 2_280.0)
 #: The two selectable high-pass corners (D13).
 HIGHPASS_OPTIONS_HZ = (1.0, 10.0)
+
+#: Adaptive Therapy can be driven by a band inside this range only; outside it, sensing is possible
+#: but a change in the signal cannot change stimulation. White paper p. 14 parameter table, "LFP
+#: Frequency Range": "8-30Hz (Adaptive) / 1-96Hz (Sensing Only)" (D08; also quoted in
+#: `StimOptimizer/routines/percept_adaptive.py`, decision 32). Moved here 2026-09-25 (item P-15):
+#: it had been typed separately as `StimOptimizer.routines.percept_adaptive.ADAPTIVE_LFP_BAND_HZ`,
+#: `Biomarkers.bravo_service.ADAPTIVE_LO_HZ`/`ADAPTIVE_HI_HZ` and
+#: `Biomarkers.routines.analytics.BAND_TIME_SWEEP_CENTER_LO_HZ`/`_HI_HZ`; those names stay for
+#: every existing reader and are now bound to this one tuple, pinned by
+#: `StimOptimizer/tests/test_device_ranges_one_home.py`.
+ADAPTIVE_LFP_BAND_HZ = (8.0, 30.0)
 
 #: One device decision: an averaging window plus an onset hold, in milliseconds.
 HOLD_HORIZON_MS = AVERAGING_RANGE_MS[1] + ONSET_RANGE_DUAL_MS[1]

@@ -11,7 +11,9 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import FlashAuto from "@mui/icons-material/FlashAuto";
+import {
+  FlashAuto, 
+} from "@mui/icons-material";
 
 import CustomizedAnalysis from "./index";
 

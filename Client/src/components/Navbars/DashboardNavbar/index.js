@@ -30,7 +30,11 @@ import {
   CircularProgress
 } from "@mui/material";
 
-import ChangeCircle from "@mui/icons-material/ChangeCircle";
+import {
+  Translate,
+  ChangeCircle,
+  PublishedWithChanges
+} from '@mui/icons-material';
 
 import { FaArrowRightFromBracket, FaUser } from "react-icons/fa6";
 
@@ -54,6 +58,10 @@ import { usePlatformContext, setContextState } from "context";
 import { dictionary } from "assets/translation";
 import { SessionController } from "database/session-control";
 import MDTypography from "components/MDTypography";
+import { T, SPACE, MIN_TEXT_PX } from "assets/theme/base/tokens";
+import SkipToContent from "components/Navbars/DashboardNavbar/SkipToContent";
+import { openNotificationSocket } from "./notificationSocket";
+import ManualSyncButton from "./ManualSyncButton";
 
 function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
   const navigate = useNavigate();
@@ -78,6 +86,61 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
       navigate("/", {replace: false});
       return;
     };
+
+    // Live processing-queue notifications. The server-side WebSocket endpoint (/socket/notification)
+    // is NOT implemented (the ASGI app is HTTP-only, no Channels consumer), so this connection is
+    // expected to fail; the queue still updates on navigation/poll. Fail QUIETLY -- don't spam the
+    // console with "Connection Error"/"Connection Closed" on every page load, and don't reconnect.
+    // The onmessage handler is kept intact so that if a Channels backend is ever added, live updates
+    // work with no frontend change.
+    const client = openNotificationSocket(() => SessionController.getServer().replace("http","ws") + "/socket/notification");
+    if (client) {
+    client.onerror = function() {
+      // endpoint not implemented; ignore quietly
+    };
+    client.onopen = () => {
+      
+    };
+    client.onclose = () => {
+      // expected when the endpoint is absent; ignore quietly
+    };
+
+    client.onmessage = (event) => {
+      let content = JSON.parse(event.data);
+      if (content["Notification"] === "QueueUpdate") {
+        if (content["UpdateType"] === "JobCompletion") {
+          setQueueState(currentState => {
+            for (let i in currentState.queues) {
+              if (currentState.queues[i].taskId == content["TaskID"]) {
+                currentState.queues[i].state = content["State"];
+                currentState.queues[i].descriptor = {...currentState.queues[i].descriptor, Message: content["Message"]};
+              }
+            }
+            return {...currentState};
+          });
+        } else if (content["UpdateType"] === "JobUpdate") {
+          setQueueState(currentState => {
+            for (let i in currentState.queues) {
+              if (currentState.queues[i].taskId == content["TaskID"]) {
+                currentState.queues[i].state = content["State"];
+                currentState.queues[i].descriptor = {...currentState.queues[i].descriptor, Message: content["Message"]};
+              }
+            }
+            return {...currentState};
+          });
+        } else if (content["UpdateType"] === "NewJob") {
+          setQueueState(currentState => {
+            currentState.queues.push(content["NewJob"]);
+            return {...currentState};
+          });
+        }
+      }
+    };
+    }
+
+    return () => {
+      if (client) { try { client.close(); } catch (e) { /* already closed */ } }
+    }
   }, []);
 
   useEffect(() => {
@@ -126,7 +189,7 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
   const renderProfileMenu = () => (
     <Menu
       anchorEl={openMenu}
-      anchorReference="anchorEl"
+      anchorReference={null}
       disableScrollLock
       anchorOrigin={{
         vertical: "bottom",
@@ -138,14 +201,14 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
     >
       <Link to="/profile">
         <MenuItem>
-          <FaUser fontSize={10} style={{paddingRight: 15}} />
+          <FaUser fontSize={MIN_TEXT_PX} style={{paddingRight: SPACE.xs}} />
           <MDTypography variant="button" fontWeight="regular" color="text">
             {"Profile"}
           </MDTypography>
         </MenuItem>
       </Link>
       <MenuItem onClick={() => logoutUser()}>
-        <FaArrowRightFromBracket fontSize={10} style={{paddingRight: 15}} />
+        <FaArrowRightFromBracket fontSize={MIN_TEXT_PX} style={{paddingRight: SPACE.xs}} />
         <MDTypography variant="button" fontWeight="regular" color="text">
           {dictionary.SimplifiedNavbar.Logout[language]}
         </MDTypography>
@@ -166,7 +229,7 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
   const renderLanguageSelectionMenu = () => (
     <Menu
       anchorEl={openMenu}
-      anchorReference="anchorEl"
+      anchorReference={null}
       anchorOrigin={{
         vertical: "bottom",
         horizontal: "left",
@@ -218,16 +281,9 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
   };
 
   // Styles for the navbar icons
-  const iconsStyle = ({ palette: { dark, white, text }, functions: { rgba } }) => ({
-    color: () => {
-      let colorValue = light || darkMode ? white.main : dark.main;
-
-      if (transparentNavbar && !light) {
-        colorValue = darkMode ? rgba(text.main, 0.6) : text.main;
-      }
-
-      return colorValue;
-    },
+  // Icons in the caption grey (6.48:1 on the page background); the bar has one light look.
+  const iconsStyle = () => ({
+    color: T.ink3,
   });
 
   return (
@@ -237,10 +293,13 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
       sx={(theme) => navbar(theme, { transparentNavbar, absolute, light, darkMode })}
     >
       {alert}
+      {/* First in the top bar, so it is the first thing a keyboard reaches (TASTE_AUDIT.md C7). */}
+      <SkipToContent />
       <Toolbar sx={(theme) => navbarContainer(theme)}>
         <MDBox color="inherit" mb={{ xs: 1, md: 0 }} sx={(theme) => navbarRow(theme, { isMini })}>
           <Breadcrumbs icon="home" title={route[route.length - 1]} route={route} light={light} />
-          <IconButton aria-label="Toggle compact navigation" sx={{display: {xs: "none", xl: "block"}, flexShrink: 0}} onClick={handleMiniSidenav} size="small" disableRipple>
+          <IconButton sx={{display: {xs: "none", xl: "block"}}} onClick={handleMiniSidenav} size="small" disableRipple
+            aria-label={!miniSidenav ? "Shrink the side menu" : "Widen the side menu"}>
             <Icon fontSize="medium" sx={iconsStyle}>
               {!miniSidenav ? "menu_open" : "menu"}
             </Icon>
@@ -249,9 +308,9 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
             size="small"
             disableRipple
             color="inherit"
-            aria-label="Toggle navigation"
             sx={navbarMobileMenu}
             onClick={handleHideSidenav}
+            aria-label={!hideSidenav ? "Hide the side menu" : "Show the side menu"}
           >
             <Icon sx={iconsStyle} fontSize="medium">
               {!hideSidenav ? "menu_open" : "menu"}
@@ -260,6 +319,7 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
         </MDBox>
         {isMini ? null : (
           <MDBox sx={(theme) => navbarRow(theme, { isMini })}>
+            <ManualSyncButton key={controller.participant_uid || "none"} participantUid={controller.participant_uid} />
             <MDBox pr={1}/>
             <MDBox color={light ? "white" : "inherit"}>
               <IconButton
@@ -267,9 +327,9 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
                 disableRipple
                 color="inherit"
                 sx={navbarIconButton}
-                aria-label="Account menu"
                 aria-controls="notification-menu"
                 aria-haspopup="true"
+                aria-label="Account menu: profile and log out"
                 variant="contained"
                 onClick={(event) => handleOpenMenu(event, "ProfileMenu")}
               >

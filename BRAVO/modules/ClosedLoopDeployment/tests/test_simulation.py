@@ -1,4 +1,12 @@
-"""Synthetic regression fixtures adapted from Prasad8146f069 for simulation."""
+"""The closed-loop simulation (Phase 8 of the 2026-09-11 redesign; design §6's seven tests, plus
+the coefficient pass-through the response curve depends on).
+
+Every test checks VALUES: arrays compared element for element with a difference count, never a
+tolerance on a shape.
+
+Merged here 2026-10-05: test_simulation_compiled_controller.py, test_simulation_segments_parallel.py.
+"""
+import importlib.util
 import math
 
 import numpy as np
@@ -74,7 +82,7 @@ def test_1_zero_curve_reproduces_the_replay_field_for_field():
 
 def test_1b_the_segment_wise_run_matches_the_replay_segment_wise_run():
     t, p, a = _series(n=600)
-    # two contiguous stretches separated by a day, like a chronic record of streaming bursts
+    # Preserve the behavior covered by the regression tests.
     t2 = np.concatenate([t, t + 86400.0])
     p2 = np.concatenate([p, p[::-1]])
     a2 = np.concatenate([a, a])
@@ -317,7 +325,7 @@ def test_8_the_pooled_fit_returns_the_quadratic_coefficients_and_the_table_carri
 
 
 def test_1c_jittered_pieces_are_put_on_the_device_clock_not_refused():
-    """Generic implementation; participant-specific examples are kept outside source control."""
+    'See the implementation and synthetic regression tests for this contract.'
     t, p, a = _series(n=400, dt=3.0)
     rng = np.random.default_rng(4)
     tj = t + rng.uniform(-0.3, 0.3, t.size)            # up to 10 % jitter, twice the 5 % refusal
@@ -341,10 +349,7 @@ def test_1c_jittered_pieces_are_put_on_the_device_clock_not_refused():
 
 
 def test_9_each_candidate_keeps_its_own_stored_simulation_and_is_read_back_by_candidate(tmp_path):
-    """Met live on 2026-09-11: the page's own report wrote a simulation for the band committed on
-    the page and the store, keeping one entry per kind, evicted the one for the other band; the
-    read path then served the newest entry whatever band it was for. The store now keeps several
-    (KEEP_NEWEST_BY_KIND) and the read matches the sidecar's candidate tag."""
+    'Regression for 9 each candidate keeps its own stored simulation and is read back by candidate.'
     try:
         from modules.CacheStore import ledger as _ledger
         from modules.ClosedLoopDeployment import adapter as AD
@@ -360,7 +365,8 @@ def test_9_each_candidate_keeps_its_own_stored_simulation_and_is_read_back_by_ca
         for i, (ch, fc) in enumerate((("ONE_THREE_LEFT", 20.5), ("ZERO_THREE_RIGHT", 17.5))):
             st.store(S.KIND, uid, (S.KIND, S.RULE_VERSION, ch, fc), {"active_model": "M1", "for": ch},
                      writer="closed_loop", trigger="deployment_report", provenance=[],
-                     extra={"candidate": AD._simulation_candidate_tag(ch, fc, "Left")})
+                     extra={"candidate": AD._simulation_candidate_tag(ch, fc, "Left"),
+                            "clinical_config_digest": AD._clinical.config_digest()})
         got_l = AD.simulation_if_stored(uid, {"channel": "ONE_THREE_LEFT", "center_hz": 20.5}, hemisphere="Left")
         got_r = AD.simulation_if_stored(uid, {"channel": "ZERO_THREE_RIGHT", "center_hz": 17.5}, hemisphere="Left")
         assert got_l == {"active_model": "M1", "for": "ONE_THREE_LEFT"}, "both entries survive and each is found"
@@ -414,56 +420,44 @@ def test_11_run_models_under_two_timing_params_gives_two_different_honest_answer
     assert "undone_per_hour" in out_short["models"]["M1"]
 
 
-def test_12_timing_runs_for_simulation_reads_the_programmed_group_and_the_recommendation():
-    """`adapter._timing_runs_for_simulation` maps `device_facts["active_sensing_group_timing"]`
-    and `timing_recommendation.for_participant` onto `replay.DEFAULT_PARAMS`'s field names, using
-    the UPPER onset timer for the replay's single onset (T2's own documented choice)."""
-    try:
-        from modules.ClosedLoopDeployment import adapter as AD, timing_recommendation as TR
-    except ImportError:                                          # pragma: no cover
-        from ClosedLoopDeployment import adapter as AD, timing_recommendation as TR
+def test_12_timing_runs_for_simulation_reads_the_programmed_group_and_the_recommendation(monkeypatch):
+    """Observed programmed values and explicit synthetic recommendation stay distinct.
 
+    Missing clinical evidence refuses a recommendation; missing programmed values
+    remain an explicitly assumed reference scenario, never measured device settings.
+    """
+    from ClosedLoopDeployment import adapter as AD
+    from DecodeCommon.private_clinical_config import ClinicalConfigurationUnavailable
     uid = "p-timing-runs"
-    prev_table = dict(TR.RECORD_DERIVED_TIMING_MS)
-    try:
-        # --- both regimes present and different -------------------------------------------------
-        TR.RECORD_DERIVED_TIMING_MS[uid] = {"onset_upper_ms": 30_000.0, "onset_lower_ms": 30_000.0,
-                                            "averaging_ms": 3_000.0, "transition_up_ms": 30_000.0,
-                                            "transition_down_ms": 30_000.0, "detection_blanking_ms": 30_000.0}
-        dev = {"active_sensing_group_timing": {"Left": {
-            "averaging_ms": 30_000.0, "onset_upper_ms": 30_000.0, "onset_lower_ms": 30_000.0,
-            "detection_blanking_ms": 30_000.0, "transition_up_ms": 4_000.0, "transition_down_ms": 4_000.0}}}
-        out = AD._timing_runs_for_simulation(uid, "Left", dev)
-        assert out["programmed"]["params"] == {"averaging_ms": 30_000.0, "onset_ms": 30_000.0,
-                                                "detection_blanking_ms": 30_000.0,
-                                                "transition_up_ms": 4_000.0, "transition_down_ms": 4_000.0}
-        assert out["recommended"]["params"] == {"averaging_ms": 3_000.0, "onset_ms": 30_000.0,
-                                                 "detection_blanking_ms": 30_000.0,
-                                                 "transition_up_ms": 30_000.0, "transition_down_ms": 30_000.0}
-        assert "measured" in out["programmed"]["source"]
-        assert "decision 150" in out["recommended"]["source"] or "contest" in out["recommended"]["source"]
-
-        # --- no programmed group on this hemisphere: an empty dict, not a fabricated one --------
-        out2 = AD._timing_runs_for_simulation(uid, "Right", dev)
-        assert out2["programmed"]["params"] == {}
-        assert "white-paper" in out2["programmed"]["source"]
-
-        # --- no recommendation on file: falls back to the programmed regime, stated as such -----
-        del TR.RECORD_DERIVED_TIMING_MS[uid]
-        out3 = AD._timing_runs_for_simulation(uid, "Left", dev)
-        assert out3["recommended"]["params"] == out3["programmed"]["params"]
-        assert "no record-derived recommendation" in out3["recommended"]["source"]
-
-        # --- neither present: both empty, no exception -------------------------------------------
-        out4 = AD._timing_runs_for_simulation(uid, "Left", {})
-        assert out4["programmed"]["params"] == {} and out4["recommended"]["params"] == {}
-    finally:
-        TR.RECORD_DERIVED_TIMING_MS.clear()
-        TR.RECORD_DERIVED_TIMING_MS.update(prev_table)
+    dev = {"active_sensing_group_timing": {"Left": {
+        "averaging_ms": 30000.0, "onset_upper_ms": 30000.0, "onset_lower_ms": 30000.0,
+        "detection_blanking_ms": 30000.0, "transition_up_ms": 4000.0, "transition_down_ms": 4000.0}}}
+    out = AD._timing_runs_for_simulation(uid, "Left", dev)
+    assert out["programmed"]["params"] == {
+        "averaging_ms": 30000.0, "onset_ms": 30000.0, "detection_blanking_ms": 30000.0,
+        "transition_up_ms": 4000.0, "transition_down_ms": 4000.0}
+    assert out["recommended"]["params"] == {
+        "averaging_ms": 3000.0, "onset_ms": 12000.0, "detection_blanking_ms": 12000.0,
+        "transition_up_ms": 12000.0, "transition_down_ms": 12000.0}
+    assert out["programmed"]["label"] == "As programmed today"
+    assert "measured" in out["programmed"]["source"]
+    assert "participant-specific private timing evidence" in out["recommended"]["source"]
+    absent = AD._timing_runs_for_simulation(uid, "Right", dev)
+    assert absent["programmed"]["params"] == {}
+    assert absent["programmed"]["label"] == "Reference timing (assumed)"
+    assert "white-paper" in absent["programmed"]["source"]
+    partial = AD._timing_runs_for_simulation(uid, "Left", {
+        "active_sensing_group_timing": {"Left": {"averaging_ms": 30000.0}}})
+    assert partial["programmed"]["label"] == "Reference timing (partly assumed)"
+    assert partial["programmed"]["params"] == {"averaging_ms": 30000.0}
+    monkeypatch.delenv("BRAVO_CLINICAL_CONFIG_FILE")
+    for device in (dev, {}):
+        with pytest.raises(ClinicalConfigurationUnavailable, match="not configured"):
+            AD._timing_runs_for_simulation(uid, "Left", device)
 
 
 def test_13_simulation_signature_changes_with_the_recommendation_table_version(monkeypatch):
-    """A future edit to `RECORD_DERIVED_TIMING_MS` must invalidate a stored replay built under the
+    """A future edit to the private timing schema must invalidate a stored replay built under the
     old numbers -- the decision-107 class of defect, one table over (T2's own comment)."""
     try:
         from modules.ClosedLoopDeployment import adapter as AD, timing_recommendation as TR
@@ -485,3 +479,260 @@ def test_13_simulation_signature_changes_with_the_recommendation_table_version(m
         TR.TABLE_VERSION = prev
     assert sig_a != sig_b
     assert TR.TABLE_VERSION in sig_a
+
+# --------------------------------------------------------------------------------------------
+# The compiled controller loop (from test_simulation_compiled_controller.py, merged 2026-10-05)
+# --------------------------------------------------------------------------------------------
+# Speed-up item 4 (`artifacts/research_2026-09-25_options/06_remaining_speed_ups.md` #4; decision
+# 269's pattern applied to the CL-DBS simulation's controller loop): the compiled loop returns
+# EXACTLY what the numpy loop returns.
+#
+# Unlike the design rule's two-component filter, nothing in this loop sums across the K replicates a
+# call runs at once, so no pairwise-summation kernel is needed here to match a numpy reduction inside
+# the loop: every step is elementwise (add, subtract, multiply, divide, comparison, clip), and the
+# reductions over time that follow the loop (the fractions of time at a limit, the mean amplitude,
+# and the rest) run in plain numpy on the arrays the loop filled, in both the numpy and the compiled
+# case, so they inherit numpy's own reduction order automatically.
+#
+# This test holds the compiled loop's output arrays and running counts equal to the numpy loop's on
+# constructed series exercising every curve kind (none, a straight line either sign, the quadratic on
+# both sides of an established peak, and a quadratic with no established peak), gaps in both the
+# power and the amplitude, and every controller branch (onset suppression, detection blanking, both
+# transition directions, saturation at a limit); and holds the whole `simulate_series` answer equal
+# too. Skipped where numba is not installed (CI); the container has it (decision 271).
+needs_numba = pytest.mark.skipif(importlib.util.find_spec("numba") is None, reason="numba is not installed")
+
+
+def _gappy_series(n, seed, amp_lo, amp_hi, dt=1.2, gap_frac=0.1):
+    """A band-power series crossing both thresholds repeatedly, an amplitude series stepping
+    between the plan's own limits, and gaps of missing estimates in both -- a missing power sample
+    must hold the controller's state, a missing amplitude sample must fall back to the amplitude
+    the controller itself is commanding."""
+    rng = np.random.default_rng(seed)
+    p = 100.0 + 35.0 * np.sin(np.linspace(0, 6 * np.pi, n)) + rng.normal(0, 6.0, n)
+    a = amp_lo + (amp_hi - amp_lo) * (0.5 + 0.5 * np.sin(np.linspace(0, 4 * np.pi, n) + 1.0))
+    t = np.arange(n) * dt
+    p = p.copy()
+    a = a.copy()
+    p[rng.random(n) < gap_frac] = np.nan
+    a[rng.random(n) < gap_frac] = np.nan
+    return t, p, a
+
+
+def _curve_bank():
+    """One of each curve kind the controller loop has to evaluate: no response, a rising and a
+    falling straight line, a peaked quadratic (the post-peak break falls inside the capture range,
+    so `has_post` is True) and a quadratic with no established peak (`peak_mA` is NaN, so
+    `has_post` stays False throughout)."""
+    return [
+        AR.ResponseCurve.zero(),
+        AR.ResponseCurve.linear(+55.0),
+        AR.ResponseCurve.linear(-40.0),
+        AR.ResponseCurve(kind=AR.QUADRATIC, quad_per_mA2=-30.0, quad_lin_per_mA=90.0,
+                         peak_mA=2.0, post_peak_slope_per_mA=-25.0),
+        AR.ResponseCurve(kind=AR.QUADRATIC, quad_per_mA2=8.0, quad_lin_per_mA=-5.0,
+                         peak_mA=float("nan"), post_peak_slope_per_mA=float("nan")),
+    ]
+
+
+def _compare(a, b):
+    """Field count and difference count, recursively: dicts and lists by key/index, arrays
+    element for element (NaN equal to NaN), everything else by equality (project convention:
+    check the values, never the shape -- CLAUDE.md §7 rule 11)."""
+    if isinstance(a, dict):
+        compared = differing = 0
+        for key in a:
+            c, d = _compare(a[key], b[key])
+            compared += c
+            differing += d
+        return compared, differing
+    if isinstance(a, (list, tuple)):
+        compared = differing = 0
+        for x, y in zip(a, b):
+            c, d = _compare(x, y)
+            compared += c
+            differing += d
+        return compared, differing
+    if isinstance(a, np.ndarray):
+        b = np.asarray(b)
+        if a.dtype.kind in "fc":
+            bf = b.astype(float)
+            same = (a == bf) | (np.isnan(a) & np.isnan(bf))
+        else:
+            same = (a == b)
+        return int(a.size), int(a.size - int(np.count_nonzero(same)))
+    if isinstance(a, float) and isinstance(b, float) and np.isnan(a) and np.isnan(b):
+        return 1, 0
+    return 1, int(a != b)
+
+
+# --------------------------------------------------------------------------------------------
+# 1. the compiled loop's own arrays and running counts, many constructed series
+# --------------------------------------------------------------------------------------------
+@needs_numba
+def test_the_compiled_loop_returns_exactly_the_numpy_loops_arrays_and_counts():
+    curves = _curve_bank()
+    bank = S._bank(curves)
+    plan = _plan()
+    upper, lower = float(plan.upper), float(plan.lower)
+    amp_low, amp_high = float(plan.capture_amp_low), float(plan.capture_amp_high)
+    onset_steps, blank_steps = 4, 3
+    rate_up, rate_down = 2.0, 1.5
+    target_hi, target_lo = amp_high, amp_low
+    dt = 1.2
+    amp_init = 0.5 * (amp_low + amp_high)
+
+    assert S.COMPILED_CONTROLLER, "numba is installed, so the compiled loop must be the one reachable"
+
+    compared = differing = 0
+    # Nine constructed recordings, not eight: with 8 (n = 350 + 17*seed, K = 5 replicates), the
+    # loop's own arrays and counts give exactly 49,308 compared values by construction (3*K*n summed
+    # over the 8 series, plus 4*K + 1 running counts each) -- true and correct, but short of the
+    # 50,000-value floor this test originally asserted, which an adversarial review caught failing
+    # under the container's pinned numba (0.61.2) with `compared: 49308`. The ninth series restores
+    # the margin honestly rather than lowering the floor to match the smaller number.
+    for seed in range(9):
+        n = 350 + 17 * seed
+        _, p, a_obs = _gappy_series(n, seed, amp_low, amp_high)
+        rng = np.random.default_rng(1000 + seed)
+        alpha = rng.uniform(0.05, 1.0, bank["K"])
+        got_np = S._run_controller_loop_numpy(bank, p, a_obs, alpha, dt, upper, lower, amp_low,
+                                              amp_high, amp_init, rate_up, rate_down, onset_steps,
+                                              blank_steps, target_hi, target_lo)
+        got_kernel = S._run_controller_loop(bank, p, a_obs, alpha, dt, upper, lower, amp_low,
+                                            amp_high, amp_init, rate_up, rate_down, onset_steps,
+                                            blank_steps, target_hi, target_lo)
+        c, d = _compare(list(got_np), list(got_kernel))
+        compared += c
+        differing += d
+    assert compared > 50_000, compared
+    assert differing == 0, (compared, differing)
+
+
+# --------------------------------------------------------------------------------------------
+# 2. the whole `simulate_series` answer, forced compiled against forced numpy
+# --------------------------------------------------------------------------------------------
+@needs_numba
+def test_the_whole_simulate_series_answer_is_the_same_with_the_compiled_loop():
+    curves = _curve_bank()
+    plan = _plan()
+    t, p, a_obs = _gappy_series(700, seed=3, amp_lo=float(plan.capture_amp_low),
+                          amp_hi=float(plan.capture_amp_high))
+    saved = S.COMPILED_CONTROLLER
+    try:
+        S.COMPILED_CONTROLLER = True
+        fast = S.simulate_series(t, p, a_obs, plan, curves, tau_s=8.0)
+        S.COMPILED_CONTROLLER = False
+        slow = S.simulate_series(t, p, a_obs, plan, curves, tau_s=8.0)
+    finally:
+        S.COMPILED_CONTROLLER = saved
+    assert fast["n_missing"] > 0, "the fixture must exercise the missing-estimate hold"
+    compared, differing = _compare(fast, slow)
+    assert compared > 5_000, compared
+    assert differing == 0, (compared, differing)
+
+
+@needs_numba
+def test_the_whole_simulate_segments_answer_is_the_same_with_the_compiled_loop():
+    """`simulate_segments` re-enters `simulate_series` once per contiguous stretch (decision 269's
+    equality proof needs the whole path a report actually takes, not only the innermost loop)."""
+    curves = _curve_bank()
+    plan = _plan()
+    t1, p1, a1 = _gappy_series(400, seed=11, amp_lo=float(plan.capture_amp_low),
+                         amp_hi=float(plan.capture_amp_high))
+    t2, p2, a2 = _gappy_series(500, seed=12, amp_lo=float(plan.capture_amp_low),
+                         amp_hi=float(plan.capture_amp_high))
+    t = np.concatenate([t1, t2 + t1[-1] + 3600.0])
+    p = np.concatenate([p1, p2])
+    a = np.concatenate([a1, a2])
+    saved = S.COMPILED_CONTROLLER
+    try:
+        S.COMPILED_CONTROLLER = True
+        fast = S.simulate_segments(t, p, a, plan, curves, tau_s=8.0)
+        S.COMPILED_CONTROLLER = False
+        slow = S.simulate_segments(t, p, a, plan, curves, tau_s=8.0)
+    finally:
+        S.COMPILED_CONTROLLER = saved
+    assert fast["refused"] is False and fast["n_segments_used"] == 2
+    compared, differing = _compare(fast, slow)
+    assert compared > 500, compared
+    assert differing == 0, (compared, differing)
+
+
+# --------------------------------------------------------------------------------------------
+# Segments simulated in worker processes (from test_simulation_segments_parallel.py, merged 2026-10-05)
+# --------------------------------------------------------------------------------------------
+# The segments of a gappy record are simulated in worker processes (2026-10-02: the Closed-Loop
+# request ran its ~700 segment simulations one after another on one core of the Jetstream2 BRAVO's
+# 64). Each segment's simulation depends on that segment alone, and the per-segment results are
+# combined in segment order exactly as before, so the answer is the same to the last bit.
+#
+# Values, not shapes: every number and array of the result compared element for element.
+
+
+def _record(n_segments=12):
+    t, p, a = _series(n=300)
+    ts, ps, as_ = [], [], []
+    for k in range(n_segments):                 # stretches a day apart, as in a chronic record
+        ts.append(t + 86400.0 * k); ps.append(p if k % 2 else p[::-1]); as_.append(a)
+    return np.concatenate(ts), np.concatenate(ps), np.concatenate(as_)
+
+
+def _flat(o, pre=""):
+    if isinstance(o, dict):
+        out = {}
+        for k, v in o.items():
+            out.update(_flat(v, f"{pre}.{k}"))
+        return out
+    if isinstance(o, (list, tuple)):
+        out = {}
+        for i, v in enumerate(o):
+            out.update(_flat(v, f"{pre}[{i}]"))
+        return out
+    return {pre: o}
+
+
+def _differences(a, b):
+    fa, fb = _flat(a), _flat(b)
+    assert fa.keys() == fb.keys()
+    n = 0
+    for k in fa:
+        x, y = np.asarray(fa[k]), np.asarray(fb[k])
+        n += int(x.shape != y.shape or not np.array_equal(x, y, equal_nan=x.dtype.kind == "f"))
+    return len(fa), n
+
+
+def _run(monkeypatch, jobs):
+    monkeypatch.setenv(S.SEGMENT_JOBS_ENV, str(jobs))
+    t, p, a = _record()
+    curves = [AR.ResponseCurve.zero(), AR.ResponseCurve.zero()]
+    return S.simulate_segments(t, p, a, _plan(), curves, tau_s=30.0, keep_longest=2)
+
+
+def test_segments_simulated_in_worker_processes_give_the_same_result_to_the_last_bit(monkeypatch):
+    one = _run(monkeypatch, 1)
+    many = _run(monkeypatch, 4)
+    assert one["refused"] is False and one["n_segments_used"] == 12
+    n, differing = _differences(one, many)
+    assert n > 50 and differing == 0, (n, differing)
+
+
+def test_when_no_worker_process_can_start_the_segments_run_here_with_the_same_result(monkeypatch):
+    import joblib
+
+    one = _run(monkeypatch, 1)
+
+    def no_pool(*a, **k):
+        raise OSError("no process pool in this sandbox")
+
+    monkeypatch.setattr(joblib, "Parallel", no_pool)
+    fallback = _run(monkeypatch, 4)
+    n, differing = _differences(one, fallback)
+    assert differing == 0, (n, differing)
+
+
+@pytest.fixture(autouse=True)
+def synthetic_clinical_configuration(monkeypatch, tmp_path):
+    """Supply explicitly authored clinical evidence only inside this test's sandbox."""
+    from DecodeCommon.tests.synthetic_clinical_config import install
+    install(monkeypatch, tmp_path / "clinical.json", ['p-sim-cands', 'p-timing-runs'])

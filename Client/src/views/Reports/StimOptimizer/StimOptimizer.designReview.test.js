@@ -1,0 +1,407 @@
+/** Synthetic display-contract regression tests.
+ * Independently authored examples; no participant responses or live scientific validation.
+ */
+import "@testing-library/jest-dom";
+import fs from "fs";
+import path from "path";
+import { render as rtlRender } from "@testing-library/react";
+
+import oldResponse from "./__fixtures__/synthetic_optimizer_basic.json";
+import newResponse from "./__fixtures__/synthetic_optimizer_cautions.json";
+import { statusSummary, STATUS_GLYPH } from "./StatusLine";
+import { CURRENT_MAP_COLORSCALE } from "./CurrentMapCard";
+import { wrap } from "testUtils/render";
+
+jest.mock("react-router-dom", () => ({
+  ...jest.requireActual("react-router-dom"),
+  useParams: () => ({ participant_uid: "synthetic-participant" }),
+}));
+jest.mock("layouts/DatabaseLayout", () => ({ children }) => <div>{children}</div>);
+jest.mock("database/session-control", () => ({ SessionController: { query: jest.fn(() => new Promise(() => {})) } }));
+jest.mock("plotly.js-dist", () => ({
+  react: () => Promise.resolve(), purge: () => {}, restyle: () => Promise.resolve(),
+  relayout: () => Promise.resolve(), newPlot: () => Promise.resolve(), toImage: () => Promise.resolve(),
+}));
+jest.mock("graphing-utility/Plotly", () => ({
+  PlotlyRenderManager: class {
+    constructor() { this.traces = []; this.layout = {}; }
+    subplots() {} clearData() {} render() {} setLayoutProps() {} setXlabel() {} setYlabel() {}
+    addHeatmap() {} addScatter() {} addShape() {} addAnnotation() {} setTitle() {} purge() {}
+  },
+}));
+jest.mock("views/Reports/RecomputeBar", () => () => <div>recompute bar</div>);
+jest.mock("views/Reports/ControlAnalyses/ControlAnalysesCard", () => ({
+  ControlAnalysesSection: () => <div data-testid="control-analyses">control analyses</div>,
+}));
+jest.mock("database/useCachedResult", () => ({
+  useCachedResult: () => ({ data: global.__SO_FX__, loading: false, err: null, hasCached: true,
+    stale: false, staleReasons: [], computedAt: null, notKept: false }),
+}));
+
+// eslint-disable-next-line import/first
+import StimOptimizer from "./index";
+
+function renderPage(fx) {
+  global.__SO_FX__ = fx;
+  return rtlRender(wrap(<StimOptimizer />));
+}
+
+/** Inside a closed fold: some ancestor is a collapsed MUI Collapse. */
+const isFolded = (el) => !!(el && el.closest(".MuiCollapse-hidden"));
+
+/** The text a reader sees on load: every text node not inside a closed fold. */
+function visibleText(root) {
+  let out = "";
+  const walk = (n) => {
+    if (n.nodeType === 3) { out += n.textContent; return; }
+    if (n.nodeType !== 1) return;
+    if (n.classList && n.classList.contains("MuiCollapse-hidden")) return;
+    n.childNodes.forEach(walk);
+  };
+  walk(root);
+  return out.replace(/\s+/g, " ");
+}
+const countOf = (text, re) => (text.match(new RegExp(re.source, `${re.flags.replace("g", "")}g`)) || []).length;
+const words = (s) => (String(s).trim().match(/\S+/g) || []).length;
+
+// CHANGED 2026-09-26 (SPEC.md section 5.3): the page's sections are <section> cards built from the
+// shared paper components, not MUI cards; a section is found the same way, by its title's text.
+const CARD_SELECTOR = "section[data-paper='section'], .MuiCard-root";
+const cardWithTitle = (container, title) => Array.from(container.querySelectorAll(CARD_SELECTOR))
+  .find((c) => c.textContent.includes(title));
+const NEXT_VISIT = "Next-visit requirements";
+
+// ---------------------------------------------------------------------------------------------
+describe("1. the status line", () => {
+  it("states the answer in one line, from the numbers (synthetic caution response)", () => {
+    const s = statusSummary(newResponse, newResponse.two_stage);
+    expect(s.headline).toBe("Keep today's setting on both sides; closed loop cannot start.");
+  });
+
+  // PIN CHANGED 2026-09-26 (SPEC.md section 2.3): a check that could not run is its own state,
+  // grey ○, counted apart from a caution; it is never drawn as a pass.
+  // SPLIT 2026-09-26 (the PI's ruling D14, TASTE_AUDIT.md): the test named "lists the refusals and
+  // blocking checks in red" would now be untrue. Red is only a device refusal or a value above the
+  // safe ceiling; the two statistical results on this synthetic example ("No usable sensing pair", "Setting not
+  // proven better") are drawn in ink with ✕ (kind "blocked"). The refusals keep red, pinned below
+  // on a constructed response.
+  it("lists the blocking statistical results in ink with ✕, the cautions in yellow, the checks not run in grey", () => {
+    const s = statusSummary(newResponse, newResponse.two_stage);
+    const of = (k) => s.bullets.filter((b) => b.kind === k).map((b) => b.text);
+    expect(of("blocked")).toEqual(["No usable sensing pair", "Setting not proven better"]);
+    expect(of("refused")).toEqual([]);
+    expect(of("yellow")).toEqual(["Next visit: 2 pairs short", "Pain map moves over time"]);
+    expect(of("grey")).toEqual(expect.arrayContaining([
+      "Band response not assessed", "Current limits not proposed", "Pulse width not assessed"]));
+    // blocked, then yellow, then grey
+    const kinds = s.bullets.map((b) => b.kind);
+    expect(kinds.indexOf("yellow")).toBeGreaterThan(kinds.lastIndexOf("blocked"));
+    expect(kinds.indexOf("grey")).toBeGreaterThan(kinds.lastIndexOf("yellow"));
+  });
+
+  it("keeps red with ✕ for a device refusal and a value above the ceiling, listed first (D14)", () => {
+    const plan = JSON.parse(JSON.stringify(newResponse.two_stage));
+    plan.gate.passed = false;
+    plan.gate.conditions = [
+      { name: "rate_at_or_above_adaptive_minimum", verdict: "FAIL", detail: "rate below", evidence: { min_rate_hz: 55 } },
+      { name: "openloop_choice_resolved", verdict: "FAIL", detail: "not proven" },
+      { name: "adaptive_band_passes_lfp_response", verdict: "FAIL", detail: "no band" },
+      // PIN CHANGED 2026-09-26: only a proposed limit ABOVE the ceiling is the red refusal, read
+      // from the check's own sentence or evidence; this detail names that cause.
+      { name: "amplitude_limits_inside_envelope_and_under_ceiling", verdict: "FAIL",
+        detail: "Left: upper limit 4.8 mA exceeds the declared ceiling of 4.5 mA" },
+    ];
+    const data = { ...newResponse, closed_loop: { available: true,
+      sensing_rule: { sentence: "the device allows no pair", by_side: { Left: { rule_applied: true }, Right: { rule_applied: true } } } } };
+    const s = statusSummary(data, plan);
+    const of = (k) => s.bullets.filter((b) => b.kind === k).map((b) => b.text);
+    expect(of("refused").map((t) => t.replace(/\s/g, " "))).toEqual(
+      ["Device allows no sensing pair", "Rate below 55 Hz refused", "Current limits above ceiling"]);
+    expect(of("blocked")).toEqual(["Setting not proven better", "No band moves with current"]);
+    const kinds = s.bullets.map((b) => b.kind);
+    expect(kinds.indexOf("blocked")).toBeGreaterThan(kinds.lastIndexOf("refused"));
+    const { container } = renderPage({ ...data, two_stage: plan });
+    const inkOf = (text) => {
+      const b = Array.from(container.querySelectorAll('[data-testid="status-bullet"]')).find((x) => x.textContent.includes(text));
+      return b.querySelector('[data-testid="status-glyph"]').style.color;
+    };
+    expect(STATUS_GLYPH.refused).toBe("✕");
+    expect(STATUS_GLYPH.blocked).toBe("✕");
+    expect(inkOf("Device allows no sensing pair")).toBe("rgb(180, 35, 24)");   // #B42318
+    expect(inkOf("Setting not proven better")).toBe("rgb(26, 26, 26)");        // #1A1A1A
+  });
+
+  it("reads the older response without the fields it predates, and invents no bullet", () => {
+    const s = statusSummary(oldResponse, oldResponse.two_stage);
+    expect(s.headline).toBe("Keep today's setting on both sides; closed loop cannot start.");
+    expect(s.bullets.map((b) => b.text)).toEqual(
+      ["Setting not proven better", "Current limits not proposed", "Pulse width not assessed"]);
+  });
+
+  // PIN CHANGED 2026-09-26 (SPEC.md sections 2.3 and 4): three states, not two -- ✕ blocks (red),
+  // ▲ needs more data or caution (amber), ○ not checked (grey) -- and at most five items in the
+  // open, the not-checked ones counted in one item when they would overflow. Nothing is dropped:
+  // every item is still named, and the counted ones are in the item's own accessible name.
+  it("at most five items, each five words or fewer and carrying a glyph as well as a colour", () => {
+    const { container } = renderPage(newResponse);
+    const bullets = container.querySelectorAll('[data-testid="status-bullet"]');
+    expect(bullets.length).toBe(5);
+    // PIN CHANGED 2026-09-26 (D14): the kinds are "refused" (red) and "blocked" (ink), both ✕.
+    const WORD = { refused: /^refused: /, blocked: /^blocked: /, yellow: /^caution: /, grey: /^not checked: / };
+    bullets.forEach((b) => {
+      const kind = b.getAttribute("data-kind");
+      const glyph = b.querySelector('[data-testid="status-glyph"]');
+      expect(glyph.textContent).toBe(STATUS_GLYPH[kind]);
+      const label = b.querySelector('[data-testid="status-text"]').textContent.replace("†", "");
+      expect(words(label)).toBeLessThanOrEqual(5);
+      expect(b.getAttribute("aria-label")).toMatch(WORD[kind]);
+    });
+    const counted = Array.from(bullets).find((b) => /checks not run/.test(b.textContent));
+    expect(counted.getAttribute("aria-label")).toBe(
+      "not checked: 3 checks not run: Band response not assessed, Current limits not proposed, Pulse width not assessed");
+    expect(STATUS_GLYPH.refused).toBe("✕");
+    expect(STATUS_GLYPH.blocked).toBe("✕");
+    expect(STATUS_GLYPH.yellow).toBe("▲");
+    expect(STATUS_GLYPH.grey).toBe("○");
+  });
+
+  it("keeps the decision-294 dagger on its bullet, and its note in the folded detail", () => {
+    const { container } = renderPage(newResponse);
+    const moves = Array.from(container.querySelectorAll('[data-testid="status-bullet"]'))
+      .find((b) => b.textContent.includes("Pain map moves over time"));
+    expect(moves.textContent).toContain("†");
+    const detail = container.querySelector('[data-testid="status-details"]');
+    expect(detail.textContent).toContain("moves between blocks of time");
+    expect(isFolded(detail)).toBe(true);
+  });
+
+  // PIN CHANGED 2026-09-26 (SPEC.md section 1, principle 1): the page opens with its answer, so
+  // the status sentence comes before the recompute bar (the bar itself is unchanged).
+  it("opens the page, above the recompute bar and the readiness card", () => {
+    const { container } = renderPage(newResponse);
+    const t = container.textContent;
+    const status = t.indexOf("Keep today's setting on both sides");
+    expect(status).toBeGreaterThan(-1);
+    expect(status).toBeLessThan(t.indexOf("recompute bar"));
+    expect(status).toBeLessThan(t.indexOf("contact-and-rate combinations usable for closed loop"));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+describe("2. folds closed on load", () => {
+  let container;
+  beforeEach(() => { ({ container } = renderPage(newResponse)); });
+  const byTestId = (id) => container.querySelector(`[data-testid="${id}"]`);
+
+  it("the definition of 'proven better', the exposure line and the stopping rule (243(b), 243(d), 245(b))", () => {
+    const def = Array.from(container.querySelectorAll("div")).find((d) => /^Proven better means/.test(d.textContent));
+    expect(def).toBeTruthy();
+    expect(isFolded(def)).toBe(true);
+    expect(isFolded(byTestId("stopping-rule"))).toBe(true);
+  });
+
+  it("the stored-results line beside the recompute bar", () => {
+    expect(isFolded(byTestId("cache-status-fold-body"))).toBe(true);
+  });
+
+  it("the readiness rows on pairs the device does not allow today; the two allowed pairs open", () => {
+    const open = container.querySelectorAll('[data-testid="readiness-row"][data-allowed="true"]');
+    const rest = container.querySelectorAll('[data-testid="readiness-row"][data-allowed="false"]');
+    expect(open.length).toBeGreaterThan(0);
+    expect(rest.length).toBeGreaterThan(0);
+    open.forEach((r) => {
+      expect(isFolded(r)).toBe(false);
+      expect(r.textContent).toMatch(/L 1⁻3⁺|R 0⁻3⁺/);
+    });
+    rest.forEach((r) => expect(isFolded(r)).toBe(true));
+  });
+
+  it("the clinic-sheet table and the home schedule, both inside the next-visit card", () => {
+    const card = cardWithTitle(container, NEXT_VISIT);
+    const sheet = byTestId("clinic-sheet-tables");
+    const home = byTestId("home-schedule");
+    expect(card.contains(sheet)).toBe(true);
+    expect(card.contains(home)).toBe(true);
+    expect(isFolded(sheet)).toBe(true);
+    expect(isFolded(home.querySelector("table"))).toBe(true);
+    // the home schedule is no longer a card of its own
+    const titled = Array.from(container.querySelectorAll(CARD_SELECTOR))
+      .filter((c) => c.textContent.includes("Home schedule to map two currents"));   // (CARD_SELECTOR below)
+    expect(titled).toHaveLength(1);
+    expect(titled[0]).toBe(card);
+  });
+
+  it("the two charts on the closed-loop checks", () => {
+    container.querySelectorAll('svg[aria-label^="Left side"], svg[aria-label^="Right side"]')
+      .forEach((svg) => expect(isFolded(svg)).toBe(true));
+    container.querySelectorAll('svg[aria-label^="gap between the two power levels"]')
+      .forEach((svg) => expect(isFolded(svg)).toBe(true));
+  });
+
+  it("the control analyses", () => {
+    expect(isFolded(byTestId("control-analyses"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+describe("3. nothing said twice in the open", () => {
+  [["synthetic cautions", newResponse], ["synthetic basic", oldResponse]].forEach(([label, fx]) => {
+    it(`${label}: "no current can be recommended" at most once, "closed loop cannot start" once`, () => {
+      const { container } = renderPage(fx);
+      const v = visibleText(container);
+      expect(countOf(v, /no current can be recommended/i)).toBeLessThanOrEqual(1);
+      expect(countOf(v, /closed loop (cannot|may not) start/i)).toBe(1);
+    });
+
+    it(`${label}: the ceiling's value is stated in the next-visit card, and not again in the open`, () => {
+      // Counts statements of the ceiling's VALUE ("ceiling L 4.5 mA", "4.5 mA ceiling"), not the
+      // word: the current-limits check is named "... under the ceiling", which states no value.
+      // (The first version of this test counted the word and so counted the check's name.)
+      const VALUE = /ceiling\s*(?:[LR]\s*)?\d|\d\s?mA ceiling/i;
+      const { container } = renderPage(fx);
+      const v = visibleText(container);
+      const next = visibleText(cardWithTitle(container, NEXT_VISIT));
+      expect(countOf(next, VALUE)).toBe(1);
+      // the only other open statement is the check's history line (decision 168, kept open)
+      const others = countOf(v, VALUE) - 1;
+      expect(others).toBeLessThanOrEqual(1);
+      if (others === 1) expect(v).toMatch(/\d\s?mA ceiling — history, not a proposal/);
+    });
+
+    it(`${label}: no sentence that only points at another card`, () => {
+      const { container } = renderPage(fx);
+      const v = visibleText(container);
+      expect(v).not.toMatch(/at the top of this page/i);
+      expect(v).not.toMatch(/at the foot of this page/i);
+      expect(v).not.toMatch(/card above/i);
+      expect(v).not.toMatch(/Nothing was drawn up/);
+    });
+
+    it(`${label}: one line per unfitted pulse-width pairing, not one per rate`, () => {
+      const { container } = renderPage(fx);
+      const v = visibleText(container);
+      expect(v).not.toMatch(/not enough data/i);
+      const lines = container.querySelectorAll('[data-testid="unfitted-rates"]');
+      const pairings = new Set();
+      [...fx.two_stage.stage1.rate_strata, ...(fx.two_stage.stage1.rate_strata_clinic || [])]
+        .filter((r) => r && !r.fitted).forEach((r) => pairings.add(`${r.pw_us_left}/${r.pw_us_right}/${r.source || ""}`));
+      expect(lines.length).toBeGreaterThan(0);
+      expect(lines.length).toBeLessThanOrEqual(pairings.size);
+    });
+  });
+
+  it("the stopping rule reads once for both sides when both read alike", () => {
+    const { container } = renderPage(newResponse);
+    const t = container.querySelector('[data-testid="stopping-rule"]').textContent;
+    expect(t).toMatch(/Both sides: not assessable/);
+    expect(t).not.toMatch(/Left: not assessable/);
+    expect(countOf(t, /untried combinations still look worth trying/)).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Synthetic fixtures use current wording; no saved participant response exceptions.
+describe("4. one set of words", () => {
+  [["synthetic cautions", newResponse], ["synthetic basic", oldResponse]].forEach(([label, fx]) => {
+    it(`${label}: is explicitly synthetic, not a captured participant response`, () => {
+      expect(fx._fixture_provenance.kind).toBe("independently-authored-synthetic");
+      expect(fx._fixture_provenance.purpose).toContain("not measured participant data");
+    });
+
+    it(`${label}: the retired words are not in the open`, () => {
+      const { container } = renderPage(fx);
+      const v = visibleText(container);
+      expect(v).not.toMatch(/\bepochs?\b/i);
+      expect(v).not.toMatch(/Separation \(SD\)/i);
+      expect(v).not.toMatch(/\bfloor\b/i);
+      expect(v).not.toMatch(/time removed|once time is removed/i);
+      expect(v).not.toMatch(/adaptive mode/i);
+      expect(v).not.toMatch(/\bnot resolved\b|Resolved means/);
+      expect(v).not.toMatch(/decision \d{2,3}/i);
+      expect(v).not.toMatch(/stimulation speed|at this speed/i);
+    });
+  });
+
+  it("no string this page's own files print carries a decision number", () => {
+    const dir = __dirname;
+    const offenders = [];
+    fs.readdirSync(dir).filter((f) => f.endsWith(".js") && !f.endsWith(".test.js")).forEach((f) => {
+      const code = fs.readFileSync(path.join(dir, f), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
+      const lits = code.match(/"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g) || [];
+      const jsx = (code.match(/>([^<>{}]*[A-Za-z][^<>{}]*)</g) || []);
+      lits.concat(jsx).forEach((s) => { if (/decision \d{2,3}/i.test(s)) offenders.push(`${f}: ${s.slice(0, 80)}`); });
+    });
+    expect(offenders).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+describe("5. the current map's colour scale is colour-blind safe", () => {
+  it("runs blue (better) through a neutral grey (today) to orange (worse), never red to green", () => {
+    expect(CURRENT_MAP_COLORSCALE[0]).toEqual([0, "#0072B2"]);
+    expect(CURRENT_MAP_COLORSCALE[CURRENT_MAP_COLORSCALE.length - 1]).toEqual([1, "#D55E00"]);
+    const mid = CURRENT_MAP_COLORSCALE.find(([t]) => t === 0.5)[1];
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(mid.slice(i, i + 2), 16));
+    expect(r).toBe(g);
+    expect(g).toBe(b);
+    const src = fs.readFileSync(path.join(__dirname, "CurrentMapCard.js"), "utf8");
+    expect(src).not.toMatch(/#1A9850|#D73027|#FEE08B/i);
+  });
+
+  it("the legend says so in words, and no longer says green and red", () => {
+    const { container } = renderPage(newResponse);
+    const legend = container.querySelector('[data-testid="current-map-legend"]').textContent;
+    expect(legend).toMatch(/blue better, orange\s+worse/);
+    expect(legend).not.toMatch(/\b(green|red|yellow)\b/i);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+describe("6. no horizontal scroll on a laptop", () => {
+  // A 1,280 px laptop screen less the app's side navigation and the card's padding leaves about
+  // 940 px for a card's content.
+  const BUDGET = 940;
+  const files = fs.readdirSync(__dirname).filter((f) => f.endsWith(".js") && !f.endsWith(".test.js"));
+
+  it("no fixed minimum width wider than a laptop's card", () => {
+    const offenders = [];
+    files.forEach((f) => {
+      const src = fs.readFileSync(path.join(__dirname, f), "utf8");
+      const re = /minWidth: ?(\d+)/g;
+      let m = re.exec(src);
+      while (m) { if (Number(m[1]) > BUDGET) offenders.push(`${f}: ${m[0]}`); m = re.exec(src); }
+    });
+    expect(offenders).toEqual([]);
+  });
+
+  it("no grid whose fixed column minimums and gaps add up to more than a laptop's card", () => {
+    const offenders = [];
+    files.forEach((f) => {
+      const src = fs.readFileSync(path.join(__dirname, f), "utf8");
+      const re = /(?:COLUMNS|gridTemplateColumns)\s*[:=]\s*"([^"]+)"/g;
+      let m = re.exec(src);
+      while (m) {
+        const cols = m[1].match(/minmax\([^)]*\)|\S+/g) || [];
+        const min = cols.reduce((s, c) => {
+          const mm = /^minmax\((\d+)px/.exec(c) || /^(\d+)px$/.exec(c);
+          return s + (mm ? Number(mm[1]) : 0);
+        }, 0) + (cols.length - 1) * 14;
+        if (min > BUDGET) offenders.push(`${f}: ${m[1]} (${min} px)`);
+        m = re.exec(src);
+      }
+    });
+    expect(offenders).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+describe("7. the two stale passages", () => {
+  it("the readiness fold states decision 277's harmonic rule, and the PI's advisory wording", () => {
+    const src = fs.readFileSync(path.join(__dirname, "SensingEvidenceTable.js"), "utf8");
+    expect(src).not.toMatch(/\|250 − rate\|/);
+    expect(src).not.toMatch(/may be the stimulator, not the brain/);
+    expect(src).toMatch(/carries a folded multiple of the stimulation rate/);
+    expect(src).toMatch(/every whole multiple of the rate/);
+  });
+});

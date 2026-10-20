@@ -1,4 +1,3 @@
-import { useAnalysisQuery } from "../Biomarkers/queryAnalysis";
 /**
  * Shared /api/queryDeploymentSummary fetch.
  *
@@ -8,6 +7,7 @@ import { useAnalysisQuery } from "../Biomarkers/queryAnalysis";
  * deterministic backend payload. Each caller still issues its own request (matching the existing
  * per-panel fetch architecture), but they cannot drift in what they ask for.
  */
+import { SessionController } from "database/session-control";
 import { useCachedResult } from "database/useCachedResult";
 
 import { CL } from "views/Reports/moduleCacheKeys";
@@ -17,15 +17,14 @@ export function deploymentSummaryBody({ participantUid, channel, centerHz, bandW
   cutThr, requestParams }) {
   const body = {
     ParticipantId: participantUid, Channel: channel, CenterHz: Number(centerHz),
-    BandWidthHz: Number(bandWidthHz || 5.0), ...requestParams, MatchDirection: matchDir || "prior",
+    BandWidthHz: Number(bandWidthHz || 5.0), MatchDirection: matchDir || "prior", ...requestParams,
   };
   if (cutThr != null) body.Cutpoint = Number(cutThr);
   return body;
 }
 
 export default function useDeploymentSummary({ participantUid, channel, centerHz, bandWidthHz,
-  matchDir, cutThr, requestParams, inputIdentity, enabled = true }) {
-  const queryAnalysis = useAnalysisQuery();
+  matchDir, cutThr, requestParams, enabled = true, slot = CL.summary }) {
   const body = deploymentSummaryBody({ participantUid, channel, centerHz, bandWidthHz, matchDir,
     cutThr, requestParams });
   // The request minus the participant, for the reason given at length in useDeploymentReport: the
@@ -35,15 +34,13 @@ export default function useDeploymentSummary({ participantUid, channel, centerHz
   delete settings.ParticipantId;
 
   const cached = useCachedResult({
-    moduleKey: CL.summary,
-    autoFetch: false,
+    moduleKey: slot,   // CL.summaryOther for the band chosen on the other side
     uid: participantUid,
-    identity: inputIdentity,
     settings,
     // `enabled` lets a consumer that receives the summary as a prop skip its own fetch entirely,
     // so the shared single-fetch path doesn't get shadowed by a duplicate request.
     enabled: enabled !== false && !!participantUid && channel != null && centerHz != null,
-    fetcher: () => queryAnalysis("/api/queryDeploymentSummary", body)
+    fetcher: () => SessionController.query("/api/queryDeploymentSummary", body)
       .then((response) => (response && response.data) || null),
   });
 

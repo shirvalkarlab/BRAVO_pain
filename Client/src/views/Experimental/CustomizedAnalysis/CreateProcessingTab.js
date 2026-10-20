@@ -423,7 +423,7 @@ function CreateProcessingTab({analysisId, analysisData, updateProcessingSteps, u
               {"Processing Configuration"}
             </MDTypography>
           </MDBox>
-          <DialogContent sx={{width: 500, maxWidth: "100%", minWidth: 0}} >
+          <DialogContent sx={{minWidth: 500}} >
             <Autocomplete 
               selectOnFocus 
               clearOnBlur
@@ -479,7 +479,7 @@ function CreateProcessingTab({analysisId, analysisData, updateProcessingSteps, u
               {"Set Processing Order"}
             </MDTypography>
           </MDBox>
-          <DialogContent sx={{width: 500, maxWidth: "100%", minWidth: 0}} >
+          <DialogContent sx={{minWidth: 500}} >
             <TextField
               variant="standard"
               margin="dense"

@@ -31,7 +31,8 @@ SETUP_NOTE = (
     "service-account key at secrets/google_service_account.json is used only when no user token "
     "exists, and cannot CREATE sheets in a My Drive folder: a service account owns what it "
     "creates and has no Drive storage, so the copy is refused for quota. Until one of these is "
-    "in place, this button downloads a filled .xlsx file instead."
+    "in place, this button downloads a filled .xlsx file instead. Set both "
+    "CLINIC_SHEETS_DRIVE_FOLDER_ID and CLINIC_SHEETS_TEMPLATE_ID for the intended destination."
 )
 
 #: Default credential locations, relative to wherever the server process's current directory is
@@ -40,10 +41,8 @@ DEFAULT_KEY_FILE = "secrets/google_service_account.json"
 DEFAULT_TOKEN_FILE = "secrets/google_oauth_token.json"
 DEFAULT_CLIENT_FILE = "secrets/google_oauth_client.json"
 
-# Participant-specific provenance and examples are maintained outside source control.
+#: No implicit participant destination: deployments must configure both identifiers.
 DEFAULT_FOLDER_ID = ""
-
-# Participant-specific provenance and examples are maintained outside source control.
 DEFAULT_TEMPLATE_ID = ""
 
 SCOPES = ("https://www.googleapis.com/auth/drive",
@@ -75,23 +74,17 @@ def credential_source():
 
 
 def folder_id() -> str:
-    value = os.environ.get("CLINIC_SHEETS_DRIVE_FOLDER_ID", DEFAULT_FOLDER_ID).strip()
-    if not value:
-        raise ValueError("CLINIC_SHEETS_DRIVE_FOLDER_ID must name an explicitly configured destination")
-    return value
+    return os.environ.get("CLINIC_SHEETS_DRIVE_FOLDER_ID", DEFAULT_FOLDER_ID)
 
 
 def template_id() -> str:
-    value = os.environ.get("CLINIC_SHEETS_TEMPLATE_ID", DEFAULT_TEMPLATE_ID).strip()
-    if not value:
-        raise ValueError("CLINIC_SHEETS_TEMPLATE_ID must name an explicitly configured template")
-    return value
+    return os.environ.get("CLINIC_SHEETS_TEMPLATE_ID", DEFAULT_TEMPLATE_ID)
 
 
 def available() -> bool:
     """True only when a credential file exists on disk (user token or service-account key) AND
     the google-api client libraries import cleanly. Never raises."""
-    if credential_source() is None:
+    if not folder_id().strip() or not template_id().strip() or credential_source() is None:
         return False
     try:
         import google.oauth2.credentials  # noqa: F401
@@ -111,8 +104,8 @@ class GoogleClient:
     def __init__(self, key_file_path=None):
         """Signs in as the PI when a user token exists (decision 181), else with the service
         account. `key_file_path` forces the service-account route for a caller that has one."""
-        folder_id()
-        template_id()
+        if not folder_id().strip() or not template_id().strip():
+            raise ValueError("Configure the clinic Sheets folder and template before connecting")
         from googleapiclient.discovery import build
 
         if key_file_path is None and credential_source() == "user":

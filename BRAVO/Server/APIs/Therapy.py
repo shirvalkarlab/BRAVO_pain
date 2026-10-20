@@ -1,4 +1,3 @@
-from modules.ReportCache import cached_report
 """"""
 """
 =========================================================
@@ -38,6 +37,7 @@ from django.conf import settings
 from Server import models
 from modules.HelperFunctions import sanitize_input, get_or_none
 from modules import Database, DataCurator, Therapy
+from modules.therapy_history_presentation import therapy_history_response
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
@@ -48,7 +48,6 @@ class QueryTherapyHistory(RestViews.APIView):
     permission_classes = [IsAuthenticated]
 
     @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
-    @cached_report
     def post(self, request):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
             return Response(status=400, data={"message": "Malformed Input"})
@@ -68,7 +67,7 @@ class QueryTherapyHistory(RestViews.APIView):
         TherapyHistory["DeviceImpedance"] = Therapy.queryElectrodeImpedances(Participant)
 
         Database.saveCachedResult(TherapyHistory, "/queryTherapyHistory", request.data["ParticipantId"], {**request.data})
-        return Response(status=200, data=TherapyHistory)
+        return Response(status=200, data=therapy_history_response(TherapyHistory, request.data.get("Compact", False)))
 
 class AssignTherapyLabel(RestViews.APIView):
 
@@ -85,14 +84,12 @@ class AssignTherapyLabel(RestViews.APIView):
         if not Permissions:
             return Response(status=403)
          
-        from modules.ReportCache import invalidate
         Participant = models.Participant.find(uid=request.data["ParticipantId"])
         if "SelectiveIds" in request.data.keys() and len(request.data["SelectiveIds"]) > 0:
             AllTherapies = request.data["SelectiveIds"]
             ToBeUpdated = models.ElectricalTherapy.objects.filter(therapy__uid__in=AllTherapies, therapy__source__owner=Participant)
             ToBeUpdated.update(label="")
             models.ElectricalTherapy.objects.filter(therapy__uid__in=request.data["TherapyIds"], therapy__source__owner=Participant).update(label=request.data["TherapyLabel"])
-            invalidate()
             return Response(status=200)
 
         TherapyHistory = Therapy.queryTherapyHistory(Participant)
@@ -114,5 +111,4 @@ class AssignTherapyLabel(RestViews.APIView):
         ToBeUpdated = models.ElectricalTherapy.objects.filter(therapy__uid__in=AllTherapies)
         ToBeUpdated.update(label="")
         models.ElectricalTherapy.objects.filter(therapy__uid__in=request.data["TherapyIds"]).update(label=request.data["TherapyLabel"])
-        invalidate()
         return Response(status=200)

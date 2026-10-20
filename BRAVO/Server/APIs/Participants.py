@@ -124,16 +124,6 @@ class QueryParticipantInformation(RestViews.APIView):
     def post(self, request):
         if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
             return Response(status=400, data={"message": "Malformed Input"})
-
-        # A participant URL can remain in the browser after an appliance
-        # database is replaced.  Distinguish that stale identifier from a
-        # genuine authorization failure so the client can return to the live
-        # participant list instead of showing a misleading permission error.
-        if not models.Participant.find(uid=request.data["ParticipantId"]):
-            return Response(
-                status=404,
-                data={"message": "This participant is no longer in the database."},
-            )
         
         Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"], 
                             study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
@@ -141,8 +131,6 @@ class QueryParticipantInformation(RestViews.APIView):
             return Response(status=403)
 
         ParticipantInfo = Database.extractParticipantInformation(request.data["ParticipantId"], deidentified=Permissions["Deidentified"])
-        from modules.FeatureAvailability import for_participant
-        ParticipantInfo["FeatureAvailability"] = for_participant(models.Participant.find(uid=request.data["ParticipantId"]))
         return Response(status=200, data=ParticipantInfo)
 
 class ExportParticipant(RestViews.APIView):
@@ -316,7 +304,7 @@ class DeleteDeviceInformation(RestViews.APIView):
         if not DBSDevice:
             return Response(status=403)
         
-        models.SourceFile.find_all(owner=Participant, **Database.deviceMetadataLookup(DBSDevice.uid)).delete()
+        models.SourceFile.find_all(owner=Participant, metadata__contains={"Device": DBSDevice.uid}).delete()
         DBSDevice.delete()
         ParticipantInfo = Database.extractParticipantInformation(request.data["ParticipantId"])
         return Response(status=200, data=ParticipantInfo)

@@ -1,4 +1,12 @@
-"""Synthetic regression fixtures adapted from Prasad8146f069 for threshold_placement."""
+"""The two thresholds are placed from the record, not from the tablet's capture (decision 180,
+the PI's ruling of 2026-09-15: option (b) of open item 31).
+
+Centre: the participant's own MEDIAN averaged reading at the averaging duration the card
+recommends (the occupancy check, T4, decision 153). Separation: the noise-only design rule's
+minimum at the recommended averaging and onset (T3, decision 152). The capture pair the tablet
+would have produced (D24) travels beside it as `capture_upper`/`capture_lower`, never silently
+dropped. Every test builds the inputs by hand and checks the VALUES the placement produces.
+"""
 import dataclasses
 
 import numpy as np
@@ -15,10 +23,12 @@ def _table(rows):
 
 
 def _capture_plan(upper=196.13, lower=190.89):
-    return ThresholdPlan(upper=upper, lower=lower, capture_amp_low=1.4, capture_amp_high=4.8,
+    plan = ThresholdPlan(upper=upper, lower=lower, capture_amp_low=1.4, capture_amp_high=4.8,
                          warnings=["D26 inverted capture: not assessed"],
                          capture_verdicts={"inverted": {"status": "not assessed"}},
                          note="capture")
+    from ClosedLoopDeployment import safe_current as SAFE
+    return SAFE.apply_to_plan(plan, "uid", "Left")
 
 
 # --- the centre ------------------------------------------------------------------------------
@@ -137,10 +147,8 @@ def test_the_report_step_places_the_pair_from_the_record_and_keeps_the_capture_p
                         lambda uid, **kw: {"t": 1_000_000.0 + 3.0 * np.arange(40),
                                            "power": np.r_[np.full(20, 100.0), np.full(20, 300.0)],
                                            "amp_obs": np.zeros(40)})
-    monkeypatch.setattr(AD._tr_mod if hasattr(AD, "_tr_mod") else __import__(
-        "ClosedLoopDeployment.timing_recommendation", fromlist=["for_participant"]),
-        "for_participant", lambda uid: {"averaging_ms": {"value_ms": 3000},
-                                        "onset_upper_ms": {"value_ms": 30000}})
+    # Band optimization is outside this wiring test; avoid any persistent store writes.
+    monkeypatch.setattr(AD, "write_band_timing", lambda *a, **kw: {"available": False})
 
     def _write(participant, *, candidate, hemisphere, threshold_plan, loaded=None, epochs=None):
         seen["provisional"] = (threshold_plan.upper, threshold_plan.lower)
@@ -211,3 +219,10 @@ def test_applying_twice_never_loses_the_capture_pair():
     twice = TPL.apply(once, placement)
     assert twice.capture_upper == 196.13 and twice.capture_lower == 190.89
     assert twice.upper == once.upper and twice.lower == once.lower
+
+
+@pytest.fixture(autouse=True)
+def synthetic_clinical_configuration(monkeypatch, tmp_path):
+    """Supply explicitly authored clinical evidence only inside this test's sandbox."""
+    from DecodeCommon.tests.synthetic_clinical_config import install
+    install(monkeypatch, tmp_path / "clinical.json", ['uid'])

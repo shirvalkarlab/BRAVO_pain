@@ -18,6 +18,7 @@ export function NeuralSensingIntervals({descriptions,onSegment}) {
         <div style={{fontWeight:600}}>{description.center}</div>
         {description.band !== description.center&&<div>{description.band}</div>}
         <div>{description.mode}</div>
+        {description.schedule&&<div>{description.schedule}</div>}
         <div>Control mapping: {description.mappingStatus || 'Not established'}</div>
         {description.thresholdStatus&&<div>{description.thresholdStatus}</div>}
         {onSegment&&<button type="button" onClick={()=>onSegment(description.id)}
@@ -30,22 +31,28 @@ export function NeuralSensingIntervals({descriptions,onSegment}) {
   </section>;
 }
 
-export function NeuralLegend({target,traces}) {
+export function NeuralLegend({target,traces,observational=false,independentCurrent=false}) {
   return <div aria-label={`${target} chart legend`} style={{display:'flex',flexWrap:'wrap',gap:'5px 20px',fontSize:14,margin:'4px 8px 8px',lineHeight:1.7}}>
-      <span style={{color:HOME_NEURAL_COLORS.power}}>● Biomarker · left axis</span>
-      <span style={{color:HOME_NEURAL_COLORS.amplitude}}>● {target} amplitude · right axis</span>
+      <span style={{color:HOME_NEURAL_COLORS.power}}>● {observational ? 'Recorded neural power' : 'Biomarker'} · left axis</span>
+      <span style={{color:HOME_NEURAL_COLORS.amplitude}}>● {independentCurrent ? `${target} recorded current` : `${observational ? 'Recorded channel' : target} amplitude`} · right axis</span>
       {traces.some(trace=>trace.line.dash)&&<span style={{color:HOME_NEURAL_COLORS.threshold}}>┄ Configured threshold(s)</span>}
     </div>;
 }
 
 export default function HomeNeuralChart({panel,window:period,participant,onSegment}) {
   const ref=useRef(null),[width,setWidth]=useState(0);
+  const observational=period.display_basis === 'recorded_observations';
   const plot=useMemo(()=>homeNeuralPlot(panel,period,participant),[panel,period,participant]);
   const target=neuralSourceLabel(panel.side,participant);
   useEffect(()=>{const element=ref.current;return()=>Plotly.purge(element);},[]);
   useEffect(()=>{
     const element=ref.current;
-    Plotly.react(element,plot.traces,homeNeuralLayout(period,width),{responsive:true,displaylogo:false,scrollZoom:false,
+    const layout=homeNeuralLayout(period,width);
+    if(observational) {
+      layout.yaxis.title.text='Neural power (LSB)';
+      layout.yaxis2.title.text='Recorded amp (mA)';
+    }
+    Plotly.react(element,plot.traces,layout,{responsive:true,displaylogo:false,scrollZoom:false,
       modeBarButtonsToRemove:['lasso2d','select2d']});
     const select=event=>{
       const id=event.points?.[0]?.customdata?.[0];
@@ -53,7 +60,7 @@ export default function HomeNeuralChart({panel,window:period,participant,onSegme
     };
     if(element.on) element.on('plotly_click',select);
     return()=>{if(element.removeListener) element.removeListener('plotly_click',select);};
-  },[plot,period,width,onSegment]);
+  },[plot,period,width,onSegment,observational]);
   useEffect(()=>{
     if(typeof ResizeObserver==='undefined') return;
     const element=ref.current;let frame;
@@ -64,17 +71,18 @@ export default function HomeNeuralChart({panel,window:period,participant,onSegme
     return()=>{observer.disconnect();cancelAnimationFrame(frame);};
   },[]);
   return <div style={{minWidth:0}}>
-    <NeuralLegend target={target} traces={plot.traces}/>
-    <div ref={ref} role="img" aria-label={`${target} home biomarker and stimulation amplitude, ${period.label}`} style={{width:'100%',minWidth:0,minHeight:360}}/>
+    <NeuralLegend target={target} traces={plot.traces} observational={observational} independentCurrent={Array.isArray(panel.amplitude_series)}/>
+    <div ref={ref} role="img" aria-label={`${target} ${observational ? 'recorded neural power and channel amplitude' : 'home biomarker and stimulation amplitude'}, ${period.label}`} style={{width:'100%',minWidth:0,minHeight:360}}/>
+    {panel.amplitude_provenance&&<p style={{fontSize:13,margin:8,color:'#526179'}}>{panel.amplitude_provenance}</p>}
     <NeuralSensingIntervals descriptions={plot.descriptions} onSegment={onSegment}/>
     <p style={{fontSize:13,margin:'8px',color:'#526179',lineHeight:1.7}}>
-      Recorded averages: {plot.observedPower.toLocaleString()} biomarker · {plot.observedAmplitude.toLocaleString()} amplitude.
+      Recorded averages: {plot.observedPower.toLocaleString()} {observational ? 'neural power' : 'biomarker'} · {plot.observedAmplitude.toLocaleString()} amplitude.
       {plot.latestTime !== null&&<> Latest recorded average: {localTime(plot.latestTime).slice(0,16)} Pacific.</>}
       {' '}Points are recorded averages; connecting lines are guides. Gaps over 20 minutes stay open.
     </p>
     {(!plot.observedPower || !plot.observedAmplitude)&&<p style={{fontSize:14,margin:'8px',color:'#526179'}}>
-      {!plot.observedPower&&'No established biomarker samples in this window. '}
-      {!plot.observedAmplitude&&'No established stimulation-amplitude samples in this window.'}
+      {!plot.observedPower&&(observational ? 'No recorded neural-power samples in this window. ' : 'No established biomarker samples in this window. ')}
+      {!plot.observedAmplitude&&(observational ? 'No recorded channel-amplitude samples in this window.' : 'No established stimulation-amplitude samples in this window.')}
     </p>}
   </div>;
 }

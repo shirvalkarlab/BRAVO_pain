@@ -11,7 +11,6 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import { currentTargetText } from "utils/participantTargets";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -27,11 +26,13 @@ import {
 } from "@mui/material"
 import { styled } from '@mui/material/styles';
 
-import ChevronRightIcon from "@mui/icons-material/ChevronRight";
-import SettingsIcon from "@mui/icons-material/Settings";
-import KeyboardDoubleArrowUpIcon from "@mui/icons-material/KeyboardDoubleArrowUp";
-import DashboardIcon from "@mui/icons-material/Dashboard";
-import CachedIcon from "@mui/icons-material/Cached";
+import { 
+  ChevronRight as ChevronRightIcon,
+  Settings as SettingsIcon,
+  KeyboardDoubleArrowUp as KeyboardDoubleArrowUpIcon, 
+  Dashboard as DashboardIcon,
+  Cached as CachedIcon
+} from "@mui/icons-material";
 
 import MDButton from "components/MDButton";
 import MDBox from "components/MDBox";
@@ -183,15 +184,12 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
 
   useEffect(() => {
     if (!data || !showSurveyOverlay || !availableForms.active.Id) return;
-    let cancelled = false;
-    setSurveyResults({});
 
     SessionController.query("/api/queryParticipantSurveyRecords", {
       RequestType: "RequestRecords",
       ParticipantId: participant_uid,
       FormId: availableForms.active.Id
     }).then((response) => {
-      if (cancelled) return;
       setSurveyResults({
         form: availableForms.active.Record,
         records: response.data
@@ -200,8 +198,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
       SessionController.displayError(error, setAlert);
     });
 
-    return () => { cancelled = true; };
-  }, [availableForms.active, showSurveyOverlay, participant_uid]);
+  }, [availableForms.active, showSurveyOverlay]);
   
   useEffect(() => {
     
@@ -325,7 +322,6 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                               multiple
                               value={availableChannels.active}
                               options={availableChannels.options}
-                              getOptionLabel={(option) => currentTargetText(option)}
                               onChange={(event, value) => setAvailableChannels({...availableChannels, active: value})}
                               renderInput={(params) => (
                                 <FormField
@@ -340,16 +336,13 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                         <Grid item xs={12} lg={12}>
                           <MDBox px={2} lineHeight={1}>
                           <Stack direction="row" spacing={1} alignItems="center">
-                            <Switch checked={showAdaptiveMode} inputProps={{"aria-label": "Show adaptive amplitude range"}} onChange={(_, checked) => setShowAdaptiveMode(checked)} />
+                            <Switch value={showAdaptiveMode} onClick={() => setShowAdaptiveMode(!showAdaptiveMode)} />
                             <MDTypography variant={"subtitle"} fontSize={15}>
-                              {"Show adaptive amplitude range (%)"}
+                              {"Show Adaptive Duty Cycle on Timeline"}
                             </MDTypography>
                           </Stack>
-                          {showAdaptiveMode && <MDTypography variant="body2" role="status">
-                            Percentage within the programmed amplitude range, not measured duty cycle. Gaps indicate missing or invalid adaptive limits, or samples outside those limits.
-                          </MDTypography>}
                           <Stack direction="row" spacing={1} alignItems="center">
-                            <Switch checked={showSurveyOverlay} inputProps={{"aria-label": "Show Survey Scores as Overlay"}} onChange={() => {
+                            <Switch value={showSurveyOverlay} onClick={() => {
                               setShowSurveyOverlay(!showSurveyOverlay);
                               if (!showSurveyOverlay) {
                                 querySurveyOverlay();
@@ -365,7 +358,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                               <Autocomplete
                                 value={availableForms.active}
                                 options={availableForms.options}
-                                getOptionLabel={(option) => option.Type + " - " + currentTargetText(option.Name)}
+                                getOptionLabel={(option) => option.Type + " - " + option.Name}
                                 onChange={(event, value) => {
                                   setAvailableForms({...availableForms, active: value})
                                 }}
@@ -425,7 +418,6 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                         <MDBox p={2} lineHeight={1}>
                           <Autocomplete
                             value={availableTherapy.active}
-                            getOptionLabel={currentTargetText}
                             options={["Time-based Assessment", ...availableTherapy.options]}
                             onChange={(event, value) => {
                               setAvailableTherapy({...availableTherapy, active: value})
@@ -444,7 +436,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                       <Grid item xs={12}>
                         <MDBox px={2} lineHeight={1}>
                         <Stack direction="row" spacing={1} alignItems="center">
-                          <Switch checked={circadianState.eventCount} inputProps={{"aria-label": "Show Event Histogram on Circadian Rhythm"}} onChange={(_, checked) => setCircadianState({...circadianState, eventCount: checked})} />
+                          <Switch value={circadianState.eventCount} onClick={() => setCircadianState({...circadianState, eventCount: !circadianState.eventCount})} />
                           <MDTypography variant={"subtitle"} fontSize={15}>
                             {"Show Event Histogram on Circadian Rhythm"}
                           </MDTypography>
@@ -452,7 +444,7 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                         </MDBox>
                         <MDBox px={2} lineHeight={1}>
                         <Stack direction="row" spacing={1} alignItems="center">
-                          <Switch checked={circadianState.histogram} inputProps={{"aria-label": "Show Power Distribution"}} onChange={(_, checked) => setCircadianState({...circadianState, histogram: checked})} />
+                          <Switch value={circadianState.histogram} onClick={() => setCircadianState({...circadianState, histogram: !circadianState.histogram})} />
                           <MDTypography variant={"subtitle"} fontSize={15}>
                             {"Show Power Distribution"}
                           </MDTypography>
@@ -481,7 +473,6 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                         <MDBox p={2} lineHeight={1}>
                           <Autocomplete
                             value={availableTherapy.active}
-                            getOptionLabel={currentTargetText}
                             options={availableTherapy.options}
                             onChange={(event, value) => {
                               setAvailableTherapy({...availableTherapy, active: value})
@@ -519,7 +510,6 @@ import { dictionary, dictionaryLookup } from "assets/translation.js";
                         <MDBox p={2} lineHeight={1}>
                           <Autocomplete
                             value={eventPSDData.active}
-                            getOptionLabel={currentTargetText}
                             options={eventPSDData.options}
                             onChange={(event, value) => {
                               setEventPSDData({...eventPSDData, active: value})

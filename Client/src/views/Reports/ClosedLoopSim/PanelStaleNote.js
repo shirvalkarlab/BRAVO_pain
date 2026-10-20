@@ -25,22 +25,22 @@ import MDTypography from "components/MDTypography";
 
 import PAL from "./palette";
 
-export default function PanelStaleNote({ stale, staleReasons, loading, onRecompute, notKept, hasResult, disabled }) {
+export default function PanelStaleNote({ stale, staleReasons, loading, onRecompute, notKept }) {
   const reasons = staleReasons || [];
   // While a refetch is in flight the panel is already saying so in its own words, in the place it
   // has always said it. Adding a second sentence here would put two progress messages in one card,
   // so this notice stands down for the duration and returns when there is a result to qualify.
   if (loading) return null;
-
+  if (!stale && !notKept) return null;
 
   return (
-    <MDBox mb={0.8} p={0.8} sx={{ backgroundColor: PAL.warnFill, borderRadius: "5px",
-      border: `1px solid ${PAL.warnBorder}`, display: "flex", flexDirection: "row", flexWrap: "wrap",
-      alignItems: "flex-start", gap: 1 }}>
+    <MDBox mb={1.5} pl={1.5} sx={{ borderLeft: `2px solid ${PAL.warnText}`, display: "flex",
+      flexDirection: "row", alignItems: "flex-start", gap: 1 }}>
       <MDBox flex="1 1 auto">
         {stale ? (
           <MDTypography variant="caption" display="block"
-            sx={{ fontSize: 10, color: PAL.warnText }}>
+            sx={{ fontSize: PAL.fs.body, color: PAL.warnText }}>
+            <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>
             {"This figure is the last completed run for this panel. "}
             {reasons.length
               ? reasons.join(" ")
@@ -49,16 +49,19 @@ export default function PanelStaleNote({ stale, staleReasons, loading, onRecompu
         ) : null}
         {notKept ? (
           <MDTypography variant="caption" display="block"
-            sx={{ fontSize: 9.5, color: PAL.warnText }}>
+            sx={{ fontSize: PAL.fs.body, color: PAL.warnText }}>
+            <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>
             {`This panel's result was not kept in memory: ${notKept}`}
           </MDTypography>
         ) : null}
       </MDBox>
-      {onRecompute ? (
+      {stale && onRecompute ? (
         <MDBox flex="0 0 auto">
-          <MDButton size="small" variant="text" color={stale ? "warning" : "info"} onClick={onRecompute} disabled={disabled}
-            sx={{ textTransform: "none", fontSize: 10.5, minHeight: 0, py: 0.2 }}>
-            {hasResult ? "Recompute this panel" : "Run this analysis"}
+          <MDButton size="small" variant="outlined" onClick={onRecompute}
+            sx={{ textTransform: "none", fontSize: PAL.fs.body, minHeight: 36, borderRadius: "4px",
+              color: `${PAL.ink} !important`, border: `1px solid ${PAL.ink3} !important`,
+              backgroundColor: PAL.surface, boxShadow: "none" }}>
+            Recompute this panel
           </MDButton>
         </MDBox>
       ) : null}
@@ -67,8 +70,6 @@ export default function PanelStaleNote({ stale, staleReasons, loading, onRecompu
 }
 
 PanelStaleNote.propTypes = {
-  hasResult: PropTypes.bool,
-  disabled: PropTypes.bool,
   stale: PropTypes.bool,
   staleReasons: PropTypes.arrayOf(PropTypes.string),
   loading: PropTypes.bool,
@@ -77,5 +78,5 @@ PanelStaleNote.propTypes = {
 };
 
 PanelStaleNote.defaultProps = {
-  hasResult: false, disabled: false, stale: false, staleReasons: [], loading: false, onRecompute: null, notKept: null,
+  stale: false, staleReasons: [], loading: false, onRecompute: null, notKept: null,
 };

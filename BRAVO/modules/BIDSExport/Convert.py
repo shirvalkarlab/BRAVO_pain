@@ -221,10 +221,11 @@ def upsert_participant(bids_root, subject, age, sex, diagnosis):
             df = df.reindex(columns=_PARTICIPANTS_COLUMNS)
         else:
             df = pd.DataFrame(columns=_PARTICIPANTS_COLUMNS)
-        rows = df.to_dict(orient="records")
-        rows.append(row)
-        # Preserve scalar formatting when old rows contain only missing values.
-        df = pd.DataFrame(rows, columns=_PARTICIPANTS_COLUMNS, dtype=object)
+
+        data_list = df.to_dict(orient='records')
+        data_list.append(row)
+        df = pd.DataFrame(data_list).reindex(columns=_PARTICIPANTS_COLUMNS)
+        #df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
         df.to_csv(path, sep="\t", index=False, na_rep="n/a")
 
     json_path = path.replace(".tsv", ".json")
@@ -1356,12 +1357,34 @@ def _pair(values, index, default="n/a"):
 
 
 def _clamp_onset(onset, onset_bounds):
-    """Retain physical elapsed seconds, including events outside their reporting visit.
+    """onset_bounds: (lower, upper), each independently optional (None =
+    unbounded on that side) - see Gather.export_participant()'s
+    prev_session_end/session_end. A device-reported "Past Therapy"/
+    impedance/event readout gets re-included in every visit's upload, so
+    without this a stale duplicate can land with a wildly-off onset
+    reaching back (or forward) past the actual adjacent visit. Only
+    per-visit point-in-time readouts get clamped (therapy, impedance,
+    events, annotations) - continuous device-timestamped trends
+    (ChronicLFP) aren't duplicated per-visit the same way, so they're left
+    alone.
 
-    The historical name/signature is kept for callers. Visit bounds describe
-    the upload, not the event clock; clamping or logarithmic compression would
-    change scientific time. Repeated reports are deduplicated in Gather.
-    """
+    An out-of-bound onset is squashed toward the bound with log1p rather
+    than pinned to it outright: log1p is strictly increasing, so distinct
+    raw onsets stay distinct and correctly ordered (just compressed close
+    to the bound) instead of collapsing onto one indistinguishable value
+    when a device reports many stale readouts predating the previous
+    visit. Being a pure function of one onset at a time, it also agrees
+    automatically between tables built from the same source rows at
+    different granularities (e.g. therapy_history_dataframe and
+    therapy_adaptive_dataframe both deriving onset from `therapies`),
+    which independently-ranking a batch would not."""
+    if onset_bounds is None:
+        return onset
+    lower, upper = onset_bounds
+    if upper is not None and onset > upper:
+        onset = upper + np.log1p(onset - upper)
+    if lower is not None and onset < lower:
+        onset = lower - np.log1p(lower - onset)
     return onset
 
 
@@ -1541,9 +1564,10 @@ def annotations_dataframe(annotations, session_start, onset_bounds=None, timezon
     the shape is identical - different provenance, different BIDS task
     name, so a consumer can tell them apart without inspecting trial_type.
 
-    onset is physical elapsed seconds from the reporting session start;
-    StartTimestamp/EndTimestamp preserve the corresponding absolute time.
-    Values outside the reporting visit are not compressed or clamped. StartTimestamp/EndTimestamp themselves stay UTC (no
+    onset_bounds clamps only `onset` (this row's position within this
+    session's file) - StartTimestamp/EndTimestamp stay the true absolute
+    time regardless, since those are meant to be ground truth, not scoped
+    to a session. StartTimestamp/EndTimestamp themselves stay UTC (no
     per-annotation timezone stored, see Gather.py's day-bucketing) -
     `timezone` is the session's own timezone (participant["timezone"], see
     convert_participant()), written alongside as a best-available

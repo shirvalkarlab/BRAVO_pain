@@ -78,11 +78,12 @@ class ElectricalTherapy(models.Model):
         return ElectricalTherapy.objects.select_related("therapy").filter(**kwargs).prefetch_related("stimulation_settings", "adaptive_settings").exists()
     
     def find(*args, **kwargs):
-        return ElectricalTherapy.find_all(*args, **kwargs).first()
+        return ElectricalTherapy.objects.select_related("therapy").filter(**kwargs).prefetch_related("stimulation_settings", "adaptive_settings").first()
     
     def find_all(*args, **kwargs):
         return ElectricalTherapy.objects.select_related("therapy__source").filter(**kwargs).prefetch_related(
-            Prefetch("stimulation_settings", queryset=ElectricalStimulation.objects.select_related("electrode", "group")),
+            Prefetch("stimulation_settings", queryset=ElectricalStimulation.objects.select_related(
+                "electrode", "group")),
             "adaptive_settings",
         ).all()
     

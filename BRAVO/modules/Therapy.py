@@ -28,9 +28,11 @@ import uuid
 from cryptography.fernet import Fernet
 
 from Server import models
-from modules import Database
+from modules.DecodeCommon import data_start as _data_start
+from modules.therapy_grouping import group_therapy_rows
 
 from openai import OpenAI
+import json
 
 if "GEMINI_API_KEY" in os.environ.keys() and os.environ.get("GEMINI_API_KEY") != "":
     openai_client = OpenAI(
@@ -89,10 +91,13 @@ def queryTherapyHistory(Participant):
 
         for i in range(len(DBSDeviceDict[key])):
             device = DBSDeviceDict[key][i]
-            SourceFiles = models.SourceFile.find_all(owner=Participant, **Database.deviceMetadataLookup(device.uid))
+            SourceFiles = models.SourceFile.find_all(owner=Participant, metadata__contains={"Device": device.uid})
             TherapyHistory["History"].extend([i.get_info() for i in models.ElectricalTherapy.find_all(therapy__source__in=SourceFiles)])
             DeviceTherapyModification["History"].extend([i.get_info() for i in models.TherapyModification.find_all(source__in=SourceFiles)])
-
+        # See the synthetic regression tests for this behavior.
+        TherapyHistory["History"], DeviceTherapyModification["History"] = therapy_from_data_start(
+            TherapyHistory["History"], DeviceTherapyModification["History"],
+            _data_start.data_start_s(Participant))
         DeviceTherapyModification["History"].sort(key=lambda x: x["Date"])
         TherapyHistory["History"] = [i for i in TherapyHistory["History"] if (i["Type"] in ["Pre-visit Therapy", "Post-visit Therapy", "Past Therapy"])]
         TherapyHistory["History"].sort(key=lambda x: x["Date"])
@@ -168,46 +173,38 @@ def queryTherapyHistory(Participant):
 
 def queryTherapyHistoryMetadata(Participant):
     TherapyVisitDates = models.Therapy.find_all(source__owner=Participant, type__in=["Pre-visit Therapy", "Post-visit Therapy", "Past Therapy"]).values_list("date", "source__metadata__Device").distinct()
-    TherapyVisitDates = [{"Date": i[0], "Device": i[1]} for i in TherapyVisitDates]
+    DataStart = _data_start.data_start_s(Participant)
+    TherapyVisitDates = [{"Date": i[0], "Device": i[1]} for i in TherapyVisitDates
+                         if _data_start.listed_date(i[0], DataStart) is not None]
     DBSDevices = models.DBSDevice.find_all(owner=Participant)
     DBSDevices = [i.get_info() for i in DBSDevices]
     return {"TherapyVisitDates": TherapyVisitDates, "DBSDevices": DBSDevices}
+
 
 def queryTherapyModification(Participant):
     DBSDevices = models.DBSDevice.find_all(owner=Participant)
     TherapyModifications = []
     for device in DBSDevices:
-        SourceFiles = models.SourceFile.find_all(owner=Participant, **Database.deviceMetadataLookup(device.uid))
+        SourceFiles = models.SourceFile.find_all(owner=Participant, metadata__contains={"Device": device.uid})
         TherapyModification = [{**i.get_info(), **{"Device": device.uid}} for i in models.TherapyModification.find_all(source__in=SourceFiles)]
+        _, TherapyModification = therapy_from_data_start(
+            [], TherapyModification, _data_start.data_start_s(Participant))
         TherapyModifications.extend(TherapyModification)
     return TherapyModifications
+
 
 def queryTherapyGroups(Participant):
     DBSDevices = models.DBSDevice.find_all(owner=Participant)
     TherapyGroups = []
     for device in DBSDevices:
-        SourceFiles = models.SourceFile.find_all(owner=Participant, **Database.deviceMetadataLookup(device.uid))
+        SourceFiles = models.SourceFile.find_all(owner=Participant, metadata__contains={"Device": device.uid})
         if len(SourceFiles) > 0:
             TherapyGroup = [{**i.get_info(), **{"Device": device.uid}} for i in models.ElectricalTherapy.find_all(therapy__source__in=SourceFiles)]
-            TherapyGroups.extend(groupTherapySettings(TherapyGroup))
+            TherapyGroup, _ = therapy_from_data_start(
+                TherapyGroup, [], _data_start.data_start_s(Participant))
+            TherapyGroups.extend(group_therapy_rows(TherapyGroup))
     return TherapyGroups
 
-
-def groupTherapySettings(therapies):
-    """Combine matching settings once, preserving the historical output order."""
-    types = {name: index for index, name in enumerate(
-        ("Pre-visit Therapy", "Post-visit Therapy", "Past Therapy"))}
-    grouped = {}
-    for therapy in therapies:
-        if therapy["Type"] not in types:
-            continue
-        key = (therapy["SourceId"], therapy["Date"], therapy["GroupId"], types[therapy["Type"]])
-        if key not in grouped:
-            grouped[key] = copy.deepcopy(therapy)
-        else:
-            grouped[key]["StimulationSettings"].extend(copy.deepcopy(therapy["StimulationSettings"]))
-            grouped[key]["AdaptiveSettings"].extend(copy.deepcopy(therapy["AdaptiveSettings"]))
-    return [grouped[key] for key in sorted(grouped)]
 
 def createAgenticAIOverview(PreGroup, PostGroup):
     with open(os.path.join(os.path.dirname(__file__), "AgenticAI", "TherapyGroupComparison.md"), "r") as f:
@@ -264,22 +261,29 @@ def createAgenticAIOverview(PreGroup, PostGroup):
     else:
         return cache.response if cache else "Error: No cache found and Gemini API is not available."
 
-def electrodeHemisphere(electrode):
-    """Use explicit laterality, or the side recorded in the target name."""
-    for field in ("Hemisphere", "Target"):
-        value = str(electrode.get(field, "")).lower()
-        for side in ("left", "right"):
-            if value.startswith(side):
-                return side
-    return None
 
+def therapy_from_data_start(configurations, modifications, start_s):
+    """Therapy records from the implant date on (the PI, 2026-09-24; `DecodeCommon.data_start`).
 
-def sameElectrodeSide(first, second):
-    side = electrodeHemisphere(first)
-    other = electrodeHemisphere(second)
-    if side and other:
-        return side == other
-    return bool(first.get("Id")) and first.get("Id") == second.get("Id")
+    A therapy snapshot dated before the start is dropped. Group changes are settings that hold until
+    the next change, so the last group change before the start is kept and moved to it (the group
+    in force when the device went in) and every earlier one is dropped; other modification records
+    before the start are dropped. With no start, both lists come back unchanged.
+    """
+    if not start_s or float(start_s) <= 0:
+        return configurations, modifications
+    start = float(start_s)
+    configurations = [c for c in configurations if not float(c.get("Date") or 0) < start]
+    changes = [m for m in modifications if m.get("Type") == "TherapyChangeGroup"
+               and float(m.get("Date") or 0) < start]
+    last = max(changes, key=lambda m: float(m.get("Date") or 0)) if changes else None
+    kept = []
+    for m in modifications:
+        if not float(m.get("Date") or 0) < start:
+            kept.append(m)
+        elif m is last:
+            kept.append({**m, "Date": start})
+    return configurations, kept
 
 
 def createTherapyTimeline(TherapyHistory):
@@ -297,8 +301,6 @@ def createTherapyTimeline(TherapyHistory):
     AllTherapyGroups = np.unique(AllTherapyGroups)
     AllTherapyGroups.sort()
 
-    if not len(AllSessionDates):
-        return []
     SessionDates = [AllSessionDates[0]]
     for i in range(1, len(AllSessionDates)):
         if AllSessionDates[i] - SessionDates[-1] > 3600*12:
@@ -359,7 +361,7 @@ def createTherapyTimeline(TherapyHistory):
                                 KnownSettings = []
                                 for therapy in UniqueSettings:
                                     for j in range(len(therapy["StimulationSettings"])):
-                                        if sameElectrodeSide(therapy["StimulationSettings"][j]["Electrode"], electrode):
+                                        if therapy["StimulationSettings"][j]["Electrode"]["Hemisphere"] == electrode["Hemisphere"]:
                                             KnownSettings.append({**{"TherapyId": therapy["Id"], "Label": therapy["Label"], "Date": therapy["Date"]},**therapy["StimulationSettings"][j]})
                                 DefinedTherapy["Stimulation"].append(KnownSettings)
                                 DefinedTherapy["TherapyIds"].extend([therapy["TherapyId"] for therapy in KnownSettings])
@@ -370,7 +372,7 @@ def createTherapyTimeline(TherapyHistory):
                                 KnownSettings = []
                                 for therapy in UniqueSettings:
                                     for j in range(len(therapy["StimulationSettings"])):
-                                        if sameElectrodeSide(therapy["StimulationSettings"][j]["Electrode"], electrode):
+                                        if therapy["StimulationSettings"][j]["Electrode"]["Hemisphere"] == electrode["Hemisphere"]:
                                             DefinedTherapy["GroupType"] = therapy["GroupType"]
                                             KnownSettings.append({**{"TherapyId": therapy["Id"], "Label": therapy["Label"], "Date": therapy["Date"]},**therapy["AdaptiveSettings"][j]})
                                 DefinedTherapy["Adaptive"].append(KnownSettings)
@@ -475,9 +477,10 @@ def createTherapyTimeline(TherapyHistory):
                                     if TherapyTimeline[j]["DefinedTherapies"][m]["Device"]["Id"] == device["Id"]:
                                         if TherapyTimeline[j]["DefinedTherapies"][m]["GroupId"] == key:
                                             TherapyTimeline[j]["DefinedTherapies"][m]["PercentUsage"] = DutyCycleCalculation[key]
-                            
-    if len(TherapyTimeline) > 1 and TherapyTimeline[-1]["Date"] - TherapyTimeline[-2]["Date"] < 3600*12:
-        TherapyTimeline[-1] = copy.deepcopy(TherapyTimeline[-2])
+
+    if len(TherapyTimeline) > 1:
+        if TherapyTimeline[-1]["Date"] - TherapyTimeline[-2]["Date"] < 3600*12:
+            TherapyTimeline[-1] = copy.deepcopy(TherapyTimeline[-2])
 
     return TherapyTimeline
 
@@ -546,10 +549,8 @@ def findClosestTherapy(timestamp, hemisphere, group, TherapyHistories):
     return ClosestTherapy
 
 def queryElectrodeImpedances(participant):
-    from django.db.models import Prefetch
     SourceFiles = models.SourceFile.find_all(owner=participant)
-    ImpedanceRecordss = models.DBSEvent.find_all(type__endswith="Impedance", source__in=SourceFiles).prefetch_related(
-        Prefetch("data", queryset=models.Recording.objects.select_related("source")))
+    ImpedanceRecordss = models.DBSEvent.find_all(type__endswith="Impedance", source__in=SourceFiles)
     ElectrodeImpedances = []
     for impedance in ImpedanceRecordss:
         Descriptor = impedance.get_info(data=True)
@@ -591,7 +592,7 @@ def findClosestAdaptiveTherapy(timestamp, ClosestTherapy):
     return None
 
 def checkDuplicate(device, electrode, therapy):
-    AllTherapies = models.Therapy.find_all(**Database.deviceMetadataLookup(device.uid, prefix="source__metadata"), type=therapy["type"], date=therapy["date"])
+    AllTherapies = models.Therapy.find_all(source__device=device.uid, type=therapy["type"], date=therapy["date"])
     if len(AllTherapies) == 0:
         return False
     
@@ -610,3 +611,4 @@ def checkDuplicate(device, electrode, therapy):
             return True
         
     return False
+                

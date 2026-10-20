@@ -84,8 +84,8 @@ test.each(['https://example.org/reviewed-source','http://example.org/insecure','
   } else expect(link).toBeNull();
 });
 
-test.each([['81b245ec31594d9894f1dfc9438b6348','Target','L GPe','R MD Thal'],['other-participant','Tablet target','Left GPi','Right VIM']])(
- 'target and sensing labels follow the reviewed participant mapping without changing source settings (%s)',async(uid,targetLabel,left,right)=>{
+test.each([['SYNTHETIC_A1','Tablet target','Left GPi','Right VIM'],['other-participant','Tablet target','Left GPi','Right VIM']])(
+ 'target and sensing labels retain source metadata across participant routes without changing source settings (%s)',async(uid,targetLabel,left,right)=>{
   const original=window.location.pathname;
   window.history.replaceState({},'',`/reports/redcap-pretrial/${uid}`);
   const selected={...event,settings:{group:[],left:[{label:'Tablet target',value:'Left GPi'}],right:[{label:'Tablet target',value:'Right VIM'},{label:'Sensing source hemisphere',value:'Left'}]}};
@@ -93,7 +93,15 @@ test.each([['81b245ec31594d9894f1dfc9438b6348','Target','L GPe','R MD Thal'],['o
   try {
     await render({events:[selected],selected,onSelect:jest.fn(),openDetails:true,onDetailsChange:jest.fn()});
     expect([...element.querySelectorAll('dt')].map(x=>x.textContent)).toEqual([targetLabel,targetLabel,'Sensing source hemisphere']);
-    expect([...element.querySelectorAll('dd')].map(x=>x.textContent)).toEqual([left,right,uid==='other-participant'?'Left':'L GPe']);
+    expect([...element.querySelectorAll('dd')].map(x=>x.textContent)).toEqual([left,right,'Left']);
     expect(JSON.stringify(selected)).toBe(before);
   } finally {window.history.replaceState({},'',original);}
  });
+
+test('unreviewed snapshots are not labeled home-program activations',async()=>{
+ const snapshot={id:'snapshot',number:1,time:Date.parse('2000-01-01T12:00:00Z')/1000,kind:'settings_observation',label:'Device snapshot',settings:{group:[],left:[],right:[]}};
+ await render({events:[snapshot],selected:snapshot});
+ expect(element.textContent).toContain('A snapshot does not establish home use');
+ expect(element.textContent).toContain('Program-setting observation');
+ expect(element.textContent).not.toContain('Red dashed lines mark reviewed home-program transitions');
+});

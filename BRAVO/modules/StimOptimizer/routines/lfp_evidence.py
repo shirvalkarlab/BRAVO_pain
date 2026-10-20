@@ -39,8 +39,8 @@ FIVE TRAPS, EVERY ONE OF WHICH HAS ALREADY BITTEN THIS PROJECT ONCE
    amplitude contrast. This module refuses to build evidence spanning multiple rates unless asked,
    because the honest unit is one rate at a time.
 
-5. **Amplitude is confounded with time on this record**, since amplitude rose over the programme.
-   ``era`` must block it, and is populated from the epoch's own visit index rather than invented.
+5. **Amplitude can be confounded with time.** Populate ``era`` from the epoch's own
+   visit index for blocking; do not invent visit labels or assume temporal independence.
 
 WHAT THIS MODULE DELIBERATELY DOES NOT DO
 -----------------------------------------
@@ -58,6 +58,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from . import band_checks as _BC
 from . import lfp_response as LFP
 from . import percept_adaptive as PA
 from . import stage_gate as GATE
@@ -66,15 +67,6 @@ from . import stage_gate as GATE
 #: misread rather than that the study ran for decades.
 _PLAUSIBLE_UTC = (pd.Timestamp("2015-01-01", tz="UTC"), pd.Timestamp("2035-01-01", tz="UTC"))
 
-
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
-
-MIN_RESPONDING_BAND_FRACTION = 0.5
 
 def _to_utc(values, *, unit="s"):
     """Epoch values -> tz-aware UTC, with the unit pinned and the result sanity-checked."""
@@ -90,42 +82,47 @@ def _to_utc(values, *, unit="s"):
     return t
 
 
-#: How a stored log spectrum maps back to linear power. The BRAVO platform's assembled matrix holds
-#: ``logX = 10 * log10(power)`` — DECIBELS — set in ``streaming_psd.psd_rows_to_matrix``. Undoing it
-#: with ``10 ** logX`` instead of ``10 ** (logX / 10)`` is wrong by a factor of ten IN THE EXPONENT,
-#: which for a spectrum around -1 dB inflates band power by orders of magnitude while still
-#: returning finite, plausible-looking numbers. The convention is therefore named explicitly at every
-#: call site rather than assumed.
-LOG_SCALES = {"db10": 10.0, "log10": 1.0}
-DEFAULT_LOG_SCALE = "db10"
+# UNTIL 2026-09-19 a table here (``LOG_SCALES``) named how the assembled matrix's decibels were to be
+# undone, because getting the exponent wrong by a factor of ten returned plausible-looking numbers.
+# The matrix now holds raw power (``X``, decision 204, on the PI's rule that log power enters no
+# calculation), so there is nothing to undo and the table is gone.
 
-# Participant-specific provenance and examples are maintained outside source control.
+# BAND POWER AND DEVICE UNITS
+# A recipe-specific scale factor is required before comparing modeled power with
+# thresholds programmed in device units. Multiplication by a positive constant cancels
+# inside a single-source correlation, AUC and standardized effect, but changes absolute
+# values and threshold comparisons. It does not justify mixing different DSP recipes.
+# 
+# The deployable source of truth is Biomarkers.routines.analytics.td_to_lsb, using
+# mean detrending, the rcs-Hann taper, zero padding to 256, a real FFT, peak scaling,
+# summed squared band magnitude and the configured transform calibration. Do not add
+# a second calibration based on integrating stored power density. Pairings used to
+# validate a conversion must agree in electrode, band centre, acquisition time and
+# signal product; mismatched pairings do not identify a device constant.
+# 
+# `band_power_linear` remains proportional power, not calibrated device units. Its
+# values must not be compared directly with a threshold in device units. Historical
+# participant-specific validation measurements are preserved only in private records.
 
 
-def band_power_linear(log_psd, freqs, center_hz, width_hz, *, log_scale=DEFAULT_LOG_SCALE):
-    """Device-style band power from a LOG power spectrum: linearise, then integrate over the band.
+def band_power_linear(psd, freqs, center_hz, width_hz):
+    """Device-style band power from a raw power spectrum: integrate the density over the band.
 
     The device thresholds a linear sum of squared magnitude over the band, and power is proportional
-    to squared magnitude, so integrating linear power density gives the device's quantity up to a
-    fixed scale factor. The log must be undone BEFORE summing — summing logs is a product of powers,
-    not a sum.
-
-    ``log_scale`` names the stored convention: ``"db10"`` for ``10*log10(power)`` (what the BRAVO
-    assembled matrix stores) or ``"log10"`` for a plain base-10 log. Getting this wrong does not
-    raise; it silently rescales every band power, so it is a required piece of provenance rather
-    than a detail.
+    to squared magnitude, so integrating raw power density gives the device's quantity up to a
+    fixed scale factor. ``psd`` is one raw spectrum per row (the assembled matrix's ``X``); until
+    decision 204 (2026-09-19) it was decibels and this function undid them first, with a named
+    convention because the wrong exponent returned plausible numbers. Nothing is undone now.
 
     Returns one value per row, or ``None`` when the band lies outside the frequency axis, rather
     than integrating over whichever bins happen to be nearest.
     """
-    if log_scale not in LOG_SCALES:
-        raise ValueError(f"log_scale must be one of {sorted(LOG_SCALES)}, got {log_scale!r}")
     f = np.asarray(freqs, float)
     lo, hi = float(center_hz) - float(width_hz) / 2.0, float(center_hz) + float(width_hz) / 2.0
     sel = (f >= lo) & (f <= hi)
     if not sel.any():
         return None
-    lin = np.power(10.0, np.asarray(log_psd, float)[:, sel] / LOG_SCALES[log_scale])
+    lin = np.asarray(psd, float)[:, sel]
     df = float(np.median(np.diff(f))) if f.size > 1 else 1.0
     return np.nansum(lin, axis=1) * df
 
@@ -134,7 +131,7 @@ def frame_from_matrix(mat, *, sources=None):
     """The BRAVO assembled PSD matrix -> the row frame :func:`build_evidence` consumes.
 
     ``mat`` is what ``Biomarkers.bravo_service._cached_psd_matrix`` returns:
-    ``{"logX": (N,F), "t": (N,), "channel": (N,), "source": (N,), "f_set": (F,)}``. Note ``f_set`` is
+    ``{"X": (N,F) raw power, "t": (N,), "channel": (N,), "source": (N,), "f_set": (F,)}``. Note ``f_set`` is
     ONE shared frequency axis for every row, not a per-row array, so it is attached to each row here
     rather than being re-derived.
 
@@ -143,28 +140,30 @@ def frame_from_matrix(mat, *, sources=None):
     response test — the question is whether the band moves with amplitude, and a montage sweep
     observes that as validly as a streaming segment.
     """
-    need = {"logX", "t", "channel", "f_set"}
+    # ``X`` is raw power (decision 204). A matrix that still carries ``logX`` is an entry assembled
+    # under the old decibel rule and is refused here rather than read as raw power.
+    need = {"X", "t", "channel", "f_set"}
     missing = need - set(mat or {})
     if missing:
         raise KeyError(f"assembled matrix missing {sorted(missing)}; has {sorted((mat or {}))}")
-    logX = np.asarray(mat["logX"], float)
+    X = np.asarray(mat["X"], float)
     f_set = np.asarray(mat["f_set"], float)
-    if logX.shape[1] != f_set.size:
-        raise ValueError(f"logX has {logX.shape[1]} frequency columns but f_set has {f_set.size}")
-    src = np.asarray(mat.get("source", np.full(logX.shape[0], "?")), dtype=object)
-    keep = np.ones(logX.shape[0], bool) if sources is None else np.isin(src, list(sources))
+    if X.shape[1] != f_set.size:
+        raise ValueError(f"X has {X.shape[1]} frequency columns but f_set has {f_set.size}")
+    src = np.asarray(mat.get("source", np.full(X.shape[0], "?")), dtype=object)
+    keep = np.ones(X.shape[0], bool) if sources is None else np.isin(src, list(sources))
     return pd.DataFrame({"t": np.asarray(mat["t"], float)[keep],
                          "channel": np.asarray(mat["channel"], dtype=object)[keep],
                          "source": src[keep],
-                         "log_psd": list(logX[keep]),
+                         "psd": list(X[keep]),
                          "freqs": [f_set] * int(keep.sum())})
 
 
 # =================================================================================================
 # READING BAND POWER THAT IS ALREADY ON THE DEVICE'S NUMBER SCALE
 # =================================================================================================
-# WHAT CHANGED, 2026-09-06. Everything above this line builds band power by undoing the stored
-# logarithm of a power density and integrating it across the band. Nobody ever calibrated that
+# WHAT CHANGED, 2026-09-06. Everything above this line builds band power by integrating a stored
+# power density across the band (a stored logarithm, undone first, until decision 204). Nobody ever calibrated that
 # recipe, so the numbers it produced were proportional to the quantity the device works in but not
 # on the device's scale, and the long note above ``band_power_linear`` explains why inventing a
 # constant to bridge the gap was the wrong fix and was withdrawn.
@@ -223,9 +222,8 @@ class BandPowerTier(enum.IntEnum):
 
     A reader has to be able to tell which of the two routes produced any particular number, because
     the two are different measurements of the same thing: one is computed from the raw samples by
-    the lab's validated recipe, the other is the device's own onboard spectrum. They agree closely
-    on this record but they are not the same measurement and a table that mixed them silently would
-    not be auditable.
+    transform recipe, the other is the device's onboard spectrum. They are distinct
+    measurements; preserve provenance rather than silently mixing them in a table.
     """
 
     NO_VALUE = 0
@@ -663,7 +661,16 @@ def _resolve_col(frame, candidates, what):
                    f"frame has {sorted(frame.columns)}")
 
 
-# Participant-specific provenance and examples are maintained outside source control.
+# RECENT ERAS USED BY THE RESPONSE TEST, or None for all.
+# The source limits the era window to recent programming history (PI direction,
+# 2026-09-05). Era is both a blocking factor and the cluster for robust errors.
+# Reducing eras can leave fewer clusters than model parameters, compromising robust
+# inference. It also changes the capture contrast when old amplitude levels disappear,
+# even if the within-era slope is unchanged. Report cluster count, direction and
+# separation separately. Source defaults are retained; private historical validation
+# does not establish validity for a new participant or newly ingested data.
+
+
 RECENT_ERAS_FOR_RESPONSE = 5
 
 
@@ -784,7 +791,7 @@ def _prepare_channel(psd, epochs, *, channel, time_unit="s", native_tol_s=None):
 
 def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
                    require_stim_on=True, amp_col=None, era_col="visit", rate_col=None,
-                   time_unit="s", mode_requires=None, log_scale=DEFAULT_LOG_SCALE,
+                   time_unit="s", mode_requires=None,
                    recent_eras=RECENT_ERAS_FOR_RESPONSE, native_tol_s=None, _prepared=None):
     """One :class:`LfpEvidence` for a single (channel, hemisphere, rate), plus its audit.
 
@@ -803,8 +810,8 @@ def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
         dropped rather than used.
 
         THE OLDER ONE, still accepted. A frame with ``t`` (epoch seconds), ``channel``, and either a
-        ``log_psd`` matrix column or columns named by ``freqs``; band power is then built by undoing
-        the stored logarithm and integrating the density across the band. That quantity is
+        ``psd`` matrix column (raw power, decision 204) or columns named by ``freqs``; band power is
+        then built by integrating the density across the band. That quantity is
         proportional to the one the device works in but is NOT on the device's scale, so a value
         from it must never be compared against a threshold programmed in the device's units.
 
@@ -837,7 +844,12 @@ def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
     aud.amp_col = amp_col
     aud.rate_col = rate_col
 
-    # Participant-specific provenance and examples are maintained outside source control.
+    # Prepare channel- and epoch-dependent data once per channel: filtering, timestamps,
+    # quality, device-over-tile merge and epoch join. `build_all` supplies a per-call
+    # cache; direct calls retain the single-cell path. Shared frames and matrices remain
+    # read-only; later steps create filtered frames or index the shared arrays.
+
+
     prepared = None if _prepared is None else _prepared.get(str(channel))
     if prepared is None:
         prepared = _prepare_channel(psd, epochs, channel=channel, time_unit=time_unit,
@@ -852,7 +864,11 @@ def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
     p, ep = prepared.p, prepared.ep
     center_cols, cal_values, cal_tiers = prepared.center_cols, prepared.cal_values, prepared.cal_tiers
 
-    # Participant-specific provenance and examples are maintained outside source control.
+    # Read amplitude, rate and era once per exposure epoch, then map them to tiles by
+    # index. Do not repeat formatting and epoch work for every tile in every cell.
+    # The fresh 0..n-1 epoch index makes positional access equivalent to the prior loc lookup.
+
+
     j = p._ep.to_numpy()
     p = p.assign(amp=pd.to_numeric(ep[amp_col], errors="coerce").to_numpy()[j],
                  rate=pd.to_numeric(ep[rate_col], errors="coerce").to_numpy()[j],
@@ -961,15 +977,15 @@ def build_evidence(psd, epochs, *, channel, hemisphere, rate_hz, bands=None,
     else:
         freqs = np.asarray(p["freqs"].iloc[0] if "freqs" in p.columns
                            else p.attrs.get("freqs"), float)
-        logm = np.vstack(p["log_psd"].to_numpy()) if p["log_psd"].dtype == object \
-            else np.asarray(p["log_psd"].tolist(), float)
+        pm = np.vstack(p["psd"].to_numpy()) if p["psd"].dtype == object \
+            else np.asarray(p["psd"].tolist(), float)
 
         if bands is None:
             centers = np.arange(np.ceil(lo_hz + 2.5), np.floor(hi_hz - 2.5) + 1e-9, 1.0)
             bands = [(float(c), 5.0) for c in centers]
 
         for c, w in bands:
-            v = band_power_linear(logm, freqs, c, w, log_scale=log_scale)
+            v = band_power_linear(pm, freqs, c, w)
             if v is not None:
                 bp[(round(float(c), 6), round(float(w), 6))] = v
         if not bp:
@@ -1003,7 +1019,7 @@ def band_era_negative_significant(r) -> bool:
     slope that has era removed must be negative and significant on its own.
     """
     return bool(np.isfinite(r.slope_p) and r.slope_p < 0.05
-                and np.isfinite(r.slope_log_per_mA) and r.slope_log_per_mA < 0)
+                and np.isfinite(r.slope_per_mA) and r.slope_per_mA < 0)
 
 
 def _centre_key(c) -> float:
@@ -1067,12 +1083,13 @@ def cell_response_verdict(results, *, pain_positive_centers) -> dict:
             "grid carries this contact), so no band can be shown to rise with pain"])
     fails = []
     if not falling:
-        fails.append("no band falls with current once the time confound is removed (no "
-                     "significant negative era-blocked slope)"
+        fails.append("no band falls with current after removing the differences between "
+                     "clinic visits (no significant negative slope of band power on current once "
+                     "those differences are removed)"
                      + (f"; {n_sig} of {n} are significant in the WRONG direction" if n_sig
                         else ""))
     if not pain_here:
-        fails.append("no band on this contact has an established positive relationship with "
+        fails.append("no band on this contact has a supported positive relationship with "
                      "pain on the Biomarkers grid (power rising with pain), which the device's "
                      "control polarity needs")
     if falling and pain_here and not qualifying:
@@ -1113,7 +1130,20 @@ def _laterality(channel, hemisphere) -> str:
     return "ipsilateral" if side == str(hemisphere) else "contralateral"
 
 
-def screen_cells(evidence, *, response_fn, pain_positive_by_channel=None, amp_ceiling=None):
+# THE DEVICE'S SENSING-PAIR RULE (decision 217) lives in `DecodeCommon.sensing_rule` since
+# 2026-09-26, so the Biomarkers heat maps -- which may not import this package -- state the
+# same rule. These names stay for every existing caller and are the same functions.
+try:
+    from modules.DecodeCommon import sensing_rule as _sensing_rule
+except ImportError:                                   # pragma: no cover - host spelling
+    from DecodeCommon import sensing_rule as _sensing_rule
+sensing_pair_rings = _sensing_rule.sensing_pair_rings
+flanking_pair = _sensing_rule.flanking_pair
+pair_flanks_stimulation = _sensing_rule.pair_flanks_stimulation
+
+
+def screen_cells(evidence, *, response_fn, pain_positive_by_channel=None, amp_ceiling=None,
+                 stim_rings_by_side=None):
     """Which cells carry evidence that could actually license a closed-loop deployment.
 
     The rule is :func:`cell_response_verdict` (decision 199): at least one band that falls with
@@ -1125,21 +1155,45 @@ def screen_cells(evidence, *, response_fn, pain_positive_by_channel=None, amp_ce
     ``amp_ceiling`` optionally refuses a cell whose contrast reaches above the declared hard limit
     (:data:`objective.AMP_HARD_LIMIT_MA`). Left as ``None`` no amplitude condition is applied.
 
+    ``stim_rings_by_side`` maps each lead ("Left", "Right") to the set of ring numbers it
+    stimulates on today (from the cathode in force). A cell whose sensing pair is not the pair
+    immediately FLANKING its own lead's stimulating contact is refused (decision 217: the device
+    offers three configurations per lead -- stimulate on 1 and sense 0-2, on 2 and sense 1-3, on
+    1 and 2 and sense 0-3); a lead with no ring given applies no rule and the row says so.
+
+    The former energy-matched ceiling scaling as sqrt(55/f) was removed under the PI's
+    2026-09-02 decision. `energy_budget` and `pw_lookup` are no longer accepted and
+    raise TypeError. The applicable envelope uses an amplitude limit rather than that
+    energy-budget assumption. Evidence outside the programmable envelope still cannot
+    support deployment; source method retention is not new participant validation.
+
     ``response_fn(power, amplitude, era=, cluster=)`` is injected rather than imported, so this
     module does not depend on the response implementation and a caller can screen against an
-    alternative test.
+    alternative test. On a large screen it runs in worker processes (``band_checks``), so it
+    must be a pure function of its arguments that can be pickled; one that cannot be pickled
+    runs here instead.
 
     Returns ``(screen_frame, selected_key)``. Cells are ranked by the number of qualifying bands
     then median separation, but ONLY among survivors — a cell that fails a condition is never
-    selected on the strength of a large separation."""
+    selected on the strength of a large separation.
+    """
     rows = []
-    for (ch, hemi, rate), ev in (evidence or {}).items():
-        band_keys = list(ev.band_power.keys())
-        res = {float(c): response_fn(ev.power_for(c, w), ev.amplitude_mA, era=ev.era,
-                                     cluster=ev.cluster)
-               for (c, w) in band_keys}
+    # Every band of every cell checked first, in worker processes when the screen is large
+    # (`band_checks.check_all`, 2026-10-02); each cell's verdict below reads its own checks.
+    checks = _BC.check_all(evidence, response_fn)
+    for key, ev in (evidence or {}).items():
+        ch, hemi, rate = key
+        res = checks[key]
         n = len(res) or 1
-        # Participant-specific provenance and examples are maintained outside source control.
+        # SIGNIFICANT AND POINTING THE RIGHT WAY.
+        # Raw arm means can be confounded with time, while the era-blocked slope is adjusted.
+        # Requiring only significance could admit a rising adjusted relationship despite a
+        # falling raw contrast. Adaptive Therapy requires band power to fall with amplitude,
+        # so the adjusted slope must be negative. Report both n_era_significant and
+        # n_era_negative_significant; the gate uses the latter. The shared cell_response_verdict
+        # keeps screen and gate consistent, with amplitude limits assessed separately.
+
+
         pain = (pain_positive_by_channel or {}).get(str(ch)) if pain_positive_by_channel else None
         v = cell_response_verdict(res, pain_positive_centers=pain)
         n_resp, n_sig, n_sig_neg = v["n_responding"], v["n_era_significant"], \
@@ -1152,6 +1206,22 @@ def screen_cells(evidence, *, response_fn, pain_positive_by_channel=None, amp_ce
         within_limit = bool(np.isfinite(amp_hi) and amp_hi <= cap + 1e-9)
 
         fails = list(v["blocking_reasons"])
+        sensing_side = _sensing_side(ch)
+        rings = (stim_rings_by_side or {}).get(sensing_side) if stim_rings_by_side else None
+        flanks = pair_flanks_stimulation(ch, rings) if rings else None
+        if flanks is False:
+            pair = sensing_pair_rings(ch)
+            allowed = flanking_pair(rings)
+            stim_txt = " and ".join(str(r) for r in sorted(rings))
+            if allowed is None:
+                fails.insert(0, f"the {sensing_side.lower()} lead is stimulating on contact {stim_txt}, "
+                                f"and no sensing pair flanks that contact; the device offers no sensing "
+                                f"configuration on this lead (contralateral sensing is the alternative)")
+            else:
+                fails.insert(0, f"the {sensing_side.lower()} lead is stimulating on contact {stim_txt}, so "
+                                f"the only sensing pair the device allows is {allowed[0]}-{allowed[1]} "
+                                f"(the contacts immediately above and below it); this pair is "
+                                f"{pair[0]}-{pair[1]}")
         if not within_limit:
             fails.insert(0, f"high arm {amp_hi:.1f} mA exceeds the {cap:.1f} mA hard limit, "
                             "so the response was measured outside the programmable envelope")
@@ -1171,6 +1241,7 @@ def screen_cells(evidence, *, response_fn, pain_positive_by_channel=None, amp_ce
                          laterality=_laterality(ch, hemi),
                          amp_limit_mA=(round(cap, 2) if np.isfinite(cap) else None),
                          within_amp_limit=within_limit,
+                         sensing_pair_flanks_stimulation=flanks,
                          deployable=(v["responds"] is True and not fails),
                          blocking_reasons="; ".join(fails)))
     screen = pd.DataFrame(rows)
@@ -1258,25 +1329,3 @@ def build_all(psd, epochs, *, hemispheres=("Left", "Right"), rates=None, channel
                 if ev is not None:
                     out[(ch, h, float(r))] = ev
     return out, pd.DataFrame(rows)
-
-
-# Retained active Aditya interfaces.
-def _recent_response_eras(p, aud, recent_eras):
-    """Filter surviving response observations by their era's most recent timestamp."""
-    if recent_eras is not None and int(recent_eras) > 0 and len(p):
-        if "t" in p.columns:
-            order = p.groupby("era")["t"].max().sort_values()
-            aud.era_order_source = "each era's latest timestamp"
-        else:
-            order = pd.Series(sorted(pd.Series(p["era"]).unique()),
-                              index=sorted(pd.Series(p["era"]).unique()))
-            aud.era_order_source = ("era LABEL order — no time column present, so this is only "
-                                    "chronological if the labels are date-like")
-        keep = list(order.index[-int(recent_eras):])
-        n_before = len(p)
-        p = p[p["era"].isin(keep)]
-        aud.n_dropped_old_eras = n_before - len(p)
-        aud.recent_eras_kept = tuple(str(k) for k in keep)
-        aud.recent_eras_requested = int(recent_eras)
-
-    return p

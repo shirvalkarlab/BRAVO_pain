@@ -1,30 +1,141 @@
-/** Canonical research-only report; the upstream deployment request schema is not used. */
-import { useEffect } from "react";
-import { useAnalysisQuery } from "../Biomarkers/queryAnalysis";
+/**
+ * Shared /api/queryClosedLoopDeployment fetch.
+ *
+ * This is a DIFFERENT question from useDeploymentSummary, and the two are deliberately kept apart.
+ * The summary answers "given this band, where does the threshold go and do the statistical gates
+ * pass". This report answers "may this configuration be programmed onto the device at all" — it
+ * evaluates the 51 encoded Percept rules, estimates the three edges of the amplitude/power/pain
+ * triangle at their correct clustering units, and tests whether the three signs are mutually
+ * coherent. A band can pass every gate in the summary and still be undeployable, most obviously
+ * when its power RISES with amplitude, which closes a positive-feedback loop on the device.
+ *
+ * The backend never throws for an unevaluable participant; it returns {available: false, reason}.
+ * Treat a missing report as "not yet answerable" rather than as an error, because the commonest
+ * cause is simply that no candidate configuration has been chosen yet.
+ */
+import { SessionController } from "database/session-control";
 import { useCachedResult } from "database/useCachedResult";
-import { settingsKey } from "database/resultCache";
+
 import { CL } from "views/Reports/moduleCacheKeys";
 
-export function deploymentReportBody({ participantUid, bandCandidate, requestParams }) {
+/**
+ * The side the report is evaluated on. THE BAND'S OWN SIDE, unless the caller names one.
+ *
+ * Until 2026-09-12 this read `hemisphere || "Left"` in both places below, and the page never
+ * passes `hemisphere` -- so every request the page ever sent carried `Hemisphere: "Left"` and
+ * `actuated_hemisphere: "Left"`, whatever side the band was on. The server then read the
+ * impedance, the artefact flags, the LFP amplitude bins, the capture amplitudes, the paused
+ * amplitude, the current-to-power slope, the amplitude-to-pain slope, the two capture currents and
+ * the simulation's amplitude series from the LEFT for a band picked on a RIGHT contact, and the
+ * only sign on the page was a D39 "contralateral pairing" row that was wrong about why (review
+ * C1, artifacts/review_2026-09-12_ClosedLoopDeployment.md). The committed band is on the left, so
+ * nothing the PI has watched live was affected; the first right-side band would have been.
+ */
+export function reportSide({ bandCandidate, hemisphere }) {
   const bc = bandCandidate || {};
-  return { ...requestParams, ParticipantId: participantUid, Channel: bc.contact,
-    CenterHz: Number(bc.center_freq_hz), BandWidthHz: Number(bc.bandwidth_hz || 5) };
+  return hemisphere || bc.sensingHemisphere || "Left";
 }
 
-export default function useDeploymentReport({ participantUid, bandCandidate, requestParams,
-  inputIdentity, enabled = true }) {
-  const queryAnalysis = useAnalysisQuery();
-  const body = deploymentReportBody({ participantUid, bandCandidate, requestParams });
-  const requestKey = settingsKey(body);
-  useEffect(() => () => queryAnalysis.cancel("/api/queryClosedLoopResearch"), [requestKey, queryAnalysis]);
+export function deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale,
+  painScore, matching, stimProgram, contralateral = false }) {
+  const bc = bandCandidate || {};
+  const side = reportSide({ bandCandidate, hemisphere });
+  return {
+    ParticipantId: participantUid,
+    // The matching settings inherited from the Biomarkers page's last run (decision 331), for the
+    // stability card; in the body, so they are in the cached answer's key too. Omitted, the
+    // server's one-home defaults apply.
+    ...(matching || {}),
+    Hemisphere: side,
+    // The pain score every band-to-pain reading on the report is computed on (the PI, 2026-09-25
+    // night), from the page's dropdown. In the body, so it is in the cached answer's key too.
+    PainScore: painScore || "nrs",
+    // The device thresholds a LINEAR sum of squared magnitude (rule D11), so the linear scale is
+    // the one that describes what the device will actually do. The log scale remains a valid
+    // statistical description and is not what should drive a threshold.
+    PowerScale: powerScale || "power_linear",
+    Candidates: bc.channel == null ? [] : [{
+      channel: bc.channel,
+      center_hz: Number(bc.centerHz),
+      band_width_hz: Number(bc.bandWidthHz || 5.0),
+      sensing_hemisphere: bc.sensingHemisphere || null,
+      // The stimulated side follows the band's side (same-side sensing and actuation, rule D39's
+      // ordinary case) unless the caller names another.
+      actuated_hemisphere: side,
+      rate_hz: bc.rateHz == null ? null : Number(bc.rateHz),
+      pulse_width_us: bc.pulseWidthUs == null ? null : Number(bc.pulseWidthUs),
+      threshold_mode: bc.thresholdMode || "dual",
+      // The sense-to-control wiring (the PI, 2026-10-08): choosing "Left sensing drives both" (or
+      // the right's) IS the user acknowledging that the other stimulator uses contralateral sensing
+      // (rule D39). Only on that request, so the ordinary request is exactly as before.
+      ...(contralateral ? { contralateral_pairing_acknowledged: true } : {}),
+    }],
+    // The user's stimulation program, only when it differs from the device's (decision 467); absent,
+    // the request is exactly as before, so answers saved ahead still serve it.
+    ...(stimProgram ? { StimProgram: stimProgram } : {}),
+  };
+}
+
+/**
+ * The request, minus the participant, is the cache key.
+ *
+ * This is the rule every fetch in the deployment family follows, and it is worth stating once. The
+ * body of the request IS the complete list of things that change the answer — that is what a
+ * request body is — so deriving the settings key from it means the key cannot fall behind the
+ * request. The participant is removed because the cache already stores one entry per participant
+ * per module, so including it would put the same value in the key twice.
+ *
+ * It also fixes a real gap in what used to be watched. The effect this replaces listed only the
+ * primitives it could safely depend on without re-firing every render, which meant the rate, the
+ * pulse width and the candidate's own threshold mode were sent to the server but were NOT part of
+ * what identified the request. A candidate committed at a different rate would have been answered
+ * from a response fitted at the old one. The serialised key has no such problem: it is a string, so
+ * a body rebuilt on every render still compares equal as long as its contents are equal, and every
+ * field participates.
+ */
+function reportSettings(body) {
+  const rest = { ...body };
+  delete rest.ParticipantId;
+  return rest;
+}
+
+export default function useDeploymentReport({ participantUid, bandCandidate, hemisphere,
+  powerScale, painScore, matching, stimProgram = null, contralateral = false, enabled = true,
+  slot = CL.report }) {
+  const channel = bandCandidate && bandCandidate.channel;
+  const centerHz = bandCandidate && bandCandidate.centerHz;
+  const body = deploymentReportBody({ participantUid, bandCandidate, hemisphere, powerScale,
+    painScore, matching, stimProgram, contralateral });
+
   const cached = useCachedResult({
-    moduleKey: CL.report, uid: participantUid, settings: body,
-    // A different band/control set must not display the previous band's research result.
-    identity: { input: inputIdentity, request: body },
-    enabled: enabled && !!participantUid && !!body.Channel && !!bandCandidate && bandCandidate.center_freq_hz != null,
-    autoFetch: false,
-    fetcher: () => queryAnalysis("/api/queryClosedLoopResearch", body).then(({ data }) => data),
+    // One slot per question (`moduleCacheKeys.CL`): the page asks one report per stimulator.
+    moduleKey: slot,
+    uid: participantUid,
+    settings: reportSettings(body),
+    enabled: enabled !== false && !!participantUid && channel != null && centerHz != null,
+    // The whole response is cached, INCLUDING an {available:false, reason} answer. That answer is
+    // as durable as a successful one — it will not change until an input changes — and it is the
+    // expensive one to rediscover, because the endpoint has to read the participant's recordings
+    // before it can conclude that the configuration cannot be evaluated. Storing only successes
+    // would leave the slowest case uncached.
+    fetcher: () => SessionController.query("/api/queryClosedLoopDeployment", body)
+      .then((response) => (response && response.data) || null),
   });
+
+  // The external shape of this hook is unchanged, so every consumer keeps working: `data` is the
+  // report only when the server said it was available, and `err` carries the server's own reason
+  // otherwise. The cache fields are ADDED alongside, for the page's Recompute control.
   const raw = cached.data;
-  return { ...cached, raw, data: raw && raw.available ? raw : null };
+  const available = !!(raw && raw.available);
+  return {
+    data: available ? raw : null,
+    loading: cached.loading,
+    err: cached.err || (raw && !available ? (raw.reason || "unavailable") : null),
+    stale: cached.stale,
+    staleReasons: cached.staleReasons,
+    computedAt: cached.computedAt,
+    notKept: cached.notKept,
+    recompute: cached.recompute,
+    hasCached: cached.hasCached,
+  };
 }

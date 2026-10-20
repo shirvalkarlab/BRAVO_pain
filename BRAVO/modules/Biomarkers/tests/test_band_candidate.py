@@ -1,8 +1,12 @@
-"""Unit tests for the BandCandidate emission helpers (DESIGN_biomarker_pipeline_v2 sec.6).
+"""Unit tests for the device-control mapping helpers (DESIGN_biomarker_pipeline_v2 sec.6) and the
+sign-off card's gates.
 
-These target the pure schema-assembly helpers and the device-control mapping logic, which do not
-need Django/DB. The end-to-end build_band_candidate path (DB + glmer) is exercised live via the
-/emitBandCandidate endpoint, not here.
+These target the pure helpers (`_band_credible_ci`, `_suggested_percept_mode`, the adaptive-range
+constants, `_band_decide_verdict` and the two `deployment_summary` gates), which do not need
+Django/DB. Until 2026-09-12 the same helpers also fed `build_band_candidate` behind the
+/emitBandCandidate route; that route and function were deleted on the PI's decision (Biomarkers
+review finding B12) because no page called them. The helpers stay because `deployment_summary`,
+the sign-off card's own endpoint, still reads them.
 
 Run inside the container:
     python3 -W ignore modules/Biomarkers/tests/test_band_candidate.py
@@ -59,6 +63,14 @@ def test_suggested_mode_out_of_band():
     assert mode is None and "adaptive sensing range" in reason
 
 
+def test_suggested_mode_unknown_direction_is_not_called_negative():
+    # 2026-10-02: a mixed-effects fit that did not converge leaves the direction unknown; the
+    # advice must say that, not describe a negative-direction band
+    mode, reason = bs._suggested_percept_mode("unknown", True)
+    assert mode is None
+    assert "negative-direction" not in reason and "not known" in reason
+
+
 def test_decide_verdict_branches():
     # unavailable glmer
     assert bs._band_decide_verdict({"available": False}, {}) == "unavailable"
@@ -66,12 +78,23 @@ def test_decide_verdict_branches():
     assert bs._band_decide_verdict({"available": True, "separation": True}, {}) == "failed (separation)"
     assert bs._band_decide_verdict(
         {"available": True, "separation": False, "singular": True}, {}) == "failed (singular random effect)"
-    # n.s. p
+    # a fit lme4 says did not converge never validates, whatever p it left behind (2026-10-02:
+    # R 0-3+ 24.5 Hz NRS read p 3e-104 on a fit that had stopped short)
     assert bs._band_decide_verdict(
-        {"available": True, "separation": False, "singular": False, "p": 0.2}, {}
-    ) == "candidate (mixed-effects n.s.)"
+        {"available": True, "separation": False, "singular": False, "converged": False, "p": 0.0},
+        {}) == "failed (did not converge)"
+    # too few in the smaller pain group (2026-10-03): named, never a number
+    assert bs._band_decide_verdict(
+        {"available": True, "separation": False, "singular": False, "too_few_in_smaller_group": True,
+         "smaller_group": "low", "p": 0.15}, {}) == "failed (too few low-pain samples)"
+    # n.s. p: the rotation test's p decides since decision 482
+    assert bs._band_decide_verdict(
+        {"available": True, "separation": False, "singular": False, "p": 0.2,
+         "rotation": {"available": True, "p": 0.2}}, {}
+    ) == "candidate (rotation test n.s.)"
     # validated stim-stable vs stim-dependent
-    g = {"available": True, "separation": False, "singular": False, "p": 0.001}
+    g = {"available": True, "separation": False, "singular": False, "p": 0.001,
+         "rotation": {"available": True, "p": 0.001}}
     assert bs._band_decide_verdict(g, {"available": True, "stim_stable": True}) == "VALIDATED (stim-stable)"
     assert bs._band_decide_verdict(g, {"available": True, "stim_stable": False}) == "VALIDATED (stim-dependent)"
 
@@ -99,6 +122,86 @@ def test_decide_verdict_branches():
     ) == "VALIDATED (stim-stable)"
 
 
+def test_deployment_summary_stim_stable_gate_reads_three_way_verdict():
+    """Decision 82 fix: deployment_summary's sign-off card must key its stim-stability GATE off
+    `stability_verdict`, never the retired `stim_stable` boolean (`p_lrt >= 0.05`, a failure to
+    reject rather than evidence of stability). The bug this pins: a band whose interaction test ran
+    but was too underpowered to tell stable from unstable ("inconclusive") used to render as a
+    green "pass" on the clinician-facing card, because the retired flag is True whenever the LRT
+    simply fails to reject -- exactly the "inconclusive" case too."""
+    # Genuinely shown stable -> pass. stim_stable also True here, but that's not why it passes.
+    state, detail = bs._deployment_summary_stim_stable_gate(
+        {"available": True, "lrt_p": 0.6, "stim_stable": True, "stability_verdict": "stable"})
+    assert state == "pass" and "stable" in detail
+
+    # Interaction test rejects -> fail, regardless of the retired flag.
+    state, _ = bs._deployment_summary_stim_stable_gate(
+        {"available": True, "lrt_p": 0.01, "stim_stable": False, "stability_verdict": "stim-dependent"})
+    assert state == "fail"
+
+    # THE BUG: the LRT did not reject (stim_stable=True under the retired rule) but the interval on
+    # the largest between-era difference is wider than the declared margin -- inconclusive, not
+    # stable. Must render as indeterminate, never pass.
+    state, detail = bs._deployment_summary_stim_stable_gate(
+        {"available": True, "lrt_p": 0.29, "stim_stable": True, "stability_verdict": "inconclusive"})
+    assert state == "indeterminate", (
+        f"stim_stable=True with an inconclusive equivalence verdict must render indeterminate, "
+        f"not {state!r} -- this is the exact false-reassurance decision 82 found")
+    assert "cannot tell" in detail
+
+    # LRT never converged at all (no stability_verdict key exists on the payload) -> indeterminate.
+    state, _ = bs._deployment_summary_stim_stable_gate({"available": False})
+    assert state == "indeterminate"
+
+    # A payload predating the equivalence test (stability_verdict absent, available True) must also
+    # abstain rather than trust the bare boolean.
+    state, _ = bs._deployment_summary_stim_stable_gate({"available": True, "lrt_p": 0.6, "stim_stable": True})
+    assert state == "indeterminate"
+
+
+def test_deployment_summary_adaptive_band_gate_checks_edges_not_centre():
+    """Decision 82 fix: the sign-off card's adaptive-range gate must check the band EDGES against
+    8-30 Hz, matching ClosedLoopDeployment/constraints.py's D08 rule -- not merely the centre. Cases
+    mirror D08's own docstring examples so the two rules agree."""
+    # D08's own documented disqualifying case: a 5 Hz band centred at 3.92 Hz runs 1.42-6.42 Hz,
+    # entirely below the 8 Hz floor.
+    state, detail, lo, hi = bs._deployment_summary_adaptive_band_gate(3.92, 5.0)
+    assert state == "fail" and abs(lo - 1.42) < 1e-9 and abs(hi - 6.42) < 1e-9
+
+    # D08's own second documented case: centre 10 Hz is inside 8-30, but a 5 Hz band's lower edge
+    # (7.5 Hz) is not. The OLD centre-only gate would have shown "pass" here.
+    state, detail, lo, hi = bs._deployment_summary_adaptive_band_gate(10.0, 5.0)
+    assert state == "fail", "band edge (7.5 Hz) sits below the adaptive floor even though the centre is inside it"
+    assert abs(lo - 7.5) < 1e-9
+
+    # Comfortably inside on both edges -> pass.
+    state, _, lo, hi = bs._deployment_summary_adaptive_band_gate(20.0, 5.0)
+    assert state == "pass" and lo == 17.5 and hi == 22.5
+
+    # Exactly at the boundary on both ends -> pass (D08 uses >= / <=, not strict inequality).
+    state, _, lo, hi = bs._deployment_summary_adaptive_band_gate(19.0, 22.0)  # edges 8.0, 30.0
+    assert state == "pass" and lo == 8.0 and hi == 30.0
+
+
+
+def test_every_deployment_gate_carries_a_short_label_and_whether_it_ran():
+    """Decision 302 (the PI, 2026-09-26): the Closed-Loop decision card lists evidence that should
+    have been evaluated and was not as "Untested: <label>", five words or less. Every gate the
+    summary builds must have a label of at most four words in the one table, and the two gates that
+    can fail to run at all must say so through `evaluated`, never through their state alone."""
+    import re
+    labels = bs.DEPLOYMENT_GATE_SHORT_LABELS
+    assert all(1 <= len(v.split()) <= 4 for v in labels.values()), labels
+    src = open(bs.__file__).read()
+    built = re.findall(r'gates\.append\(_gate\("([a-z_]+)"', src)
+    assert sorted(built) == sorted(labels), (built, sorted(labels))
+    # The two gates whose test can fail to run pass `evaluated=` explicitly.
+    for key in ("stim_stable", "forward_validated"):
+        call = src[src.index(f'_gate("{key}"'):]
+        call = call[:call.index("))") + 2]
+        assert "evaluated=" in call, key
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
@@ -109,3 +212,4 @@ if __name__ == "__main__":
         except Exception as e:
             nfail += 1; print("FAIL", fn.__name__, repr(e)); traceback.print_exc()
     print(f"PASS={npass} FAIL={nfail}")
+

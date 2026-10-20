@@ -26,19 +26,7 @@ import time as _time
 try:
     from modules.CacheStore import store as _cache_store
 except ImportError:                                   # pragma: no cover - depends on the runner
-    from modules.CacheStore import store as _cache_store
-
-# THE BRAINSENSE MINIMUM RATE, ONE NUMBER, imported rather than retyped (review C3, 2026-09-12).
-# ``StimOptimizer.routines.percept_adaptive.MIN_ADAPTIVE_RATE_HZ`` is the PI-stated 55 Hz the Stim
-# Optimizer page enforces (decision 138); D31 here reads ``brainsense_min_rate_hz`` and until this
-# import nobody supplied it, so the two pages carried two floors (this ledger's D44 at 30 Hz, that
-# page's 55 Hz) and a 40 Hz candidate got two different reasons on two pages. Spelled twice like
-# every cross-module import in this repository: the container makes the package
-# ``modules.StimOptimizer``, the host suite makes it ``StimOptimizer``.
-try:
-    from modules.StimOptimizer.routines.percept_adaptive import MIN_ADAPTIVE_RATE_HZ as _MIN_ADAPTIVE_RATE_HZ
-except ImportError:                                   # pragma: no cover - depends on the runner
-    from modules.StimOptimizer.routines.percept_adaptive import MIN_ADAPTIVE_RATE_HZ as _MIN_ADAPTIVE_RATE_HZ
+    from CacheStore import store as _cache_store
 
 #: Lead models whose short-circuit floor is the SenSight value rather than the 1x4 value. The
 #: constraint table keys its floor on the string "sensight", so the model number is mapped here
@@ -46,18 +34,10 @@ except ImportError:                                   # pragma: no cover - depen
 _SENSIGHT_MODELS = ("LEAD_B33015", "LEAD_B33005")
 
 
-
-# Aditya canonical compatibility imports/constants.
-
 def _lead_type(lead_model):
     if not lead_model:
         return None
-    model = str(lead_model).upper().rsplit(".", 1)[-1]
-    if model in _SENSIGHT_MODELS:
-        return "sensight"
-    if model in ("LEAD_3387", "LEAD_3389"):
-        return "1x4"
-    return None
+    return "sensight" if str(lead_model).upper() in _SENSIGHT_MODELS else "1x4"
 
 
 #: The open-circuit limit D16 uses, duplicated here (rather than imported from ``constraints``)
@@ -66,7 +46,17 @@ _OPEN_LIMIT_OHM = 10_000.0
 
 
 def _measurement_current(metadata):
-    """The impedance test's own measurement current, from ``metadata["Amplitude"]``."""
+    """The impedance test's own measurement current, from ``metadata["Amplitude"]``.
+
+    THE PI'S FINDING, 2026-09-12: the device's DEFAULT impedance test steps a low measurement
+    current automatically, and at that current a healthy lead can read above the open-circuit
+    limit while the same lead reads normal at a fixed, higher current. This function reads the
+    recording's mode so ``impedance_facts`` can prefer a fixed-current reading for D16.
+
+    Raw strings may omit the space before the unit or describe automatic increase. Parse
+    defensively rather than assuming one fixed spelling. Returns ``"automatic_increase"``, a ``float`` number of mA, or ``None``
+    when the field is absent or cannot be read.
+    """
     raw = (metadata or {}).get("Amplitude")
     if raw is None:
         return None
@@ -159,8 +149,7 @@ def impedance_facts(recordings):
 
     # The historical worst is a DIFFERENT question from the current reading and both matter: a lead
     # whose newest measurement is inside the limits but which has exceeded them before is not the
-    # same object as one that never has. Reporting only the newest hid this until the 2026-09-04
-    # ingest brought in a newer, better measurement and D16 silently flipped from fail to pass.
+    # same object as one that never has. Reporting only the newest can hide historical failures.
     # The "_fixed" figures restrict that same history to recordings run at a fixed measurement
     # current, so a reader can tell whether the record's own worst-ever reading is itself a
     # low-current artefact or a reading a fixed-current test actually confirmed.
@@ -191,7 +180,6 @@ def impedance_facts(recordings):
             "bipolar_median_ohm": _st.median(bip) if bip else None,
             "monopolar_max_ohm": max(mono) if mono else None,
             "n_bipolar_pairs": len(bip),
-            "lead_model": h.get("LeadModel"), "lead_type": _lead_type(h.get("LeadModel")),
         }
         # THE SPURIOUS-FAIL CASE the PI named: the truly newest recording of all ran in the
         # automatic mode and reads above the open-circuit limit, while the fixed-current recording
@@ -223,81 +211,79 @@ def candidate_impedance_ohm(facts, hemisphere):
     return ((facts.get(hemisphere) or {}).get("bipolar_max_ohm"))
 
 
-# ---------------------------------------------------------------------------------------------
-# FACTS THAT CAN ONLY COME FROM A PERSON READING THE PROGRAMMER
-# ---------------------------------------------------------------------------------------------
-#: Values the investigator supplied directly, with the date and the fact that they were STATED
-#: rather than measured from the record. This block is a stopgap and should be read as one: these
-#: belong in a per-participant database row with an audit trail, not in source. They are here, with
-#: provenance on every line, because the alternative was leaving eleven device rules unevaluable —
-#: and an unevaluable rule blocks, so the whole verdict was stuck behind values that take two
-#: minutes to read off a programmer.
-#:
-#: The rule for adding to this block: a value goes here ONLY if a person read it off the device or
-#: stated it as a clinical decision. Anything derivable from the record must be derived, because a
-#: stated value cannot be re-checked when the record changes. Two candidate values were REFUSED
-#: entry on exactly that basis — the LFP capture amplitude (D09), because the surveys measure it and
-#: the stated estimate of 2 uVp would have passed a gate the measured 0.27 uVp median fails, and
-#: the impedance (D16), because 548 recordings carry it.
-PI_STATED_FACTS = {}  # Participant-specific values remain in private reviewed storage.
+# Investigator statements are supplied privately for one exact participant; observed
+# programmed pairs come from that participant's ingested reports or private source evidence.
+# Missing evidence is unknown, never a global default copied from another participant.
+_STATED_KEYS = frozenset({
+    "has_pocket_adaptor", "segmental_steering_in_use", "deployment_rate_hz",
+    "brainsense_min_rate_hz", "brainsense_max_rate_hz", "brainsense_max_pulse_width_us",
+    "n_neurostimulators", "highpass_hz", "paused_amplitude_mA_by_hemisphere",
+})
 
 
-#: D31. WHAT THE DEVICE HAS ACTUALLY ACCEPTED, per hemisphere, as (rate_hz, pulse_width_us).
-#:
-#: Measured 2026-09-05 by walking all 1,154 session reports and collecting every group carrying a
-#: ``SensingChannel``. This exists because D31 was written to compare a candidate against the
-#: BrainSense parameter envelope, and that envelope is NOT PUBLISHED: the A610 guide states only
-#: that the maximum pulse width and maximum rate are lower and the minimum rate higher than for a
-#: group without BrainSense, without giving any of the three numbers, and a search of the entire
-#: JSON corpus found no field carrying them either. The only path in 1,154 files combining a
-#: rate/pulse-width/frequency name with a limit word is ``IndefiniteStreaming[].SampleRateInHz``,
-#: which is the sensing sample rate and not a stimulation limit.
-#:
-#: So the rule stops asking for a number it will never get and asks an answerable question instead:
-#: has this exact rate and pulse width been programmed in a BrainSense group on this hemisphere?
-#: A demonstrated configuration is stronger evidence than a limit comparison, because the device
-#: itself accepted it.
-#:
-#: Two asymmetries in this table matter and would be hidden by pooling the hemispheres. 55 Hz with
-#: 60 us appears 1,274 times on the LEFT and never on the right; 165 Hz with 60 us appears 152
-#: times on the LEFT and never on the right, where 165 Hz has only run at 80 and 160 us. The
-#: observed minimum rate in a sensing group is 55 Hz on both sides against 10 Hz in non-sensing
-#: groups, which is consistent with the guide's claim that the BrainSense minimum is higher, and
-#: bounds it at 55 Hz or below without revealing its value.
-BRAINSENSE_PROGRAMMED_PAIRS = {}
-
-#: Provenance for the table above, carried onto the report so a reader can tell a measurement from
-#: an assertion and can see how stale it is.
-BRAINSENSE_PAIRS_PROVENANCE = (
-    "measured 2026-09-05 from all 1,154 RCS08 session reports; counts are group records carrying "
-    "a SensingChannel, not distinct programming events"
-)
+def stated_facts_for(participant_uid):
+    """Return exact-bound investigator statements and their per-field provenance."""
+    document = _private_fact_document(participant_uid)
+    facts, provenance = document.get("stated_facts"), document.get("stated_fact_provenance")
+    if not isinstance(facts, dict) or not isinstance(provenance, dict):
+        return {}, {}
+    keep = {key: value for key, value in facts.items()
+            if key in _STATED_KEYS and value is not None
+            and isinstance(provenance.get(key), str) and provenance[key].strip()}
+    return keep, {key: provenance[key].strip() for key in keep}
 
 
-def brainsense_pair_programmed(rate_hz, pulse_width_us, hemisphere):
-    """Has this exact (rate, pulse width) been programmed in a BrainSense group on this side?
+def _programmed_pairs_for(participant_uid):
+    """A participant's observed pairs, with provenance; no participant means no evidence."""
+    if not participant_uid:
+        return {}, ""
+    from . import session_report_facts as _srf
+    summary, resolution = _load_summary(participant_uid)
+    if summary.get("brainsense_programmed_pairs"):
+        return _srf.programmed_pairs_table(summary), resolution["sentence"]
+    document = _private_fact_document(participant_uid)
+    raw = document.get("programmed_pairs")
+    provenance = document.get("programmed_pairs_provenance")
+    if not isinstance(raw, dict) or not isinstance(provenance, str) or not provenance.strip():
+        return {}, ""
+    if any(side not in ("Left", "Right") or not isinstance(pairs, dict)
+           for side, pairs in raw.items()):
+        return {}, ""
+    try:
+        table = _srf.programmed_pairs_table({"brainsense_programmed_pairs": raw})
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return {}, ""
+    table = {side: {pair: count for pair, count in pairs.items() if count > 0}
+             for side, pairs in table.items()}
+    table = {side: pairs for side, pairs in table.items() if pairs}
+    return table, provenance.strip()
 
-    Returns True when the pair appears in the measured table, False when the hemisphere is known
-    and the pair is absent from it, and None when any input is missing or the hemisphere is not
-    one this device has. The False case is deliberately NOT a device prohibition: absence means the
-    combination has never been demonstrated here, which is a weaker statement than being
-    forbidden, and the caller must present it that way.
+
+def brainsense_pairs_provenance(participant_uid):
+    return _programmed_pairs_for(participant_uid)[1]
+
+
+def brainsense_pair_programmed(rate_hz, pulse_width_us, hemisphere, participant_uid=None):
+    """True/False for a supplied side's observations; None for absent/invalid evidence.
+
+    False means not observed in this participant's evidence, not a device prohibition.
+    The participant must be supplied explicitly even when only one private file exists.
     """
-    if hemisphere not in BRAINSENSE_PROGRAMMED_PAIRS:
+    if not participant_uid or rate_hz is None or pulse_width_us is None:
         return None
-    if rate_hz is None or pulse_width_us is None:
+    table, _ = _programmed_pairs_for(participant_uid)
+    if hemisphere not in table:
         return None
     try:
         key = (float(rate_hz), float(pulse_width_us))
     except (TypeError, ValueError):
         return None
-    return key in BRAINSENSE_PROGRAMMED_PAIRS[hemisphere]
+    return key in table[hemisphere]
 
 
 def facts_for_participant(participant_uid, impedance_recordings=None, *,
                           hemisphere=None, channel=None,
-                          sensing_hemisphere=None, actuated_hemisphere=None,
-                          stated_facts=None, session_summary=None):
+                          sensing_hemisphere=None, actuated_hemisphere=None):
     """Assemble every device fact this module can establish for one participant.
 
     Measured values take precedence over stated ones wherever both exist, and the returned dict
@@ -316,20 +302,16 @@ def facts_for_participant(participant_uid, impedance_recordings=None, *,
     """
     sens = sensing_hemisphere or hemisphere
     act = actuated_hemisphere or hemisphere
-    stated = dict(stated_facts or {})
+    stated, stated_provenance = stated_facts_for(participant_uid)
     out, prov = {}, {}
 
     paused = stated.pop("paused_amplitude_mA_by_hemisphere", None)
     if paused and act in (paused or {}):
         out["paused_amplitude_mA"] = paused[act]
-        prov["paused_amplitude_mA"] = f"caller-supplied reviewed declaration for the {act} hemisphere"
+        prov["paused_amplitude_mA"] = stated_provenance["paused_amplitude_mA_by_hemisphere"] + f" ({act})"
     for k, v in stated.items():
         out[k] = v
-        prov[k] = "caller-supplied reviewed declaration"
-    if "brainsense_min_rate_hz" in out:
-        prov["brainsense_min_rate_hz"] = ("stated by PI (StimOptimizer.routines.percept_adaptive."
-                                          "MIN_ADAPTIVE_RATE_HZ, the same number the Stim "
-                                          "Optimizer page enforces)")
+        prov[k] = stated_provenance[k]
 
     imp = impedance_facts(impedance_recordings or [])
     if imp.get("available"):
@@ -339,16 +321,11 @@ def facts_for_participant(participant_uid, impedance_recordings=None, *,
         ohm = candidate_impedance_ohm(imp, hemisphere) if hemisphere else None
         if ohm is not None:
             out["impedance_ohms"] = ohm
-            out["impedance_min_ohms"] = (imp.get(hemisphere) or {}).get("bipolar_min_ohm")
-            prov["impedance_min_ohms"] = "measured: minimum non-placeholder bipolar pair in the selected impedance test"
             # Be exact about what this number IS. It is the worst bipolar pair WITHIN the record
             # D16 actually trusts (the newest FIXED-current test when one exists, decision
             # 2026-09-12; otherwise the newest test of any kind, which is the whole record here
-            # before that decision) — and the difference is not academic: on 2026-09-04 an ingest
-            # brought in a newer, better measurement and D16 flipped from fail to pass with no code
-            # change, while 1265 of 15540 historical left-lead readings remain above the
-            # open-circuit limit. The old wording said "across N recordings", which would have let
-            # a reader take a currently-sound lead for a never-faulty one.
+            # before that decision). A newer satisfactory measurement does not erase historical
+            # failures; distinguish the currently trusted reading from the worst-ever history.
             _hist = ((imp.get("history") or {}).get(hemisphere) or {})
             _worst_ever_txt = (
                 f"worst EVER {_hist.get('bipolar_max_ohm_ever')} ohm with "
@@ -408,7 +385,7 @@ def facts_for_participant(participant_uid, impedance_recordings=None, *,
         if _lt_side:
             out["lead_type"] = _lt_side
             prov["lead_type"] = f"measured: LeadModel {_lm_side} on the {hemisphere} lead"
-        elif not hemisphere and imp.get("lead_type"):
+        elif imp.get("lead_type"):
             out["lead_type"] = imp["lead_type"]
             prov["lead_type"] = f"measured: LeadModel {imp.get('lead_model')}"
         out["_impedance_status"] = imp.get("status_newest")
@@ -416,11 +393,25 @@ def facts_for_participant(participant_uid, impedance_recordings=None, *,
     # Facts from the raw session reports: capture amplitudes, adaptive limits, the device's own
     # artefact verdict, cycling, and the per-bin LFP spectrum D09 consumes.
     srf, srf_prov = session_report_facts_for(participant_uid, channel=channel,
-                                             sensing_hemisphere=sens, actuated_hemisphere=act, summary=session_summary)
+                                             sensing_hemisphere=sens, actuated_hemisphere=act)
     for k, v in srf.items():
         if v is not None and out.get(k) is None:
             out[k] = v
             prov[k] = srf_prov.get(k, "measured: session reports")
+
+    # D39: contralateral sensing is documented for dual lead implants only. Read from the stored
+    # leads of the newest implanted device (the same records the lead names come from); a lookup
+    # that fails leaves the fact absent, so D39 stays "could not check", never a pass.
+    if out.get("dual_lead_implant") is None:
+        try:
+            from . import stim_program as _sp
+            _sides = _sp.lead_targets(participant_uid)
+            if _sides:
+                out["dual_lead_implant"] = {"Left", "Right"} <= set(_sides)
+                prov["dual_lead_implant"] = ("measured: the newest implanted device's stored leads ("
+                                             + ", ".join(sorted(_sides)) + ")")
+        except Exception:                              # noqa: BLE001 - no database, no fact
+            pass
 
     out["_provenance"] = prov
     return out
@@ -448,40 +439,59 @@ ARTIFACT_FLAG_RATE_LIMIT = 0.5
 #: which is a statement about the hardware and is already governed by D16, where it is evaluated
 #: against the manufacturer's published short and open limits. Counting it here as well penalises
 #: one hardware fact twice through two independent rules, and the second penalty carries no
-#: additional information: on this participant the same four surveys drive both. A survey whose
+#: additional information. A survey whose
 #: only adverse finding is an impedance failure is therefore treated as a normal survey for D17,
 #: and the impedance question is answered where it belongs.
 #:
 #: The status is still COUNTED AND REPORTED in ``artifact_flag_counts``, so nothing is hidden — it
 #: simply does not enter the numerator of the artefact rate. D16 continues to carry the lead's full
-#: impedance history, including the 1265 of 15540 left-lead readings above the open-circuit limit.
+#: impedance history, including any readings above the open-circuit limit.
 D17_NON_ARTEFACT_STATUSES = ("ARTIFACT_NOT_PRESENT", "IMPEDANCE_FAILURE")
 
 
-#: THE LAST FALLBACK: the per-participant summary ``session_report_facts.scan_folder`` produced
-#: ONCE, on 2026-09-05, over a plain-JSON folder on a shared drive, and committed next to the
-#: module. Until 2026-09-12 it was the only summary and nothing refreshed it, so it is stale today
-#: (110 Hz and adaptive NOT_CONFIGURED where the device says 55 Hz and RUNNING). ``_load_summary``
-#: now reads the summary built from the INGESTED reports out of the one store first, and reaches
-#: this file only when the store holds nothing for the participant; the provenance sentence on
-#: every fact says which was used.
-_SUMMARY_FILES = {}  # Participant-specific values remain in private reviewed storage.
-_COMMITTED_SCAN_DATE = "2026-09-05"
-_COMMITTED_SCAN_SOURCE = "shared-drive"
+def _private_fact_document(participant_uid):
+    """Read a private, exact-participant envelope with source/date provenance.
 
-
-def _committed_summary(participant_uid):
-    """The committed ``_facts_<code>.json`` for this participant, or ``{}``."""
-    import json as _json
-    name = _SUMMARY_FILES.get(str(participant_uid))
-    if not name:
+    BRAVO_DEVICE_FACTS_DIR/<uid>.json may supply summary, stated_facts with
+    stated_fact_provenance, and programmed_pairs with programmed_pairs_provenance.
+    Participant-bound evidence is never inferred from whichever file happens to exist.
+    """
+    import json
+    import re
+    from pathlib import Path
+    directory = os.environ.get("BRAVO_DEVICE_FACTS_DIR")
+    uid = str(participant_uid or "")
+    if not directory or not re.fullmatch(r"[A-Za-z0-9_-]+", uid):
         return {}
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+    root = Path(directory).expanduser().resolve()
+    path = (root / f"{uid}.json").resolve()
+    if path.parent != root:
+        return {}
     try:
-        with open(path) as fh:
-            return _json.load(fh)
-    except Exception:
+        with path.open() as fh:
+            document = json.load(fh)
+    except (OSError, ValueError):
         return {}
+    if not isinstance(document, dict) or document.get("participant_uid") != uid:
+        return {}
+    provenance = document.get("provenance")
+    if not isinstance(provenance, dict) or any(
+        not isinstance(provenance.get(key), str) or not provenance[key].strip()
+        for key in ("source", "scanned_at")
+    ):
+        return {}
+    return document
+
+
+def _private_summary(participant_uid):
+    """Optional supplied summary; ingested reports always take precedence."""
+    document = _private_fact_document(participant_uid)
+    summary = document.get("summary")
+    if not isinstance(summary, dict) or not summary:
+        return {}, {}
+    if type(summary.get("n_files")) is not int or summary["n_files"] < 0:
+        return {}, {}
+    return summary, {key: document["provenance"][key].strip() for key in ("source", "scanned_at")}
 
 
 def _ingested_file_set(participant_uid):
@@ -506,10 +516,11 @@ def _load_summary(participant_uid):
     (b) else the NEWEST stored summary of that kind for the participant, whatever file set it was
         built from -- used, marked STALE with how many newer reports it misses, and a rebuild is
         started in the background;
-    (c) else the committed ``_facts_<code>.json`` -- used, marked as the 2026-09-05 shared-drive
-        scan, and a rebuild started in the background.
+    (c) else an explicitly supplied private summary, labeled with its own source/date;
+        it does not override ingested observations. A rebuild is started whenever ingested
+        reports are available, including a fresh installation with no private summary.
 
-    ``resolution`` carries ``source`` (``current`` / ``stale`` / ``committed`` / ``none``), the
+    ``resolution`` carries ``source`` (``current`` / ``stale`` / ``supplied`` / ``none``), the
     ``sentence`` every fact's provenance is prefixed with, and ``launch`` (what the launcher did,
     or None when nothing was started). A summary handed back from (b) or (c) is exactly as wrong as
     it was before this resolver existed; what is new is that the report SAYS so, and that the next
@@ -533,22 +544,10 @@ def _load_summary(participant_uid):
                                f"{S.get('newest_stamp')}, built {str(S.get('built_utc') or '')[:10]}")
             return S, res
 
-        # Research reports run inside an explicitly requested AnalysisJob. Build the current
-        # summary here instead of launching a detached process or serving an older source set.
-        if rows:
-            S = _srf.summary_from_ingested(uid, rows=rows)
-            if S.get("n_unreadable"):
-                raise RuntimeError("Some approved session reports could not be decoded")
-            _cache_store.store(_srf.SUMMARY_KIND, uid, sig, S, writer="closed_loop",
-                               trigger="explicit_research_report", provenance=[])
-            res["source"] = "current"
-            res["sentence"] = f"rebuilt from {S.get('n_files')} approved session reports"
-            return S, res
-
         S, stamp = _cache_store.load_newest(_srf.SUMMARY_KIND, uid)
         if isinstance(S, dict) and S:
             old_key = str(S.get("newest_stamp_key") or _srf.report_stamp(S.get("newest_stamp")))
-            newer = sum(1 for r in rows if _srf.report_stamp(r.name) > old_key)
+            newer = sum(1 for r in rows if _srf.row_stamp(r) > old_key)
             res["source"] = "stale"
             res["sentence"] = (f"STALE: built from {S.get('n_files')} files on "
                                f"{str(S.get('built_utc') or '')[:10]}; {newer} newer session "
@@ -556,9 +555,9 @@ def _load_summary(participant_uid):
             res["launch"] = launch_summary_rebuild_in_background(uid, sig)
             return S, res
 
-    S = _committed_summary(uid)
+    S, supplied_provenance = _private_summary(uid)
     if S:
-        res["source"] = "committed"
+        res["source"] = "supplied"
         if sig is not None:
             rec = f"the ingested record has {n_ing} reports, newest {newest_ing}"
             res["launch"] = launch_summary_rebuild_in_background(uid, sig)
@@ -566,14 +565,16 @@ def _load_summary(participant_uid):
             rec = "the ingested record has no session reports"
         else:
             rec = f"the ingested record could not be queried ({err})"
-        res["sentence"] = (f"committed scan of {_COMMITTED_SCAN_DATE} over {S.get('n_files'):,} "
-                           f"{_COMMITTED_SCAN_SOURCE} files; {rec}")
+        res["sentence"] = (f"externally supplied scan of {supplied_provenance['scanned_at']} over "
+                           f"{S['n_files']:,} files from {supplied_provenance['source']}; {rec}")
         return S, res
+    if sig is not None:
+        res["launch"] = launch_summary_rebuild_in_background(uid, sig)
     return {}, res
 
 
 def session_report_facts_for(participant_uid, *, channel=None, hemisphere=None,
-                             sensing_hemisphere=None, actuated_hemisphere=None, summary=None):
+                             sensing_hemisphere=None, actuated_hemisphere=None):
     """Facts for the six rules the platform decoder does not keep in queryable form.
 
     Two sides, as in ``facts_for_participant`` (review C1): the capture amplitudes, adaptive
@@ -587,15 +588,14 @@ def session_report_facts_for(participant_uid, *, channel=None, hemisphere=None,
     while the most recent capture is compliant, and reporting only one of those would mislead.
 
     Which summary the facts were read from -- the stored one for the current file set, a stale
-    stored one, or the committed 2026-09-05 scan -- is written into every provenance sentence and
+    stored one, or an externally supplied private scan -- is written into every provenance sentence and
     into ``session_report_summary_source``, so a ledger row can be read without wondering whether
     the value behind it is the device as it is today.
     """
     from . import session_report_facts as _srf
     sens = sensing_hemisphere or hemisphere
     act = actuated_hemisphere or hemisphere
-    S, res = (_load_summary(participant_uid) if summary is None else
-              (summary, {"sentence": "caller-supplied reviewed session summary", "source": "supplied", "launch": None}))
+    S, res = _load_summary(participant_uid)
     if not S:
         return {}, {}
     out, prov = {}, {}
@@ -751,7 +751,13 @@ def _match_survey_channel(mapping, channel, hemisphere):
     return None
 
 
-# Participant-specific provenance and examples are maintained outside source control.
+# ---------------------------------------------------------------------------------------------
+# THE BACKGROUND REBUILD OF THE SESSION-REPORT SUMMARY, STARTED WHEN A REQUEST FINDS IT BEHIND
+# ---------------------------------------------------------------------------------------------
+# Mirrors the Biomarkers module's stability launcher (decision 96) rather than inventing a second
+# shape: a separate detached process, output to a file, a cooldown that is a FILE beside the stored
+# entries because four gunicorn workers are four memories, a refusal while the store is pointed at
+# a caller's own root, and an off switch. A full-record scan belongs off the page request path.
 
 #: Off switch that needs no deployment: set the environment variable
 #: ``SESSION_REPORT_SUMMARY_BACKGROUND=0`` on the server (or this flag False in a running process)
@@ -805,11 +811,71 @@ def _spawn_detached(argv, log_path):
 
 
 def launch_summary_rebuild_in_background(participant_uid, sig):
-    """Heavy analysis is launched only by an explicit canonical AnalysisJob."""
-    return {"launched": False, "reason": "Run the analysis explicitly to compute this product"}
+    """Start the session-report summary rebuild for this participant in its own process, unless
+    there is no point. NEVER RAISES AND NEVER WAITS: this runs inside a page request that must
+    return whatever summary it already has. Every outcome is in the returned dict, so a live check
+    needs no log file.
+
+    Skipped when the switch is off (flag or environment), when the store is on a caller's own
+    root, when there is no key to build under, and when a launch for this key is inside the
+    cooldown. THE KEY IS NOT RE-CHECKED HERE: the caller resolved (a) before reaching this, so a
+    launch is asked for only when the current key is absent.
+    """
+    out = {"launched": False, "reason": None, "store_key": None}
+    if not SESSION_REPORT_SUMMARY_BACKGROUND or \
+            os.environ.get(SESSION_REPORT_SUMMARY_BACKGROUND_ENV, "1").strip() == "0":
+        out["reason"] = "background rebuilding of the session-report summary is switched off"
+        return out
+    if _cache_store.DIR_OVERRIDE is not None and not SESSION_REPORT_SUMMARY_LAUNCH_UNDER_OVERRIDE_ROOT:
+        out["reason"] = ("the store is pointed at a caller's own root rather than the production "
+                         "one, so a run started here would write where nothing reads it")
+        return out
+    if sig is None:
+        out["reason"] = "the session-report file set has no key, so a rebuild could not be keyed to it"
+        return out
+    try:
+        from . import session_report_facts as _srf
+        out["store_key"] = _cache_store.product_key(_srf.SUMMARY_KIND, participant_uid, sig)
+        marker = _summary_launch_marker(sig)
+        if marker is None:
+            out["reason"] = "the store has nowhere to write, so a rebuild would have nowhere to land"
+            return out
+        if os.path.exists(marker):
+            age = _time.time() - os.path.getmtime(marker)
+            if age < SESSION_REPORT_SUMMARY_LAUNCH_COOLDOWN_SECONDS:
+                out["reason"] = (f"a rebuild for this key started {age:.0f} s ago and the cooldown "
+                                 f"is {SESSION_REPORT_SUMMARY_LAUNCH_COOLDOWN_SECONDS:.0f} s")
+                return out
+        argv = _summary_command_argv(participant_uid)
+        if argv is None:
+            out["reason"] = "manage.py could not be found, so no command could be started"
+            return out
+        # Written BEFORE the launch, so a launch that then fails still holds the storm back.
+        with open(marker, "w") as fh:
+            fh.write(str(_time.time()))
+        _spawn_detached(argv, os.path.join(os.path.dirname(marker), "background_runs.log"))
+    except Exception as exc:                                     # noqa: BLE001
+        out["reason"] = f"the background rebuild could not be started ({exc!r})"
+        return out
+    out["launched"] = True
+    return out
 
 
-# Participant-specific provenance and examples are maintained outside source control.
+# ---------------------------------------------------------------------------------------------
+# THE DEVICE'S ACTIVE SENSING GROUP, READ LIVE FROM THE NEWEST SESSION REPORT (D30)
+# ---------------------------------------------------------------------------------------------
+# A committed participant snapshot can be stale. D30 asks whether the candidate's rate is the
+# one currently frozen in the device, so it must read the newest ingested session report. The
+# report is decrypted through ``DataCurator.loadCacheFile``, the same route
+# ``StimOptimizer.adapter`` already takes for the therapy history.
+#
+# WHY THERE IS A MEMO, AND WHAT IT IS KEYED ON. Decrypting and parsing an 8-15 MB session report
+# costs real time on every page load, and the answer changes only when a new report is ingested.
+# The memo is keyed on the participant AND the newest report's own file identity (its uid and its
+# stored hash), never on the participant alone -- decision 130's lesson: the daily noon ingest adds
+# a file, and a participant-keyed memo would keep serving yesterday's group until a worker happened
+# to restart. A new file is a new key and therefore a miss; a repeat request costs one database
+# query for the file list and nothing else.
 _ACTIVE_GROUP_MEMO = {}
 _ACTIVE_GROUP_MEMO_MAX = 32
 
@@ -857,9 +923,70 @@ def active_sensing_group_from_report(d):
             # (2026-09-13). Read from the same group; the export's own field names are kept in
             # the comment beside each key.
             "active_sensing_group_timing": programmed_closed_loop_timing(sens),
+            # Each side's stimulation program, for the Closed-Loop page's "Inherit current settings"
+            # (decision 467).
+            "active_sensing_group_program": programmed_stimulation(sens),
         }
         return out
     return {}
+
+
+def _contact_name(electrode):
+    """``ElectrodeDef.SenSight_2a`` / ``ElectrodeDef.Sensight_2b`` -> "2a"; ``ElectrodeDef.Case`` ->
+    "case"; ``ElectrodeDef.FourElectrodes_1`` -> "1". Contacts are numbered 0-3 on both sides, as the
+    device writes them; the right lead's 8-11 is a label the page adds."""
+    nm = str(electrode or "").split(".")[-1]
+    if nm.lower() == "case":
+        return "case"
+    tail = nm.split("_")[-1]
+    return tail.lower() if tail and tail[0].isdigit() else None
+
+
+def programmed_stimulation(sensing_channels):
+    """Per hemisphere, the stimulation program in one group: contacts and their sign, amplitude,
+    pulse width, rate and the closed-loop current limits. Pure; ``{}`` for an empty list.
+
+    ``contacts`` maps "0", "1a" ... "3" and "case" to -1 (negative) or +1 (positive); a contact left
+    off is absent. ``amp_mA`` is the amplitude the program returns to when closed loop is paused
+    (``SuspendAmplitudeInMilliAmps``), the one number the programmer shows; when the export does not
+    carry it, the sum of the negative contacts' own currents. Nothing is invented: a missing field
+    is ``None``.
+    """
+    def _f(v):
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    out = {}
+    for c in sensing_channels or []:
+        if not isinstance(c, dict):
+            continue
+        side = str(c.get("HemisphereLocation") or "").split(".")[-1] or None
+        if side not in ("Left", "Right"):
+            continue
+        contacts, neg_mA = {}, []
+        for e in c.get("ElectrodeState") or []:
+            name = _contact_name(e.get("Electrode"))
+            state = str(e.get("ElectrodeStateResult") or "").split(".")[-1]
+            if name is None or state not in ("Negative", "Positive"):
+                continue
+            contacts[name] = -1 if state == "Negative" else 1
+            if state == "Negative" and _f(e.get("ElectrodeAmplitudeInMilliAmps")) is not None:
+                neg_mA.append(_f(e.get("ElectrodeAmplitudeInMilliAmps")))
+        amp = _f(c.get("SuspendAmplitudeInMilliAmps"))
+        if amp is None and neg_mA:
+            amp = round(sum(neg_mA), 2)
+        out[side] = {
+            "contacts": contacts,
+            "amp_mA": amp,
+            "pw_us": _f(c.get("PulseWidthInMicroSecond")),
+            "rate_hz": _f(c.get("RateInHertz")),
+            "lower_limit_mA": _f(c.get("LowerLimitInMilliAmps")),
+            "upper_limit_mA": _f(c.get("UpperLimitInMilliAmps")),
+            "sensing_channel": str(c.get("Channel") or "").split(".")[-1] or None,
+        }
+    return out
 
 
 def programmed_closed_loop_timing(sensing_channels):
@@ -937,7 +1064,10 @@ def active_sensing_group_facts(participant):
     p = participant if hasattr(participant, "uid") else _m.Participant.find(uid=participant)
     if p is None:
         return {}
-    # Participant-specific provenance and examples are maintained outside source control.
+    # ONE rule for which files are session reports and ONE for which is newest (review C10,
+    # 2026-09-12): `session_report_facts.session_report_files` and `newest_by_stamp`, the same
+    # two the summary resolver uses. This used to test `"Session" in name` inline and take the
+    # newest by `SourceFile.date`; one shared implementation prevents these rules from drifting.
     sfs = _srf.session_report_files(p)
     if not sfs:
         return {}
@@ -945,11 +1075,7 @@ def active_sensing_group_facts(participant):
     key = (str(p.uid), str(newest.uid), str(newest.hashed or ""))
 
     def _build():
-        raw = _DC.loadCacheFile(newest)
-        d = _json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+        d = _DC.loadPerceptJSON(newest)          # times on the tablet's clock (2026-09-26)
         return active_sensing_group_from_report(d)
 
     return _memoised_active_group_facts(key, _build)
-
-
-# Retained active Aditya interfaces.

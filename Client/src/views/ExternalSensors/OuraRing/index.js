@@ -48,7 +48,12 @@ import DatabaseLayout from "layouts/DatabaseLayout";
 import { SessionController } from "database/session-control";
 import { usePlatformContext, setContextState } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
-import useRCS08Sync from "views/Dashboard/Overview/useRCS08Sync";
+
+const streamLabels = {
+  DailyActivity: "Daily activity", DailyReadiness: "Daily readiness",
+  DailyCardiovascularAge: "Cardiovascular age", DailySpo2: "Blood oxygen",
+  DailyStress: "Daily stress", HeartRate: "Heart rate", Sleep: "Sleep"
+};
 
 export default function OuraRingDashboard() {
   const [controller, dispatch] = usePlatformContext();
@@ -56,52 +61,52 @@ export default function OuraRingDashboard() {
   const { participant_uid } = useParams();
 
   const [alert, setAlert] = useState(null);
-  const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
-  const [summary, setSummary] = useState(null);
+  const [data, setData] = useState(null);
 
   const [authenticated, setAuthenticated] = useState(0);
   const [OAuthURL, setOAuthURL] = useState(null);
   const [personalAccessToken, setPersonalAccessToken] = useState("");
   const [authPeriod, setAuthPeriod] = useState([]);
-  const [managedSync, setManagedSync] = useState(false);
-  const sync = useRCS08Sync(managedSync);
+  const [managedConnection, setManagedConnection] = useState(false);
+  const [canRefresh, setCanRefresh] = useState(true);
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setAuthenticated(0);
-    setSummary(null);
     SessionController.query("/api/requestOuraRingAuth", {
       RequestType: "RequestURL",
       ParticipantId: participant_uid
     }).then((response) => {
-      if (cancelled) return;
-      setLoading(false);
-      setManagedSync(response.headers["x-bravo-managed-sync"] === "true");
       if (!response.data.OAuthURL) {
+        const managed = response.data.ManagedByServer === true;
+        const periods = managed ? response.data.DatePeriods : response.data;
+        setManagedConnection(managed);
+        setCanRefresh(!managed || response.data.CanRefresh === true);
         setAuthenticated((a) => a+1);
-        setAuthPeriod(response.data.map((a) => a.map((b) => moment(new Date(b*1000+new Date().getTimezoneOffset()*60000)))))
+        setAuthPeriod(periods.map((a) => a.map((b) => moment(new Date(b*1000+new Date().getTimezoneOffset()*60000)))))
       } else {
         setOAuthURL(response.data.OAuthURL);
       }
     }).catch((error) => {
-      if (!cancelled) { setLoading(false); SessionController.displayError(error, setAlert); }
+      SessionController.displayError(error, setAlert);
     });
-    return () => { cancelled = true; };
-  }, [participant_uid]);
+  }, []);
 
   useEffect(() => {
-    if (!authenticated) return;
-    let cancelled = false;
-    SessionController.query("/api/queryOuraRingData", {ParticipantId: participant_uid, RequestType: "RequestSummary"})
-      .then(response => { if (!cancelled) setSummary(response.data); })
-      .catch(error => { if (!cancelled) SessionController.displayError(error, setAlert); });
-    return () => { cancelled = true; };
-  }, [participant_uid, authenticated, sync.state?.finished_at_utc]);
+    if (authenticated < 1) return;
+    
+    setAlert(<LoadingProgress />)
+    SessionController.query("/api/queryOuraRingData", {
+      RequestType: "RequestOverview",
+      ParticipantId: participant_uid
+    }).then((response) => {
+      setData(response.data)
+      setAlert(null)
+    }).catch((error) => {
+      SessionController.displayError(error, setAlert);
+    });
+  }, [authenticated])
 
   useEffect(() => {
-    if (!authenticated || !authPeriod || managedSync) return;
+    if (!authenticated || !authPeriod || managedConnection) return;
     SessionController.query("/api/requestOuraRingAuth", {
       RequestType: "SetAuthPeriod",
       ParticipantId: participant_uid,
@@ -114,27 +119,24 @@ export default function OuraRingDashboard() {
     }).catch((error) => {
       SessionController.displayError(error, setAlert);
     });
-  }, [authPeriod, managedSync])
+  }, [authPeriod, managedConnection])
 
   return (
     <DatabaseLayout>
       {alert}
       
-      {loading ? <MDTypography role="status">Loading Oura connection…</MDTypography> : authenticated ? (
+      {authenticated ? (
         <MDBox>
-          <Card sx={{marginTop: 5}}>
-            <MDBox p={2}>
-              <MDTypography variant="h3">Oura data</MDTypography>
-              <MDTypography variant="body2" role="status">{summary === null ? "Loading stored data…" : summary.some(row => row.records > 0) ? "Stored Oura data is available. View Oura timeline opens Oura-only charts with event overlays off. Switch to Combined there to compare with neural signals and surveys." : "No Oura data has been imported yet."}</MDTypography>
-              {summary?.some(row => row.qc_version) && <MDTypography variant="body2" role="status">
-                Quality control applied: daily summaries from April 30–May 27, 2026 are excluded. Timestamped samples from April 29 at 20:53:55.700 through May 27 at 13:55:36 Pacific are excluded (end time included again). Original stored records are preserved; the timeline and download use QC data. Missing values remain gaps.
-              </MDTypography>}
-              {summary?.map(row => <MDTypography key={row.name} variant="body2">
-                {row.name.replace(/([a-z])([A-Z])/g, "$1 $2")}: {row.records} stored records{row.first_day ? ` · ${row.first_day} – ${row.last_day}` : ""}{row.qc_version ? ` · ${row.summary_included} summaries eligible / ${row.summary_excluded} excluded; ${row.samples_excluded.toLocaleString()} sample times excluded` : ""}
-              </MDTypography>)}
-              <MDButton color="info" disabled={!summary?.some(row => row.records > 0)} onClick={() => navigate(`/reports/multimodal-timeline-report/${participant_uid}?source=oura`)}>View Oura timeline</MDButton>
-            </MDBox>
-          </Card>
+          {managedConnection ? (
+            <Card sx={{marginTop: 5}}>
+              <MDBox p={2}>
+                <MDTypography variant="h3">{"Oura connection"}</MDTypography>
+                <MDTypography variant="body2">
+                  {"This participant's Oura connection and collection dates are managed by the server administrator. Stored observations remain available if a refresh fails."}
+                </MDTypography>
+              </MDBox>
+            </Card>
+          ) : (
           <Card sx={{marginTop: 5}}>
             <MDBox p={2}>
               <Grid container spacing={2}>
@@ -145,10 +147,10 @@ export default function OuraRingDashboard() {
                 </Grid>
                 <Grid item xs={12}>
                   <MDTypography variant="h5" fontWeight="regular" color={"black"} fontSize={15}>
-                    {managedSync ? "The platform sync manages the collection period for this account." : "Define the inclusive collection periods for this participant. At least one period is required."}
+                    {"If multiple participants are sharing the same device, please use this section to define time period of data collection. All dates are inclusive. If empty, server will send error. "}
                   </MDTypography>
 
-                  <MDButton disabled={managedSync} variant="contained" color="info" style={{marginTop: 5}} onClick={() => {
+                  <MDButton variant="contained" color="info" style={{marginTop: 5}} onClick={() => {
                     setAuthPeriod((authPeriod) => {
                       return [...authPeriod, [moment(new Date()), moment(new Date())]]
                     });
@@ -156,7 +158,7 @@ export default function OuraRingDashboard() {
                     {"Add Date Periods"} 
                   </MDButton>
                   
-                  <MDButton disabled={managedSync} variant="contained" color="error" style={{marginTop: 5, marginLeft: 5}} onClick={() => {
+                  <MDButton variant="contained" color="error" style={{marginTop: 5, marginLeft: 5}} onClick={() => {
                     SessionController.query("/api/requestOuraRingAuth", {
                       RequestType: "DeleteAuthentication",
                       ParticipantId: participant_uid
@@ -178,7 +180,6 @@ export default function OuraRingDashboard() {
                     </MDTypography>
                     <LocalizationProvider dateAdapter={AdapterMoment} adapterLocale={"us"}>
                       <DatePicker
-                        disabled={managedSync}
                         label="Start Date"
                         value={section[0]}
                         onChange={(newDate) => {
@@ -195,7 +196,6 @@ export default function OuraRingDashboard() {
                     </MDTypography>
                     <LocalizationProvider dateAdapter={AdapterMoment}>
                       <DatePicker
-                        disabled={managedSync}
                         label="End Date"
                         value={section[1]}
                         onChange={(newDate) => {
@@ -207,7 +207,7 @@ export default function OuraRingDashboard() {
                         renderInput={(params) => <TextField {...params} />}
                       />
                     </LocalizationProvider>
-                    <MDButton disabled={managedSync} variant="contained" color="error" style={{marginLeft: 15}} onClick={() => {
+                    <MDButton variant="contained" color="error" style={{marginLeft: 15}} onClick={() => {
                       setAuthPeriod((authPeriod) => {
                         authPeriod.splice(sectionIndex, 1);
                         return [...authPeriod]
@@ -221,6 +221,17 @@ export default function OuraRingDashboard() {
               </Grid>
             </MDBox>
           </Card>
+          )}
+          <Card sx={{marginTop: 5}}>
+            <MDBox p={2}>
+              <MDTypography variant="h3">{"Stored Oura observations"}</MDTypography>
+              {data && Object.keys(data).length > 0 ? Object.entries(data).map(([stream, records]) => (
+                <MDTypography key={stream} variant="body2">
+                  {(streamLabels[stream] || stream) + ": " + (Array.isArray(records) ? records.length + " stored records" : "unavailable")}
+                </MDTypography>
+              )) : <MDTypography variant="body2">{"No Oura observations have been imported yet."}</MDTypography>}
+            </MDBox>
+          </Card>
           <Card sx={{marginTop: 5}}>
             <MDBox p={2}>
               <Grid container spacing={2}>
@@ -231,12 +242,13 @@ export default function OuraRingDashboard() {
                 </Grid>
                 <Grid item xs={12}>
                   <MDTypography variant="h5" fontWeight="regular" color={"black"} fontSize={15}>
-                    {managedSync ? "This Oura account uses the platform sync. Updates continue if you leave this page." : "Use the button below to refresh Oura data for the selected collection periods."}
+                    {managedConnection
+                      ? "Refresh requests the configured Oura history. A complete refresh replaces the stored snapshot only after every data stream succeeds."
+                      : "Use the button below to request data for the selected collection periods."}
                   </MDTypography>
                 </Grid>
                 <Grid item xs={12}>
-                  <MDButton disabled={managedSync && sync.disabled} variant="contained" color="info" style={{marginTop: 5}} onClick={() => {
-                    if (managedSync) { sync.start(); return; }
+                  {canRefresh && <MDButton variant="contained" color="info" style={{marginTop: 5}} onClick={() => {
                     setAlert(<LoadingProgress />)
                     SessionController.query("/api/queryOuraRingData", {
                       RequestType: "RefreshOuraRingData",
@@ -248,9 +260,8 @@ export default function OuraRingDashboard() {
                       SessionController.displayError(error, setAlert);
                     });
                   }}>
-                    {managedSync ? (sync.disabled ? "Checking / syncing…" : "Sync platform data") : "Refresh Oura Ring Data"}
-                  </MDButton>
-                  {managedSync && <MDTypography variant="body2" role="status">{sync.message || (sync.state ? `Sync status: ${sync.state.status}` : "Checking sync status…")}</MDTypography>}
+                    {"Refresh Oura Ring Data"} 
+                  </MDButton>}
                   <MDButton variant="contained" color="primary" style={{marginTop: 5, marginLeft: 15}} onClick={() => {
                     let downloader = document.createElement('a');
                     downloader.href = SessionController.getDownloadLink("/api/queryOuraRingData", {
@@ -295,7 +306,7 @@ export default function OuraRingDashboard() {
 
                 {OAuthURL ? (
                 <Grid item xs={12} sx={{lineHeight: 1}}>
-                  <MDBox display="flex" flexDirection={{xs: "column", sm: "row"}} gap={2}>
+                  <MDBox display={"flex"} flexDirection={"row"}>
                     <TextField
                       variant="standard"
                       margin="dense" id="oura_ring_personal_access_token"
@@ -303,7 +314,7 @@ export default function OuraRingDashboard() {
                       onChange={(event) => setPersonalAccessToken(event.target.value)}
                       fullWidth
                     />
-                    <MDButton variant="contained" color="info" sx={{minWidth: {xs: 0, sm: 200}}} onClick={() => {
+                    <MDButton variant="contained" color="info" style={{minWidth: 200, marginLeft: 15}} onClick={() => {
                       setAlert(<LoadingProgress />)
                       SessionController.query("/api/requestOuraRingAuth", {
                         RequestType: "VerifyToken",
@@ -330,3 +341,4 @@ export default function OuraRingDashboard() {
     </DatabaseLayout>
   );
 };
+

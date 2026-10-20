@@ -1,9 +1,0 @@
-__pycache__/
-.coverage*
-*.sqlite*
-*.db*
-.env*
-.dev.vars*
-.wrangler/
-node_modules/
-coverage/

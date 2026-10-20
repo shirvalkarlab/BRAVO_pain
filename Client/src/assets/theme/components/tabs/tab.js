@@ -13,17 +13,11 @@ Coded by www.creative-tim.com
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-// Material Dashboard 2 React base styles
-import typography from "assets/theme/base/typography";
-import borders from "assets/theme/base/borders";
-import colors from "assets/theme/base/colors";
+// One tab: 14 px, sentence case, body ink; the selected tab takes the accent blue and weight
+// 600 (SPEC.md section 2.3: the accent marks the selected tab).
+import { T, TYPE, WEIGHT, RADIUS, SPACE } from "assets/theme/base/tokens";
 
-// Material Dashboard 2 React helper functions
 import pxToRem from "assets/theme/functions/pxToRem";
-
-const { size, fontWeightRegular } = typography;
-const { borderRadius } = borders;
-const { dark } = colors;
 
 const tab = {
   styleOverrides: {
@@ -31,35 +25,39 @@ const tab = {
       display: "flex",
       alignItems: "center",
       flexDirection: "row",
-      flex: "0 0 auto",
+      flex: "1 1 auto",
       textAlign: "center",
-      maxWidth: "min(100%, 20rem) !important",
+      maxWidth: "unset !important",
       minWidth: "unset !important",
       minHeight: "unset !important",
-      fontSize: size.md,
-      fontWeight: fontWeightRegular,
+      fontSize: pxToRem(TYPE.body.fontSize),
+      fontWeight: WEIGHT.regular,
+      letterSpacing: 0,
       textTransform: "none",
-      lineHeight: 1.4,
-      whiteSpace: "normal",
-      overflowWrap: "anywhere",
-      padding: `${pxToRem(8)} ${pxToRem(12)}`,
-      borderRadius: borderRadius.lg,
-      color: `${dark.main} !important`,
+      lineHeight: "inherit",
+      padding: `${pxToRem(SPACE.xxs)} ${pxToRem(SPACE.xs)}`,
+      borderRadius: pxToRem(RADIUS.sm),
+      color: `${T.ink2} !important`,
       opacity: "1 !important",
+
+      "&.Mui-selected": {
+        color: `${T.accent} !important`,
+        fontWeight: WEIGHT.strong,
+      },
 
       "& .material-icons, .material-icons-round": {
         marginBottom: "0 !important",
-        marginRight: pxToRem(6),
+        marginRight: pxToRem(SPACE.xs),
       },
 
       "& svg": {
         marginBottom: "0 !important",
-        marginRight: pxToRem(6),
+        marginRight: pxToRem(SPACE.xs),
       },
     },
 
     labelIcon: {
-      paddingTop: pxToRem(4),
+      paddingTop: pxToRem(SPACE.xxs),
     },
   },
 };

@@ -11,7 +11,9 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import Watch from "@mui/icons-material/Watch";
+import {
+  Watch, 
+} from "@mui/icons-material";
 
 import MobileManager from "./index";
 

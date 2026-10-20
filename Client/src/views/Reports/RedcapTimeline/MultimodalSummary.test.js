@@ -15,7 +15,7 @@ const redcap={metrics:[{key:'left_leg_vas_intensity',label:'Left-leg VAS',points
 const time=point('2026-08-12',0).time;
 const period={id:'past28',label:'Past 28 days',start:point('2026-08-07',0).time,end:point('2026-09-04',0).time,panels:['left','right'].map(side=>({side,segments:[{id:side,start:time,end:time+3600,sensing_side:'left',sensing_contacts:'1-3',center_frequency_hz:20,mode:'Open loop',points:[{time,power:20,amplitude:2},{time:time+1200,power:30,amplitude:3}],thresholds:[{value:100}]}]}))};
 let element,root;
-const mount=async(props={})=>act(async()=>root.render(<MultimodalSummary participant="RCS08" redcap={redcap} revision={2} {...props}/>));
+const mount=async(props={})=>act(async()=>root.render(<MultimodalSummary participant="SYNTHETIC_A1" redcap={redcap} revision={2} {...props}/>));
 const charts=()=>[...element.querySelectorAll('[data-summary-chart]')].map(node=>mockCharts[node.dataset.summaryChart]);
 const toggle=async label=>{const input=[...element.querySelectorAll('label')].find(node=>node.textContent===label)?.querySelector('input');expect(input).toBeDefined();await act(async()=>input.click());};
 const input=async(label,value)=>{const node=[...element.querySelectorAll('input')].find(n=>document.querySelector(`label[for="${n.id}"]`)?.textContent===label);expect(node).toBeDefined();await act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(node,value);node.dispatchEvent(new Event('input',{bubbles:true}));});};
@@ -25,7 +25,7 @@ afterEach(()=>{act(()=>root.unmount());element.remove();jest.restoreAllMocks();}
 test('all toggles start ON with one Pacific 28-day range, correct outcome axes and visible native sensing intervals',async()=>{
  await mount();expect([...element.querySelectorAll('input[type="checkbox"]')].map(n=>n.checked)).toEqual([true,true,true]);
  expect(charts()).toHaveLength(4);expect(charts().every(chart=>chart.range.start==='2026-08-07'&&chart.range.end==='2026-09-03')).toBe(true);
- expect(mockRequests.at(-1)).toEqual(['RCS08',2,'past28']);expect(mockContext.previous.id).toBe('before');expect(mockContext.events.map(e=>e.id)).toEqual(['one']);
+ expect(mockRequests.at(-1)).toEqual(['SYNTHETIC_A1',2,'past28',true]);expect(mockContext.previous.id).toBe('before');expect(mockContext.events.map(e=>e.id)).toEqual(['one']);
  expect(charts()[0].limits).toEqual([[0,100],[0,45]]);expect(charts()[1].right).toBe('Sleep (hours)');
  expect(charts()[0].traces.some(t=>t.marker.symbol==='x'&&t.y[0]===50)).toBe(true);expect(charts()[1].traces.find(t=>t.yaxis==='y2'&&t.mode==='markers').y).toEqual([8.5,9]);
  expect(charts()[2].traces.filter(t=>t.line.dash).map(t=>t.y)).toEqual([[100,100]]);expect(charts()[2].neuralPeriod).toBe(period);expect(charts()[2].traces[0].y).toEqual([20,null,30]);
@@ -47,7 +47,7 @@ test('zoom and hover propagate from any plot to every plot; reset and date chang
  const reset=[...element.querySelectorAll('button')].find(n=>n.textContent==='Reset shared zoom');await act(async()=>reset.click());expect(charts().every(c=>c.xRange===null)).toBe(true);
  await act(async()=>charts()[0].onTransition('one'));expect(mockContext.selected.id).toBe('one');expect(mockContext.openDetails).toBe(true);
  await act(async()=>charts()[0].onRange(['a','b']));await input('Summary from','2026-08-10');expect(charts().every(c=>c.range.start==='2026-08-10'&&c.xRange===null)).toBe(true);
- expect(mockRequests.at(-1)).toEqual(['RCS08',2,{window:'custom',start_date:'2026-08-10',end_date:'2026-09-03'}]);
+ expect(mockRequests.at(-1)).toEqual(['SYNTHETIC_A1',2,{window:'custom',start_date:'2026-08-10',end_date:'2026-09-03'},true]);
  await toggle('Past 28 days');expect(charts()[0].range.start).toBe('2026-08-07');expect(mockRequests.at(-1)[2]).toBe('past28');
 });
 
@@ -59,9 +59,9 @@ test('invalid or future date ranges do not request neural data or render mislead
 
 test('missing data, calendar and failures stay explicit while independent charts remain usable',async()=>{
  mockOura={data:null,loading:true,error:''};mockNeural={data:null,loading:true,error:''};await mount({redcap:{}});
- expect(charts()).toHaveLength(2);expect(element.textContent).toContain('Loading reviewed Oura');expect(element.textContent).toContain('Loading home neural');expect(element.textContent).toContain('calendar loads');expect(element.textContent).toContain('No reviewed survey');
+ expect(charts()).toHaveLength(2);expect(element.textContent).toContain('Loading stored Oura');expect(element.textContent).toContain('Loading home neural');expect(element.textContent).toContain('calendar loads');expect(element.textContent).toContain('No recorded survey');
  mockOura={data:{metrics:[]},loading:false,error:'Oura unavailable'};mockNeural={data:{windows:[{...period,panels:[{side:'left',segments:[]}]}]},loading:false,error:'Neural unavailable'};
- await mount({redcap:{visits:{available:false,message:'Visit QC unavailable'}}});expect(element.textContent).toContain('No reviewed Oura');expect(element.textContent).toContain('Oura unavailable');expect(element.textContent).toContain('Neural unavailable');expect(element.textContent).toContain('Visit QC unavailable');expect(element.textContent).toContain('No established biomarker');expect(element.textContent).toContain('No established amplitude');
+ await mount({redcap:{visits:{available:false,message:'Visit QC unavailable'}}});expect(element.textContent).toContain('No recorded Oura');expect(element.textContent).toContain('Oura unavailable');expect(element.textContent).toContain('Neural unavailable');expect(element.textContent).toContain('Visit QC unavailable');expect(element.textContent).toContain('No established biomarker');expect(element.textContent).toContain('No established amplitude');
 });
 
 test('dense transition histories share one selected marker and selection updates all plots',async()=>{
@@ -77,4 +77,44 @@ test('neural point selection opens the source interval and complete settings; mi
  expect(element.textContent).toContain('contacts, sensing, thresholds and complete settings');
  await act(async()=>element.querySelector('.MuiAccordionSummary-root').click());expect(element.querySelector('.MuiAccordionSummary-root').getAttribute('aria-expanded')).toBe('false');
  mockNeural={data:{windows:[{...period,panels:[{side:'left',segments:[{...period.panels[0].segments[0],points:[]}]}]}]}};await mount();expect(charts()[2].traces).toHaveLength(1);expect(element.textContent).toContain('No established biomarker');
+});
+
+test('missing neural metadata is explained without blocking survey or wearable plots',async()=>{
+ mockNeural={data:{message:'Reviewed visit calendar unavailable'},loading:false,error:''};
+ await mount();
+ expect(element.textContent).toContain('Reviewed visit calendar unavailable');
+ expect(charts().map(chart=>chart.title)).toEqual(['Multimodal Summary REDCap pain outcomes','Multimodal Summary Oura activity and sleep']);
+});
+
+test('summary retains actual VAS scope and does not substitute legacy MPQ when standard is absent',async()=>{
+ const metrics=[{key:'vas_intensity',label:'Overall VAS',range:[0,100],points:[point('2026-08-12',90)]},{key:'mpq_sum',label:'MPQ Sum',range:[0,72],points:[point('2026-08-12',65)]}];
+ await mount({redcap:{metrics,phases:[]}});
+ const chart=charts()[0];expect(chart.left).toBe('Overall VAS');expect(chart.right).toBe('Standard MPQ (0–45) unavailable');expect(chart.limits).toEqual([[0,100],undefined]);
+ expect(element.textContent).toContain('Standard MPQ (0–45) observations are unavailable.');expect(element.textContent).not.toContain('MPQ Sum (0–72)');expect(element.textContent).toContain('Left-leg VAS is unavailable');expect(element.textContent).not.toContain('MPQ total (0–45)');
+ expect(chart.traces.some(trace=>trace.y.includes(65))).toBe(false);
+ expect(metrics[1].points[0].value).toBe(65);
+});
+
+test('summary opts into live neural reads and shows independent freshness failures without hiding successful plots',async()=>{
+ mockOura.freshnessError='Automatic Oura update check unavailable';mockNeural.freshnessError='Automatic neural update check unavailable';
+ await mount();expect(mockRequests.at(-1)[3]).toBe(true);expect(charts()).toHaveLength(4);
+ expect(element.textContent).toContain('Automatic Oura update check unavailable');
+ expect(element.textContent).toContain('Automatic neural update check unavailable');
+});
+
+
+test('summary names the shared chronic zero policy without claiming physiological invalidity',async()=>{
+ mockNeural.data.chronic_analysis_policy={id:'prasad_chronic_v1',exact_zero_power_excluded:true,invalid_code_power_excluded:true,raw_values_preserved:true};
+ await mount();expect(element.textContent).toContain('excludes exact-zero chronic power');
+ expect(element.textContent).toContain('not evidence that zero is physiologically invalid');
+ expect(element.textContent).toContain('zero-current readings are preserved');
+});
+
+test('summary uses independent current on the proper lead and shows its provenance without settings attribution',async()=>{
+ mockNeural.data.windows=[{...period,panels:[{side:'right',segments:[],amplitude_series:[{time,amplitude:0}],amplitude_provenance:'Measured right lead current at its own time.'}]}];
+ await mount();
+ expect(element.textContent).toContain('Measured right lead current at its own time.');
+ expect(element.textContent).toContain('Recorded lead current is shown; no sensing settings interval');
+ const neural=charts().find(chart=>chart.neuralPeriod);
+ expect(neural.traces).toHaveLength(1);expect(neural.traces[0].yaxis).toBe('y2');expect(neural.traces[0].y).toEqual([0]);
 });

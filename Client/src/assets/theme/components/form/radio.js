@@ -21,7 +21,11 @@ import colors from "assets/theme/base/colors";
 import pxToRem from "assets/theme/functions/pxToRem";
 import linearGradient from "assets/theme/functions/linearGradient";
 
-const { borderWidth, borderColor } = borders;
+const { borderWidth } = borders;
+// A control's outline is at least 3:1 against its background (WCAG 1.4.11; the PI's ruling D3 of
+// 2026-09-26): the hairline rule (1.41:1) left an empty box nearly invisible, so the outline is
+// the input border colour (3.45:1).
+const borderColor = colors.inputBorderColor;
 const { transparent, info } = colors;
 
 const radio = {

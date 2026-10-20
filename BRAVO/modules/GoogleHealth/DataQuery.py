@@ -13,11 +13,18 @@ from Server import models
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 
-GoogleHealth_CLIENT_ID = os.environ["GoogleHealth_CLIENT_ID"]
-GoogleHealth_CLIENT_SECRET = os.environ["GoogleHealth_CLIENT_SECRET"]
-GoogleHealth_CLIENT_REDIRECT_URI = os.environ["GoogleHealth_CLIENT_REDIRECT_URI"]
+GoogleHealth_CLIENT_ID = os.environ.get("GoogleHealth_CLIENT_ID", "")
+GoogleHealth_CLIENT_SECRET = os.environ.get("GoogleHealth_CLIENT_SECRET", "")
+GoogleHealth_CLIENT_REDIRECT_URI = os.environ.get("GoogleHealth_CLIENT_REDIRECT_URI", "")
+
+def oauthConfigured():
+    """OAuth is optional; a fresh install must not require vendor credentials."""
+    return all(value.strip() for value in (GoogleHealth_CLIENT_ID, GoogleHealth_CLIENT_SECRET, GoogleHealth_CLIENT_REDIRECT_URI))
+
 
 def retrieveToken(code):
+    if not oauthConfigured():
+        return None
     try:
         response = requests.post("https://oauth2.googleapis.com/token", headers={
             "Content-Type": "application/x-www-form-urlencoded"
@@ -38,6 +45,8 @@ def retrieveToken(code):
     return None
 
 def refreshToken(token):
+    if not oauthConfigured():
+        return None
     try:
         response = requests.post("https://oauth2.googleapis.com/token", headers={
             "Content-Type": "application/x-www-form-urlencoded"
@@ -507,6 +516,8 @@ def getFloorsList(service, start_time, end_time):
     return all_data
 
 def refreshGoogleHealthData(device):
+    if not oauthConfigured():
+        raise RuntimeError("GoogleHealth connection is not configured on this server.")
     Participant = device.owner
     Data = loadGoogleHealthData(Participant)
     token = device.auth

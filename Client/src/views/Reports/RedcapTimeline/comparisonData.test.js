@@ -1,4 +1,4 @@
-import {surveyCount,stimulationSettingLines,stimulationSummary,stimulationDetailRows,finalizedProgram,stimulationAxisSettings,comparisonCoverage,compactLabel,topPrograms,conditionSummary,conditionPlot,medicationTimeline,stimulationPlot,medicationConditionPlot,orderedMedicationConditions} from './comparisonData';
+import {surveyCount,stimulationSettingLines,stimulationSummary,stimulationDetailRows,finalizedProgram,stimulationAxisSettings,comparisonCoverage,compactLabel,topPrograms,conditionSummary,conditionPlot,medicationTimeline,medicationDisplayScope,stimulationPlot,medicationConditionPlot,orderedMedicationConditions} from './comparisonData';
 const time=day=>Date.parse(`${day}T19:00:00Z`)/1000;
 const points=values=>values.map((value,i)=>({time:time('2026-08-01')+i*86400,value}));
 const condition=(id,median,count=5)=>({id,label:`Program ${id}`,mode:'open_loop',median,count,points:points(Array.from({length:count},()=>median))});
@@ -251,14 +251,14 @@ test('split mode comparisons preserve every score/reference slot while only surv
   const ol=condition('ol',2),cl={...condition('cl',4),mode:'closed_loop',settings:sourceSettings([{label:'Cycle',value:'Off'},{label:'Left adaptive mode',value:'SINGLE_THRESHOLD_DIRECT'}])};
   const metric={label:'NRS',range:[0,10],conditions:[ol,cl]};
   const current={available:true,id:'cl',mode:'closed_loop',settings:cl.settings};
-  const plot=stimulationPlot(metric,[ol],[cl],null,current,{mode:'closed_loop',participant:'RCS08'});
+  const plot=stimulationPlot(metric,[ol],[cl],null,current,{mode:'closed_loop',participant:'SYNTHETIC_A1'});
   expect(plot.fitWidth).toBe(true);expect(plot.minWidth).toBeUndefined();expect(plot.layout.hovermode).toBe('closest');
   expect(plot.layout.xaxis.tickvals).toEqual([0,3]);expect(plot.layout.xaxis.range).toEqual([-0.65,3.65]);
   expect(plot.programs.map(program=>program.title)).toEqual(['CL 1','Current CL']);
   expect(plot.traces.filter(trace=>trace.type==='box').map(trace=>trace.y)).toEqual([cl.points.map(p=>p.value),cl.points.map(p=>p.value)]);
   for(const box of plot.traces.filter(trace=>trace.type==='box')) {expect(box.hoverinfo).toBe('skip');expect(box.hovertemplate).toBeUndefined();}
   expect(plot.traces[1].hovertemplate).toContain('Mode: Single threshold direct');
-  expect(plot.traces[1].hovertemplate).toContain('L GPe C+2-');expect(plot.traces[1].hovertemplate).toContain('R MD Thal C+9-10-');
+  expect(plot.traces[1].hovertemplate).toContain('L C+2-');expect(plot.traces[1].hovertemplate).toContain('R C+9-10-');
   expect(plot.traces[1].hovertemplate).not.toContain('Continuous');
   expect(plot.traces[1].hovertemplate).toContain('n = 5 surveys (5 days)');
   expect(plot.layout.shapes.filter(shape=>shape.name==='Condition median').map(shape=>(shape.x0+shape.x1)/2)).toEqual([0,3]);
@@ -272,9 +272,9 @@ test('native CL settings use explicit mode and sensing source with units, includ
     {label:'Sensing contacts',value:'8–10'},{label:'Biomarker center frequency',value:'23.44 Hz'},
     {label:'Lower LFP threshold',value:'0 LFP Power (LSB)'},{label:'Upper LFP threshold',value:'167 LFP Power (LSB)'},
     {label:'Adaptive state',value:'Paused'}],right:[{label:'Stimulation contacts',value:'Case+, 9−'}]}};
-  const before=JSON.stringify(original),text=stimulationSummary(original,'RCS08');
-  expect(text).toContain('&lt;CL&gt;');expect(text).toContain('L GPe C+2−<br>55 Hz · 1 mA · 100 µs');
-  expect(text).toContain('Mode: Dual threshold direct');expect(text).toContain('BrainSense R MD Thal: 8–10 · 23.44 Hz');
+  const before=JSON.stringify(original),text=stimulationSummary(original,'SYNTHETIC_A1');
+  expect(text).toContain('&lt;CL&gt;');expect(text).toContain('L GPi C+2−<br>55 Hz · 1 mA · 100 µs');
+  expect(text).toContain('Mode: Dual threshold direct');expect(text).toContain('BrainSense R: 8–10 · 23.44 Hz');
   expect(text).toContain('lower 0 LFP Power (LSB) · upper 167 LFP Power (LSB)');
   expect(text).toContain('Mode: not recorded');expect(text).toContain('frequency not recorded');expect(text).toContain('Adaptive state: Paused');
   expect(text).not.toContain('Continuous');expect(JSON.stringify(original)).toBe(before);
@@ -286,19 +286,19 @@ test('legacy sensing values retain source scope, unknowns and explicit ganged me
     {label:'Left lower lfp threshold (LSB)',value:'0'},{label:'Left upper lfp threshold (LSB)',value:'167'},
     {label:'Left ganged to',value:'Right'},{label:'Right ganged to',value:'NOT_GANGED'}];
   const original={label:'CL',mode:'closed_loop',settings:sourceSettings(extra),points:[]},before=JSON.stringify(original);
-  const lines=stimulationSettingLines(original,'RCS08');
-  expect(lines).toContain('Mode: Dual threshold direct');expect(lines).toContain('BrainSense L GPe: 0–2 · 23.44 Hz');
+  const lines=stimulationSettingLines(original,'SYNTHETIC_A1');
+  expect(lines).toContain('Mode: Dual threshold direct');expect(lines).toContain('BrainSense L: 0–2 · 23.44 Hz');
   expect(lines).toContain('LFP thresholds: lower 0 · upper 167 LSB');
-  expect(lines).toContain('Ganged to: R MD Thal (sensing values above are recorded for L GPe)');
+  expect(lines).toContain('Ganged to: Right (sensing values above are recorded for L)');
   expect(lines.filter(line=>line.startsWith('Ganged to'))).toHaveLength(1);
-  expect(lines).toContain('BrainSense R MD Thal: contacts not recorded · frequency not recorded');
+  expect(lines).toContain('BrainSense R: contacts not recorded · frequency not recorded');
   const encoded={...original,settings:sourceSettings([...extra,
     {label:'Left sensing channel',value:'LfpMontageDef.ZERO_AND_TWO'},
     {label:'Right sensing channel',value:'LfpMontageDef.ONE_AND_THREE'}])};
-  expect(stimulationSettingLines(encoded,'RCS08')).toContain('BrainSense L GPe: 0–2 · 23.44 Hz');
-  expect(stimulationSettingLines(encoded,'RCS08')).toContain('BrainSense R MD Thal: 9–11 · frequency not recorded');
+  expect(stimulationSettingLines(encoded,'SYNTHETIC_A1')).toContain('BrainSense L: 0–2 · 23.44 Hz');
+  expect(stimulationSettingLines(encoded,'SYNTHETIC_A1')).toContain('BrainSense R: 9–11 · frequency not recorded');
   expect(JSON.stringify(original)).toBe(before);
-  expect(stimulationDetailRows({mode:'open_loop',settings:[{label:'Left target',value:'L GPi'},{label:'Lower threshold',value:0}]},'RCS08')).toEqual(['Left target: L GPe','Stored Lower threshold (not controlling stimulation): 0']);
+  expect(stimulationDetailRows({mode:'open_loop',settings:[{label:'Left target',value:'L GPi'},{label:'Lower threshold',value:0}]},'SYNTHETIC_A1')).toEqual(['Left target: L GPi','Stored Lower threshold (not controlling stimulation): 0']);
   expect(stimulationDetailRows({})).toEqual([]);
 });
 
@@ -309,4 +309,34 @@ test('medication plots expose complete source row labels for responsive keys wit
   expect(timeline.fitWidth).toBe(true);expect(timeline.minWidth).toBeUndefined();expect(timeline.rowLabels).toEqual([`1. Analgesic · ${name} · 10 mg · daily`]);
   const conditions=medicationConditionPlot({label:'NRS',range:[0,10]},[{...med,label:name,count:1,median:4,points:[{time:time('2026-07-01'),value:4}]}]);
   expect(conditions.fitWidth).toBe(true);expect(conditions.minWidth).toBeUndefined();expect(conditions.rowLabels[0]).toContain(name);expect(conditions.rowLabels[0]).toContain('n=1 · median 4');
+});
+
+
+test('historical medication scope clips rendering only and preserves factual dates and ongoing status',()=>{
+  const start=time('2026-08-01'),end=time('2026-08-15');
+  const drugs=[episode('ongoing',{end:null,ongoing:true}),episode('future-end',{end:time('2026-10-01')}),episode('after',{start:end}),episode('at-start',{start:time('2026-07-01'),end:start}),episode('unknown-start-after',{start:null,end:time('2026-10-01')}),episode('known-end',{start:null,end:time('2026-08-10')}),episode('undated-ongoing',{start:null,end:null,ongoing:true})];
+  const original=JSON.stringify(drugs);
+  const phases=[{label:'Inside',start:time('2026-08-03'),color:'#123456'},{label:'Outside',start:end,color:'#777777'}];
+  const plot=medicationTimeline(drugs,'2026-09-03',start,phases,end);
+  expect(JSON.stringify(drugs)).toBe(original);expect(plot.traces).toHaveLength(3);
+  expect(plot.layout.xaxis.range).toEqual(['2026-08-01 12:00:00','2026-08-15 12:00:00']);
+  expect(plot.traces.every(trace=>trace.x.every(value=>value<='2026-08-15 12:00:00'))).toBe(true);
+  const ongoing=plot.traces.find(t=>t.hovertemplate.includes('Drug ongoing'));
+  expect(ongoing.hovertemplate).toContain('later use is unverified');expect(ongoing.hovertemplate).not.toContain('shown through current day');
+  const future=plot.traces.find(t=>t.hovertemplate.includes('Drug future-end'));
+  expect(future.hovertemplate).toContain('Documented end 2026-10-01');expect(future.marker.symbol[1]).toBe('triangle-right');
+  expect(plot.layout.shapes.filter(s=>s.type==='line')).toHaveLength(1);
+  expect(medicationTimeline([episode('one')],'2026-08-10',start,[],end).layout.xaxis.range[1]).toBe('2026-08-10 23:59:59');
+});
+
+test('invalid medication display bounds fail closed while omitted bounds preserve legacy behavior',()=>{
+  expect(medicationDisplayScope()).toEqual({valid:true,bounded:false});
+  expect(medicationDisplayScope(null)).toEqual({valid:true,bounded:false});
+  for(const end of [null,'123',NaN,Infinity,0,1e300]) expect(medicationDisplayScope({period_start:1,period_end_exclusive:end}).valid).toBe(false);
+  expect(medicationDisplayScope({period_start:2,period_end_exclusive:1}).valid).toBe(false);
+  expect(medicationDisplayScope({period_start:NaN,period_end_exclusive:3}).valid).toBe(false);
+  expect(medicationDisplayScope({period_start:-1e300,period_end_exclusive:3}).valid).toBe(false);
+  expect(()=>medicationTimeline([], '2026-09-03',1,[],0)).toThrow(RangeError);
+  const end=Date.parse('2026-10-07T00:00:00-07:00')/1000;
+  expect(medicationDisplayScope({period_start:1,period_end_exclusive:end}).lastDay).toBe('2026-10-06');
 });

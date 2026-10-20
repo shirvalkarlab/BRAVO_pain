@@ -91,10 +91,6 @@ _INSERT = f"""
 CONNECTION_FACTORY = None
 
 
-
-# Aditya canonical compatibility imports/constants.
-
-
 def _connection():
     """Django's default connection, or None when there is no configured database."""
     if CONNECTION_FACTORY is not None:
@@ -234,6 +230,3 @@ def counts_by_kind():
     except Exception as exc:
         _log.info("CacheStore ledger: could not count rows (%r)", exc)
         return {}
-
-
-# Retained active Aditya interfaces.

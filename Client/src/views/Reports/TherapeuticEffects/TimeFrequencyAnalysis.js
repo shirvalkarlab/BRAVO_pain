@@ -11,8 +11,6 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import { currentTargetText } from "utils/participantTargets";
-import { rawTraceName } from "graphing-utility/participantTraceDisplay";
 import { useCallback, useState, useEffect, useMemo } from "react";
 import { useResizeDetector } from 'react-resize-detector';
 
@@ -201,7 +199,6 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
             color: "#ff0000", 
             alpha: 0.3, 
             hovertemplate: ` ${annotations[i].Name}<br>  %{x} <extra></extra>`,
-            meta: {bravoPreserveLabel: true},
             name: annotations[i].Name
           }, 
           axName: activeChannels[j]
@@ -259,7 +256,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
 
   const plotly_onClick = (data) => {
     setEventInfo((eventInfo) => {
-      eventInfo.channel_name = rawTraceName(data.points[0].data);
+      eventInfo.channel_name = data.points[0].data.name;
       eventInfo.channel = data.points[0].data.id;
       eventInfo.current_alignment = data.points[0].data.current_alignment;
       eventInfo.time = new Date(data.points[0].x).getTime();
@@ -304,7 +301,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
           }}>{"Adjust Alignment"}</MenuItem>
       </Menu>
       <Dialog open={eventInfo.show} onClose={() => setEventInfo({...eventInfo, show: false})}>
-        <MDBox px={2} pt={2} sx={{width: 500, maxWidth: "100%", minWidth: 0}}>
+        <MDBox px={2} pt={2} sx={{minWidth: 500}}>
           <MDTypography variant="h5">
             {"New Custom Event"} 
           </MDTypography>
@@ -356,7 +353,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
       <Dialog open={dataAlignment.show} onClose={() => setDataAlignment({show: false, alignment: 0})}>
         <MDBox px={2} pt={2}>
           <MDTypography variant="h5">
-            {"Shift Alignment for "}{currentTargetText(eventInfo.channel_name)} 
+            {"Shift Alignment for "}{eventInfo.channel_name} 
           </MDTypography>
         </MDBox>
         <DialogContent>
@@ -365,7 +362,7 @@ function TimeFrequencyAnalysis({dataToRender, activeChannels, handleAddEvent, ha
             margin="dense"
             type={"number"}
             label="Time Shift toward Right (ms)"
-            placeholder={"Enter Time Shift to be applied to " + currentTargetText(eventInfo.channel_name)}
+            placeholder={"Enter Time Shift to be applied to " + eventInfo.channel_name}
             value={dataAlignment.alignment}
             onChange={(event) => setDataAlignment({...dataAlignment, alignment: event.target.value})}
             fullWidth

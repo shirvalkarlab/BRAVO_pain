@@ -1,67 +1,26 @@
 """Behaviour tests for the one cache store.
 
+Merged here 2026-10-05: test_keep_newest.py, test_mapped_format.py (their sections below keep their
+own notes).
+
 Django-free: every test points the store at a temporary directory of its own, so nothing here
-reads or writes the real cache. Plain `assert` throughout because the container has no pytest and
-`pytest.approx` / `pytest.raises` are unavailable there.
+reads or writes the real cache. Plain `assert` throughout, and no test takes arguments, because the
+container's runner (`run_tests.py`) calls each `test_*` with nothing.
 """
 import datetime
 import json
+import mmap
 import os
-import pathlib
 import pickle
 import shutil
-import sys
 import tempfile
 
 import numpy as np
 import pandas as pd
 
-_BRAVO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-if str(_BRAVO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_BRAVO_ROOT))
-
 from modules.CacheStore import provenance as prov
 from modules.CacheStore import store as st
-
-UID = "11111111111111111111111111111111"
-
-
-class _Sandbox:
-    """Point the store at a fresh directory and turn the ledger off for the duration.
-
-    The ledger is off because these tests must run with no database at all; `test_ledger.py`
-    covers it separately and skips itself when no database is configured.
-    """
-
-    def __enter__(self):
-        from modules.CacheStore import ledger
-        self._dir = tempfile.mkdtemp(prefix="bravo_store_test_")
-        self._prev_dir = st.DIR_OVERRIDE
-        self._prev_ledger = ledger.ENABLED
-        st.DIR_OVERRIDE = self._dir
-        ledger.ENABLED = False
-        st.clear()
-        return self._dir
-
-    def __exit__(self, *exc):
-        from modules.CacheStore import ledger
-        st.DIR_OVERRIDE = self._prev_dir
-        ledger.ENABLED = self._prev_ledger
-        shutil.rmtree(self._dir, ignore_errors=True)
-        return False
-
-
-def _tree(root):
-    """Every file under the root with its size and content hash, for byte-identity checks."""
-    import hashlib
-    out = {}
-    for dirpath, _dirs, names in os.walk(root):
-        for n in sorted(names):
-            p = os.path.join(dirpath, n)
-            with open(p, "rb") as fh:
-                out[os.path.relpath(p, root)] = (os.path.getsize(p),
-                                                 hashlib.sha256(fh.read()).hexdigest())
-    return out
+from modules.CacheStore.tests._helpers import UID, Sandbox as _Sandbox, tree as _tree
 
 
 # --------------------------------------------------------------------------------------------
@@ -159,17 +118,24 @@ def test_a_file_whose_stored_signature_disagrees_is_discarded_rather_than_return
         assert not os.path.exists(stem + ".pkl"), "the unusable entry should have been removed"
 
 
-def test_a_payload_with_no_sidecar_in_a_checkable_format_is_refused():
-    """Parquet cannot carry the wrapper the pickle path uses, so with no sidecar it is unverifiable.
-
-    Refusing is the only safe answer: a rebuild is always correct and a wrong answer is not.
-    """
-    with _Sandbox():
-        sig = ("k", 9)
-        st.store("biomarker_band_results", UID, sig, pd.DataFrame({"a": [1]}), writer="biomarkers", provenance=[])
-        stem = st._stem("biomarker_band_results", UID, sig)
-        os.remove(stem + ".meta.json")
-        assert st.load("biomarker_band_results", UID, sig) is None
+def test_a_table_with_no_committed_sidecar_is_refused_whether_removed_or_half_written():
+    """Parquet cannot carry the wrapper the pickle path uses, so with no sidecar it is unverifiable;
+    refusing is the only safe answer (a rebuild is always correct and a wrong answer is not). The
+    sidecar is also the commit marker: a writer that died between the payload and the sidecar
+    leaves only a temporary sidecar, and the half-written entry must be invisible.
+    (Merged 2026-10-05 from `test_a_payload_with_no_sidecar_in_a_checkable_format_is_refused` and
+    `test_the_sidecar_is_the_commit_marker_so_a_half_written_entry_is_invisible`.)"""
+    for case in ("sidecar removed", "sidecar left as a temporary file"):
+        with _Sandbox():
+            sig = ("k", 9)
+            st.store("biomarker_band_results", UID, sig, pd.DataFrame({"a": [1]}),
+                     writer="biomarkers", provenance=[])
+            stem = st._stem("biomarker_band_results", UID, sig)
+            if case == "sidecar removed":
+                os.remove(stem + ".meta.json")
+            else:
+                os.rename(stem + ".meta.json", stem + ".meta.json.7.tmp")
+            assert st.load("biomarker_band_results", UID, sig) is None, case
 
 
 # --------------------------------------------------------------------------------------------
@@ -196,7 +162,7 @@ def test_the_stamp_is_readable_without_opening_the_payload():
 
 
 def test_the_newest_stamp_is_found_without_knowing_todays_signature():
-    """A page says "last updated" before it knows whether today's key matches."""
+    'Regression for the newest stamp is found without knowing todays signature.'
     with _Sandbox():
         st.store("inputs", UID, ("s", 1), {"a": 1}, trigger="first", writer="biomarkers", provenance=[])
         st.store("inputs", UID, ("s", 2), {"a": 2}, trigger="second", writer="biomarkers", provenance=[])
@@ -204,23 +170,17 @@ def test_the_newest_stamp_is_found_without_knowing_todays_signature():
         assert newest is not None and newest["trigger"] == "second"
 
 
-def test_the_sidecar_is_the_commit_marker_so_a_half_written_entry_is_invisible():
-    """Simulates a writer that died between the payload and the sidecar."""
-    with _Sandbox():
-        sig = ("k", 11)
-        st.store("biomarker_band_results", UID, sig, pd.DataFrame({"a": [1]}), writer="biomarkers", provenance=[])
-        stem = st._stem("biomarker_band_results", UID, sig)
-        os.rename(stem + ".meta.json", stem + ".meta.json.7.tmp")
-        assert st.load("biomarker_band_results", UID, sig) is None
-
-
 # --------------------------------------------------------------------------------------------
 # housekeeping
 # --------------------------------------------------------------------------------------------
 
 def test_a_new_entry_sweeps_this_participants_older_ones_and_leaves_others_alone():
-    """245 MB per entry means an unswept directory grows by gigabytes a month."""
+    """245 MB per entry means an unswept directory grows by gigabytes a month. The default of one
+    entry per kind is unchanged for a kind not listed in `KEEP_NEWEST_BY_KIND`, and that matters:
+    a tile kind that quietly began keeping twelve would cost about three gigabytes per participant
+    (absorbed 2026-10-05: `test_keep_newest.py::test_a_kind_that_is_not_listed_still_keeps_exactly_one`)."""
     with _Sandbox():
+        assert _ONE_ONLY == "raw_lsb_tiles" and _ONE_ONLY not in st.KEEP_NEWEST_BY_KIND
         other = "OTHER_PARTICIPANT_UID"
         st.store("raw_lsb_tiles", UID, ("s", 1), {"a": np.zeros(3)})
         st.store("raw_lsb_tiles", other, ("s", 1), {"a": np.zeros(3)})
@@ -229,6 +189,7 @@ def test_a_new_entry_sweeps_this_participants_older_ones_and_leaves_others_alone
         st.store("raw_lsb_tiles", UID, ("s", 2), {"a": np.ones(3)})
         assert st.load("raw_lsb_tiles", UID, ("s", 1)) is None, "the older entry should be gone"
         assert st.load("raw_lsb_tiles", UID, ("s", 2)) is not None
+        assert len(_payload_files("raw_lsb_tiles")) == 1, "a kind not listed keeps exactly one"
         assert st.load("raw_lsb_tiles", other, ("s", 1)) is not None, \
             "another participant's entry must never be swept"
 
@@ -430,7 +391,7 @@ def test_the_off_switch_does_not_delete_anything():
 
 #: The closed-loop module's old per-entry cap, and the measured size of the biomarker tile entry.
 _OLD_SMALL_CAP_BYTES = 256 * 1024 * 1024          # 268,435,456
-_MEASURED_TILE_BYTES = int(245.90e6)              # 245.90 MB, measured on the real record
+_MEASURED_TILE_BYTES = int(245.90e6)              # Preserve the regression contract.
 
 
 def test_the_two_predecessors_mismatched_limits_are_gone_and_the_larger_one_won():
@@ -489,18 +450,17 @@ def test_the_existing_tile_files_are_still_found_by_their_historical_name():
         assert st.stats()["events"]["legacy_no_sidecar"] >= 1
 
 
-def test_the_signature_naming_matches_the_predecessors_exactly():
+def test_the_signature_naming_matches_the_predecessors_exactly_and_names_the_product_key():
     """The existing 782 MB of files depend on `repr` of the signature and a 20-byte digest.
 
-    A different encoding would silently miss every one of them, so the recipe is pinned here.
+    A different encoding would silently miss every one of them, so the recipe is pinned here; and
+    a product key names the kind, the participant and that same signature digest. (Merged
+    2026-10-05 with `test_a_product_key_names_the_kind_the_participant_and_the_signature`.)
     """
     import hashlib
     sig = ("a", 1, None, 2.5)
     assert st.signature_key(sig) == hashlib.blake2b(repr(sig).encode("utf8"),
                                                     digest_size=20).hexdigest()
-
-
-def test_a_product_key_names_the_kind_the_participant_and_the_signature():
     key = st.product_key("biomarker_band_results", UID, ("s", 1))
     assert key == f"biomarker_band_results/{UID}/{st.signature_key(('s', 1))}"
     assert prov.module_of(key) == "biomarkers"
@@ -576,3 +536,281 @@ def test_a_request_supplied_identifier_cannot_climb_out_of_the_cache_directory()
         names = [n for n in os.listdir(d) if n.startswith("inputs.") and not n.endswith(".meta.json")]
         assert len(names) == 1, names
         assert all(".___evil." in n for n in names), names     # ".", ".", "/" -> three underscores
+# See the synthetic regression tests for this behavior.
+_SWEEP_KIND = "biomarker_band_sweep"   # a kind whose key carries the reader's own choice
+_ONE_ONLY = "raw_lsb_tiles"            # a kind that must keep on keeping exactly one
+
+
+def _write(kind, metric, payload=None):
+    """One entry whose key differs only in the pain score, as the real grid's key does."""
+    sig = (kind, "v1", UID, "tiles-key", "reports-key", metric)
+    st.store(kind, UID, sig, payload if payload is not None else {"metric": metric},
+             writer="biomarkers", provenance=[])
+    return sig
+
+
+def _payload_files(kind):
+    d = st.kind_dir(kind, create=False)
+    names = [n for n in (os.listdir(d) if d else []) if UID in n]
+    return sorted(n for n in names if not n.endswith(".meta.json"))
+
+
+def test_six_pain_scores_written_in_turn_are_all_still_readable():
+    """THE LOAD-BEARING ONE. Six scores in, six scores back, each with its own value.
+
+    Read back through the store's own `load` rather than by counting files, so this fails if the
+    entries survive on disk but cannot be served -- which is the only thing a reader would notice.
+    """
+    metrics = ["nrs", "vas", "left_leg_vas", "back_vas", "mpq_sum", "composite_mpq_leftleg"]
+    with _Sandbox():
+        sigs = {m: _write(_SWEEP_KIND, m) for m in metrics}
+        got = {m: st.load(_SWEEP_KIND, UID, sigs[m], consumer="biomarkers") for m in metrics}
+    missing = [m for m in metrics if got[m] is None]
+    assert not missing, f"these pain scores were evicted by later writes: {missing}"
+    for m in metrics:
+        assert got[m] == {"metric": m}, (m, got[m])
+
+
+def test_the_limit_is_a_limit_and_the_oldest_entry_is_the_one_that_goes():
+    """Keeping several is not keeping all of them: a store that only grows is not a cache
+    (decision 28's reasoning for bounding Redis). The entry just written is always kept, and the
+    oldest of the rest is the first to go."""
+    limit = st.KEEP_NEWEST_BY_KIND[_SWEEP_KIND]
+    with _Sandbox():
+        sigs = [_write(_SWEEP_KIND, f"m{i:03d}") for i in range(limit + 4)]
+        files = _payload_files(_SWEEP_KIND)
+        assert len(files) == limit, (len(files), limit)
+        # The newest `limit` are readable; everything older is gone.
+        for sig in sigs[-limit:]:
+            assert st.load(_SWEEP_KIND, UID, sig, consumer="biomarkers") is not None
+        for sig in sigs[:-limit]:
+            assert st.load(_SWEEP_KIND, UID, sig, consumer="biomarkers") is None
+
+
+def test_an_entry_is_removed_whole_rather_than_leaving_a_sidecar_behind():
+    """An entry is a payload plus a `.meta.json` sidecar, and the sidecar is the commit marker.
+    A sweep that removed one and left the other would leave something that reads as an entry and
+    has no content -- so the two are grouped by stem and go together."""
+    limit = st.KEEP_NEWEST_BY_KIND[_SWEEP_KIND]
+    with _Sandbox():
+        for i in range(limit + 3):
+            _write(_SWEEP_KIND, f"m{i:03d}")
+        d = st.kind_dir(_SWEEP_KIND, create=False)
+        names = [n for n in os.listdir(d) if UID in n]
+        payloads = {n.rsplit(".", 1)[0] for n in names if not n.endswith(".meta.json")}
+        sidecars = {n[:-len(".meta.json")] for n in names if n.endswith(".meta.json")}
+        assert payloads == sidecars, (sorted(payloads ^ sidecars))
+        assert len(payloads) == limit
+
+
+def test_one_participants_scores_do_not_evict_anothers():
+    """The sweep has always been scoped to one participant, and the limit must not quietly change
+    that -- a limit of twelve counted across participants would evict a second patient's answers as
+    soon as the first had a full set."""
+    other = "1111111111111111111111111111aaaa"
+    limit = st.KEEP_NEWEST_BY_KIND[_SWEEP_KIND]
+    with _Sandbox():
+        mine = [_write(_SWEEP_KIND, f"m{i:03d}") for i in range(limit)]
+        for i in range(limit):
+            sig = (_SWEEP_KIND, "v1", other, "tiles-key", "reports-key", f"m{i:03d}")
+            st.store(_SWEEP_KIND, other, sig, {"metric": f"m{i:03d}"}, writer="biomarkers", provenance=[])
+        for sig in mine:
+            assert st.load(_SWEEP_KIND, UID, sig, consumer="biomarkers") is not None
+
+
+def test_the_two_writer_kinds_keep_both_entries_and_a_third_key_evicts_the_oldest():
+    """Two kinds each have two live writers under two keys, and under a limit of one they evicted
+    each other: the assembled spectrum matrix (Biomarkers review B4, 2026-09-12: the page's
+    rating-centred key and the daily ingest's legacy first-window key, evicting each other every
+    day) and the Stim Optimizer response (2026-09-12: the page's two requests, plain and with the
+    two-stage plan, so the second page load rebuilt what the first had just stored). Written in
+    turn, both must still read back; a third key still evicts the oldest. (Merged 2026-10-05 from
+    `test_the_spectrum_matrix_keeps_its_two_live_writers_entries` and
+    `test_the_stim_optimizer_response_keeps_both_page_requests`.)"""
+    cases = {
+        "biomarker_psd_matrix": ("biomarkers", ("recordings", "reports-abc"), ("recordings", ""),
+                                 ("recordings", "reports-def")),
+        "stim_optimizer_response": ("stim_optimizer", ("inputs", "two_stage=0"),
+                                    ("inputs", "two_stage=1"), ("inputs", "two_stage=1", "new")),
+    }
+    for kind, (writer, first, second, third) in cases.items():
+        assert st.KEEP_NEWEST_BY_KIND.get(kind) == 2, kind
+        with _Sandbox():
+            sig_a, sig_b, sig_c = ((kind, "v1", UID) + x for x in (first, second, third))
+            st.store(kind, UID, sig_a, {"which": "a"}, writer=writer, provenance=[])
+            st.store(kind, UID, sig_b, {"which": "b"}, writer=writer, provenance=[])
+            assert st.load(kind, UID, sig_a) == {"which": "a"}, f"{kind}: the second write evicted the first"
+            assert st.load(kind, UID, sig_b) == {"which": "b"}, kind
+            assert len(_payload_files(kind)) == 2, kind
+            st.store(kind, UID, sig_c, {"which": "c"}, writer=writer, provenance=[])
+            assert len(_payload_files(kind)) == 2, (kind, _payload_files(kind))
+            assert st.load(kind, UID, sig_a) is None, f"{kind}: the oldest goes"
+            assert st.load(kind, UID, sig_c) == {"which": "c"}, kind
+
+
+def test_the_stability_answer_keeps_one_entry_per_grid_it_answers():
+    'Regression for the stability answer keeps one entry per grid it answers.'
+    kind = "biomarker_band_stability_grid"
+    assert st.KEEP_NEWEST_BY_KIND.get(kind, 1) >= st.KEEP_NEWEST_BY_KIND[_SWEEP_KIND], (
+        "one stability answer per grid needs at least as many entries as there are grids")
+    grid_keys = [f"grid-{m}-{s}" for s in ("reader", "daily")
+                 for m in ("nrs", "vas", "left_leg_vas", "back_vas", "mpq_sum", "composite")]
+    with _Sandbox():
+        sigs = {}
+        for g in grid_keys:
+            sigs[g] = (kind, "v1", UID, g, 5.0, "points-132")
+            st.store(kind, UID, sigs[g], {"points": [g]}, writer="biomarkers", provenance=[])
+        lost = [g for g in grid_keys if st.load(kind, UID, sigs[g], consumer="biomarkers") is None]
+    assert not lost, f"these grids' stability answers were evicted by later runs: {lost}"
+
+
+def test_the_newest_entry_of_a_keep_group_outlives_twelve_later_writes():
+    'See the implementation and synthetic regression tests for this contract.'
+    limit = st.KEEP_NEWEST_BY_KIND[_SWEEP_KIND]
+    with _Sandbox():
+        old_default = (_SWEEP_KIND, "v1", UID, "tiles-key", "reports-OLD", "nrs-defaults")
+        st.store(_SWEEP_KIND, UID, old_default, {"which": "old default"}, writer="biomarkers",
+                 provenance=[], extra={"keep_group": "default_settings:nrs"})
+        default = (_SWEEP_KIND, "v1", UID, "tiles-key", "reports-key", "nrs-defaults")
+        st.store(_SWEEP_KIND, UID, default, {"which": "default"}, writer="biomarkers", provenance=[],
+                 extra={"keep_group": "default_settings:nrs"})
+        page = [_write(_SWEEP_KIND, f"page-{i:03d}") for i in range(limit + 3)]
+        assert st.load(_SWEEP_KIND, UID, default, consumer="biomarkers") == {"which": "default"}, (
+            "the newest daily-default grid was evicted by grids at other settings")
+        assert st.load(_SWEEP_KIND, UID, old_default, consumer="biomarkers") is None, (
+            "an older entry of the same group must still age out")
+        for sig in page[-limit:]:
+            assert st.load(_SWEEP_KIND, UID, sig, consumer="biomarkers") is not None, (
+                "the protected entry must not count toward the limit")
+        assert len(_payload_files(_SWEEP_KIND)) == limit + 1
+
+
+def test_a_kind_that_keeps_one_ignores_keep_groups():
+    """The protection applies only where a kind already keeps several; a 245 MB tile entry that
+    named a keep group must still be replaced, never joined by a second copy."""
+    with _Sandbox():
+        first = (_ONE_ONLY, "v1", UID, "a")
+        st.store(_ONE_ONLY, UID, first, {"m": "a"}, writer="biomarkers", provenance=[],
+                 extra={"keep_group": "x"})
+        _write(_ONE_ONLY, "b")
+        assert len(_payload_files(_ONE_ONLY)) == 1
+        assert st.load(_ONE_ONLY, UID, first, consumer="biomarkers") is None
+# See the synthetic regression tests for this behavior.
+_MAPPED_KIND = "therapy_settings"   # a raw kind: needs no writer, so the tests stay about the format
+_MAPPED_SIG = ("mapped-test", 1)
+
+
+def _payload():
+    rng = np.random.default_rng(0)
+    return {
+        "recordings": [
+            {"Data": rng.normal(size=(3, 5000)).astype(np.float32), "Time": np.arange(5000.0),
+             "Channel": "ZERO_TWO_LEFT", "SamplingRate": 250, "Missing": None},
+            {"Data": rng.integers(0, 9, size=1234, dtype=np.int16), "Flags": np.zeros(7, bool),
+             "Nested": {"deep": [np.linspace(0, 1, 11), "text", 3.5]}},
+        ],
+        "table": pd.DataFrame({"t": np.arange(4.0), "power": [1.0, 2.0, np.nan, 4.0]}),
+        "empty": np.zeros((0, 3)),
+        "strided": np.arange(20.0)[::2],
+    }
+
+
+def _same(a, b):
+    if isinstance(a, np.ndarray):
+        return (isinstance(b, np.ndarray) and a.dtype == b.dtype and a.shape == b.shape
+                and np.array_equal(a, b, equal_nan=a.dtype.kind == "f"))
+    if isinstance(a, pd.DataFrame):
+        return isinstance(b, pd.DataFrame) and a.equals(b)
+    if isinstance(a, dict):
+        return isinstance(b, dict) and a.keys() == b.keys() and all(_same(a[k], b[k]) for k in a)
+    if isinstance(a, (list, tuple)):
+        return type(a) is type(b) and len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+    return a == b
+
+
+def _backed_by_a_map(a):
+    base = a
+    while getattr(base, "base", None) is not None:
+        base = base.base
+        if isinstance(base, mmap.mmap):
+            return True
+        if isinstance(base, memoryview) and isinstance(base.obj, mmap.mmap):
+            return True
+    return False
+
+
+def test_a_mapped_entry_reads_back_equal_backed_by_its_file_aligned_and_only_under_its_signature():
+    """A nested payload comes back equal, every array with its own type and shape, by key and as
+    the newest entry; the arrays are read from the file, not copied into the process; every array
+    starts on a 64-byte boundary; another signature is a miss. (Merged 2026-10-05 from
+    `test_a_nested_payload_round_trips_exactly`, `test_the_arrays_are_read_from_the_file_not_copied`,
+    `test_every_array_starts_on_a_64_byte_boundary`, `test_the_newest_entry_is_read_mapped_too` and
+    `test_another_signature_is_a_miss`, which each stored the same payload.)"""
+    with _Sandbox():
+        p = _payload()
+        assert st.store(_MAPPED_KIND, UID, _MAPPED_SIG, p, fmt="mapped") is True
+        got = st.load(_MAPPED_KIND, UID, _MAPPED_SIG)
+        assert got is not None and _same(p, got)
+        assert st.read_stamp(_MAPPED_KIND, UID, _MAPPED_SIG)["format"] == "mapped"
+        assert _backed_by_a_map(got["recordings"][0]["Data"])
+        assert _backed_by_a_map(got["recordings"][1]["Nested"]["deep"][0])
+        for arr in (got["recordings"][0]["Data"], got["recordings"][0]["Time"],
+                    got["recordings"][1]["Data"]):
+            assert arr.__array_interface__["data"][0] % 64 == 0
+        newest, stamp = st.load_newest(_MAPPED_KIND, UID)
+        assert stamp["format"] == "mapped" and _same(_payload(), newest), "the newest entry"
+        assert st.load(_MAPPED_KIND, UID, ("mapped-test", 2)) is None, "another signature"
+
+
+def test_each_read_is_its_own_copy_and_the_file_is_never_written():
+    with _Sandbox():
+        st.store(_MAPPED_KIND, UID, _MAPPED_SIG, _payload(), fmt="mapped")
+        path = st._existing_payload_path(st._stem(_MAPPED_KIND, UID, _MAPPED_SIG))
+        before = open(path, "rb").read()
+        a = st.load(_MAPPED_KIND, UID, _MAPPED_SIG)
+        b = st.load(_MAPPED_KIND, UID, _MAPPED_SIG)
+        a["recordings"][0]["Data"][:] = -1.0                      # in place, as a loader may do
+        a["recordings"][0]["Channel"] = "CHANGED"
+        assert float(b["recordings"][0]["Data"][0, 0]) != -1.0
+        assert b["recordings"][0]["Channel"] == "ZERO_TWO_LEFT"
+        c = st.load(_MAPPED_KIND, UID, _MAPPED_SIG)
+        assert _same(_payload(), c), "a later read sees the stored values"
+        assert open(path, "rb").read() == before
+
+
+def test_a_damaged_file_is_a_miss_and_is_removed():
+    with _Sandbox():
+        st.store(_MAPPED_KIND, UID, _MAPPED_SIG, _payload(), fmt="mapped")
+        path = st._existing_payload_path(st._stem(_MAPPED_KIND, UID, _MAPPED_SIG))
+        with open(path, "r+b") as fh:
+            fh.truncate(100)
+        assert st.load(_MAPPED_KIND, UID, _MAPPED_SIG) is None
+        assert not os.path.exists(path)
+
+
+def test_the_format_is_used_only_when_asked_for():
+    assert st.choose_format(_payload()) == "pickle"
+    assert st.choose_format({"a": np.zeros(3)}) == "npz"
+    with _Sandbox():
+        st.store(_MAPPED_KIND, UID, _MAPPED_SIG, _payload())
+        assert st.read_stamp(_MAPPED_KIND, UID, _MAPPED_SIG)["format"] == "pickle"
+
+
+def test_a_file_that_cannot_be_mapped_is_a_miss_and_is_kept():
+    """Running out of file handles is not a damaged entry: the file stays for the next read."""
+    import mmap as _mmap_mod
+    with _Sandbox():
+        st.store(_MAPPED_KIND, UID, _MAPPED_SIG, _payload(), fmt="mapped")
+        path = st._existing_payload_path(st._stem(_MAPPED_KIND, UID, _MAPPED_SIG))
+        real = _mmap_mod.mmap
+
+        def refuse(*a, **k):
+            raise OSError(24, "Too many open files")
+        _mmap_mod.mmap = refuse
+        try:
+            assert st.load(_MAPPED_KIND, UID, _MAPPED_SIG) is None
+            assert st.load_newest(_MAPPED_KIND, UID)[0] is None
+        finally:
+            _mmap_mod.mmap = real
+        assert os.path.exists(path)
+        assert st.load(_MAPPED_KIND, UID, _MAPPED_SIG) is not None

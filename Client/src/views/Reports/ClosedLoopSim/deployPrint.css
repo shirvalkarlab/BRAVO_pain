@@ -1,83 +1,65 @@
 /*
- * Print stylesheet — audit finding #2 ("window.print() dumps the whole app").
+ * Print stylesheet: the Closed-Loop page prints ONE record, the decision card (decision 302).
  *
- * DeploySignoffCard has a Print button, but with no @media print rule the browser prints the entire
- * page: sidebar nav, top app bar, all six analysis panels, the JSON inspector. The clinician wants a
- * clean ONE-PAGE programming record: the verdict strip + the sign-off card, nothing else.
+ * Audit finding #2 ("window.print() dumps the whole app"): with no print rule the browser printed
+ * the sidebar, the app bar and every analysis panel. When the deployment view is mounted it adds
+ * `.cl-deploy-root` to <body> (index.js). In print everything is hidden and only the decision card
+ * is opted back in, so a panel added to the page later is excluded from the record by construction
+ * (fail-safe: a new panel cannot leak onto the signed sheet).
  *
- * Approach: when the deployment view is mounted it adds `.cl-deploy-root` to <body> (see index.js).
- * In print, hide everything, then re-show only the verdict strip and the sign-off card, promoted out
- * of the flctx and laid flat. We hide by default and opt back in, so future panels added to the page
- * are excluded from the printout automatically (fail-safe: a new panel can't leak into the record).
+ * Until decision 302 three blocks printed: the verdict header, the parameter table (only when
+ * authorised) and the sign-off card. They are one card now. The card's "Details" fold is closed on
+ * screen when the configuration is allowed and supported; the printed record is the full record,
+ * so every fold inside the card is forced open here.
+ *
+ * THE PLANNING VIEW NEVER PRINTS. The parameter table carries `cl-prescription-authorised` when the
+ * device rules permit the configuration and `cl-prescription-planning` when they do not. The
+ * planning view is a screen affordance (watermarked, read-back disabled); a printed sheet of
+ * values loses its surroundings and could be carried into a visit as though authorised, so it is
+ * removed from the printed layout outright, whatever else is opted in.
  */
 @media print {
-  /* Hide the whole app chrome + every panel by default. */
   body.cl-deploy-root * {
     visibility: hidden !important;
   }
 
-  /* Re-show ONLY the reconciled verdict header, the sign-off card, and the parameter table when
-     that table is AUTHORISED (and their descendants).
-
-     THE PRESCRIPTION TABLE IS OPTED IN BY CLASS, NOT BY POSITION, and only in one of its two
-     states. PrescriptionPanel sets `cl-prescription-authorised` when the device rules permit the
-     configuration and `cl-prescription-planning` when they do not. Only the first is listed here,
-     so the read-only planning view — the watermarked table a reader can open while the device
-     refuses the configuration — never reaches paper. That matters because the watermark is a
-     screen affordance: a printed sheet of parameter values loses whatever surrounded it on screen
-     and can be carried into a programming visit as though it were authorised, which is the exact
-     failure the withholding behaviour exists to prevent. The default-hidden rule above is what
-     makes this safe by construction: a state that is not named here cannot print. */
-  body.cl-deploy-root .cl-verdict-strip,
-  body.cl-deploy-root .cl-verdict-strip *,
-  body.cl-deploy-root .cl-prescription-authorised,
-  body.cl-deploy-root .cl-prescription-authorised *,
-  body.cl-deploy-root .cl-signoff-card,
-  body.cl-deploy-root .cl-signoff-card * {
+  body.cl-deploy-root .cl-decision-card,
+  body.cl-deploy-root .cl-decision-card * {
     visibility: visible !important;
   }
 
-  /* Belt and braces: even if the planning card were somehow made visible by a future rule, remove
-     it from the printed layout entirely. */
+  /* Belt and braces: the planning table is inside the opted-in card, so it is removed from the
+     layout rather than merely hidden. */
   body.cl-deploy-root .cl-prescription-planning {
     display: none !important;
   }
 
-  /* Lay the two printed blocks flat at the top of the page. */
-  body.cl-deploy-root .cl-verdict-strip {
-    position: static !important;
-    box-shadow: none !important;
-    border: 1px solid #444 !important;
-    margin: 0 0 10px 0 !important;
-    width: 100% !important;
+  /* Every fold in the card open on paper: MUI Collapse holds a closed fold at height 0 with its
+     content hidden, and the record must carry the detail the screen folds away. */
+  body.cl-deploy-root .cl-decision-card .MuiCollapse-root,
+  body.cl-deploy-root .cl-decision-card .MuiCollapse-hidden {
+    height: auto !important;
+    min-height: 0 !important;
+    visibility: visible !important;
+    overflow: visible !important;
   }
-  /* Lay every printed block in document order rather than positioning any of them absolutely.
-     The sign-off card used to be pinned at a fixed offset below the strip, which worked only while
-     exactly two blocks printed and the first had a known height. There are now three blocks and the
-     verdict header's height varies with how many blocker sentences the rule table returned, so a
-     fixed offset would overlap or leave a gap. Static positioning in flow order needs no such
-     assumption. */
-  body.cl-deploy-root .cl-prescription-authorised,
-  body.cl-deploy-root .cl-signoff-card {
+
+  body.cl-deploy-root .cl-decision-card {
     position: static !important;
     width: 100% !important;
     box-shadow: none !important;
     border: 1px solid #444 !important;
-    margin: 0 0 10px 0 !important;
-  }
-
-  /* Interactive-only affordances have no place on a paper record. */
-  body.cl-deploy-root .cl-jumps,
-  body.cl-deploy-root .cl-signoff-actions {
-    display: none !important;
-  }
-
-  /* Let the record break across pages naturally rather than clipping. */
-  body.cl-deploy-root .cl-signoff-card,
-  body.cl-deploy-root .cl-prescription-authorised,
-  body.cl-deploy-root .cl-verdict-strip {
+    margin: 0 !important;
     overflow: visible !important;
     page-break-inside: auto;
+  }
+
+  /* Interactive-only affordances have no place on a paper record: the jump links, the buttons
+     (mode toggle, planning, Sign and print, Export, and every fold's own toggle). */
+  body.cl-deploy-root .cl-jumps,
+  body.cl-deploy-root .cl-signoff-actions,
+  body.cl-deploy-root .cl-decision-card button {
+    display: none !important;
   }
 
   @page {

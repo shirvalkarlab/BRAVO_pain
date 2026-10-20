@@ -30,19 +30,12 @@ import datetime
 import zarr
 
 from Server import models
+from modules.DecodeCommon import data_start as _data_start
 from modules.MedtronicPercept import BrainSenseStream
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
 FALLBACK_COMPRESSION_MAGIC = b"BRAVO_ZLIB_v1\0"
-
-def deviceMetadataLookup(device_uid, prefix="metadata"):
-    """Use JSON containment where supported, retaining SQLite compatibility."""
-    from django.db import connection
-    if connection.features.supports_json_field_contains:
-        return {prefix + "__contains": {"Device": device_uid}}
-    return {prefix + "__Device": device_uid}
-
 
 def retrieveProcessingSettings(config=dict()):
     options = {
@@ -143,8 +136,8 @@ def checkAccessPermission(user, participant_uid, study_uid=None, recording_uid=N
 
     Participant = models.Participant.find(uid=participant_uid)
     if not Participant:
-        return False 
-    
+        return False
+
     if Participant.institute.has_permission(user):
         Permission["Deidentified"] = False
         return Permission
@@ -153,6 +146,8 @@ def checkAccessPermission(user, participant_uid, study_uid=None, recording_uid=N
         return False 
     
     study = models.Study.find(uid=study_uid)
+    if not study or not models.StudyRel.find(member=user, study=study):
+        return False
     rel = models.StudyDataRel.find(study=study, participant=Participant)
     if rel:
         if "PHIAllowed" in rel.permission.keys():
@@ -181,17 +176,24 @@ def extractParticipantInformation(participant_uid, deidentified=False):
 
     return ParticipantInfo
 
+def _already_on_tablet(source, check_files):
+    'Whether the tablet already holds this session file. A file with no `hashed_id` cannot be in the.'
+    hashed = (getattr(source, "metadata", None) or {}).get("hashed_id")
+    return hashed is not None and hashed in check_files
+
+
 def extractParticipantContext(participant_uid, check_files=[], deidentified=False):
     Participant = models.Participant.find(uid=participant_uid)
     ParticipantContext = list()
 
-    DBSDevices = models.DBSDevice.find_all(owner=Participant).prefetch_related("electrodes")
+    DBSDevices = models.DBSDevice.find_all(owner=Participant)
     for device in DBSDevices:
-        SourceFiles = models.SourceFile.find_all(owner=Participant, type="MedtronicJSON", **deviceMetadataLookup(device.uid))
+        SourceFiles = models.SourceFile.find_all(owner=Participant, type="MedtronicJSON", metadata__contains={"Device": device.uid})
         SourceFiles = sorted(SourceFiles, key=lambda x: -x.date)
 
         TherapyModificationList = list()
-        TherapyModifications = models.TherapyModification.find_all(source__in=SourceFiles)
+        TherapyModifications = [m for m in models.TherapyModification.find_all(source__in=SourceFiles)
+                                if _data_start.listed_date(m.date, _data_start.data_start_s(Participant)) is not None]
         for modification in TherapyModifications:
             TherapyModificationList.append({
                 "Name": "",
@@ -203,7 +205,7 @@ def extractParticipantContext(participant_uid, check_files=[], deidentified=Fals
 
         for n in range(len(SourceFiles)):
             source = SourceFiles[n]
-            if source.metadata.get("hashed_id") and source.metadata["hashed_id"] in check_files:
+            if _already_on_tablet(source, check_files):
                 Context = {
                     "Id": source.uid, "OnlineFile": True, "HashedId": source.metadata["hashed_id"],
                 }
@@ -217,7 +219,7 @@ def extractParticipantContext(participant_uid, check_files=[], deidentified=Fals
                 "MRN": Participant.mrn,
                 "Diagnosis": Participant.diagnosis,
                 "Sex": Participant.sex,
-                "DOB": 0,  # Omit birthdates from session report context.
+                "DOB": Participant.date_of_birth*1000,
                 "Device": {}
             }, "TherapyInformation": [], "TherapyModification": TherapyModificationList, "ChronicBrainSense": [], "Recordings": [], "TherapyRecordings": []}
 
@@ -233,7 +235,7 @@ def extractParticipantContext(participant_uid, check_files=[], deidentified=Fals
             for lead in device.electrodes.all():
                 LeadInfo = {
                     "Id": lead.uid,
-                    "Target": lead.target.split(" ")[1],
+                    "Target": lead.target.split(" ", 1)[1],   # "MD Thal" stays whole
                     "Hemisphere": lead.target.split(" ")[0],
                     "CustomName": lead.custom_name,
                     "ChannelCount": lead.channel_count,
@@ -355,6 +357,11 @@ def extractParticipantContext(participant_uid, check_files=[], deidentified=Fals
             Recordings = models.Recording.find_all(source=source, type__in=["MedtronicChronicBrainSense"])
             for recording in Recordings:
                 Data = loadSourceFile(recording.pointer, recording.hashed)
+                # From the implant date on (2026-09-24): a chronic file's samples before it are cut.
+                _cut = _data_start.trim_segment(Data["Time"], Data["Data"], _data_start.data_start_s(Participant), time_axis=0)
+                if _cut is None:
+                    continue
+                Data = {**Data, "Time": _cut[0], "Data": _cut[1]}
                 Context["ChronicBrainSense"].append({
                     "Id": recording.uid,
                     "Name": recording.name,
@@ -442,7 +449,7 @@ def assignSourceFile(old_device_uid, new_device_uid):
         if not new_device.electrodes.filter(uid=electrode.uid).exists():
             new_device.electrodes.add(electrode)
 
-    source_files = models.SourceFile.objects.filter(**deviceMetadataLookup(old_device.uid)).all()
+    source_files = models.SourceFile.objects.filter(metadata__contains={"Device": old_device.uid}).all()
     for file in source_files:
         file.metadata["Device"] = new_device.uid
         file.save()
@@ -497,6 +504,9 @@ def listRecordings(participant_uid):
     SourceFiles = models.SourceFile.find_all(owner=Participant)
     DBSDevices = [device.get_info() for device in models.DBSDevice.find_all(owner=Participant)]
     Recordings = models.Recording.find_all(source__in=SourceFiles, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream", "DelsysMDAT", "HPFCSV", "AOMPX"])
+    # From the implant date on (2026-09-24); none of these types runs across it.
+    _start = _data_start.data_start_s(Participant)
+    Recordings = [r for r in Recordings if _data_start.listed_date(r.date, _start) is not None]
     
     AllRecordings = []
     for recording in Recordings:
@@ -536,7 +546,6 @@ def listRecordings(participant_uid):
     return AllRecordings
 
 def listSourceFiles(participant_uid, file_type=None):
-    from django.db.models import Avg, Count
     Participant = models.Participant.find(uid=participant_uid)
     if not file_type:
         source_files = models.SourceFile.find_all(owner=Participant)
@@ -544,26 +553,13 @@ def listSourceFiles(participant_uid, file_type=None):
         source_files = models.SourceFile.find_all(owner=Participant, type=file_type)
 
     SourceFiles = []
-    DBSDevices = models.DBSDevice.find_all(owner=Participant).prefetch_related("electrodes")
-    medtronic_sources = source_files.filter(type__in=["MedtronicJSON", "DefaultType"])
-    recording_counts = {row["source_id"]: row for row in models.Recording.objects.filter(
-        source__in=medtronic_sources, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream"]
-    ).values("source_id").annotate(count=Count("uid"), mean_date=Avg("date"))}
-    def counts(model, **kwargs):
-        return {row["source_id"]: row["count"] for row in model.objects.filter(
-            source__in=medtronic_sources, **kwargs).values("source_id").annotate(count=Count("uid"))}
-    therapy_events = counts(models.TherapyModification)
-    therapies = counts(models.Therapy)
-    dbs_events = {row["source_id"]: row["count"] for row in models.DBSEvent.objects.filter(
-        source__in=medtronic_sources).exclude(type="MedtronicDeviceImpedance").values("source_id").annotate(count=Count("uid"))}
+    DBSDevices = models.DBSDevice.find_all(owner=Participant)
     for source in source_files:
         if source.type == "MedtronicJSON" or source.type == "DefaultType":
             SourceFile = {
                 "Id": source.uid,
                 "Name": source.name,
                 "Type": "Medtronic JSON Sessions",
-                "AnalysisExclusion": source.metadata.get("AnalysisExclusion", ""),
-                "Device": {},
                 "DateOfUpload": source.date,
                 "Timezone": source.metadata["Timezone"] if "Timezone" in source.metadata.keys() else ""
             }
@@ -573,12 +569,16 @@ def listSourceFiles(participant_uid, file_type=None):
                     if device.uid == source.metadata["Device"]:
                         SourceFile["Device"] = device.get_info()
 
-            recording = recording_counts.get(source.uid, {})
-            SourceFile["RecordingCount"] = recording.get("count", 0)
-            SourceFile["DateOfRecording"] = recording.get("mean_date", source.date)
-            SourceFile["TherapyEventCount"] = therapy_events.get(source.uid, 0)
-            SourceFile["TherapyCount"] = therapies.get(source.uid, 0)
-            SourceFile["DBSEventCount"] = dbs_events.get(source.uid, 0)
+            AllRecordings = models.Recording.find_all(source=source, type__in=["MedtronicBrainSenseTimeDomain", "MedtronicBrainSensePowerDomain", "MedtronicIndefiniteStream"])
+            SourceFile["RecordingCount"] = len(AllRecordings)
+            if SourceFile["RecordingCount"] > 0:
+                SourceFile["DateOfRecording"] = np.mean([i.date for i in AllRecordings])
+            else:
+                SourceFile["DateOfRecording"] = source.date
+            SourceFile["TherapyEventCount"] = len(models.TherapyModification.find_all(source=source))
+            SourceFile["TherapyEventCount"] = len(models.TherapyModification.find_all(source=source))
+            SourceFile["TherapyCount"] = len(models.Therapy.find_all(source=source))
+            SourceFile["DBSEventCount"] = len(models.DBSEvent.find_all(source=source).exclude(type="MedtronicDeviceImpedance"))
 
             SourceFiles.append(SourceFile)
         
@@ -747,6 +747,22 @@ def saveSourceFile(datastruct, pointer, bytes=False):
         print("Lockfile Not Acquired before Timeout")
         return False
 
+
+def contentFingerprint(datastruct, bytes=False):
+    """A DETERMINISTIC content fingerprint of a recording payload, for duplicate detection.
+
+    IMPORTANT: this is NOT the same as the hash stored by saveSourceFile. saveSourceFile hashes the
+    blosc2-COMPRESSED bytes, and blosc2.compress2 is non-deterministic (identical input compresses to
+    different output across calls), so its hash changes every upload and cannot identify a duplicate.
+    This fingerprint hashes the UNCOMPRESSED pickle of the payload, which IS stable across decodes of
+    the same source JSON, so an indexed lookup on it reliably detects a re-uploaded recording.
+    """
+    if not bytes:
+        pData = pickle.dumps(datastruct, protocol=pickle.HIGHEST_PROTOCOL)
+    else:
+        pData = datastruct
+    return hmac.new(HASH_KEY.encode("utf8"), pData, hashlib.sha256).hexdigest()
+
 def loadSourceFile(pointer, verifiedHash, bytes=False):
     pointer = pointer.replace("\\", os.path.sep).replace("/", os.path.sep)
 
@@ -809,7 +825,7 @@ def delete_directory(path):
 
 def loadProcessedCollection(pointer, key):
     if not os.path.exists(pointer.replace(".bdat", ".zarr")):
-        raise Exception("Collection not found")
+        raise Exception(f"Collection not found")
     
     root = zarr.open(pointer.replace(".bdat", ".zarr"), mode="r")
     print(list(root.array_keys()))
@@ -840,30 +856,26 @@ def saveSourceBinary(pointer, rawBytes):
         file.write(rawBytes)
 
 def getCachedResult(url, participant_uid, config):
-    from modules.ReportCache import calculation_revision
     models.SourceFile.purge(type="CachedResult", date__lt=models.current_time() - 3600)
-    metadata = {**config, "URL": url, "Participant": participant_uid, "ReportRevision": calculation_revision()}
+    metadata = {**config, **{"URL": url, "Participant": participant_uid}}
     result = models.SourceFile.find(type="CachedResult", metadata=metadata)
     if result:
         return loadSourceFile(result.pointer, result.hashed)
     
 def saveCachedResult(data, url, participant_uid, config):
-    from modules.ReportCache import calculation_revision
-    metadata = {**config, "URL": url, "Participant": participant_uid, "ReportRevision": calculation_revision()}
+    metadata = {**config, **{"URL": url, "Participant": participant_uid}}
     result = models.SourceFile.create(type="CachedResult", metadata=metadata)
     result.pointer = DATABASE_PATH + "visualization" + os.path.sep + participant_uid + os.path.sep + result.uid + ".bdat"
     result.hashed = saveSourceFile(data, DATABASE_PATH + "visualization" + os.path.sep + participant_uid + os.path.sep + result.uid + ".bdat")
     result.save()
 
 def deleteCachedResult(participant_uid=None, url=None):
-    from modules.ReportCache import invalidate
-    invalidate()
     if participant_uid and url:
-        models.SourceFile.purge(type="CachedResult", metadata__Participant=participant_uid, metadata__URL=url)
+        models.SourceFile.purge(type="CachedResult", metadata__contains={"Participant": participant_uid, "URL": url})
     elif participant_uid:
-        models.SourceFile.purge(type="CachedResult", metadata__Participant=participant_uid)
+        models.SourceFile.purge(type="CachedResult", metadata__contains={"Participant": participant_uid})
     elif url:
-        models.SourceFile.purge(type="CachedResult", metadata__URL=url)
+        models.SourceFile.purge(type="CachedResult", metadata__contains={"URL": url})
     else:
         models.SourceFile.purge(type="CachedResult")
         

@@ -64,6 +64,9 @@ class FitbitAuthHandler(RestViews.APIView):
         if not Participant:
             return Response(status=403)
 
+        if request.data["RequestType"] in ("RequestURL", "VerifyToken") and not DataQuery.oauthConfigured():
+            return Response(status=503, data={"message": "Fitbit connection is not configured on this server."})
+
         device = models.FitbitDevice.find(owner=Participant)
         if not device:
             device = models.FitbitDevice.create(owner=Participant)
@@ -75,7 +78,7 @@ class FitbitAuthHandler(RestViews.APIView):
             challenger = PKCE_code_challenger(device.pkce)
             FitbitAuthURL = "https://www.fitbit.com/oauth2/authorize?" + urlencode({
                 "response_type": "code",
-                "client_id": os.environ["FIBIT_CLIENT_ID"],
+                "client_id": DataQuery.FITBIT_CLIENT_ID,
                 "code_challenge": challenger,
                 "code_challenge_method": "S256",
                 "state": device.uid,
@@ -154,6 +157,9 @@ class QueryFitbitData(RestViews.APIView):
         if not Permissions:
             return Response(status=403)
         
+        if request.data["RequestType"] == "RefreshFitbitData" and not DataQuery.oauthConfigured():
+            return Response(status=503, data={"message": "Fitbit connection is not configured on this server."})
+
         Participant = models.Participant.find(uid=request.data["ParticipantId"])
         device = models.FitbitDevice.find(owner=Participant)
         if not device:

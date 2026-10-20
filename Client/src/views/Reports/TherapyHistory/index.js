@@ -97,7 +97,8 @@ function TherapyHistory() {
       setAlert(<LoadingProgress/>);
       try {
         const response = await SessionController.query("/api/queryTherapyHistory", {
-          ParticipantId: participant_uid
+          ParticipantId: participant_uid,
+          Compact: true
         });
         let availableDevices = [];
         for (let i in response.data.TherapyDevices) {

@@ -64,6 +64,9 @@ class GoogleHealthAuthHandler(RestViews.APIView):
         if not Participant:
             return Response(status=403)
 
+        if request.data["RequestType"] in ("RequestURL", "VerifyToken") and not DataQuery.oauthConfigured():
+            return Response(status=503, data={"message": "GoogleHealth connection is not configured on this server."})
+
         device = models.GoogleHealth.find(owner=Participant)
         if not device:
             device = models.GoogleHealth.create(owner=Participant)
@@ -72,8 +75,8 @@ class GoogleHealthAuthHandler(RestViews.APIView):
             if len(device.auth.keys()) > 0:
                 return Response(status=200, data=device.date_periods)
             
-            GoogleHealth_CLIENT_ID = os.environ["GoogleHealth_CLIENT_ID"]
-            redirect_uri = os.environ["GoogleHealth_CLIENT_REDIRECT_URI"]
+            GoogleHealth_CLIENT_ID = DataQuery.GoogleHealth_CLIENT_ID
+            redirect_uri = DataQuery.GoogleHealth_CLIENT_REDIRECT_URI
             scopes = [
                 "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly",
                 "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly",
@@ -94,11 +97,9 @@ class GoogleHealthAuthHandler(RestViews.APIView):
             if not get_or_none(sanitize_input)(request.data, required_keys=["RequestType", "ParticipantId", "TokenURL"]):
                 return Response(status=400, data={"message": "Malformed Input"})
 
-            redirect_uri = os.environ["GoogleHealth_CLIENT_REDIRECT_URI"]
-            print(request.data["TokenURL"])
+            redirect_uri = DataQuery.GoogleHealth_CLIENT_REDIRECT_URI
             if not request.data["TokenURL"].startswith(redirect_uri+"?"):
                 return Response(status=400, data={"message": "Malformed Input"})
-            print("test")
             if not Participant.institute.has_permission(request.user, "Upload"):
                 return Response(status=403)
             
@@ -158,6 +159,9 @@ class QueryGoogleHealthData(RestViews.APIView):
         if not Permissions:
             return Response(status=403)
         
+        if request.data["RequestType"] == "RefreshGoogleHealthData" and not DataQuery.oauthConfigured():
+            return Response(status=503, data={"message": "GoogleHealth connection is not configured on this server."})
+
         Participant = models.Participant.find(uid=request.data["ParticipantId"])
         device = models.GoogleHealth.find(owner=Participant)
         if not device:

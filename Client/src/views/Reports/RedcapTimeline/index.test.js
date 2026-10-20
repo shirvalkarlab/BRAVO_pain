@@ -1,11 +1,12 @@
 import React from 'react';
 import {createRoot} from 'react-dom/client';
 import {act} from 'react-dom/test-utils';
+import {SYNC_COMPLETED_EVENT} from 'utils/syncEvents';
 import {SessionController} from 'database/session-control';
 import RedcapTimeline from './index';
 import {DEFAULT_METRICS} from './data';
 
-jest.mock('database/resultCache',()=>({cacheScope:()=> 'account-a'}));
+jest.mock('./requestScope',()=>({cacheScope:()=> 'account-a'}));
 const mockDispatch=jest.fn();
 let mockParticipant='synthetic';
 jest.mock('database/session-control',()=>({SessionController:{query:jest.fn()}}));
@@ -34,7 +35,7 @@ async function click(label){const node=[...element.querySelectorAll('button')].f
 async function input(label,value){const node=[...element.querySelectorAll('input')].find(n=>document.querySelector(`label[for="${n.id}"]`)?.textContent===label);expect(node).toBeDefined();await act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(node,value);node.dispatchEvent(new Event('input',{bubbles:true}));});}
 async function openOptions(){const node=element.querySelector('input[role="combobox"]');await act(async()=>node.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,button:0})));}
 async function option(label){const node=[...document.querySelectorAll('[role="option"]')].find(n=>n.textContent.startsWith(`${label} ·`));expect(node).toBeDefined();await act(async()=>node.dispatchEvent(new MouseEvent('click',{bubbles:true})));}
-async function mount(redcap=true){await act(async()=>root.render(<RedcapTimeline/>));if(redcap && element.querySelector('[role="tab"]')) await click("REDCap");}
+async function mount(redcap=true){await act(async()=>root.render(<RedcapTimeline/>));if(redcap && !element.querySelector('[role="status"]') && element.querySelector('[role="tab"]')) await click("REDCap");}
 async function toggle(label){const node=[...element.querySelectorAll('label')].find(n=>n.textContent===label)?.querySelector('input[type="checkbox"]');expect(node).toBeDefined();await act(async()=>node.click());}
 async function selectTransition(id){const selector=[...element.querySelectorAll('input[role="combobox"]')].find(n=>document.querySelector(`label[for="${n.id}"]`)?.textContent==='Home-program transition');expect(selector).toBeDefined();await act(async()=>{selector.focus();selector.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,button:0}));});const item=[...document.querySelectorAll('[role="option"]')].find(n=>n.textContent.endsWith(`Changed ${id}`));expect(item).toBeDefined();await act(async()=>item.dispatchEvent(new MouseEvent('click',{bubbles:true})));}
 const settings={group:[{label:'Active group',value:'Group B'},{label:'Mode',value:'Adaptive'}],left:[{label:'Amplitude',value:'1.5 mA'},{label:'Frequency',value:'130 Hz'}],right:[{label:'Pulse width',value:'60 µs'},{label:'Sensing band',value:'8–12 Hz'}]};
@@ -61,7 +62,7 @@ test('date controls filter observations, reject reversed and missing dates, show
   await mount();await input('From','2025-01-01');
   expect(text()).toContain('1 observations');expect(charts()[0].range.start).toBe('2025-01-01');
   await input('From','2026-09-04');expect(text()).toContain('Choose valid dates');expect(charts()).toHaveLength(0);
-  await input('From','2026-08-01');expect(text()).toContain('No reviewed observations for this metric');
+  await input('From','2026-08-01');expect(text()).toContain('No recorded observations for this metric');
   await input('From','');expect(text()).toContain('Choose valid dates');
   await click('Pre-trial to today');expect(charts()).toHaveLength(11);expect(charts()[0].range.start).toBe('2024-12-12');
   await input('Through','2025-01-01');expect(charts()[0].range.end).toBe('2025-01-01');expect(text()).toContain('1 observations');
@@ -92,7 +93,7 @@ test('clear selection is explicit and metrics with no observations are disabled,
 
 test('loading prevents duplicate refresh, errors expose recovery, and empty data never fabricates charts',async()=>{
   const pending=deferred();SessionController.query.mockReturnValueOnce(pending.promise);
-  await mount();expect(element.querySelector('[role="status"]').textContent).toContain('Loading reviewed');
+  await mount();expect(element.querySelector('[role="status"]').textContent).toContain('Loading REDCap');
   const refresh=[...element.querySelectorAll('button')].find(n=>n.textContent==='Refresh view');expect(refresh.disabled).toBe(true);
   await act(async()=>pending.reject({response:{status:403}}));
   expect(text()).toContain('You do not have access');expect(charts()).toHaveLength(0);
@@ -103,7 +104,7 @@ test('loading prevents duplicate refresh, errors expose recovery, and empty data
 test('participant navigation resets custom selection and dates, hides old data until the current response',async()=>{
   await mount();await input('From','2025-01-01');await openOptions();await option('Optional throbbing');
   const pending=deferred();SessionController.query.mockReturnValueOnce(pending.promise);
-  mockParticipant='second';await mount();expect(charts()).toHaveLength(0);expect(text()).toContain('Loading reviewed');
+  mockParticipant='second';await mount();expect(charts()).toHaveLength(0);expect(text()).toContain('Loading REDCap');
   await act(async()=>pending.resolve({data:payload}));
   expect(element.querySelector('[data-summary-view]')).not.toBeNull();await click("REDCap");
   expect(charts().map(c=>c.metric.key)).toEqual(DEFAULT_METRICS);expect(charts()[0].range.start).toBe('2024-12-12');
@@ -201,7 +202,7 @@ test('Oura is a separate fourth REDCap tab with participant and study context, i
   await click('Oura');
   expect([...element.querySelectorAll('[role="tab"]')].map(tab=>tab.textContent)).toEqual(['Multimodal Summary','REDCap','Stim Program Boxplots','Stim Program Settings','Neural Data','Medications','Oura']);
   const oura=element.querySelector('[data-oura-view]');expect(oura).not.toBeNull();
-  expect(JSON.parse(oura.textContent)).toEqual({participant:'synthetic',phases:payload.phases,homeTransitions:[],unknownIntervals:[]});
+  expect(JSON.parse(oura.textContent)).toEqual({participant:'synthetic',refreshRevision:0,phases:payload.phases,homeTransitions:[],unknownIntervals:[]});
   expect(charts()).toEqual([]);expect(element.querySelector('input[role="combobox"]')).toBeNull();
   expect(element.textContent).not.toContain('Clinical metrics');expect(element.textContent).not.toContain('FreeReps');
   await click('REDCap');expect(element.querySelector('[data-oura-view]')).toBeNull();
@@ -215,10 +216,10 @@ test('Stim Program Settings retains the reviewed settings view, followed by inde
   SessionController.query.mockResolvedValue({data:{...payload,stimulation:{home_transitions:homes,home_unknown_intervals:unknown}}});
   await mount();expect(text()).toContain('Aditya - All Data Streams');await click('Stim Program Settings');
   const view=JSON.parse(element.querySelector('[data-neural-view]').textContent);
-  expect(view).toEqual({participant:'synthetic',phases:payload.phases,homeTransitions:homes,unknownIntervals:unknown});
+  expect(view).toEqual({participant:'synthetic',phases:payload.phases,homeTransitions:homes,observations:[],unknownIntervals:unknown});
   expect(element.querySelector('input[role="combobox"]')).toBeNull();expect(text()).not.toContain('Clinical metrics');
   await click('Neural Data');expect(element.querySelector('[data-neural-view]')).toBeNull();
-  expect(JSON.parse(element.querySelector('[data-home-neural-view]').textContent)).toEqual({participant:'synthetic'});
+  expect(JSON.parse(element.querySelector('[data-home-neural-view]').textContent)).toEqual({participant:'synthetic',refreshRevision:0});
   expect(element.querySelector('input[role="combobox"]')).toBeNull();
   await click('REDCap');expect(element.querySelector('[data-home-neural-view]')).toBeNull();
 });
@@ -239,3 +240,60 @@ test('Multimodal Summary is inside All Data Streams, has independent controls, r
  await mount(false);let tabs=[...element.querySelectorAll('[role="tab"]')];expect(tabs[0].textContent).toBe('Multimodal Summary');expect(tabs[0].getAttribute('aria-selected')).toBe('true');expect(element.querySelector('[data-summary-view]')).not.toBeNull();
  await click('Neural Data');mockParticipant='second';await mount(false);expect(element.querySelector('[data-summary-view]')).not.toBeNull();expect(JSON.parse(element.querySelector('[data-summary-view]').textContent).participant).toBe('second');
  });
+
+test('fresh installation preserves all seven tabs and explains unavailable metadata',async()=>{
+ SessionController.query.mockResolvedValue({data:{metrics:[],phases:[],message:'Reviewed supplemental metadata has not been connected.',visits:{available:false,message:'Visit calendar unavailable',metrics:{}},stimulation:{home_transitions:[],home_unknown_intervals:[]},comparisons:{stimulation:{available:false,message:'Program assignments unavailable'},medications:{available:false,message:'Medication metadata unavailable'}}}});
+ await mount(false);
+ expect([...element.querySelectorAll('[role="tab"]')].map(tab=>tab.textContent)).toEqual(['Multimodal Summary','REDCap','Stim Program Boxplots','Stim Program Settings','Neural Data','Medications','Oura']);
+ expect(text()).toContain('Reviewed supplemental metadata has not been connected.');
+ await click('REDCap');expect(charts()).toHaveLength(0);expect(text()).toContain('Visit calendar unavailable');
+ await click('Stim Program Boxplots');expect(text()).toContain('Program assignments unavailable');
+ await click('Medications');expect(text()).toContain('Medication metadata unavailable');
+});
+
+
+test('survey service outage leaves independent neural and wearable views available',async()=>{
+ SessionController.query.mockRejectedValue({response:{status:503}});
+ await mount(false);
+ expect(element.querySelectorAll('[role="tab"]')).toHaveLength(7);
+ expect(element.querySelector('[data-summary-view]')).not.toBeNull();
+ expect(JSON.parse(element.querySelector('[data-summary-view]').textContent).redcap).toEqual({});
+ await click('Oura');
+ expect(JSON.parse(element.querySelector('[data-oura-view]').textContent)).toEqual({participant:'synthetic',refreshRevision:0,phases:[],homeTransitions:[],unknownIntervals:[]});
+ await click('Neural Data');
+ expect(JSON.parse(element.querySelector('[data-home-neural-view]').textContent)).toEqual({participant:'synthetic',refreshRevision:0});
+ await click('REDCap');expect(charts()).toHaveLength(0);expect(element.querySelector('[role="alert"]')).not.toBeNull();
+});
+
+test('manual sync refreshes the common survey and context response without resetting REDCap selections',async()=>{
+ await mount();await input('From','2025-01-01');await openOptions();await option('Optional throbbing');
+ const updated={...payload,stimulation:{home_transitions:[transition('new-after-sync','2026-08-20')]},metrics:payload.metrics.map(m=>({...m,points:[...m.points,point('2026-08-20',77)]}))};
+ SessionController.query.mockResolvedValue({data:updated});
+ await act(async()=>window.dispatchEvent(new CustomEvent(SYNC_COMPLETED_EVENT,{detail:{participantUid:'synthetic',scope:'account-a',state:'failed'}})));
+ expect(charts()[0].metric.points.at(-1).value).toBe(77);expect(charts().at(-1).metric.key).toBe('throbbing');
+ expect(charts().every(c=>c.range.start==='2025-01-01')).toBe(true);
+ await click('Stim Program Settings');expect(JSON.parse(element.querySelector('[data-neural-view]').textContent).homeTransitions[0].id).toBe('new-after-sync');
+ await click('Multimodal Summary');expect(JSON.parse(element.querySelector('[data-summary-view]').textContent).redcap.metrics[0].points.at(-1).value).toBe(77);
+});
+
+test('page-wide Refresh view reaches the active Oura and Neural tabs',async()=>{
+ await mount(false);await click('Oura');expect(JSON.parse(element.querySelector('[data-oura-view]').textContent).refreshRevision).toBe(0);
+ await click('Refresh view');expect(JSON.parse(element.querySelector('[data-oura-view]').textContent).refreshRevision).toBe(1);
+ await click('Neural Data');expect(JSON.parse(element.querySelector('[data-home-neural-view]').textContent).refreshRevision).toBe(1);
+ await click('Refresh view');expect(JSON.parse(element.querySelector('[data-home-neural-view]').textContent).refreshRevision).toBe(2);
+});
+
+test('common REDCap freshness warning is visible while stored downstream context remains available',async()=>{
+ jest.useFakeTimers();SessionController.query.mockResolvedValueOnce({data:{...payload,revision:'a'.repeat(64)}}).mockRejectedValueOnce(new Error('offline'));
+ await mount();await act(async()=>jest.advanceTimersByTime(60000));expect(charts()).toHaveLength(11);
+ expect(text()).toContain('Automatic update check unavailable');await click('Stim Program Settings');
+ expect(element.querySelector('[data-neural-view]')).not.toBeNull();expect(text()).toContain('Automatic update check unavailable');jest.useRealTimers();
+});
+
+test.each([['Stim Program Boxplots','stimulation'],['Medications','medications']])('sync replaces unavailable %s context with newly stored comparison data',async(tab,field)=>{
+ SessionController.query.mockResolvedValue({data:{...payload,comparisons:{[field]:{available:false,message:'No stored comparison yet'}}}});
+ await mount(false);await click(tab);expect(text()).toContain('No stored comparison yet');
+ SessionController.query.mockResolvedValue({data:{...payload,comparisons:{[field]:{available:true,metrics:payload.metrics.map(m=>({...m,conditions:[],top:{}})),episodes:[]}}}});
+ await act(async()=>window.dispatchEvent(new CustomEvent(SYNC_COMPLETED_EVENT,{detail:{participantUid:'synthetic',scope:'account-a',state:'succeeded'}})));
+ expect(text()).not.toContain('No stored comparison yet');expect(text()).toContain('Stage 1 onward');expect(text()).toContain('Mood VAS');
+});

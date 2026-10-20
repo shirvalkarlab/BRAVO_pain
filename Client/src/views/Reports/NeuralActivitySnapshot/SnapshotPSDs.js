@@ -11,9 +11,8 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import {useCallback, useState, useEffect} from "react";
+import {useCallback, useState, useEffect, useMemo} from "react";
 import {useResizeDetector} from "react-resize-detector";
-import {snapshotLayout,snapshotTicks} from "./snapshotLayout";
 import colormap from "colormap";
 import * as math from "mathjs";
 
@@ -32,7 +31,7 @@ function SnapshotPSDs({dataToRender, figureTitle, monopolarEstimate}) {
   const { language } = controller;
   
   const [figGroup, setFigGroup] = useState({});
-  const [plotWidth,setPlotWidth] = useState(0);
+  const [fig, setFig] = useState(null);
   const [renderData, setRenderData] = useState(null);
   const [cacheData, setCacheData] = useState(null);
 
@@ -57,8 +56,6 @@ function SnapshotPSDs({dataToRender, figureTitle, monopolarEstimate}) {
       
       if (key.endsWith("Boxplot")) {
         const ax = fig.subplots(1, 1, {sharey: false, sharex: false});
-        fig.setAxisProps({tickangle: -60, automargin: true}, "x", ax[0]);
-        fig.setLayoutProps({margin: {b: 150}});
         fig.setYlabel(`${dictionaryLookup(dictionary.FigureStandardText, "Power", language)} (${dictionaryLookup(dictionary.FigureStandardUnit, monopolarEstimate ? "dB" : "uV2Hz", language)})`, {fontSize: 15});
 
       } else {
@@ -237,22 +234,11 @@ function SnapshotPSDs({dataToRender, figureTitle, monopolarEstimate}) {
     }
   }, [figGroup, renderData]);
 
-  useEffect(() => {
-    for (const [key,manager] of Object.entries(figGroup)) {
-      const bars=key.endsWith("Boxplot");
-      const records=(renderData || []).filter(record=>record.figName===key);
-      manager.setLayoutProps(snapshotLayout(plotWidth,bars,records.filter(record=>record.type==='line').length));
-      manager.setAxisProps({automargin:true,nticks:plotWidth>0&&plotWidth<600?4:7,tickfont:{size:12}},"x");
-      manager.setAxisProps({automargin:true,tickfont:{size:12}},"y");
-      if(bars)manager.setAxisProps(snapshotTicks(records.flatMap(record=>record.x),plotWidth),"x");
-      manager.render();
-    }
-  },[figGroup,plotWidth,renderData]);
-
-  const onResize = useCallback((width) => {
-    setPlotWidth(width || 0);
-    Object.values(figGroup).forEach(manager=>manager.refresh());
-  }, [figGroup]);
+  const onResize = useCallback(() => {
+    if (!fig) return;
+    
+    fig.refresh();
+  }, [fig]);
 
   const {ref} = useResizeDetector({
     onResize: onResize,
@@ -276,20 +262,16 @@ function SnapshotPSDs({dataToRender, figureTitle, monopolarEstimate}) {
     }
   };
 
-  return (
+  return useMemo(() => (
     <Grid container spacing={0}>
-      <Grid key={figureTitle} item xs={12} xl={6} sx={{minWidth: 0}}>
-        <MDBox style={{width: "100%", minWidth: 0, overflowX: "visible"}}>
-          <MDBox ref={ref} id={figureTitle} style={{height: snapshotLayout(plotWidth,false,(renderData || []).filter(record=>record.type==='line').length).height, width: "100%", minWidth: 0}}/>
-        </MDBox>
+      <Grid key={figureTitle} item xs={12} lg={6}>
+        <MDBox ref={ref} id={figureTitle} style={{height: 600, width: "100%"}}/>
       </Grid>
-      <Grid key={figureTitle + "_Boxplot"} item xs={12} xl={6} sx={{minWidth: 0}}>
-        <MDBox style={{width: "100%", minWidth: 0, overflowX: "visible"}}>
-          <MDBox id={figureTitle + "_Boxplot"} style={{height: snapshotLayout(plotWidth,true).height, width: "100%", minWidth: 0}}/>
-        </MDBox>
+      <Grid key={figureTitle + "_Boxplot"} item xs={12} lg={6}>
+        <MDBox id={figureTitle + "_Boxplot"} style={{height: 600, width: "100%"}}/>
       </Grid>
     </Grid>
-  );
+  ), [refresh]);
 }
 
 export default SnapshotPSDs;

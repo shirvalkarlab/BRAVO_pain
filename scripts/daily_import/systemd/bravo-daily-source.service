@@ -1,0 +1,17 @@
+[Unit]
+Description=Read-only retained-source export for independent BRAVO
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/bravo-aditya/daily-import/host.py --config /etc/bravo-aditya/daily-source.json
+# Each read-only container operation has its own internal timeout. The full
+# first baseline can require multiple operations; allow graceful termination.
+TimeoutStartSec=0
+TimeoutStopSec=180
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

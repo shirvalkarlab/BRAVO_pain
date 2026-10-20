@@ -1,8 +1,55 @@
-/* Participant-specific motivating examples are maintained outside source control. */
+/**
+ * binarizationModel — single client-side source of truth for "which neural samples feed the
+ * binarized biomarker at the current match window, and how each one is labeled."
+ *
+ * The backend's exploratory scan pools every all-band sample (TD from streaming and from montage/survey
+ * recordings, plus the patient-event PSDs) on
+ * the six main bipolar channels, matches each to the NEAREST continuous PRO within ±tolerance, and
+ * binarizes the matched values (tertile / percentile / median / kmeans). The availability payload
+ * now ships `psd_scan_index` — one {t, channel, source} per pooled PSD — so the frontend can
+ * reproduce that match + binarization LIVE (no recompute) as the user drags the match-window slider
+ * or changes the strategy. This module is that reproduction; it is verified to return counts
+ * IDENTICAL to the backend `matched_sample_counts`.
+ *
+ * Both the binarization-preview histogram (which samples feed binarization, at this window) and the
+ * timeline color overlay (highlight the selected samples, dim the rest) consume one model instance.
+ *
+ * Colours come from the shared data colours (assets/theme/base/dataColors.js, the redesign of
+ * 2026-09-26): high pain vermillion, low pain blue, the middle third (left out) light grey. The
+ * unmatched / not-selected samples are drawn lighter still by the consumer (not a class here).
+ */
+import { PAIN, DIVERGING } from "assets/theme/base/dataColors";
+import { T } from "assets/theme/base/tokens";
 
-export const BIN_HI = "#D55E00";   // high pain
-export const BIN_LO = "#0072B2";   // low pain
-export const BIN_MID = "#7E8794";  // excluded middle
+export const BIN_HI = PAIN.high;    // high pain
+export const BIN_LO = PAIN.low;     // low pain
+export const BIN_MID = PAIN.middle; // the middle third, left out
+const hexRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+// RGB triplets for consumers that interpolate or build a translucent fill from the same colours.
+export const BIN_HI_RGB = hexRgb(BIN_HI);
+export const BIN_LO_RGB = hexRgb(BIN_LO);
+
+// The one diverging scale (blue -> light grey -> vermillion, nine stops, dataColors.DIVERGING)
+// around the value that means "no relationship" for each quantity -- 0 for a correlation, 0.5
+// (never 0) for an area under the curve. House rule: an AUC is never read against zero. Shared
+// with the Closed-Loop page's band heat map (one definition, so the two cannot drift apart).
+// Values beyond +/- halfRange saturate at the end colour; the hover still prints the true value.
+const STOPS = DIVERGING.map(([s, c]) => [s, hexRgb(c)]);
+export function divergingRgb(v, center, halfRange) {
+  const t = Math.max(-1, Math.min(1, (Number(v) - center) / halfRange));
+  const pos = (t + 1) / 2;
+  let i = 1;
+  while (i < STOPS.length - 1 && STOPS[i][0] < pos) i += 1;
+  const [s0, c0] = STOPS[i - 1];
+  const [s1, c1] = STOPS[i];
+  const k = s1 > s0 ? (pos - s0) / (s1 - s0) : 0;
+  return c0.map((a, j) => a + (c1[j] - a) * k);
+}
+export function diverging(v, center, halfRange) {
+  if (v == null || !Number.isFinite(Number(v))) return T.fillMuted;
+  const c = divergingRgb(v, center, halfRange);
+  return `rgb(${c.map((x) => Math.round(x)).join(",")})`;
+}
 
 // numpy-percentile (linear interpolation, q in 0..100) over a finite-value array.
 function percentile(values, q) {
@@ -50,7 +97,7 @@ function matchNearest(tSec, proSorted, tolSec, direction = "prior") {
 //   * "percentile" -> low/high slider percentiles
 //   * "median"   -> single median cut (>= median => high)
 //   * "kmeans"   -> 1-D 2-means (Lloyd from p25/p75), split at the cluster midpoint
-function computeCuts(vals, strategy, lowPct, highPct) {
+export function computeCuts(vals, strategy, lowPct, highPct) {
   if (!vals || vals.length === 0) return { kind: "none" };
   if (strategy === "tertile" || strategy === "percentile") {
     const loQ = strategy === "tertile" ? 33.3333 : Number(lowPct);
@@ -71,6 +118,33 @@ function computeCuts(vals, strategy, lowPct, highPct) {
     c0 = nc0; c1 = nc1;
   }
   return { kind: "one-cut", cut: (c0 + c1) / 2 };
+}
+
+// Warn when the high/low split feeding the discrimination reading (an area-under-the-curve figure,
+// worked out as though from a one-band logistic fit) is too lopsided to trust (the PI, 2026-09-27:
+// look up the literature, flag it if it is outside the range that literature considers usable).
+// Two thresholds, the stricter of the two decides:
+//   * Peduzzi, Concato, Kemper, Holford & Feinstein 1996 (J Clin Epidemiol 49(12):1373-9): a
+//     logistic fit needs at least 10 members in the smaller of its two outcome groups per fitted
+//     term, or the fitted numbers and their spread become unreliable. This page fits one term (the
+//     band's own power), so the floor is 10 in the smaller group.
+//   * A widely used general severity scale for an uneven split (see e.g. MachineLearningMastery's
+//     imbalanced-classification guide, summarising Kotsiantis et al. 2006 and later surveys): once
+//     the larger group reaches 3 times the smaller, the split counts as worth a caution.
+// Returns a plain-English sentence naming both counts, or null when the split is fine.
+export function classBalanceFlag(nLow, nHigh) {
+  const lo = Number(nLow) || 0, hi = Number(nHigh) || 0;
+  const minority = Math.min(lo, hi), majority = Math.max(lo, hi);
+  if (minority === 0 && majority === 0) return null;
+  if (minority < 10) {
+    return `Only ${minority} in the smaller of the two groups (${lo} low, ${hi} high) — fewer `
+      + "than 10 makes this reading unstable; treat it as a lead, not a finding.";
+  }
+  if (majority >= minority * 3) {
+    return `The two groups are uneven: ${lo} low vs ${hi} high (about `
+      + `${(majority / minority).toFixed(1)} to 1) — this can push the reading toward the larger group.`;
+  }
+  return null;
 }
 
 // Classify one matched continuous value into its bin given the cuts.
@@ -95,6 +169,52 @@ function classify(v, cuts) {
  *     counts: {n_sessions, n_matched, n_high, n_low, n_excluded_middle, tolerance_min,
  *              median_abs_offset_min} }
  */
+/**
+ * The coverage sentence's numbers (the PI, 2026-09-21): how many DISTINCT pain reports have ANY
+ * neural sample (TD from a streaming or montage recording, or a patient-event PSD, on any contact pair) within
+ * the match window, and within two fixed wider windows (±10 and ±60 min), either direction; plus
+ * how many of the in-window reports have a sample BEFORE them, which is what the "prior" direction
+ * keeps. Counted, not matched: no cap, no claiming, so a report counts once however many samples
+ * sit near it. Null when either input is missing.
+ */
+export function reportCoverage({ scanIndex, painSeries, toleranceMin }) {
+  if (!Array.isArray(scanIndex) || !scanIndex.length) return null;
+  if (!painSeries || !Array.isArray(painSeries.t) || !painSeries.t.length) return null;
+  const pro = painSeries.t
+    .map((t, i) => ({ t, v: painSeries.y ? painSeries.y[i] : 0 }))
+    .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.v))
+    .map((p) => p.t)
+    .sort((a, b) => a - b);
+  if (!pro.length) return null;
+  const st = scanIndex.map((e) => Number(e && e.t)).filter(Number.isFinite).sort((a, b) => a - b);
+  // for each report, the nearest sample before it and after it (seconds; Infinity when none)
+  const before = new Array(pro.length).fill(Infinity);
+  const after = new Array(pro.length).fill(Infinity);
+  let j = 0;
+  for (let k = 0; k < pro.length; k++) {
+    while (j < st.length && st[j] <= pro[k]) j++;
+    if (j > 0) before[k] = pro[k] - st[j - 1];
+    if (j < st.length) after[k] = st[j] - pro[k];
+  }
+  const within = (minutes, priorOnly = false) => {
+    const s = minutes * 60;
+    let n = 0;
+    for (let k = 0; k < pro.length; k++) {
+      if (before[k] <= s || (!priorOnly && after[k] <= s)) n++;
+    }
+    return n;
+  };
+  const tol = Number(toleranceMin) > 0 ? Number(toleranceMin) : 0;
+  return {
+    n_reports: pro.length,
+    tolerance_min: tol,
+    n_within_window: within(tol),
+    n_within_10: within(10),
+    n_within_60: within(60),
+    n_within_window_prior: within(tol, true),
+  };
+}
+
 export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
                                           strategy, percentileLow, percentileHigh,
                                           maxPerRating = 3, refractoryMin = 2,
@@ -122,10 +242,10 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
     matchable: false,
     unmatchableReason: reason,
     counts: { n_sessions: 0, n_matched: 0, n_high: 0, n_low: 0, n_excluded_middle: 0,
-              n_matched_td: 0, n_matched_montage: 0,
-              by_source: { low: { td: 0, montage: 0, lsb: 0 },
-                           high: { td: 0, montage: 0, lsb: 0 },
-                           excluded: { td: 0, montage: 0, lsb: 0 } },
+              n_matched_td: 0, n_matched_td_montage: 0, n_matched_event: 0, n_matched_other: 0,
+              by_source: { low: { td: 0, td_montage: 0, event: 0, other: 0, lsb: 0 },
+                           high: { td: 0, td_montage: 0, event: 0, other: 0, lsb: 0 },
+                           excluded: { td: 0, td_montage: 0, event: 0, other: 0, lsb: 0 } },
               tolerance_min: toleranceMin, median_abs_offset_min: null },
   });
   if (!Array.isArray(scanIndex) || !scanIndex.length) return emptyWith("no_scan_index");
@@ -295,29 +415,34 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
   const cuts = computeCuts(matchedValues, strategy, percentileLow, percentileHigh);
 
   // 2nd pass: assign each sample its bin + build the (channel,t) lookup for the timeline.
-  // Also tally matched samples by SOURCE (TD streaming vs montage/survey), since most of the pool
-  // is TD streaming, not montage PSDs — the readout breaks the count down so "neural samples" is
-  // not misread as "PSDs".
+  // Also tally matched samples by SOURCE, in the page's two groups: TD (streaming AND montage/survey
+  // recordings -- every montage sample in this index is Welch over the recording's own time-domain
+  // signal, so it is TD, the PI 2026-09-26) and PSD (the device's own patient-event snapshots).
   const samples = [];
   const binByKey = new Map();
-  let nHigh = 0, nLow = 0, nMid = 0, nMatchedTd = 0, nMatchedMontage = 0, nMatchedEvent = 0;
+  let nHigh = 0, nLow = 0, nMid = 0, nMatchedTd = 0, nMatchedTdMontage = 0, nMatchedEvent = 0;
+  let nMatchedOther = 0;
   // Per-group (low/excluded/high) modality breakdown for the in-plot detail boxes. The backend
   // `_psd_sample_index` stamps four `source` labels (bravo_service.py): time-domain streams are
-  // "BrainSense streaming" or "Indefinite stream", montage/survey is "Montage", and imported
-  // event-marker PSDs are "Patient event". srcBucket MUST key on those exact strings — an earlier
-  // version matched the substring "td", which NONE of them contain, so every time-domain sample
-  // fell through to the montage bucket and the hover's "TD" figure always read 0. LSB (band power)
-  // is NOT pooled here — its slot stays 0 (renderer shows "n/a").
-  const bySrc = { low: { td: 0, montage: 0, event: 0, lsb: 0 },
-                  high: { td: 0, montage: 0, event: 0, lsb: 0 },
-                  excluded: { td: 0, montage: 0, event: 0, lsb: 0 } };
+  // "BrainSense streaming" or "Indefinite stream", montage/survey is "Montage" (Welch over the
+  // recording's own time-domain signal, so TD), and imported event-marker PSDs are "Patient event".
+  // srcBucket MUST key on those exact strings — an earlier version matched the substring "td", which
+  // NONE of them contain, so every time-domain sample fell through to the montage bucket and the
+  // hover's "TD" figure always read 0. `td` is the WHOLE TD group (streaming + montage) and
+  // `td_montage` the montage part of it; until 2026-09-26 the montage was a separate bucket shown as
+  // "PSD (montage)". A label the server does not write lands in `other`, counted in neither group.
+  // LSB (band power) is NOT pooled here — its slot stays 0 (renderer shows "n/a").
+  const bySrc = { low: { td: 0, td_montage: 0, event: 0, other: 0, lsb: 0 },
+                  high: { td: 0, td_montage: 0, event: 0, other: 0, lsb: 0 },
+                  excluded: { td: 0, td_montage: 0, event: 0, other: 0, lsb: 0 } };
   const srcBucket = (src) => {
     const s = String(src || "").toLowerCase();
     // Time domain: BrainSense streaming + Indefinite stream (both are raw 250 Hz TD). Keep the
     // legacy "td" / "stream" / "indefinite" tokens so any older label still maps correctly.
     if (s.indexOf("td") >= 0 || s.indexOf("stream") >= 0 || s.indexOf("indefinite") >= 0) return "td";
+    if (s.indexOf("montage") >= 0 || s.indexOf("survey") >= 0) return "td_montage";
     if (s.indexOf("event") >= 0) return "event";
-    return "montage";   // "Montage" / "Montage PSD" / survey
+    return "other";
   };
   for (const s of obs) {
     let bin;
@@ -326,8 +451,14 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
       bin = classify(s.v, cuts);
       if (bin === "high") nHigh++; else if (bin === "low") nLow++; else nMid++;
       const srcKey = srcBucket(s.source);
-      if (srcKey === "td") nMatchedTd++; else if (srcKey === "event") nMatchedEvent++; else nMatchedMontage++;
-      if (bySrc[bin]) bySrc[bin][srcKey] += 1;   // bin is high|low|excluded (matched-only branch)
+      if (srcKey === "td") nMatchedTd++;
+      else if (srcKey === "td_montage") { nMatchedTd++; nMatchedTdMontage++; }
+      else if (srcKey === "event") nMatchedEvent++;
+      else nMatchedOther++;
+      if (bySrc[bin]) {                          // bin is high|low|excluded (matched-only branch)
+        if (srcKey === "td_montage") { bySrc[bin].td += 1; bySrc[bin].td_montage += 1; }
+        else bySrc[bin][srcKey] += 1;
+      }
     }
     samples.push({ ...s, bin });
     // Collision-proof key set: `Math.round(s.t)` buckets samples to the integer second, and >=2
@@ -360,8 +491,9 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
       n_matched: matchedValues.length,
       n_high: nHigh, n_low: nLow,
       n_excluded_middle: (strategy === "tertile" || strategy === "percentile") ? nMid : 0,
-      n_matched_td: nMatchedTd, n_matched_montage: nMatchedMontage,
-      n_matched_event: nMatchedEvent,
+      // n_matched_td is the whole TD group (streaming + montage); n_matched_td_montage its montage part.
+      n_matched_td: nMatchedTd, n_matched_td_montage: nMatchedTdMontage,
+      n_matched_event: nMatchedEvent, n_matched_other: nMatchedOther,
       by_source: bySrc,
       tolerance_min: toleranceMin,
       median_abs_offset_min: medianOffset,
@@ -401,27 +533,4 @@ export function computeMatchedScanModel({ scanIndex, painSeries, toleranceMin,
                      : matchedValues.length)) / scanIndex.length) / 10 : 0,
     },
   };
-}
-
-export const BIN_HI_RGB = [213, 94, 0];
-export const BIN_LO_RGB = [0, 114, 178];
-
-// A diverging scale around the value that means "no relationship" for each quantity -- 0 for a
-// correlation, 0.5 (never 0) for an area under the curve. House rule: an AUC is never read against
-// zero. Moved here from BiomarkerHeatmapGrids on 2026-09-11 so the Closed-Loop page's band heat map
-// and the Biomarkers heat maps read ONE definition of the colour and cannot drift apart.
-export function divergingRgb(v, center, halfRange) {
-  const t = Math.max(-1, Math.min(1, (Number(v) - center) / halfRange));
-  const neg = BIN_LO_RGB;         // blue
-  const pos = BIN_HI_RGB;         // vermillion
-  const mid = [255, 255, 255];
-  const lerp = (a, b, k) => a + (b - a) * k;
-  return t < 0
-    ? [lerp(neg[0], mid[0], 1 + t), lerp(neg[1], mid[1], 1 + t), lerp(neg[2], mid[2], 1 + t)]
-    : [lerp(mid[0], pos[0], t), lerp(mid[1], pos[1], t), lerp(mid[2], pos[2], t)];
-}
-export function diverging(v, center, halfRange) {
-  if (v == null || !Number.isFinite(Number(v))) return "#e9e9e9";
-  const c = divergingRgb(v, center, halfRange);
-  return `rgb(${c.map((x) => Math.round(x)).join(",")})`;
 }

@@ -1,0 +1,19 @@
+[Unit]
+Description=Fixed BRAVO manual synchronization target worker
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+RequiresMountsFor=/media/bravo-aditya
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/bravo-aditya/daily-import/manual_sync.py --config /etc/bravo-aditya/manual-target.json
+# Preserve the ingestion lock until the child process exits. Never kill a live
+# write process merely to make the interface show a timeout.
+TimeoutStartSec=0
+TimeoutStopSec=180
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

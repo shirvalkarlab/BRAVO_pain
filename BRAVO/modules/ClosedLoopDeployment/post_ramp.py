@@ -1,31 +1,22 @@
-"""THE SWITCH for the 20 s post-ramp margin on the three-source comparison (review hazard 1).
+"""Switch for the post-ramp margin on the three-source comparison (review hazard 1).
 
-SETTLED OFF BY MEASUREMENT, 2026-09-17 (decision 196, the PI: "settle the issue for S7, remove
-NO DATA since all is stable"). On the 2026-09-16 titration session at 55 Hz, 31 settings held
-107-168 s on L 1-3+, the band power in the first 3 s after a current move is 1.000 of the same
-setting's last-30 s level (95 % 0.86-1.16); on the record's 58 holds of 60 s or more, 0.98-1.02
-at every window from 3 to 30 s. There is no transient to exclude at the pieces' 3 s resolution.
-The switch stays False and is not to be turned on; it is kept only so the stored tables' rule
-versions (`_off`) do not move. The history that follows is why it existed.
+The source policy keeps the switch OFF (decisions 196 and 217, 2026-09-20). The switch is retained
+for compatibility with stored rule versions; participant-specific evidence for that policy is
+private. This integration preserves the source policy rather than generalizing its measurements.
 
-Two removed points flipping a verdict is his call, not the code's, so the margin ships OFF
-(decision 144, 2026-09-12). It was switched ON for part of the evening of 2026-09-15 (decision
-178, which records what that did: L 1-3+ went from "supported (provisional)" to blocked on a slope
-of +17.31 from 11 points) and switched back the same night on his ruling, "let the next titration
-decide, so wait on more data" (decision 179). The rule versions of every stored table derived from
-the comparison carry the state, so a table built one way is never served as the other; the switch
-is read at import, so flipping it means restarting the workers, after which the tables rebuild
-under their own keys. `margin_becomes_available` is the condition for turning it on."""
+Commit 790ed21 introduced the clip, wired into `_tile_panel` by the review of 2026-09-12.
+The rule versions of derived tables carry the switch state so results built under different
+policies cannot be interchanged. The switch is read at import; changing it requires worker
+restart and rebuild under the corresponding keys. `margin_becomes_available` records the
+condition for enabling it.
+"""
 try:
     from modules.StimOptimizer.routines.within_visit import RAMP_EXCLUDE_S as _RAMP_EXCLUDE_S
 except ImportError:                                   # the host suite's root
-    from modules.StimOptimizer.routines.within_visit import RAMP_EXCLUDE_S as _RAMP_EXCLUDE_S
+    from StimOptimizer.routines.within_visit import RAMP_EXCLUDE_S as _RAMP_EXCLUDE_S
 
 USE_POST_RAMP_MARGIN = False
 
-
-
-# Aditya canonical compatibility imports/constants.
 
 def margin_s():
     """Seconds after a current move kept out of the settled window: 20 when on, 0 when off."""
@@ -63,7 +54,7 @@ def margin_becomes_available(runs, *, min_settled_settings=None):
         out["note"] = "the per-run points table is not stored, so nothing was counted"
         return out
     try:
-        from modules.StimOptimizer.titration_plan import settled_settings_per_run as _per_run
+        from StimOptimizer.titration_plan import settled_settings_per_run as _per_run
     except ImportError:
         from modules.StimOptimizer.titration_plan import settled_settings_per_run as _per_run
     per = _per_run(runs)
@@ -85,6 +76,3 @@ def margin_becomes_available(runs, *, min_settled_settings=None):
                    f"no run holds {need} settled settings; the most in any one run is "
                    f"{out['max_settled_settings_in_one_run']} ({out['run']} on {out['sensing_contact']})")
     return out
-
-
-# Retained active Aditya interfaces.

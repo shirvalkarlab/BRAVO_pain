@@ -1,6 +1,11 @@
 """The clinic and at-home testing sheets' pain scores as extra ratings for the Biomarkers heat maps
 (B5 of the 2026-09-15 review, decision 186), Django-free.
 
+The heat maps pool at-home REDCap ratings. Clinic and at-home testing sheets carry
+additional step-level ratings entered by the clinician. These may be pooled behind
+a switch that defaults to OFF, with each added rating flagged and counted so the
+page exposes how much of a cell rests on this supplemental source (decision 161).
+
 THE SCALE. The sheet's scores are 0-10 verbal ratings at half-point resolution. The page's NRS is
 0-10 too, so "overall" goes in as it is; the three VAS scores are 0-100, so the sheet's "overall",
 "left_leg" and "back" columns go in multiplied by ten (the PI, 2026-09-16: "rescale ... by
@@ -13,7 +18,8 @@ minute inside a session, so 200 of them are perhaps 20 sessions' worth of near-d
 The p-value's block shuffle and the interval's block bootstrap (decision 183) size their blocks on
 the rating series' own autocorrelation, which these steps raise -- the corrections adapt, the
 effective sample size grows far less than the count. That is why the switch is off by default and
-the count is on the page."""
+the count is on the page.
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -27,9 +33,6 @@ SHEET_COLUMN_FOR_METRIC = {
     "back_vas": ("back", 10.0),
 }
 
-
-
-# Aditya canonical compatibility imports/constants.
 
 def _epoch_s(value):
     """UTC epoch seconds for a sheet step's `t_utc` (a Timestamp, a datetime, an ISO string), or
@@ -86,6 +89,3 @@ def merge_ratings(pro_times, pro_values, sheet_times, sheet_values):
     flag = np.concatenate([np.zeros(pt.size, dtype=bool), np.ones(st.size, dtype=bool)])
     order = np.argsort(t, kind="stable")
     return t[order], v[order], flag[order]
-
-
-# Retained active Aditya interfaces.

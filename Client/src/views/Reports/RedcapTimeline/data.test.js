@@ -6,7 +6,7 @@ const phases=[{key:'pre',label:'Pre-trial',color:'#111111',start:point('2025-01-
 const range={start:'2025-01-01',end:'2025-12-31'};
 
 test('the eleven requested defaults retain user order and the standard MPQ scale',()=>{
-  expect(DEFAULT_METRICS).toEqual(['mood_vas','nrs_intensity','vas_intensity','left_leg_vas_intensity','back_vas_intensity','mpq_sens','mpq_aff','mpq_standard_0_45','firey','tingly','electrocuting']);
+  expect(DEFAULT_METRICS).toEqual(['mood_vas','nrs_intensity','vas_intensity','left_leg_vas_intensity','back_vas_intensity','mpq_standard_sensory_0_33','mpq_standard_affective_0_12','mpq_standard_0_45','firey','tingly','electrocuting']);
   expect(new Set(DEFAULT_METRICS).size).toBe(11);
 });
 
@@ -245,33 +245,32 @@ test('inactive adaptive thresholds are explicitly stored values and source rows 
 });
 
 
-test('RCS08 hover settings use reviewed anatomy, compact stimulation lines and the actual sensing source',()=>{
+test('hover settings retain recorded anatomy, compact stimulation lines and the actual sensing source',()=>{
   const settings={group:[],left:[row('Tablet target','GPi'),row('Stimulation contacts','Case+, 2−'),row('Frequency','55 Hz'),row('Amplitude','3.5 mA'),row('Pulse width','100 µs'),row('Threshold mode','DUAL_THRESHOLD'),row('Sensing source hemisphere','Right'),row('Sensing contacts','9–11')],right:[row('Tablet target','VIM'),row('Stimulation contacts','Case+, 10−')]};
   const before=JSON.stringify(settings);
-  const summary=settingsSummary(settings,'RCS08');
-  expect(summary).toContain('L GPe C+2−<br>55 Hz · 3.5 mA · 100 µs');
-  expect(summary).toContain('R MD Thal C+10−');
+  const summary=settingsSummary(settings,'SYNTHETIC_A1');
+  expect(summary).toContain('L GPi C+2−<br>55 Hz · 3.5 mA · 100 µs');
+  expect(summary).toContain('R VIM C+10−');
   expect(summary).toContain('Threshold mode: Dual threshold');
-  expect(summary).toContain('Source: R MD Thal · Contacts: 9–11');
-  expect(summary).not.toMatch(/GPi|VIM/);
-  expect(settingsSummary(settings,'RCS09')).toContain('L GPi C+2−');
-  expect(settingsSummary({left:[row('Tablet target','Left STN'),row('Frequency','130 Hz')]},'RCS09')).toContain('L STN Contacts not recorded<br>130 Hz');
-  expect(settingsSummary({left:[row('Threshold mode','unrecorded')]},'RCS08')).toContain('Threshold mode: unrecorded');
-  expect(settingsSummary({left:[row('Stimulation contacts','Case+, 2−')]},'RCS08')).toContain('L GPe C+2−');
+  expect(summary).toContain('Source: Right · Contacts: 9–11');
+  expect(settingsSummary(settings,'SYNTHETIC_B2')).toContain('L GPi C+2−');
+  expect(settingsSummary({left:[row('Tablet target','Left STN'),row('Frequency','130 Hz')]},'SYNTHETIC_B2')).toContain('L STN Contacts not recorded<br>130 Hz');
+  expect(settingsSummary({left:[row('Threshold mode','unrecorded')]},'SYNTHETIC_A1')).toContain('Threshold mode: unrecorded');
+  expect(settingsSummary({left:[row('Stimulation contacts','Case+, 2−')]},'SYNTHETIC_A1')).toContain('L C+2−');
   expect(JSON.stringify(settings)).toBe(before);
 });
 
 test('the live participant route reaches observed, median and transition tooltips without changing survey data',()=>{
   const previous=window.location.pathname;
-  window.history.replaceState({},'', '/reports/redcap-pretrial/81b245ec31594d9894f1dfc9438b6348');
+  window.history.replaceState({},'', '/reports/redcap-pretrial/SYNTHETIC_A1');
   try {
     const metric={label:'Pain',points:[point('2025-01-02',0),point('2025-01-03',8)]};
     const home={time:point('2025-01-01',0).time,id:'raw-home-id',number:1,label:'Group A',settings:completeSettings};
     const traces=metricTraces(metric,phases,range,true,[],[home]);
-    expect(traces[0].customdata[0]).toContain('L GPe C+2−<br>55 Hz · 3.5 mA · 100 µs');
-    expect(traces[1].customdata[0]).toContain('R MD Thal C+10−');
+    expect(traces[0].customdata[0]).toContain('L C+2−<br>55 Hz · 3.5 mA · 100 µs');
+    expect(traces[1].customdata[0]).toContain('R C+10−');
     expect(transitionLayout([home]).annotations[0]).toMatchObject({name:'raw-home-id'});
-    expect(transitionLayout([home]).annotations[0].hovertext).toContain('Shared sensing: Source: L GPe');
+    expect(transitionLayout([home]).annotations[0].hovertext).toContain('Shared sensing: Source: Left');
     expect(traces[0].y).toEqual([0,8]);expect(traces[1].y).toEqual([4,4]);
     expect(home.settings.left[5].value).toBe('Left');
   } finally { window.history.replaceState({},'',previous); }

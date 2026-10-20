@@ -9,7 +9,7 @@ so BRAVO can run them on its decoded Percept recordings.
 
 What is verbatim vs. ported:
   * The PSD transform / correlation functions below (`_mad`, `normalize_psd_across_epochs`,
-    `pearson_corr_psd_label`, `zscore_per_freq`, `remove_aperiodic`, `relative_power`,
+    `pearson_corr_psd_label`, `zscore_per_freq`, `relative_power`,
     `align_and_standardize_label`) are copied BYTE-FOR-BYTE from the notebook (cell 19).
   * `welch_psd_for_instance` ports the signal-processing logic of notebook cell 8
     (Butterworth high-pass + Welch nperseg=1024 + interp to F_SET). The Welch parameters and
@@ -40,9 +40,13 @@ import numpy as np
 try:
     from modules.DecodeCommon import matching as _matching
 except ImportError:
-    from modules.DecodeCommon import matching as _matching
+    from DecodeCommon import matching as _matching
 from scipy.signal import welch, butter, filtfilt
 from scipy.stats import t
+
+# The matching defaults have one home (decision 331); the two builders below take theirs from it.
+from . import sweep_settings as _sweep_settings
+from .event_spectra import EVENT_SPECTRUM_SOURCE, interpolate_observed_event_spectrum
 
 # Frequency grid the notebook interpolates every PSD onto (cell 8).
 # np.linspace(0.95, 100, int(round((100-0.95)/0.98)))  -> ~101 bins at ~0.98 Hz spacing.
@@ -54,12 +58,6 @@ F_SET = np.linspace(0.95, 100, int(round((100 - 0.95) / 0.98)))
 # ============================================================================
 
 # ---------- Day-wise normalization (NaN-safe) ----------
-
-# Aditya canonical compatibility imports/constants.
-
-
-
-
 def _mad(a, axis=0, scale_gaussian=True):
     med = np.nanmedian(a, axis=axis, keepdims=True)
     mad = np.nanmedian(np.abs(a - med), axis=axis, keepdims=True)
@@ -107,16 +105,25 @@ def _mad_keep(x, k=None):
     polarity convention; the PI consolidated the plate onto a single 5 MAD filter on 2026-08-30.
     ``k=None`` means the canonical threshold (stats_utils.MAD_N_DEFAULT).
 
-    Scale: the features reaching this function are post-daywise-normalization log/z quantities and
-    the label is a bounded ordinal score, so both are additive and the rule is applied on the raw
-    scale. Do NOT pass a raw-linear power/LSB feature here — that needs scale="log" (see
-    stats_utils.mad_outlier_flags).
+    Scale: the rule is applied on the values as given, raw power included (decision 205; the
+    log-scale option is gone, see stats_utils.mad_outlier_flags).
     """
     from .stats_utils import mad_keep_mask
     return mad_keep_mask(x, n_mad=k, scale="raw")
 
 def pearson_corr_psd_label(psd_feat, label, mad_k=None, rating_group=None, return_extra=False):
-    """Generic implementation; participant-specific examples are kept outside source control."""
+    """psd_feat: (E, C, F) features AFTER daywise normalization
+label: (E,)
+mad_k: per-(channel, frequency) outlier rejection on both feature and label;
+    None selects the canonical threshold and 0 disables rejection.
+rating_group: (E,) integer code per matched report (-1 ungrouped), from
+    pipeline.rating_group_from_identity. When supplied, `pval` is cluster-robust
+    with df=G-1; naive df=n-2 overstates information when epochs share a report.
+    Omitting this argument retains the naive calculation for existing callers.
+return_extra: return pval_naive, n_clusters, se_cluster and method alongside the
+    corrected result, allowing both families to be shown explicitly.
+Returns: corr (C,F), pval (C,F)[, extra dict]
+    """
     X = np.asarray(psd_feat, dtype=float)
     y = np.asarray(label, dtype=float)
     E, C, F = X.shape
@@ -212,17 +219,15 @@ def pearson_corr_psd_label(psd_feat, label, mad_k=None, rating_group=None, retur
 
 
 # ------------------------------
-# 1) Log-transform + z-score (per channel & frequency across epochs), NaN-safe
+# 1) z-score (per channel & frequency across epochs), NaN-safe
 # ------------------------------
 def zscore_per_freq(psd, eps=1e-12):
     """
     psd: (E, C, F) non-negative power values (Nas allowed)
-    Returns: (E, C, F) log10 power, z-scored across epochs per (channel, freq).
+    Returns: (E, C, F) power, z-scored across epochs per (channel, freq) -- no logarithm.
              Ignores NaNs when computing mean/std.
     """
     psd = np.asarray(psd, dtype=float)
-    # logp = np.log10(psd + eps)
-
     # nanmean / nanstd across epochs (axis=0)
     mu = np.nanmean(psd, axis=0, keepdims=True)               # (1, C, F)
     sd = np.nanstd(psd, axis=0, keepdims=True) + 1e-12        # avoid /0
@@ -231,77 +236,9 @@ def zscore_per_freq(psd, eps=1e-12):
     return out  # NaNs propagate only where inputs are NaN or all-NaN along axis
 
 
-# ------------------------------
-# 2) Aperiodic (1/f) removal, NaN-safe
-#    - Tries specparam/FOOOF per spectrum with freq-masking
-#    - Falls back to log-log linear detrend with NaN masks
-# ------------------------------
-def remove_aperiodic(psd, freqs, use_specparam=True, aperiodic_mode="knee",
-                     peak_width_limits=(1, 12), max_n_peaks=6, eps=1e-12):
-    """
-    psd:   (E, C, F)
-    freqs: (F,)
-    Returns: (E, C, F) log10 residuals after aperiodic removal, NaN-safe.
-             If a spectrum has <2 valid points, residuals are NaN for that row.
-    """
-    psd = np.asarray(psd, dtype=float)
-    freqs = np.asarray(freqs, dtype=float)
-    if np.any(freqs <= 0):
-        raise ValueError("All freqs must be > 0 for log/aperiodic fitting.")
-
-    E, C, F = psd.shape
-    logp = np.log10(psd + eps)
-    residuals = np.full_like(logp, np.nan)  # initialize with NaN
-
-    # ---- Try specparam if available
-    if use_specparam:
-        try:
-            from specparam import SpectralModel
-            # Fit per (epoch, channel) to allow NaN-masking of freqs
-            for e in range(E):
-                for c in range(C):
-                    y = psd[e, c, :]
-                    valid = np.isfinite(y) & np.isfinite(freqs)
-                    if valid.sum() < 2:
-                        continue
-                    sm = SpectralModel(aperiodic_mode=aperiodic_mode,
-                                       peak_width_limits=peak_width_limits,
-                                       max_n_peaks=max_n_peaks,
-                                       verbose=False)
-                    # specparam wants linear power (no logs); it logs internally
-                    sm.fit(freqs[valid], y[valid])
-                    # Build aperiodic fit (in log10 units) on valid bins
-                    ap = sm.get_params('aperiodic_params')
-                    if aperiodic_mode == 'fixed':        # [offset, exponent]
-                        offset, exponent = ap
-                        ap_fit_valid = offset - exponent * np.log10(freqs[valid])
-                    else:                                 # 'knee': [offset, knee, exponent]
-                        offset, knee, exponent = ap
-                        ap_fit_valid = offset - np.log10(knee + freqs[valid]**exponent)
-                    # residuals (log10)
-                    residuals[e, c, valid] = np.log10(y[valid] + eps) - ap_fit_valid
-            return residuals
-        except Exception:
-            # Fall through to simple detrend
-            pass
-
-    # ---- Fallback: log-log linear fit per spectrum with NaN masks
-    lf = np.log10(freqs)
-    for e in range(E):
-        for c in range(C):
-            y = logp[e, c, :]                      # (F,)
-            valid = np.isfinite(y) & np.isfinite(lf)
-            if valid.sum() < 2:
-                continue
-            x = lf[valid]
-            X = np.vstack([np.ones_like(x), x]).T  # (n_valid, 2)
-            # Solve least squares on valid points
-            a, b = np.linalg.lstsq(X, y[valid], rcond=None)[0]
-            ap_fit = a + b * lf
-            residuals[e, c, valid] = y[valid] - (a + b * lf[valid])
-    return residuals
-
-
+# The aperiodic (1/f) fit that stood here (`remove_aperiodic`, a spectral-model library fit with a log-log fallback)
+# was deleted on 2026-09-19 (decision 206): log power enters no calculation, and nothing on any
+# page could select it.
 # ------------------------------
 # 3) Relative (fractional) power across frequency, NaN-safe
 # ------------------------------
@@ -347,13 +284,38 @@ def align_and_standardize_label(label):
 # the matrix-cache key (bravo_service): changing it invalidates the cache so PSDs are re-Welch'd.
 WELCH_MAX_SECONDS = 30.0
 
-# Participant-specific provenance and examples are maintained outside source control.
+# Maximum fraction of a Welch window that may be MISSING (zero-filled) before the window is rejected.
+# Background: BrainSenseStream.saveBrainSenseStreams' FixBreaking block concatenates consecutive,
+# time-separated TD recordings and ZERO-FILLS the inter-recording gap (up to a 30 s ceiling), marking
+# those samples 1 in the recording's `Missing` array. Those zeros are not neural signal — Welch'ing over them
+# deflates broadband power and leaks spectrally. A window whose missing fraction exceeds this
+# threshold is dropped (centered path) or flagged (first-window path) rather than returned as a
+# trustworthy spectrum. The PowerDomain adapter already drops missing>0 samples; this brings the TD
+# Welch path to parity. Part of the TD PSD cache key (bravo_service `_TD_MISSING_VERSION`): changing
+# it invalidates the cache so PSDs are re-Welch'd.
 WELCH_MAX_MISSING_FRAC = 0.10
+
+# A sample at the recording rail, in microvolts (the PI, 2026-10-18, item 6d): a channel whose 30 s
+# window holds any finite sample at or above this, in absolute value, gives no spectrum for that
+# window -- the rule the heat maps' 3 s pieces have long applied, with its number
+# (`availability.PRO_LSB_SATURATION_UV`; a test, tests/test_welch_saturation.py, pins the two
+# equal, so neither can move alone). Per channel, as the 3 s route judges each channel's own piece.
+# Part of the spectrum caches' keys (bravo_service `_TD_SATURATION_VERSION`).
+WELCH_SATURATION_UV = 4000.0
+
+
+def _railed_rows(data, sat):
+    """(n_ch,) bool: the rows of `data` (n_ch, n) holding any finite sample with |x| >= `sat`."""
+    if not np.isfinite(sat):
+        return np.zeros(data.shape[0], dtype=bool)
+    with np.errstate(invalid="ignore"):
+        return np.any(np.abs(data) >= float(sat), axis=-1)
 
 
 def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
                            f_set=F_SET, max_seconds=WELCH_MAX_SECONDS,
-                           missing=None, max_missing_frac=WELCH_MAX_MISSING_FRAC):
+                           missing=None, max_missing_frac=WELCH_MAX_MISSING_FRAC,
+                           saturation_uv=WELCH_SATURATION_UV):
     """
     Compute one PSD epoch, shaped (1, len(chan_order), len(f_set)), from one streaming
     group. Signal-processing: 4th-order Butterworth high-pass at Wn=1/nyq, Welch nperseg=1024,
@@ -405,6 +367,10 @@ def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
             if miss.size and float(np.mean(miss > 0)) > float(max_missing_frac):
                 return np.full((1, len(chan_order), len(f_set)), np.nan)
 
+    # (a'') A channel with a sample at the recording rail in this window gives no spectrum
+    # (`WELCH_SATURATION_UV`, item 6d), judged on the raw window before filtering.
+    railed = _railed_rows(data, saturation_uv)
+
     data = filtfilt(b, a, data, axis=-1)
 
     # nperseg can't exceed the (possibly short) segment length; guard explicitly so Welch averages
@@ -412,6 +378,8 @@ def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
     nper = int(min(1024, data.shape[-1]))
     f, Pxx = welch(data, fs=fs, nperseg=max(nper, 8), axis=-1)  # (n_ch, F_welch)
     Pxx = np.array([np.interp(f_set, f, Pxx[i, :]) for i in range(Pxx.shape[0])])
+    if railed.any():
+        Pxx[railed[:Pxx.shape[0]], :] = np.nan
 
     psd = np.zeros((1, len(chan_order), len(f_set)))
     # (b) Place each channel by its LOCAL row index into the global chan_order slot.
@@ -447,7 +415,8 @@ WELCH_CENTERED_MIN_SECONDS = 10.0   # floor: clipped windows shorter than this a
 def welch_rating_centered(channel_data, channel_names, fs, chan_order, centers_s, *,
                           f_set=F_SET, win_s=WELCH_MAX_SECONDS,
                           min_s=WELCH_CENTERED_MIN_SECONDS,
-                          missing=None, max_missing_frac=WELCH_MAX_MISSING_FRAC):
+                          missing=None, max_missing_frac=WELCH_MAX_MISSING_FRAC,
+                          saturation_uv=WELCH_SATURATION_UV):
     """Welch one rating-centered window per entry in `centers_s`, for ONE streaming recording.
 
     Parameters
@@ -522,6 +491,19 @@ def welch_rating_centered(channel_data, channel_names, fs, chan_order, centers_s
             frac = np.where(dur_n > 0, win_missing / np.maximum(dur_n, 1), 0.0)
             kept_mask = kept_mask & (frac <= float(max_missing_frac))
 
+    # Saturation (item 6d): a channel with a sample at the recording rail inside a window gives no
+    # spectrum for that window (NaN); a window railed on every channel it would fill is dropped
+    # like an under-length one. Judged on the raw [lo, hi) span before filtering.
+    railed = {}
+    if np.isfinite(saturation_uv):
+        slot_rows = [li for li, nm in enumerate(channel_names) if nm in chan_order]
+        for gi in np.nonzero(kept_mask)[0]:
+            r = _railed_rows(data[:, lo[gi]:hi[gi]], saturation_uv)
+            if r.any():
+                railed[int(gi)] = r
+                if slot_rows and all(r[li] for li in slot_rows if li < r.size):
+                    kept_mask[gi] = False
+
     kept_idx = np.nonzero(kept_mask)[0]
     if kept_idx.size == 0:
         return (np.zeros((0, n_ch, len(f_set))), np.zeros((0,)), kept_mask)
@@ -571,6 +553,12 @@ def welch_rating_centered(channel_data, channel_names, fs, chan_order, centers_s
         for li, gslot in slot:
             psd[row_of[int(gi)], gslot, :] = np.interp(f_set, f, P[li, :])
         used[row_of[int(gi)]] = seg.shape[-1] / fs
+
+    for gi, r in railed.items():
+        if gi in row_of:
+            for li, gslot in slot:
+                if li < r.size and r[li]:
+                    psd[row_of[gi], gslot, :] = np.nan
 
     return psd, used, kept_mask
 
@@ -658,34 +646,35 @@ def _match_to_pro(times_s, pro_times_s, pro_values, tolerance_min, direction="ne
             return lab, dt, pro_idx
 
     # --- PSD-first branches ("prior", "nearest") -----------------------------------------------
-    for i, sample_time in enumerate(times_s):
-        if not _np.isfinite(sample_time):
+    for i, t in enumerate(times_s):
+        if not _np.isfinite(t):
             continue
-        pos = int(_np.searchsorted(pt, sample_time))
+        pos = int(_np.searchsorted(pt, t))
         best, best_d = -1, None
         if direction == "prior":
-            # PSD must precede the rating: consider only PRO times at or after sample_time (pt[k] >= sample_time), and
-            # pick the nearest such within tolerance. searchsorted(pt, sample_time) is the first index with
-            # pt[k] >= sample_time, so the candidate is pos (and pos itself if pt[pos]==sample_time).
+            # PSD must precede the rating: consider only PRO times at or after t (pt[k] >= t), and
+            # pick the nearest such within tolerance. searchsorted(pt, t) is the first index with
+            # pt[k] >= t, so the candidate is pos (and pos itself if pt[pos]==t).
             k = pos
             if 0 <= k < pt.size:
-                d = pt[k] - sample_time
+                d = pt[k] - t
                 if 0 <= d <= tol_s:
                     best, best_d = k, d
         else:
             for k in (pos - 1, pos):
                 if 0 <= k < pt.size:
-                    d = abs(pt[k] - sample_time)
+                    d = abs(pt[k] - t)
                     if d <= tol_s and (best_d is None or d < best_d):
                         best, best_d = k, d
         if best >= 0:
             lab[i] = pv[best]
-            dt[i] = (pt[best] - sample_time) / 60.0
+            dt[i] = (pt[best] - t) / 60.0
             pro_idx[i] = int(order[best])   # map back to caller's original PRO ordering
     return lab, dt, pro_idx
 
 
-def build_pooled_psd_detail(psd_rows, pro_times_s, pro_values, *, tolerance_min=15.0,
+def build_pooled_psd_detail(psd_rows, pro_times_s, pro_values, *,
+                            tolerance_min=_sweep_settings.DEFAULT_MATCH_TOLERANCE_MIN,
                             f_set=F_SET, min_per_group=3):
     """Assemble ALL full-spectrum PSDs (time-domain, montage/survey, snapshot, patient events) into
     one scan-ready detail dict, KEYED BY ELECTRODE CHANNEL (DESIGN: channel is the top-level gate),
@@ -693,12 +682,14 @@ def build_pooled_psd_detail(psd_rows, pro_times_s, pro_values, *, tolerance_min=
 
     Every full-spectrum source contributes rows; rows on the SAME bipolar channel pool together no
     matter which source they came from (streaming session, montage sweep, snapshot, patient event).
-    Each spectrum is interpolated onto a common `f_set`, taken to 10*log10, then Z-SCORED PER
+    Each spectrum is interpolated onto a common `f_set` and kept as RAW POWER, then Z-SCORED PER
     FREQUENCY WITHIN (channel, source) so heterogeneous units (uV^2 vs LSB vs FFT bins) become
     comparable before pooling (§8c "within-stream standardization removes the need for unit
     conversion to pool"). Pearson r and single-feature logistic AUC are invariant to this affine
     transform, so a single-source channel is unaffected; the standardization only matters where two
-    sources share a channel.
+    sources share a channel. Until 2026-09-19 the spectra were taken to decibels before the
+    standardisation; the PI's rule of that day (decision 202: log power enters no calculation)
+    removed that step (decision 204).
 
     Parameters
     ----------
@@ -715,8 +706,8 @@ def build_pooled_psd_detail(psd_rows, pro_times_s, pro_values, *, tolerance_min=
 
     Returns
     -------
-    dict shaped like compute_psd_pain_correlation's output, with `prelog=True`, channel axis = the
-    bipolar channels found, plus `pool_meta`.
+    dict shaped like compute_psd_pain_correlation's output, channel axis = the bipolar channels
+    found, plus `pool_meta`.
     """
     mat = psd_rows_to_matrix(psd_rows, f_set=f_set)
     if mat is None:
@@ -729,15 +720,22 @@ def psd_rows_to_matrix(psd_rows, *, f_set=F_SET):
     """Interpolate raw per-(recording, channel) spectra onto a common grid -> a CACHEABLE matrix.
 
     This is the expensive-to-recompute artifact (the upstream Welch/decode feeds it): a fixed-shape
-    (N, F) log-power matrix plus parallel channel/source/timestamp arrays. It depends ONLY on the
+    (N, F) matrix of RAW power plus parallel channel/source/timestamp arrays. It depends ONLY on the
     recordings — NOT on the match tolerance or the pain metric — so it can be computed once (eagerly,
     while the availability timeline loads) and reloaded on every subsequent compute.
 
+    THE FIELD IS `X`, NOT `logX`, ON PURPOSE (decision 204, 2026-09-19). Until then the matrix held
+    decibels under `logX`, and three consumers undid them (`10 ** (x / 10)`) or standardised them
+    as they were. The stored kind's key carries a power-scale token so no decibel entry is served
+    as raw power, and the field was renamed so a reader that still asks for `logX` fails with a
+    KeyError instead of reading raw power as decibels.
+
     `psd_rows`: list of {"channel", "source", "t": epoch_s, "freq", "power"}.
-    Returns {"logX": (N,F) float, "t": (N,), "channel": (N,) str, "source": (N,) str, "f_set": (F,)}.
+    Returns {"X": (N,F) float raw power, "t": (N,), "channel": (N,) str, "source": (N,) str,
+    "f_set": (F,)}.
     """
     f_set = np.asarray(f_set, dtype=float)
-    logs, ts, chs, srcs, durs = [], [], [], [], []
+    xs, ts, chs, srcs, durs = [], [], [], [], []
     for r in psd_rows or []:
         t = r.get("t")
         ch = r.get("channel")
@@ -745,26 +743,36 @@ def psd_rows_to_matrix(psd_rows, *, f_set=F_SET):
             continue
         fr = np.asarray(r.get("freq"), dtype=float)
         pw = np.asarray(r.get("power"), dtype=float)
-        ok = np.isfinite(fr) & np.isfinite(pw) & (pw > 0)
-        if ok.sum() < 4:
-            continue
-        logs.append(10.0 * np.log10(np.interp(f_set, fr[ok], pw[ok])))
+        if r.get("source") == EVENT_SPECTRUM_SOURCE:
+            # Device event negatives are censored, not zero or an endpoint to extend.
+            values = interpolate_observed_event_spectrum(fr, pw, f_set)
+            if not np.isfinite(values).any():
+                continue
+        else:
+            # Preserve the existing waveform/Welch and montage path exactly.
+            ok = np.isfinite(fr) & np.isfinite(pw) & (pw > 0)
+            if ok.sum() < 4:
+                continue
+            values = np.interp(f_set, fr[ok], pw[ok])
+        xs.append(values)
         ts.append(float(t)); chs.append(str(ch)); srcs.append(str(r.get("source") or "?"))
         # Welch epoch length (s) for this PSD; NaN for sources without a time-domain epoch
         # (event/montage onboard PSDs). Carried so the report can show the TD epoch mean +/- SD.
         d = r.get("dur")
         durs.append(float(d) if d is not None else float("nan"))
-    if not logs:
+    if not xs:
         return None
-    return {"logX": np.vstack(logs), "t": np.asarray(ts, dtype=float),
+    return {"X": np.vstack(xs), "t": np.asarray(ts, dtype=float),
             "channel": np.asarray(chs, dtype=object), "source": np.asarray(srcs, dtype=object),
             "dur": np.asarray(durs, dtype=float), "f_set": f_set}
 
 
-def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_min=60.0,
+def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *,
+                                    tolerance_min=_sweep_settings.DEFAULT_MATCH_TOLERANCE_MIN,
                                     min_per_group=3, aggregate="all",
-                                    max_per_rating=3, refractory_min=2.0,
-                                    match_direction="pro_first"):
+                                    max_per_rating=_sweep_settings.DEFAULT_MAX_PER_RATING,
+                                    refractory_min=_sweep_settings.DEFAULT_REFRACTORY_MIN,
+                                    match_direction=_sweep_settings.DEFAULT_MATCH_DIRECTION):
     """Cheap per-compute step: z-score within (channel, source), match each PSD to the nearest
     continuous PRO within the window, and pack into a scan-ready detail dict. Consumes the cached
     matrix from `psd_rows_to_matrix` so the Welch/interp work is never repeated.
@@ -782,7 +790,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
     """
     f_set = np.asarray(mat["f_set"], dtype=float)
     F = f_set.size
-    X = np.asarray(mat["logX"], dtype=float)
+    X = np.asarray(mat["X"], dtype=float)          # raw power (decision 204); `logX` is gone
     t_arr = np.asarray(mat["t"], dtype=float)
     ch_arr = np.asarray(mat["channel"], dtype=object)
     src_arr = np.asarray(mat["source"], dtype=object)
@@ -804,8 +812,8 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
     # Per-row source tag (unchanged z-score machinery uses src_arr directly; the short
     # _lsb_tier tag is kept so callers can label rows as td/survey/patient_event in the UI).
     # NOTE: the old Welch-density × k=269 / device-FFT rescale path was REMOVED 2026-06-27 (PI).
-    # Per-band LSB now comes from the shared per-pair cache (CS-1…CS-4 routes, k=352.62 transform /
-    # k≈73.63 bridge) via availability.live_lsb_spectrum_match, not from this routine.
+    # Per-band LSB now comes from the shared per-pair cache (CS-1…CS-4 routes, the transform constant /
+    # the composed bridge, both in effect) via availability.live_lsb_spectrum_match, not from this routine.
     # psd_abs_uv2_per_hz and device_psd_scale_by_channel are no longer emitted from this function.
     src_str = np.array([str(s) for s in src_arr]) if src_arr.size else np.zeros(0, dtype=object)
     _is_td = np.isin(src_str, ("TD streaming", "Montage/survey")) if src_str.size else np.zeros(0, bool)
@@ -825,7 +833,14 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
                 # too few to standardize -> center only (keeps it on a comparable additive scale)
                 Xz[m] = X[m] - np.nanmean(X[m], axis=0)
 
-    # Participant-specific provenance and examples are maintained outside source control.
+    # The shared DecodeCommon.matching step replaces the reference matcher followed by
+    # a per-(channel, rating) cap. Preserve three directions, pro_first claim-once and
+    # the closeness-first, temporally-spread cap. Multiple PSDs may match one report:
+    # keep max_per_rating nearest PSDs and enforce refractory_min separation. Dropped
+    # PSDs remain unmatched (NaN label, pro_idx=-1). The pro_first matcher already claims
+    # PSDs at most once per report and does not apply the post-hoc cap.
+
+
     _m = _matching.matched_samples(t_arr, None, pro_times_s, pro_values,
                                    tolerance_min=tolerance_min, direction=match_direction,
                                    group_keys=ch_arr, max_per_rating=max_per_rating,
@@ -844,9 +859,13 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
             for i in np.where(keep)[0]:
                 keys.setdefault((ch_arr[i], int(pro_idx[i])), []).append(i)
             rows_Xz, rows_ch, rows_src, rows_t, rows_lab, rows_dt, rows_pidx = ([] for _ in range(7))
+            rows_Xabs = []
             rows_tier = []
-            # Retain the highest source tier for display; z-scored features average the
-            # whole cluster. Absolute-density conversion is handled by the separate cache.
+            # LSB-fidelity priority within a (channel, rating) cluster: a real TD reading outranks a
+            # montage/survey sweep, which outranks a scaled device-FFT, which outranks an
+            # uncalibrated one. The cluster's calibrated-LSB density is the LINEAR mean over ONLY the
+            # highest tier present (so a survey or device-PSD reading never dilutes a TD one); the
+            # z-scored dB view still averages the whole cluster as before.
             _tier_rank = {"td": 0, "survey": 1, "device_psd_scaled": 2,
                           "device_psd_uncalibrated": 3, "excluded": 9}
             for (ch, pidx), idxs in keys.items():
@@ -856,8 +875,12 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
                 ranks = [_tier_rank.get(t, 9) for t in tiers_here]
                 best = min(ranks) if ranks else 9
                 if best >= 9:
-                    rows_tier.append("excluded")
+                    rows_Xabs.append(np.full(F, np.nan)); rows_tier.append("excluded")
                 else:
+                    sel = idxs[np.asarray(ranks) == best]
+                    # Absolute density aggregates in LINEAR space (mean µV²/Hz), so the band integral
+                    # × 269 stays a physical LSB. Only the top-tier rows define it.
+                    rows_Xabs.append(np.nanmean(Xabs[sel], axis=0))
                     rows_tier.append({0: "td", 1: "survey", 2: "device_psd_scaled",
                                       3: "device_psd_uncalibrated"}[best])
                 rows_ch.append(ch)
@@ -868,6 +891,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
                 rows_dt.append(float(np.nanmean(dt_min[idxs])))
                 rows_pidx.append(int(pidx))
             Xz = np.vstack(rows_Xz)
+            Xabs = np.vstack(rows_Xabs)
             ch_arr = np.asarray(rows_ch, dtype=object)
             src_arr = np.asarray(rows_src, dtype=object)
             _lsb_tier = np.asarray(rows_tier, dtype=object)
@@ -876,7 +900,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
             dt_min = np.asarray(rows_dt, dtype=float)
             pro_idx = np.asarray(rows_pidx, dtype=int)
         else:
-            Xz = Xz[:0]; ch_arr = ch_arr[:0]; src_arr = src_arr[:0]
+            Xz = Xz[:0]; Xabs = Xabs[:0]; ch_arr = ch_arr[:0]; src_arr = src_arr[:0]
             _lsb_tier = _lsb_tier[:0]
             t_arr = t_arr[:0]; labels = labels[:0]; dt_min = dt_min[:0]; pro_idx = pro_idx[:0]
 
@@ -965,7 +989,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
 
     return {
         "f_set": f_set,
-        "psd": psd_stack,                    # (N, C, F) — log + within-(channel,source) z-scored
+        "psd": psd_stack,                    # (N, C, F) — raw power, within-(channel,source) z-scored
         "feature": psd_stack,
         # Per-row source label ("TD streaming" | "Montage/survey" | "Patient event" | "Snapshot" |
         # "aggregated") and the row's channel.
@@ -982,8 +1006,9 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
         "aggregate": aggregate,
         "chan_order": chan_order,
         "times": [_dt.datetime.utcfromtimestamp(float(t)).isoformat(sep=" ") for t in t_arr],
-        "prelog": True,                      # already log-scaled above: do NOT re-log
-        "transform": "log_zscore_within_channel_source",
+        # No `prelog` flag any more (decision 204): the detail is raw power standardised within
+        # channel and source, and every reader takes it as it is.
+        "transform": "raw_power_zscore_within_channel_source",
         "pool_meta": {
             "n_psds": int(N),
             "n_matched": int(matched_mask.sum()),
@@ -1008,7 +1033,7 @@ def build_pooled_detail_from_matrix(mat, pro_times_s, pro_values, *, tolerance_m
 
 
 def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
-                                 transform="log", rating_group=None):
+                                 transform="raw", rating_group=None):
     """
     Orchestrates the streaming biomarker: build a per-epoch PSD stack, normalize, and
     correlate each (channel, frequency) feature against a pain label.
@@ -1036,8 +1061,10 @@ def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
     chan_order : list[str]
         Canonical channel ordering.
     transform : str
-        One of "log" (10*log10 PSD), "log_zscore", "fooof", "relative_power",
-        "relative_power_log". Selects which transformed feature feeds the correlation.
+        "raw" (the spectrum as it is; the default and what the page uses) or "relative_power"
+        (each bin as a share of the spectrum's total). The three logarithmic transforms that
+        existed until 2026-09-19 ("log", "log_zscore", "relative_power_log") and the aperiodic-fit
+        residual ("fooof") are refused: log power enters no calculation (decisions 202, 204, 206).
 
     Returns
     -------
@@ -1074,20 +1101,15 @@ def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
     psd_nz = psd.copy()
     psd_nz[psd_nz == 0] = np.nan  # cell 11: zeros -> NaN before transforms
 
-    if transform == "log":
-        feature = 10 * np.log10(psd_nz)
-    elif transform == "log_zscore":
-        feature = zscore_per_freq(10 * np.log10(psd_nz))
-    elif transform == "fooof":
-        feature = remove_aperiodic(psd_nz, f_set)
+    if transform == "raw":
+        feature = psd_nz
     elif transform == "relative_power":
         feature = relative_power(psd_nz)
-    elif transform == "relative_power_log":
-        feature = relative_power(10 * np.log10(psd_nz))
     else:
         raise ValueError(
-            "transform must be one of "
-            "'log'|'log_zscore'|'fooof'|'relative_power'|'relative_power_log'"
+            "transform must be 'raw' or 'relative_power' (the logarithmic transforms and the "
+            "aperiodic fit were removed on 2026-09-19: log power enters no calculation, "
+            "decisions 204 and 206)"
         )
 
     corr, pval, _pextra = pearson_corr_psd_label(
@@ -1108,6 +1130,3 @@ def compute_psd_pain_correlation(streams, labels, chan_order, f_set=F_SET,
         "transform": transform,
         "labels": np.asarray(labels, dtype=float),
     }
-
-
-# Retained active Aditya interfaces.

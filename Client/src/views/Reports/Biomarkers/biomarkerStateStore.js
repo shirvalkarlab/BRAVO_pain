@@ -25,16 +25,61 @@
  * shared store carries the same guard, and the view now reports on the shared one.
  */
 
+import {
+  MATCHING_DEFAULTS, MATCHING_DEFAULTS_VERSION, REPLACED_DEFAULTS, CONTROL_REQUEST_KEYS,
+} from "./matchingDefaults";
+
 const CONTROLS_PREFIX = "bravo.biomarkerControls.";
 
 // ---- controls (localStorage, per participant) ------------------------------------------------
 function _ckey(uid) { return CONTROLS_PREFIX + String(uid || "unknown"); }
+
+const _same = (a, b) => (typeof a === "number" || typeof b === "number"
+  ? Number(a) === Number(b) : a === b);
+
+/**
+ * A saved setting from before a change of defaults, moved to today's defaults ONCE (decision 331).
+ *
+ * A value equal to a default an intervening version replaced (`REPLACED_DEFAULTS`) becomes today's
+ * default; anything else the viewer chose is kept. The same move is made inside the saved request
+ * (`requestParams`, by its request keys) and the saved last run (`matchingRun.settings`), so the page
+ * and the Closed-Loop page, which inherits the last run, agree. The result carries today's version,
+ * so once the page saves it again a viewer who then picks 5 minutes keeps 5 minutes.
+ */
+export function migrateControls(saved) {
+  if (!saved || typeof saved !== "object") return saved;
+  const from = Number(saved.defaults_version) || 1;
+  if (from >= MATCHING_DEFAULTS_VERSION) return saved;
+  const out = { ...saved };
+  const rp = out.requestParams ? { ...out.requestParams } : null;
+  const run = out.matchingRun && out.matchingRun.settings
+    ? { ...out.matchingRun, settings: { ...out.matchingRun.settings } } : null;
+  for (let v = from + 1; v <= MATCHING_DEFAULTS_VERSION; v += 1) {
+    const replaced = REPLACED_DEFAULTS[v] || {};
+    Object.keys(replaced).forEach((field) => {
+      const olds = replaced[field];
+      const now = MATCHING_DEFAULTS[field];
+      const key = CONTROL_REQUEST_KEYS[field];
+      if (field in out && olds.some((o) => _same(out[field], o))) out[field] = now;
+      if (rp && key && key in rp && olds.some((o) => _same(rp[key], o))) rp[key] = now;
+      if (run && key && key in run.settings && olds.some((o) => _same(run.settings[key], o))) {
+        run.settings[key] = now;
+      }
+    });
+  }
+  if (rp) out.requestParams = rp;
+  if (run) out.matchingRun = run;
+  out.defaults_version = MATCHING_DEFAULTS_VERSION;
+  out.migrated_from_version = from;
+  return out;
+}
 
 /** Persist the lightweight control panel + last-computed requestParams for a participant. */
 export function saveControls(uid, controls) {
   try {
     window.localStorage.setItem(_ckey(uid), JSON.stringify({
       schema: "biomarker_controls_v1", saved_at: Date.now(), ...controls,
+      defaults_version: MATCHING_DEFAULTS_VERSION,
     }));
   } catch (e) {
     // Quota or private browsing. The shared result cache still holds this session's analysis, so
@@ -44,12 +89,54 @@ export function saveControls(uid, controls) {
   }
 }
 
-/** Read persisted controls for a participant, or null. */
+/** Read persisted controls for a participant, moved to today's defaults where they predate them
+ *  (`migrateControls`), or null. */
 export function loadControls(uid) {
   try {
     const raw = window.localStorage.getItem(_ckey(uid));
-    return raw ? JSON.parse(raw) : null;
+    return raw ? migrateControls(JSON.parse(raw)) : null;
   } catch (e) { return null; }
+}
+
+/** Today's defaults as the request keys the pages send (the pain score as `LabelMetric`). */
+export function defaultMatchingSettings() {
+  const out = { LabelMetric: MATCHING_DEFAULTS.metric };
+  Object.keys(CONTROL_REQUEST_KEYS).forEach((field) => {
+    out[CONTROL_REQUEST_KEYS[field]] = MATCHING_DEFAULTS[field];
+  });
+  return out;
+}
+
+/**
+ * THE MATCHING SETTINGS THE BIOMARKERS PAGE MOST RECENTLY RAN (decision 331), for the Closed-Loop
+ * page to inherit: `{settings, ranAt, source}`, `settings` in request keys (the pain score as
+ * `LabelMetric`).
+ *
+ * `source` says where they came from: "run" (the page recorded a run: a Recompute, or a heat-map
+ * grid it built and showed as current), "computed" (a page saved before decision 331 recorded only
+ * its last Compute request, which carries no clinic-sheet switch; the switch is then the page's own
+ * control), or "defaults" (the page has never been opened for this participant in this browser).
+ */
+export function loadMatchingRun(uid) {
+  const P = (uid && loadControls(uid)) || null;
+  const base = defaultMatchingSettings();
+  if (P && P.matchingRun && P.matchingRun.settings) {
+    return { settings: { ...base, ...P.matchingRun.settings }, ranAt: P.matchingRun.ranAt || null,
+      source: "run" };
+  }
+  if (P && P.requestParams) {
+    const rp = P.requestParams;
+    const settings = { ...base };
+    Object.values(CONTROL_REQUEST_KEYS).concat(["LabelMetric"]).forEach((k) => {
+      if (rp[k] !== undefined && rp[k] !== null) settings[k] = rp[k];
+    });
+    if (P.metric) settings.LabelMetric = P.metric;
+    if (typeof P.includeClinicSheetRatings === "boolean") {
+      settings.IncludeClinicSheetRatings = P.includeClinicSheetRatings;
+    }
+    return { settings, ranAt: P.saved_at || null, source: "computed" };
+  }
+  return { settings: base, ranAt: null, source: "defaults" };
 }
 
 /** Clear persisted controls for a participant. */

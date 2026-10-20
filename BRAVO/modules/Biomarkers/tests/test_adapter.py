@@ -15,7 +15,6 @@ import pathlib
 
 import numpy as np
 import pandas as pd
-import pytest
 
 # Put BRAVO/ on the path so `modules.Biomarkers...` resolves (modules is a namespace pkg).
 _BRAVO_ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -86,122 +85,70 @@ def test_compute_psd_pain_correlation_runs():
     recs = [_make_recording(seed=k) for k in range(5)]
     streams = adapter.bravo_timedomain_recordings_to_streams(recs)
     labels = np.array([2.0, 4.0, 6.0, 8.0, 9.0])  # increasing pain
-    out = streaming_psd.compute_psd_pain_correlation(streams, labels, CHAN_ORDER, transform="log")
+    out = streaming_psd.compute_psd_pain_correlation(streams, labels, CHAN_ORDER)
     C, F = len(CHAN_ORDER), len(streaming_psd.F_SET)
     assert out["psd"].shape == (5, C, F)
     assert out["corr"].shape == (C, F)
     assert out["pval"].shape == (C, F)
 
 
-@pytest.mark.parametrize("orientation", ["samples_channels", "channels_samples", "vector"])
-def test_missing_packet_flags_survive_recording_adapter(orientation):
-    rec = _make_recording()
-    n = len(rec["Data"])
-    expected = np.zeros(n, dtype=bool)
-    expected[20:40] = True
-    flags = np.zeros((n, 2))
-    flags[20:40, 1] = 1  # Missing on either channel rejects the shared window.
-    rec["Missing"] = flags if orientation == "samples_channels" else (
-        flags.T if orientation == "channels_samples" else expected.astype(int))
+def test_adapter_carries_missing_forward():
+    """The stream-data dict must carry a per-sample Missing flag, not silently drop it
+    (decision 57 / open item 9: this is the field compute_psd_pain_correlation needs and,
+    before this fix, never received)."""
+    rec = _make_recording(n_seconds=2)
+    n = rec["Data"].shape[0]
+    # Mark the first 30% of samples missing on channel 0 only -- the any-channel rule
+    # (decision 4's own convention, mirrored by DecodeCommon.missing_per_sample) must still
+    # flag those samples missing even though channel 1 is clean there.
+    rec["Missing"] = np.zeros_like(rec["Data"])
+    rec["Missing"][: int(0.3 * n), 0] = 1.0
     epoch = adapter.bravo_timedomain_to_streamdata(rec)
-    np.testing.assert_array_equal(epoch["missing"], expected)
-    np.testing.assert_array_equal(epoch["stream_data"][0], rec["Data"].T)
-    assert epoch["channel_names"] == [CHAN_ORDER]
-    assert epoch["start_time"] == rec["StartTime"]
+    assert epoch["missing"] is not None
+    assert epoch["missing"].shape == (n,)
+    assert epoch["missing"][: int(0.3 * n)].astype(bool).all()
+    assert not epoch["missing"][int(0.3 * n):].astype(bool).any()
 
 
-@pytest.mark.parametrize("missing", [None, []])
-def test_optional_missing_mask_and_single_channel_remain_supported(missing):
+def test_adapter_missing_absent_gives_none():
+    """A recording with no Missing field at all (legacy shape) must not raise, and must give
+    the routine no mask -- i.e. the pre-fix, no-rejection behavior for such a caller."""
     rec = _make_recording()
-    rec["Data"] = rec["Data"][:, 0]
-    rec["ChannelNames"] = CHAN_ORDER[:1]
-    rec["Missing"] = missing
+    del rec["Missing"]
     epoch = adapter.bravo_timedomain_to_streamdata(rec)
     assert epoch["missing"] is None
-    assert epoch["stream_data"][0].shape == (1, len(rec["Data"]))
-    rec.pop("Missing")
-    assert adapter.bravo_timedomain_to_streamdata(rec)["missing"] is None
 
 
-@pytest.mark.parametrize("missing_samples,rejected", [(199, False), (200, False), (201, True)])
-def test_correlation_rejects_only_windows_above_existing_missing_limit(missing_samples, rejected):
+def test_compute_psd_pain_correlation_rejects_a_mostly_missing_epoch():
+    """The decision-57 fix itself: a window that's mostly zero-fill must come back NaN, not a
+    real-looking but artificially deflated power value. Before this fix, `adapter` never carried
+    the Missing field into the epoch dict and `compute_psd_pain_correlation` never read one, so
+    a heavily zero-filled recording was pooled as if it were a genuine, quiet measurement."""
     recs = [_make_recording(seed=k) for k in range(5)]
-    recs[2]["Missing"][:missing_samples, 1] = 1
-    recs[2]["Data"][:missing_samples, 1] = 0
+    n = recs[2]["Data"].shape[0]
+    # Zero-fill 60% of the third recording, on every channel -- well over the 10% cutoff
+    # (streaming_psd.WELCH_MAX_MISSING_FRAC) this project applies everywhere else (decision 4).
+    recs[2]["Data"][: int(0.6 * n), :] = 0.0
+    recs[2]["Missing"][: int(0.6 * n), :] = 1.0
     streams = adapter.bravo_timedomain_recordings_to_streams(recs)
-    labels = np.array([2., 4., 6., 8., 9.])
-    controls = [{key: value for key, value in epoch.items() if key != "missing"}
-                for epoch in streams]
-    before = streaming_psd.compute_psd_pain_correlation(controls, labels, CHAN_ORDER)
-    with np.errstate(invalid="ignore"):
-        after = streaming_psd.compute_psd_pain_correlation(streams, labels, CHAN_ORDER)
-    assert np.isfinite(before["psd"]).all()
-    if rejected:
-        assert np.isnan(after["psd"][2]).all()
-        np.testing.assert_array_equal(after["psd"][[0, 1, 3, 4]], before["psd"][[0, 1, 3, 4]])
-    else:
-        np.testing.assert_array_equal(after["psd"], before["psd"])
-    np.testing.assert_array_equal(after["labels"], labels)
-    assert after["chan_order"] == CHAN_ORDER
+    labels = np.array([2.0, 4.0, 6.0, 8.0, 9.0])
+    out = streaming_psd.compute_psd_pain_correlation(streams, labels, CHAN_ORDER)
+    assert np.isnan(out["psd"][2]).all(), "a >10%-zero-filled epoch must be rejected, not pooled"
+    for k in (0, 1, 3, 4):
+        assert np.isfinite(out["psd"][k]).all()
 
 
-def test_missing_fraction_uses_only_the_existing_first_thirty_second_window():
-    recs = [_make_recording(n_seconds=40, seed=k) for k in range(5)]
-    recs[2]["Missing"][7500:, :] = 1  # Later gap must not reject a clean first window.
-    recs[2]["Data"][7500:, :] = 0
-    streams = adapter.bravo_timedomain_recordings_to_streams(recs)
-    labels = [2., 4., 6., 8., 9.]
-    after = streaming_psd.compute_psd_pain_correlation(streams, labels, CHAN_ORDER)
-    controls = [dict(epoch, missing=None) for epoch in streams]
-    before = streaming_psd.compute_psd_pain_correlation(controls, labels, CHAN_ORDER)
-    np.testing.assert_array_equal(after["psd"], before["psd"])
-
-
-@pytest.mark.parametrize("transform", ["log", "log_zscore", "fooof", "relative_power", "relative_power_log"])
-def test_correlation_transform_routes_preserve_clean_psd(transform):
-    recs = [_make_recording(seed=k) for k in range(5)]
-    streams = adapter.bravo_timedomain_recordings_to_streams(recs)
-    labels = [2., 4., 6., 8., 9.]
-    out = streaming_psd.compute_psd_pain_correlation(streams, labels, CHAN_ORDER, transform=transform)
-    expected = np.concatenate([
-        streaming_psd.welch_psd_for_instance(rec["Data"].T, CHAN_ORDER, FS, CHAN_ORDER)
-        for rec in recs], axis=0)
-    np.testing.assert_array_equal(out["psd"], expected)
-    assert out["transform"] == transform
-    assert out["feature"].shape == expected.shape
-
-
-def test_correlation_accepts_single_channel_group_name_and_rejects_unknown_transform():
-    recs = [_make_recording(seed=k) for k in range(5)]
-    streams = [{"stream_data": [rec["Data"][:, 0]],
-                "channel_names": [CHAN_ORDER[0]], "sample_rate": FS} for rec in recs]
-    out = streaming_psd.compute_psd_pain_correlation(streams, [2, 4, 6, 8, 9], CHAN_ORDER[:1])
-    assert out["psd"].shape == (5, 1, len(streaming_psd.F_SET))
-    assert np.isfinite(out["psd"]).all()
-    with pytest.raises(ValueError, match="transform must be one of"):
-        streaming_psd.compute_psd_pain_correlation(streams, [2, 4, 6, 8, 9], CHAN_ORDER[:1], transform="unknown")
-
-
-@pytest.mark.parametrize("matched", [True, False])
-@pytest.mark.parametrize("sources", [["TD streaming", "TD streaming"], ["TD streaming", "Montage/survey"]])
-def test_one_per_rating_aggregation_keeps_standardized_features_without_obsolete_density(matched, sources):
-    matrix = {"f_set": np.array([10., 20.]), "logX": np.array([[1., 2.], [3., 6.]]),
-              "t": np.array([1000., 1010.]), "channel": np.array(["LEFT", "LEFT"]),
-              "source": np.array(sources)}
-    out = streaming_psd.build_pooled_detail_from_matrix(
-        matrix, [1005. if matched else 10000.], [7.], tolerance_min=1.,
-        min_per_group=2, aggregate="one_per_rating")
-    assert "psd_abs_uv2_per_hz" not in out
-    assert "device_psd_scale_by_channel" not in out
-    if matched:
-        # Same-source standardization gives [-1,+1]; single-source rows center to zero.
-        np.testing.assert_allclose(out["feature"], np.zeros((1, 1, 2)), atol=1e-15)
-        np.testing.assert_array_equal(out["labels"], [7.])
-        np.testing.assert_array_equal(out["rating_group"], [0])
-        np.testing.assert_array_equal(out["row_lsb_tier"], ["td"])
-    else:
-        assert out["feature"].shape == (0, 0, 2)
-        assert out["labels"].size == 0
+def test_missing_rejection_is_not_a_false_positive_from_zero_signal():
+    """Guard against the trivial explanation that zero-filling the data alone (independent of
+    whether `missing=` is threaded through) already yields a degenerate PSD for some unrelated
+    reason. Confirms the NaN in the test above comes specifically from the missing-fraction gate,
+    not incidentally from Welch on a partly-zero signal with no mask supplied."""
+    rec = _make_recording(seed=99)
+    n = rec["Data"].shape[0]
+    rec["Data"][: int(0.6 * n), :] = 0.0
+    group = rec["Data"].T
+    psd_without_mask = streaming_psd.welch_psd_for_instance(group, CHAN_ORDER, FS, CHAN_ORDER)
+    assert np.isfinite(psd_without_mask).all()
 
 
 def _make_pro_df():
@@ -245,6 +192,11 @@ def test_align_pros_chronic():
 # Chronic ("10-min PSD") source: adapter, science, merge, back-compat
 # ---------------------------------------------------------------------------
 _MIDNIGHT_UTC = 1_699_920_000.0  # 2023-11-14 00:00:00 UTC
+# The chronic-trend fixtures build whole DAYS of samples with one rating per day, and "day" in
+# the detector is the CALIFORNIA calendar day (review B1, 2026-09-12). A day of samples must
+# therefore start at California midnight, which on 2023-11-14 (PST, UTC-8) is 08:00 UTC; a day
+# built from UTC midnight would have its first eight hours labelled by the previous day's rating.
+_MIDNIGHT_LOCAL = _MIDNIGHT_UTC + 8 * 3_600.0  # 2023-11-14 00:00:00 America/Los_Angeles
 
 
 def _utc_str(unix):
@@ -257,7 +209,7 @@ def _make_chronic_trend(days=14, step_hours=2):
     for d in range(days):
         pain_day = (d % 2 == 0)
         for h in range(0, 24, step_hours):
-            times.append(_MIDNIGHT_UTC + d * 86_400 + h * 3_600)
+            times.append(_MIDNIGHT_LOCAL + d * 86_400 + h * 3_600)
             lfp.append(150.0 if pain_day else 110.0)
             amp.append(2.0)
     chronic = {
@@ -267,7 +219,7 @@ def _make_chronic_trend(days=14, step_hours=2):
         "ChannelNames": ["L LFP", "L Amplitude"],
     }
     pro = pd.DataFrame({
-        "date_time_s1_daily": [_utc_str(_MIDNIGHT_UTC + d * 86_400 + 12 * 3_600) for d in range(days)],
+        "date_time_s1_daily": [_utc_str(_MIDNIGHT_LOCAL + d * 86_400 + 12 * 3_600) for d in range(days)],
         "nrs": [8 if d % 2 == 0 else 2 for d in range(days)],
     })
     return chronic, pro
@@ -356,46 +308,6 @@ def test_run_chronic_threshold_no_sliding():
     assert np.isfinite(out["mean_thr_sens"]) and 110.0 <= out["mean_thr_sens"] <= 150.0
     assert out["mean_test_acc_sens"] == 1.0
     assert out["std_thr_sens"] == 0.0
-
-
-def test_sliding_window_analytics_no_sliding():
-    """sliding=False -> a single all-data window entry (flagged), vs many entries when sliding on.
-
-    Return shape is now `{windows: [...], summary: {...}}` so the panel can caption coverage.
-    """
-    cv = _make_cv_df()
-    full = analytics.sliding_window_analytics(cv, sliding=True)
-    one = analytics.sliding_window_analytics(cv, sliding=False)
-    assert set(one.keys()) >= {"windows", "summary"}
-    assert len(one["windows"]) == 1 and one["windows"][0].get("all_data") is True
-    assert one["windows"][0]["threshold"] is not None
-    assert one["summary"]["n_total"] == 1
-    assert len(full["windows"]) > 1   # sliding produces many windows on the same data
-    assert full["summary"]["n_total"] >= len(full["windows"])
-
-
-def test_sliding_window_skips_one_class_test_folds():
-    """When a tertile-labeled test fold has only one class, the window is expanded; if it still
-    has one class after expansion, it's SKIPPED (not a half-NaN row) and counted in summary."""
-    # 30 days, label_metric alternates blocks; tertile-style binarization (NaN middle on day 15)
-    rng = np.random.default_rng(0)
-    days = pd.date_range("2025-01-01", periods=30, freq="D")
-    rows = []
-    for i, d in enumerate(days):
-        label = 0.0 if i < 14 else (np.nan if i == 14 else 1.0)
-        for k in range(20):
-            rows.append({"timestamp": d + pd.Timedelta(minutes=10 * k),
-                         "LFP_smoothed": float(rng.normal(100 + 20 * (label if np.isfinite(label) else 0.5), 5)),
-                         "pain_level": label})
-    cv = pd.DataFrame(rows)
-    out = analytics.sliding_window_analytics(cv, train_days=7, gap_days=1, test_days=2,
-                                             step_days=1, sliding=True, max_test_days=4)
-    # No half-NaN rows leak out: every returned window has a defined AUC.
-    assert all(w["auc"] is not None for w in out["windows"])
-    # Summary counts what was skipped.
-    assert out["summary"]["n_total"] >= len(out["windows"])
-    assert out["summary"]["n_skipped_test_one_class"] >= 0
-    assert out["summary"]["max_test_days"] == 4
 
 
 def test_td_sliding_corr_spectrum_matches_scipy():
@@ -512,37 +424,6 @@ def test_concat_chronic_mad_is_per_recording_not_global():
     assert 9000.0 in set(adapter._concat_chronic(rec_s, mad_k=0)["Data"][:, 0])
 
 
-def test_sliding_window_test_fold_expansion_fires_and_categorizes_skips():
-    """The test-fold expansion must actually FIRE (a window's test_days_used grows beyond the
-    requested test_days when the short window is single-class) and skips must be CATEGORIZED into
-    one-class vs no-data with the summary counts reconciling to n_total. Every returned window has a
-    defined AUC (no half-NaN rows leak out)."""
-    days = pd.date_range("2025-01-01", periods=40, freq="D")
-    rows = []
-    for i, d in enumerate(days):
-        if i < 20:
-            lab = float(i % 2)            # alternating classes -> usable training
-        elif i < 28:
-            lab = 0.0                     # homogeneous block -> short test fold is single-class
-        else:
-            lab = 1.0                     # class flips -> expansion reaches both classes
-        for k in range(15):
-            rows.append({"timestamp": d + pd.Timedelta(minutes=5 * k),
-                         "LFP_smoothed": 100 + 30 * lab + np.random.default_rng(i * 15 + k).normal(0, 2),
-                         "pain_level": lab})
-    cv = pd.DataFrame(rows)
-    out = analytics.sliding_window_analytics(cv, train_days=10, gap_days=1, test_days=2,
-                                             step_days=1, sliding=True, max_test_days=8)
-    used = [w["test_days_used"] for w in out["windows"]]
-    assert any(u > 2 for u in used), "expansion never fired (no test_days_used grew past test_days)"
-    assert all(u <= 8 for u in used)                              # never exceeds max_test_days
-    assert all(w["auc"] is not None for w in out["windows"])      # no half-NaN rows
-    s = out["summary"]
-    assert s["n_skipped_test_one_class"] >= 1                     # at least one genuine one-class skip
-    assert s["n_total"] == len(out["windows"]) + s["n_skipped_test_one_class"] + s["n_skipped_no_data"]
-    assert s["max_test_days"] == 8 and s["test_days"] == 2
-
-
 def test_decimate_for_plot_thins_only():
     """decimate_for_plot thins rows FOR PLOTTING ONLY: a strict row-subset, columns + values
     unchanged (no interpolation), under-cap frames returned as-is. Locks the plot-only invariant."""
@@ -576,20 +457,6 @@ def test_merge_timelines_both_and_degenerate():
     assert len(only_td) == 2 and "chronic_biomarker_value" not in only_td.columns
     only_ch = adapter.merge_timelines(None, chronic)
     assert len(only_ch) == 5 and "td_biomarker_value" not in only_ch.columns
-
-
-def test_run_streaming_biomarker_backcompat():
-    recs = [_make_recording(seed=k) for k in range(4)]
-    for k, r in enumerate(recs):
-        # November Pacific midnight, so the session shares the naive local PRO day.
-        r["StartTime"] = _MIDNIGHT_UTC + 8 * 3_600 + k * 86_400
-    pro = pd.DataFrame({
-        "date_time_s1_daily": [_utc_str(_MIDNIGHT_UTC + k * 86_400 + 12 * 3_600) for k in range(4)],
-        "nrs": [8, 6, 4, 3], "vas": [80, 60, 40, 30], "mpq_sum": [30, 20, 10, 5],
-    })
-    out = pipeline.run_streaming_biomarker(recs, pro, CHAN_ORDER)
-    assert {"result", "band", "combined"} <= set(out)
-    assert isinstance(out["combined"], pd.DataFrame)
 
 
 def test_run_biomarker_both_unified_timeline():
@@ -747,15 +614,13 @@ def test_run_powerdomain_branch_per_channel_split():
     """Two-channel chronic input -> branch returns a per_channel dict keyed by ChannelNames[0]
     with independent summaries; the pooled run continues to work alongside it."""
     chronic_l, pro = _make_chronic_trend(days=14)
-    # The synthetic coupling alternates by local day, not by the UTC date boundary.
-    chronic_l["Time"] = chronic_l["Time"] + 8 * 3_600
     # Build a Right-hemisphere counterpart with the OPPOSITE pain-LFP coupling so the per-channel
     # thresholds (and AUCs) genuinely differ from the pooled result.
     times, lfp_r, amp_r = [], [], []
     for d in range(14):
         pain_day = (d % 2 == 0)
         for h in range(0, 24, 2):
-            times.append(_MIDNIGHT_UTC + 8 * 3_600 + d * 86_400 + h * 3_600)
+            times.append(_MIDNIGHT_LOCAL + d * 86_400 + h * 3_600)
             lfp_r.append(80.0 if pain_day else 130.0)   # inverted coupling
             amp_r.append(2.0)
     chronic_r = {
@@ -826,7 +691,6 @@ if __name__ == "__main__":
     test_bravo_chronic_accepts_list_of_recordings()
     test_run_chronic_threshold_runs()
     test_merge_timelines_both_and_degenerate()
-    test_run_streaming_biomarker_backcompat()
     test_run_biomarker_both_unified_timeline()
     test_chronic_summary_is_self_consistent()
     test_merge_timelines_handles_nat_time()
@@ -840,13 +704,10 @@ if __name__ == "__main__":
     test_run_powerdomain_branch_per_channel_split()
     test_bravo_powerdomain_to_chronic_like()
     test_run_chronic_threshold_no_sliding()
-    test_sliding_window_analytics_no_sliding()
-    test_sliding_window_skips_one_class_test_folds()
     test_td_sliding_corr_spectrum_matches_scipy()
     test_pearson_corr_psd_label_rejects_mad_outliers()
     test_mad_outlier_mask_behavior()
     test_concat_chronic_mad_is_per_recording_not_global()
-    test_sliding_window_test_fold_expansion_fires_and_categorizes_skips()
     test_decimate_for_plot_thins_only()
     print("All adapter tests passed.")
 
@@ -855,12 +716,9 @@ def test_align_pros_records_the_matched_report_identity_not_just_its_value():
     """`matched_pro_time` is the IDENTITY of the matched report, which is what callers need in order
     to cluster correctly.
 
-    Regression for a defect fixed 2026-08-30: pipeline.run_timedomain_branch used to reconstruct the
-    grouping by searching pro_df for a report whose VALUE equalled the session's label and taking the
-    first hit. On an integer pain scale that collapses every session sharing a score into one
-    "rating". Measured on live RCS08 with Metric=nrs: 72 genuinely distinct matched reports were
-    represented as 7 groups, because there were only 7 distinct NRS values. Two sessions matched to
-    DIFFERENT reports that happen to share a score must land in different groups.
+    Regression: grouping by equal score values collapses distinct pain reports into
+    one group. Two sessions matched to different reports with the same score must
+    retain different report identities.
     """
     import datetime as _dt
     base = _dt.datetime(2026, 3, 1, 12, 0, 0)
@@ -1062,117 +920,6 @@ def test_ungrouped_epochs_are_excluded_from_the_cluster_p():
     assert int(extra["n_clusters"][0, 0]) == 10, extra["n_clusters"][0, 0]
 
 
-# --- F3: the permutation null's exchangeable unit is the RATING (2026-09-02) ---------------------
-def test_rating_level_null_broadcasts_one_value_per_rating():
-    """Every epoch sharing a rating must receive the SAME permuted value. If the permutation can
-    hand two epochs of one report different labels, the null has more freedom than the data and the
-    p-value is not interpretable."""
-    from modules.Biomarkers import pipeline as pl
-    g = np.repeat(np.arange(12), 4)                 # 12 ratings x 4 epochs
-    y = np.repeat(np.linspace(2.0, 9.0, 12), 4)     # constant within rating, by construction
-    rng = np.random.default_rng(0)
-    Yp, info = pl._rating_level_perm_matrix(y, g, 50, rng)
-    assert Yp is not None and info["unit" if "unit" in info else "n_ratings"] is not None
-    assert info["n_ratings"] == 12 and info["n_epochs_used"] == 48
-    for p in range(Yp.shape[0]):
-        for k in range(12):
-            block = Yp[p, g[info["rows"]] == k]
-            assert np.allclose(block, block[0]), (p, k, block)
-
-
-def test_rating_level_null_permutes_ratings_not_epochs():
-    """The multiset of rating values must be preserved: a permutation relabels which rating goes
-    where, it does not invent values."""
-    from modules.Biomarkers import pipeline as pl
-    g = np.repeat(np.arange(10), 3)
-    y = np.repeat(np.arange(10) * 1.0, 3)
-    Yp, info = pl._rating_level_perm_matrix(y, g, 25, np.random.default_rng(1))
-    for p in range(Yp.shape[0]):
-        vals = sorted(set(np.round(Yp[p], 9)))
-        assert vals == sorted(set(np.round(y, 9))), (p, vals)
-
-
-def test_ungrouped_epochs_are_dropped_from_both_null_and_observed():
-    """rating_group == -1 has no rating identity, so it cannot take part in a rating-level null.
-    The rows mask is returned so the CALLER computes the observed statistic on the same subset —
-    an observed value on more rows than its null is the F8 defect."""
-    from modules.Biomarkers import pipeline as pl
-    g = np.concatenate([np.repeat(np.arange(8), 3), np.full(6, -1)])
-    y = np.concatenate([np.repeat(np.arange(8) * 1.0, 3), np.full(6, 5.0)])
-    Yp, info = pl._rating_level_perm_matrix(y, g, 10, np.random.default_rng(2))
-    assert info["n_ratings"] == 8
-    assert info["n_epochs_used"] == 24 and Yp.shape[1] == 24
-    assert info["rows"].sum() == 24 and not info["rows"][-6:].any()
-
-
-def test_too_few_ratings_refuses_rather_than_returning_a_null():
-    from modules.Biomarkers import pipeline as pl
-    g = np.repeat(np.arange(3), 5)
-    y = np.repeat(np.arange(3) * 1.0, 5)
-    Yp, info = pl._rating_level_perm_matrix(y, g, 10, np.random.default_rng(3))
-    assert Yp is None and "at least 4" in (info["reason"] or "")
-
-
-def test_perm_pvalue_reports_which_unit_it_permuted():
-    """Provenance is mandatory: an epoch-level fallback is anti-conservative, so a consumer must be
-    able to tell which null produced the p it is reading."""
-    from modules.Biomarkers import pipeline as pl
-    rng = np.random.default_rng(4)
-    g = np.repeat(np.arange(20), 3)
-    y = np.repeat(rng.normal(5, 2, 20), 3)
-    X = rng.normal(0, 1, (60, 8))
-    _, _, _, _, m_rat = pl._block_perm_maxcorr_pvalue(X, y, n_perm=200, return_null=True,
-                                                      rating_group=g)
-    _, _, _, _, m_ep = pl._block_perm_maxcorr_pvalue(X, y, n_perm=200, return_null=True)
-    assert m_rat["unit"] == "rating" and m_rat["n_ratings"] == 20
-    assert m_ep["unit"] == "epoch" and m_ep["n_ratings"] is None
-
-
-def test_return_shape_is_invariant_including_the_degenerate_path():
-    """The early-return paths used to hand back a 4-tuple while the success path returned 5, so a
-    consumer reading perm_info raised on exactly the inputs where it needed the reason."""
-    from modules.Biomarkers import pipeline as pl
-    rng = np.random.default_rng(5)
-    ok = pl._block_perm_maxcorr_pvalue(rng.normal(0, 1, (30, 4)), rng.normal(0, 1, 30),
-                                       n_perm=50, return_null=True)
-    tiny = pl._block_perm_maxcorr_pvalue(rng.normal(0, 1, (3, 4)), rng.normal(0, 1, 3),
-                                         n_perm=50, return_null=True)
-    assert len(ok) == 5 and len(tiny) == 5
-    assert isinstance(tiny[4], dict)
-
-
-# --- F14: the winner's curse gets a magnitude ---------------------------------------------------
-def test_null_max_summary_is_reported_and_internally_consistent():
-    """The null distribution of the family max was already computed and shipped as a raw array while
-    the plate said only selection_biased=True. These summaries are what turn that flag into a
-    number a reader can act on."""
-    from modules.Biomarkers import pipeline as pl
-    rng = np.random.default_rng(6)
-    X = rng.normal(0, 1, (60, 25))
-    y = rng.normal(0, 1, 60)
-    p, used, obs, null, m = pl._block_perm_maxcorr_pvalue(X, y, n_perm=400, return_null=True)
-    assert m["family_size"] == 25
-    assert np.isclose(m["null_max_mean"], float(np.mean(null)))
-    assert np.isclose(m["null_max_p95"], float(np.quantile(null, 0.95)))
-    assert np.isclose(m["obs_minus_null_mean"], obs - np.mean(null))
-    assert m["obs_exceeds_null_p95"] == bool(obs > np.quantile(null, 0.95))
-    # under pure noise the observed family max should sit INSIDE the null, which is the whole point
-    assert 0.0 < m["null_max_mean"] < 1.0
-
-
-def test_null_max_mean_grows_with_family_size():
-    """E[max|r|] under the null rises with the number of cells searched. That is the winner's curse
-    in one line, and it is why a bare per-cell q is not a selection-corrected statement."""
-    from modules.Biomarkers import pipeline as pl
-    rng = np.random.default_rng(7)
-    y = rng.normal(0, 1, 80)
-    small = pl._block_perm_maxcorr_pvalue(rng.normal(0, 1, (80, 3)), y, n_perm=300,
-                                          return_null=True)[4]["null_max_mean"]
-    big = pl._block_perm_maxcorr_pvalue(rng.normal(0, 1, (80, 120)), y, n_perm=300,
-                                        return_null=True)[4]["null_max_mean"]
-    assert big > small, (small, big)
-
-
 # --- F8 part 2: the outlier rule is ONE rule, but its verdict depends on the estimation base -----
 def test_mad_rule_is_shared_by_adapter_and_streaming_psd():
     """There must be exactly one MAD rule on this plate. `adapter.mad_outlier_mask` and
@@ -1217,16 +964,65 @@ def test_mad_verdict_depends_on_the_estimation_base():
     assert keep_subset[:5].all() and keep_full[:5].all()
 
 
-def test_min_pairs_floor_is_the_correlation_routines_own_floor():
-    """`pipeline.SELECTION_MIN_PAIRS` must be the number of surviving pairs at which
-    `pearson_corr_psd_label` starts producing a correlation, because that routine's floor is what
-    decides which cells are members of the selection family. The permutation family previously used
-    a floor of 4, which excluded any 3-pair cell the selection could nevertheless have chosen."""
-    assert pipeline.SELECTION_MIN_PAIRS == 3
-    for n_finite, want_finite in ((3, True), (2, False)):
-        feat = np.full((6, 1, 1), np.nan)
-        feat[:n_finite, 0, 0] = np.arange(n_finite, dtype=float) + 1.0
-        lab = np.arange(6, dtype=float) * 1.5 + 0.5
-        corr, _pval = streaming_psd.pearson_corr_psd_label(feat, lab)
-        got = np.isfinite(corr[0, 0])
-        assert bool(got) is want_finite, (n_finite, corr[0, 0])
+def test_align_pros_applies_the_pages_per_report_cap_and_reports_the_sharing_left():
+    """The PI, 2026-09-21: the page says a cap of 3 samples per rating and no window reuse, so a
+    warning reading "no cap is applied" is an error. The session matcher now takes the same cap
+    the Binarization card applies (`max_per_rating`, nearest sessions first, `refractory_min`
+    between kept ones) and the same direction; `attrs["report_sharing"]` names the cap in force
+    and counts the sharing that remains under it."""
+    import datetime as _dt
+    base = _dt.datetime(2026, 3, 1, 12, 0, 0)
+    pro = pd.DataFrame({"date_time_s1_daily": [base, base + _dt.timedelta(days=1)], "nrs": [7.0, 4.0]})
+    # four sessions within an hour of the first report, one near the second, one unmatched
+    recs = [{"StartTime": base + _dt.timedelta(minutes=m)} for m in (-20, 5, 30, 50)]
+    recs += [{"StartTime": base + _dt.timedelta(days=1, minutes=2)},
+             {"StartTime": base + _dt.timedelta(days=5)}]
+    # cap 3, no refractory: the first report keeps its 3 nearest sessions (5, -20, 30 min), drops 50
+    sdf = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",),
+                             match_tolerance_min=60.0, max_per_rating=3, refractory_min=0.0)
+    assert sdf["matched"].tolist() == [True, True, True, False, True, False]
+    sh = sdf.attrs["report_sharing"]
+    assert sh["mode"] == "time_window" and sh["cap_per_report"] == 3
+    assert sh["n_sessions_matched"] == 4 and sh["n_reports_matched"] == 2
+    assert sh["n_reports_shared"] == 1 and sh["n_sessions_on_shared_reports"] == 3
+    assert sh["max_sessions_per_report"] == 3 and sh["n_dropped_by_cap"] == 1
+    w = sh["warning"]
+    assert "1 of 2" in w and "3 sessions" in w and "cap of 3" in w
+    assert "no cap" not in w.lower()
+    assert "grouped on the report" in w
+    # cap 1: one session per report, nothing shared, no warning
+    one = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",),
+                             match_tolerance_min=60.0, max_per_rating=1, refractory_min=0.0)
+    assert one["matched"].tolist() == [False, True, False, False, True, False]
+    assert one.attrs["report_sharing"]["n_reports_shared"] == 0
+    assert one.attrs["report_sharing"]["warning"] is None
+    assert one.attrs["report_sharing"]["n_dropped_by_cap"] == 3
+    # the refractory gap: cap 3, 30-minute gap keeps +5 (nearest), drops -20 and +30 (both 25 min
+    # from it), keeps +50 (45 min from it)
+    gap = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",),
+                             match_tolerance_min=60.0, max_per_rating=3, refractory_min=30.0)
+    assert gap["matched"].tolist() == [False, True, False, True, True, False]
+    assert gap.attrs["report_sharing"]["n_dropped_by_cap"] == 2
+    # the prior direction: only sessions BEFORE the report count
+    prior = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",),
+                               match_tolerance_min=60.0, max_per_rating=3, refractory_min=0.0,
+                               match_direction="prior")
+    assert prior["matched"].tolist() == [True, False, False, False, False, False]
+    # the same-day path: sessions on one day share the day's aggregate by design, not by matching
+    day = adapter.align_pros(pro, target="session", recordings=recs, metrics=("nrs",))
+    assert day.attrs["report_sharing"]["mode"] == "same_day"
+    assert day.attrs["report_sharing"]["warning"] is None
+
+
+def test_the_time_domain_summary_carries_the_report_sharing_warning():
+    """`pipeline.run_timedomain_branch` copies the matcher's count onto `summary["report_sharing"]`
+    so the module response (`summary.timedomain.report_sharing`) can print it."""
+    assert callable(getattr(pipeline, "report_sharing_for_summary", None))
+    sdf = pd.DataFrame({"session_start": [], "session_date": []})
+    sdf.attrs["report_sharing"] = {"mode": "time_window", "cap_per_report": 3, "n_sessions_matched": 4,
+                                   "n_reports_matched": 2, "n_reports_shared": 1,
+                                   "n_sessions_on_shared_reports": 3, "max_sessions_per_report": 3,
+                                   "warning": "W"}
+    out = pipeline.report_sharing_for_summary(sdf)
+    assert out["warning"] == "W" and out["n_reports_shared"] == 1
+    assert pipeline.report_sharing_for_summary(pd.DataFrame()) is None

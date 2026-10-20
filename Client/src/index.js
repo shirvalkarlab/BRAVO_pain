@@ -12,6 +12,8 @@
 */
 
 import { useState, useEffect } from "react";
+// The fonts, self-hosted (TASTE_AUDIT.md C8): IBM Plex Sans 400/600 and the icon font.
+import "assets/theme/fonts";
 import "./setupDisableAutocomplete";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Link, useLocation, useNavigate } from "react-router-dom";

@@ -5,13 +5,28 @@ WHY THIS MODULE EXISTS
 The principal investigator's instruction, 2026-09-12, verbatim: "don't recommend settings that
 adaptive cannot use unless there is a scientific or physiological reason."
 
+Stage 1 must search inside the adaptive device envelope so it cannot propose a
+setting that the later gate rejects solely as unprogrammable. This module defines
+the shared envelope read by both Stage 1 and the gate.
+
+WHAT THE ENVELOPE IS, AND WHAT IT IS NOT
+* MIN_RATE_HZ comes from percept_adaptive.MIN_ADAPTIVE_RATE_HZ (55 Hz, PI-stated).
+  The A610 guide states the constraint's direction but does not print that number.
+* Adaptive-mode rate and pulse-width ceilings are unknown here. A610 p.35 states
+  they are lower than in a group without Adaptive Therapy but gives no numbers.
+  None is reported and no invented ceiling is enforced.
+* Device-reported programmed pairs may establish that a pair was demonstrated on
+  a side. Their absence does not prohibit a pair. Read these lazily for reporting,
+  avoiding circular imports; unavailable evidence is reported rather than guessed.
+
 THE OVERRIDE
 ------------
 The instruction carries its own exception: a scientific or physiological reason to explore outside
 the envelope. ``Constraint.lifted`` is True only when a NON-EMPTY reason is recorded, and the reason
 and the name of who gave it travel with the frozen configuration. A request that names the override
 key without a reason is treated as no override at all, and the report says the override was ignored
-and why, so an empty override can never silently disable the constraint."""
+and why, so an empty override can never silently disable the constraint.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -118,7 +133,7 @@ def exclusion_reason(rate_hz, *, min_rate_hz=MIN_RATE_HZ) -> str:
     return f"{float(rate_hz):g} Hz excluded: below the {float(min_rate_hz):g} Hz adaptive minimum"
 
 
-def brainsense_pair_demonstrated(rate_hz, pw_us, hemisphere) -> dict:
+def brainsense_pair_demonstrated(rate_hz, pw_us, hemisphere, participant_uid=None) -> dict:
     """REPORTING ONLY: has this exact (rate, pulse width) been accepted by the device in a
     BrainSense group on this side, according to ``ClosedLoopDeployment/device_facts``?
 
@@ -130,21 +145,20 @@ def brainsense_pair_demonstrated(rate_hz, pw_us, hemisphere) -> dict:
         try:
             from modules.ClosedLoopDeployment import device_facts as _df
         except ImportError:
-            from modules.ClosedLoopDeployment import device_facts as _df
+            from ClosedLoopDeployment import device_facts as _df
     except Exception as exc:                          # noqa: BLE001 -- reporting only
         return {"demonstrated": None,
                 "note": ("not checked: the device-facts table could not be read "
                          f"({type(exc).__name__}: {exc})")}
     try:
-        seen = _df.brainsense_pair_programmed(rate_hz, pw_us, hemisphere)
+        seen = _df.brainsense_pair_programmed(rate_hz, pw_us, hemisphere, participant_uid=participant_uid)
+        prov = _df.brainsense_pairs_provenance(participant_uid)
     except Exception as exc:                          # noqa: BLE001 -- reporting only
         return {"demonstrated": None,
                 "note": f"not checked: {type(exc).__name__}: {exc}"}
-    prov = str(getattr(_df, "BRAINSENSE_PAIRS_PROVENANCE", ""))
     if seen is None:
         return {"demonstrated": None,
-                "note": ("not checked: rate, pulse width or hemisphere missing, or the hemisphere "
-                         "is not in the device-facts table")}
+                "note": ("not checked: participant-bound device evidence, rate, pulse width or hemisphere is missing")}
     if seen:
         return {"demonstrated": True,
                 "note": (f"{float(rate_hz):g} Hz at {float(pw_us):g} us has been programmed in a "

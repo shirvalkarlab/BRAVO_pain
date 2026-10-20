@@ -11,8 +11,7 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import {therapyLayout,groupLabel} from "./plotLayout";
+import { useCallback, useEffect, useState, useMemo } from "react";
 import { useResizeDetector } from 'react-resize-detector';
 
 import { Card, Grid } from "@mui/material";
@@ -34,11 +33,8 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, f
   const { language } = controller;
 
   const [fig, setFig] = useState(null);
-  const [plotWidth,setPlotWidth] = useState(0);
   const [graphingData, setGraphingData] = useState(false);
   const [showDevice, setShowDevice] = useState([]);
-  const previousDeviceIds = useRef([]);
-  const deviceIdsKey = JSON.stringify(dataToRender.TherapyDevices.map((device) => device.Id));
   
   const colors = colormap({
     colormap: 'rainbow-soft',
@@ -49,11 +45,8 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, f
   const step = Math.floor(11 / dataToRender.TherapyDevices.length);
 
   useEffect(() => {
-    const ids = JSON.parse(deviceIdsKey);
-    const previouslyAvailable = previousDeviceIds.current;
-    setShowDevice((selected) => ids.filter((id) => selected.includes(id) || !previouslyAvailable.includes(id)));
-    previousDeviceIds.current = ids;
-  }, [deviceIdsKey]);
+    setShowDevice(dataToRender.TherapyDevices.map((a) => a.Id));
+  }, []);
 
   useEffect(() => {
     const fig = new PlotlyRenderManager(figureTitle, language);
@@ -189,7 +182,7 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, f
     }
     uniqueGroups = uniqueGroups.sort();
     fig.setTickValue(uniqueGroups.map((value, index) => index), "y");
-    fig.setTickLabel(uniqueGroups.map(groupLabel), "y");
+    fig.setTickLabel(uniqueGroups.map((value, index) => value), "y");
     
     fig.traces = [];
     for (let i in data) {
@@ -274,10 +267,6 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, f
         }
       });
     }
-    // Apply viewport styling before the single data render. Rendering an empty layout in a
-    // separate effect can race the first Plotly.newPlot with a subsequent Plotly.react.
-    fig.setLayoutProps(therapyLayout(plotWidth,height));
-    fig.setAxisProps({autorange: false}, "x");
     fig.setYlim([-0.5, uniqueGroups.length-0.5]);
     fig.setXlim([new Date(xLim[0]*1000), new Date(xLim[1]*1000)]);
 
@@ -292,7 +281,7 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, f
         document.removeEventListener("PlotlyClick", onClick);
       }
     };
-  }, [dataToRender, graphingData, showDevice, language, plotWidth, height]);
+  }, [dataToRender, graphingData, showDevice, language]);
 
   var updateTimeout = null;
   var singleClicked = false;
@@ -328,9 +317,10 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, f
     onTimeClick(timeClicked, TherapyId);
   }
 
-  const onResize = useCallback((width) => {
-    setPlotWidth(width || 0);
-    if (fig) fig.refresh();
+  const onResize = useCallback(() => {
+    if (!fig) return;
+
+    fig.refresh();
   }, [fig]);
 
   const {ref} = useResizeDetector({
@@ -340,15 +330,13 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, f
     skipOnMount: false
   });
 
-  return (
+  return useMemo(() => (
     <MDBox>
-      <MDBox role="region" aria-label="Therapy history chart" sx={{width: "100%", minWidth: 0}}>
-        <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: therapyLayout(plotWidth,height).height, width: "100%", minWidth: 0}}/>
-      </MDBox>
+      <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: height, width: "100%", display: ""}}/>
       {dataToRender && dataToRender.TherapyDevices.length > 1 ? (
         <Grid container spacing={2}>
           {dataToRender.TherapyDevices.map((device, index) => {
-            return <Grid item xs={12} sm={6} md={4} key={device.Id}>
+            return <Grid item xs={4} sm={3} key={device.Id}>
               <Card style={{cursor: "pointer", background: showDevice.includes(device.Id) ? "" : "darkgrey"}} onClick={() => {
                 setShowDevice((showDevice) => {
                   if (showDevice.includes(device.Id)) showDevice = showDevice.filter((a) => a != device.Id)
@@ -358,8 +346,8 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, f
               }}>
                 <MDBox display={"flex"} flexDirection={"row"} alignItems={"center"} py={2} px={2}>
                   <MDBox style={{backgroundColor: colors[index*step], height: "10px", width: "10px", marginRight: 5}} />
-                  <MDTypography fontSize={14} fontFamily={"Roboto, sans-serif"} fontWeight={"bold"} style={{overflowWrap:"anywhere",textDecoration: showDevice.includes(device.Id) ? "" : "line-through"}}>
-                    {device.Name}
+                  <MDTypography fontSize={18} fontFamily={"lato"} fontWeight={"bold"} style={{textDecoration: showDevice.includes(device.Id) ? "" : "line-through"}}>
+                    {device.Name.length > 15 ? device.Name.slice(0,15) : device.Name}
                   </MDTypography>
                 </MDBox>
               </Card>
@@ -368,7 +356,7 @@ function TherapyHistoryFigure({dataToRender, height, onTimeClick, rangeSlider, f
         </Grid>
       ) : null}
     </MDBox>
-  );
+  ), [ref, showDevice, dataToRender]);
 }
 
 export default TherapyHistoryFigure;

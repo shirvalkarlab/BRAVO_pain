@@ -13,90 +13,76 @@ Coded by www.creative-tim.com
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-// Material Dashboard 2 React Base Styles
-import colors from "assets/theme/base/colors";
-import typography from "assets/theme/base/typography";
+// Text buttons: no fill, no shadow; text in the body ink, or the accent for a primary one.
+import { T, TYPE, SPACE, SHADOW } from "assets/theme/base/tokens";
+import { BUTTON_HEIGHT } from "assets/theme/components/button/root";
 
-// Material Dashboard 2 React Helper Functions
 import pxToRem from "assets/theme/functions/pxToRem";
 
-const { text, info, secondary, transparent } = colors;
-const { size } = typography;
+const iconSize = (px) => ({
+  "& .material-icon, .material-icons-round, svg": {
+    fontSize: `${pxToRem(px)} !important`,
+  },
+});
 
 const buttonText = {
   base: {
-    backgroundColor: transparent.main,
-    minHeight: pxToRem(40),
-    color: text.main,
-    boxShadow: "none",
-    padding: `${pxToRem(10)} ${pxToRem(24)}`,
+    backgroundColor: "transparent",
+    minHeight: pxToRem(BUTTON_HEIGHT.medium),
+    color: T.ink2,
+    boxShadow: SHADOW.none,
+    padding: `${pxToRem(SPACE.xxs)} ${pxToRem(SPACE.xs)}`,
 
     "&:hover": {
-      backgroundColor: transparent.main,
-      boxShadow: "none",
+      backgroundColor: T.fillMuted,
+      boxShadow: SHADOW.none,
     },
 
-    "&:focus": {
-      boxShadow: "none",
+    "&:focus, &:active, &:active:focus, &:active:hover, &:disabled": {
+      boxShadow: SHADOW.none,
     },
 
-    "&:active, &:active:focus, &:active:hover": {
-      opacity: 0.85,
-      boxShadow: "none",
-    },
-
-    "&:disabled": {
-      boxShadow: "none",
-    },
-
-    "& .material-icon, .material-icons-round, svg": {
-      fontSize: `${pxToRem(16)} !important`,
-    },
+    ...iconSize(TYPE.lead.fontSize),
   },
 
   small: {
-    minHeight: pxToRem(32),
-    padding: `${pxToRem(6)} ${pxToRem(16)}`,
-    fontSize: size.xs,
-
-    "& .material-icon, .material-icons-round, svg": {
-      fontSize: `${pxToRem(12)} !important`,
-    },
+    minHeight: pxToRem(BUTTON_HEIGHT.small),
+    padding: `${pxToRem(SPACE.xxs)} ${pxToRem(SPACE.xs)}`,
+    fontSize: pxToRem(TYPE.caption.fontSize),
+    ...iconSize(TYPE.caption.fontSize),
   },
 
   large: {
-    minHeight: pxToRem(47),
-    padding: `${pxToRem(12)} ${pxToRem(28)}`,
-    fontSize: size.sm,
-
-    "& .material-icon, .material-icons-round, svg": {
-      fontSize: `${pxToRem(22)} !important`,
-    },
+    minHeight: pxToRem(BUTTON_HEIGHT.large),
+    padding: `${pxToRem(SPACE.xs)} ${pxToRem(SPACE.sm)}`,
+    fontSize: pxToRem(TYPE.lead.fontSize),
+    ...iconSize(TYPE.title.fontSize),
   },
 
   primary: {
-    color: info.main,
+    color: T.accent,
 
     "&:hover": {
-      color: info.main,
+      color: T.accent,
+      backgroundColor: T.accentTint,
     },
 
     "&:focus:not(:hover)": {
-      color: info.focus,
-      boxShadow: "none",
+      color: T.accent,
+      boxShadow: SHADOW.none,
     },
   },
 
   secondary: {
-    color: secondary.main,
+    color: T.ink3,
 
     "&:hover": {
-      color: secondary.main,
+      color: T.ink2,
     },
 
     "&:focus:not(:hover)": {
-      color: secondary.focus,
-      boxShadow: "none",
+      color: T.ink3,
+      boxShadow: SHADOW.none,
     },
   },
 };

@@ -20,7 +20,6 @@ Data Upload Handler Module
 
 import os
 import json
-import logging
 import time
 import traceback
 from copy import deepcopy
@@ -42,35 +41,13 @@ from django.http import HttpResponse
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.conf import settings
-from django.db import transaction
-import math
 
 from Server import models
-from modules.HelperFunctions import sanitize_input, get_or_none, current_time, json_compliant_handler
+from modules.HelperFunctions import sanitize_input, get_or_none, current_time
 from modules import Database, DataCurator, DataAnalysis, ImageDatabase, Therapy
 
 DATABASE_PATH = os.environ.get('DATASERVER_PATH')
 HASH_KEY = os.environ.get('DATASERVER_HASHKEY')
-
-def updateRecordingAlignment(recording, alignment, propagate=False):
-    """Align only synchronized siblings atomically; native recording clocks stay intact."""
-    alignment = float(alignment)
-    if not math.isfinite(alignment):
-        raise ValueError("Time alignment must be finite")
-    synchronized = ("SynchronizedMDAT", "CustomizedStreamingData",
-                    "CustomizedTimelineData", "ExternalSensorStreaming")
-    with transaction.atomic():
-        if propagate and recording.type in synchronized:
-            recordings = models.Recording.objects.filter(
-                source=recording.source, type__in=synchronized)
-        else:
-            recordings = models.Recording.objects.filter(pk=recording.pk)
-        recordings.update(adjusted_alignment=alignment)
-        recording.source.owner.last_update = models.current_time()
-        recording.source.owner.save(update_fields=["last_update"])
-        transaction.on_commit(lambda: Database.deleteCachedResult(
-            participant_uid=recording.source.owner.uid), robust=True)
-
 
 class DataUploadHandler(RestViews.APIView):
 
@@ -96,27 +73,55 @@ class DataUploadHandler(RestViews.APIView):
         if ".." in request.data["File"].name or os.path.sep in request.data["File"].name:
             return Response(status=400, data={"message": "Filename not Supported"})
         
-        _upload_started = time.perf_counter()
+        _t_start = time.time()
+        def _stage(label, _last=[time.time()]):
+            now = time.time()
+            print(f"[upload-timing] {label}: {now - _last[0]:.3f}s (total {now - _t_start:.3f}s)", flush=True)
+            _last[0] = now
+
         rawBytes = request.data["File"].read()
-        logging.getLogger(__name__).info("Upload stage=read elapsed_seconds=%.3f", time.perf_counter() - _upload_started)
+        _stage("read upload bytes (%d KB)" % (len(rawBytes) // 1024))
+        unique_hashed = hmac.new(HASH_KEY.encode("utf8"), rawBytes, hashlib.sha256).hexdigest()
         metadata = {**{
             "UploadType": request.data["DataType"],
             "Institute": institute.pk,
             "Uploader": request.user.pk,
-            "UniqueHashed": hmac.new(HASH_KEY.encode("utf8"), rawBytes, hashlib.sha256).hexdigest()
+            "UniqueHashed": unique_hashed
         }, **json.loads(request.data["Metadata"])}
 
-        _cache_started = time.perf_counter()
+        # Fast path for re-uploading an existing/redundant file: reject BEFORE the expensive
+        # encrypt + cache-file write. Previously every upload (duplicates included) was written and
+        # encrypted to disk, and only THEN checked against the existing SourceFiles under a single
+        # global lock — so re-uploading files that are already stored paid the full
+        # write+encrypt+delete cycle and serialized on the lock, which is the long hang on redundant
+        # uploads. This pre-check matches an ALREADY-COMMITTED record, so there is no TOCTOU race;
+        # the post-write locked check below still resolves two concurrent identical NEW uploads.
+        if models.SourceFile.objects.filter(unique_hashed=unique_hashed, institute=str(institute.pk)).exists():
+            print("Duplicate File Found (pre-write fast path)")
+            _stage("pre-write duplicate check (HIT -> 301)")
+            return Response(status=301)
+        _stage("pre-write duplicate check (miss)")
+
         source_file = DataCurator.saveCacheFile(request.data["File"].name, metadata, rawBytes)
-        logging.getLogger(__name__).info("Upload stage=cache_write elapsed_seconds=%.3f", time.perf_counter() - _cache_started)
-        lock = FileLock(DATABASE_PATH + "SourceFileDuplicateCheck.lock")
-        _dedup_lock_started = time.perf_counter()
+        _stage("saveCacheFile (encrypt + write cache)")
+        # Per-hash lock, NOT a single global lock. The post-write check below only needs to resolve a
+        # race between two concurrent uploads of the SAME new file (same content hash); a global lock
+        # forced EVERY upload to serialize against every other, so concurrent uploads of DIFFERENT
+        # files queued behind one another for no reason. Keying the lock on unique_hashed lets
+        # unrelated uploads proceed in parallel while still serializing identical-content uploads.
+        lock = FileLock(DATABASE_PATH + "SourceFileDuplicateCheck_" + unique_hashed + ".lock")
+        _t_lock = time.time()
         with lock.acquire(timeout=60):
-            logging.getLogger(__name__).info("Upload stage=dedup_lock_wait elapsed_seconds=%.3f", time.perf_counter() - _dedup_lock_started)
-            if models.SourceFile.objects.exclude(pk=source_file.pk).filter(metadata__Institute=institute.pk, metadata__UniqueHashed=metadata["UniqueHashed"]).exists():
+            _waited = time.time() - _t_lock
+            if _waited > 0.5:
+                print(f"[upload-timing] WARNING: waited {_waited:.1f}s for the per-hash dedup lock "
+                      f"(a concurrent upload of the same file held it, or a crashed upload left it stale)", flush=True)
+            _stage("acquire per-hash dedup lock")
+            if models.SourceFile.objects.exclude(pk=source_file.pk).filter(unique_hashed=metadata["UniqueHashed"], institute=str(institute.pk)).exists():
                 print("Duplicate File Found")
                 source_file.delete()
                 return Response(status=301)
+        _stage("post-write locked dedup check")
         
         lockFile = source_file.pointer + ".lock"
         if request.data["DataType"] == "DefaultType":
@@ -137,11 +142,12 @@ class DataUploadHandler(RestViews.APIView):
                 if source_file.pointer.endswith(".json"):
                     source_file.metadata = {**source_file.metadata, **{"device_location": "", "automatic_deidentification": False, "infer_from_device": True, "automatic_concatenation": False}}
                     DataCurator.MedtronicPerceptJSONDecoder(source_file, person=source_file.owner)
+                    _stage("MedtronicPerceptJSONDecoder (DefaultType: decode + DB inserts)")
                 elif source_file.pointer.endswith(".mpx"):
                     source_file.metadata = {**source_file.metadata, **{"device_location": "", "infer_from_device": True}}
                     DataCurator.AlphaOmegaMPXDecoder(source_file, person=source_file.owner, name=request.data["File"].name)
                 elif source_file.pointer.endswith(".mdat"):
-                    DataCurator.UFMDATAutoDecoder(source_file, person=source_file.owner)
+                    DataCurator.UFMDATv3Decoder(source_file, person=source_file.owner)
                 elif source_file.pointer.endswith(".mat"):
                     DataCurator.MATFileDecoder(source_file, person=source_file.owner)
                 else:
@@ -169,8 +175,10 @@ class DataUploadHandler(RestViews.APIView):
                     source_file.save()
                     
                     DataCurator.MedtronicPerceptJSONDecoder(source_file, person=person)
+                    _stage("MedtronicPerceptJSONDecoder (decode + DB inserts)")
                 else:
                     DataCurator.MedtronicPerceptJSONDecoder(source_file)
+                    _stage("MedtronicPerceptJSONDecoder (batch: decode + DB inserts)")
                     
             except Exception as e:
                 print(request.data["File"].name)
@@ -279,7 +287,7 @@ class DataUploadHandler(RestViews.APIView):
                 source_file.delete()
                 return Response(status=400, data={"message": str(e)})
 
-        elif request.data["DataType"] in ["UFMDATv2", "UFMDATv3"]:
+        elif request.data["DataType"] == "UFMDATv2":
             person = models.Participant.find(uid=request.data["ParticipantId"])
             if not person:
                 return Response(status=400, data={"message": "Participant not found."})
@@ -290,8 +298,25 @@ class DataUploadHandler(RestViews.APIView):
             source_file.save()
             
             try:
-                decoder = DataCurator.UFMDATv3Decoder if request.data["DataType"] == "UFMDATv3" else DataCurator.UFMDATv2Decoder
-                decoder(source_file, person)
+                DataCurator.UFMDATv2Decoder(source_file, person)
+            except Exception as e:
+                print(request.data["File"].name)
+                print(traceback.format_exc())
+                source_file.delete()
+                return Response(status=400, data={"message": str(e)})
+
+        elif request.data["DataType"] == "UFMDATv3":
+            person = models.Participant.find(uid=request.data["ParticipantId"])
+            if not person:
+                return Response(status=400, data={"message": "Participant not found."})
+            
+            if not person.institute.uid == institute.uid:
+                return Response(status=403)
+            source_file.owner = person
+            source_file.save()
+            
+            try:
+                DataCurator.UFMDATv3Decoder(source_file, person)
             except Exception as e:
                 print(request.data["File"].name)
                 print(traceback.format_exc())
@@ -390,7 +415,7 @@ class DataDownloadHandler(RestViews.APIView):
     def get(self, request):
         CacheType = self.request.query_params.get('CacheType')
         if CacheType == "ClearDataUpload":
-            models.SourceFile.objects.filter(metadata__Uploader=request.user.pk, owner=None).delete()
+            models.SourceFile.objects.filter(metadata__contains={"Uploader": request.user.pk}, owner=None).delete()
             return Response(status=200)
 
         ParticipantId = self.request.query_params.get('ParticipantId')
@@ -543,25 +568,6 @@ class DataDownloadHandler(RestViews.APIView):
                 return Response(status=403)
 
         
-        elif CacheType == "queryChronicTimeline":
-            userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
-            timelines, annotations = DataAnalysis.queryChronicTimeline(ParticipantId, userConfig)
-            complete = []
-            for timeline in timelines:
-                if timeline.get("DataId") and not timeline.get("Data"):
-                    for channel in timeline["ChannelNames"]:
-                        entries = DataAnalysis.queryChronicTimelineData(ParticipantId, timeline["DataId"], channel, userConfig)
-                        complete.extend({**timeline, **entry, "DataId": None, "ChannelNames": [channel],
-                                         "ChannelUnits": [timeline["ChannelUnits"][timeline["ChannelNames"].index(channel)]]}
-                                        for entry in entries)
-                else:
-                    complete.append(timeline)
-            payload = json_compliant_handler({"Timelines": complete, "Annotations": annotations,
-                                               "ProcessingConfiguration": userConfig})
-            response = HttpResponse(json.dumps(payload, allow_nan=False), content_type="application/json")
-            response["Content-Disposition"] = "attachment; filename=MultimodalTimeline_" + ParticipantId + ".json"
-            return response
-
         elif CacheType == "queryChronicNeuralActivity":
             userConfig, _ = Database.retrieveProcessingSettings(request.user.configuration)
             userConfig["APIAccess"] = hasattr(request.user, "api_access")
@@ -640,32 +646,48 @@ class RecordingTimeShiftHandler(RestViews.APIView):
                 return Response(status=403)
             
             Recording = Analysis.recordings.filter(uid=request.data["RecordingId"]).first()
-            if not Recording or Recording.source.owner.uid != request.data["ParticipantId"]:
+            if not Recording.source.owner.uid == request.data["ParticipantId"]:
                 return Response(status=403)
             
             rel = models.RecordingRel.find(analysis=Analysis, recording=Recording)
             if not rel:
                 return Response(status=403)
-            
+
             try:
-                updateRecordingAlignment(Recording, request.data["Alignment"])
+                Recording.adjusted_alignment = float(request.data["Alignment"])
+                Recording.save()
             except:
                 return Response(status=400, data={"message": "Time Alignment is not valid"})
 
         elif request.data["RequestType"] == "Recording":
-            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "RecordingId", "Alignment"]):
+            if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "RequestType", "RecordingId"]):
                 return Response(status=400, data={"message": "Malformed Input"})
             
             Recording = models.Recording.objects.filter(uid=request.data["RecordingId"]).first()
-            if not Recording or Recording.source.owner.uid != request.data["ParticipantId"]:
+            if not Recording.source.owner.uid == request.data["ParticipantId"]:
                 return Response(status=403)
+
+            if Recording.type in ["SynchronizedMDAT", "CustomizedStreamingData", "CustomizedTimelineData", "ExternalSensorStreaming"]:
+                related_recordings = models.Recording.find_all(source=Recording.source)
+            else:
+                related_recordings = [Recording]
+
+            if "Alignment" in request.data.keys():
+                for rec in related_recordings:
+                    try:
+                        rec.adjusted_alignment = float(request.data["Alignment"])
+                        rec.save()
+                    except:
+                        return Response(status=400, data={"message": "Time Alignment is not valid"})
+
+            if "Scale" in request.data.keys():
+                for rec in related_recordings:
+                    try:
+                        rec.fs_scaling_factor = float(request.data["Scale"])
+                        rec.save()
+                    except:
+                        return Response(status=400, data={"message": "Time Scale is not valid"})
             
-            try:
-                updateRecordingAlignment(Recording, request.data["Alignment"], propagate=True)
-            except:
-                return Response(status=400, data={"message": "Time Alignment is not valid"})
-
-
         return Response(status=200)
 
 class TimeSeriesRecordingHandler(RestViews.APIView):
@@ -703,6 +725,13 @@ class TimeSeriesRecordingHandler(RestViews.APIView):
             
             if not "Time" in Data.keys():
                 Data["Time"] = np.arange(len(Data["Data"]))/Data["SamplingRate"]
+            # an empty place on the band-power grid holds NaN (no reading, decision 480 (e)); JSON
+            # carries it as null
+            for _k in ("Data", "ReadingTime"):
+                if _k in Data and np.issubdtype(np.asarray(Data[_k]).dtype, np.floating):
+                    _v = np.asarray(Data[_k], dtype=object)
+                    _v[~np.isfinite(np.asarray(Data[_k], dtype=float))] = None
+                    Data[_k] = _v.tolist()
 
             return Response(status=200, data=Data)
         return Response(status=400, data={"message": "Malformed Input"})
@@ -757,9 +786,7 @@ class DataSourceFileHandler(RestViews.APIView):
         if not source:
             return Response(status=400, data={"message": "Source File not found."})
         
-        # Original sources require management access; shared/deidentified views
-        # must not expose raw files. Older managed imports store an institute ID.
-        if source.metadata.get("Uploader") != request.user.pk and not Database.checkManagePermission(request.user, ParticipantId, "Edit"):
+        if not source.metadata["Uploader"] == request.user.pk:
             return Response(status=403)
         
         file_data = DataCurator.loadCacheFile(source)
@@ -870,3 +897,4 @@ class NeuroImageFileHandler(RestViews.APIView):
             return Response(status=200)
 
         return Response(status=400, data={"message": "Malformed Input"})
+        

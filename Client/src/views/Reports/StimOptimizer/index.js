@@ -1,4 +1,3 @@
-import CacheStatusLine from "../CacheStatusLine";
 /**
 =========================================================
 * UF BRAVO Platform -- Stimulation Parameter Optimizer (Shirvalkar Lab)
@@ -25,75 +24,110 @@ import CacheStatusLine from "../CacheStatusLine";
 * What replaces it: Stage 1 now fits ONE joint (rate, amplitude-Left, amplitude-Right) surface per
 * stratum and freezes ONE configuration for both sides at once, shown here as the decision strip,
 * the two-stage plan card, and the titration-session card.
+*
+* THE DESIGN REVIEW OF 2026-09-26 (`artifacts/design_review_2026-09-26_stim_optimizer_and_biomarkers.md`
+* §1; the PI: "yes to all six, build them"): a status line above the readiness card (amends
+* decision 243's order by one line; no card moved); the stored-results line beside the recompute
+* bar folds (this page wraps it; RecomputeBar.js and CacheStatusLine.js are not edited); the home
+* schedule is a section of the next-visit card (amends the two-cards ruling of 2026-09-12); the
+* control analyses fold; the loading message is one line.
+*
+* THE MINIMALIST REDESIGN OF 2026-09-26 (`artifacts/design_2026-09-26_minimalist_redesign/SPEC.md`
+* section 5.3): the page opens with its answer. The title is its question ("Should today's setting
+* change, and can closed loop start?"); one grey line names the pain score; the status sentence;
+* the status list (✕ blocks, ▲ needs more data or caution, ○ not checked, at most five items); the
+* safe current ceiling, read from the response and never typed here; a slim contents row. Then the
+* recompute bar (the PI's file, unchanged) and four sections, each a question: is any setting proven
+* better than today's; where have currents been tried; can closed loop start; what must the next
+* visit deliver. The evidence base is a quiet footer; the research checks fold. Colours, sizes and
+* spacing come from the shared tokens; the page no longer borrows the Closed-Loop page's palette.
 */
 
+import { useState } from "react";
 import { useParams } from "react-router-dom";
-
-import { Card } from "@mui/material";
 
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
-import MDAlert from "components/MDAlert";
 
 import DatabaseLayout from "layouts/DatabaseLayout";
-import { useAnalysisQuery } from "../Biomarkers/queryAnalysis";
-import MDButton from "components/MDButton";
+import { SessionController } from "database/session-control";
 import { MODULES } from "database/resultCache";
 import { useCachedResult } from "database/useCachedResult";
 
+import { LAYOUT } from "assets/theme/base/tokens";
 import RecomputeBar from "views/Reports/RecomputeBar";
-
-
+import CacheStatusLine from "views/Reports/CacheStatusLine";
+import { recomputeSlots, STIM_OPTIMIZER_SLOTS } from "views/Reports/moduleCacheKeys";
+import Section, { SectionRevealedContext } from "views/Reports/paper/Section";
+import CeilingLine from "views/Reports/paper/CeilingLine";
+import PageHead from "views/Reports/paper/PageHead";
+import { JumpRow } from "views/Reports/paper/links";
+import useDocumentTitle from "views/Reports/paper/useDocumentTitle";
+import { useStudyCode } from "views/Reports/paper/studyCode";
+import { painScoreLabel } from "views/Reports/painScores";
 // The two-stage plan (open loop, then the check that decides whether closed loop may start, then
 // closed loop) is a second request to the same endpoint, fetched after this page's own response
 // has arrived and cached in its own slot; see useTwoStagePlan.js for why.
-
+import useTwoStagePlan from "./useTwoStagePlan";
 import TwoStagePlanCard from "./TwoStagePlanCard";
-// The (left current, right current) surface behind decision 158's honest-current rule, and the
-// home titration schedule that fills the record in where that rule fails (2026-09-14).
+// The (left current, right current) surface behind the honest-current rule, and the home
+// titration schedule that fills the record in where that rule fails (2026-09-14).
 import CurrentMapCard from "./CurrentMapCard";
 import CurrentMapScheduleCard from "./CurrentMapScheduleCard";
-// The titration session to run next (2026-09-12 evening: open item 30 and the 20 s post-ramp
-// margin of decision 144, joined as one recommendation), read from `data.titration_plan`.
+// The titration session to run next, read from `data.titration_plan`.
 import TitrationSessionCard from "./TitrationSessionCard";
-// The decision strip: the setting programmed now beside the setting the joint search prefers,
-// per side, with the gain drawn against its own uncertainty (2026-09-12, the page redesign,
-// phase 1; unaffected by the 2026-09-14 joint redesign -- it already reads the two-stage plan).
-import DecisionStrip from "./DecisionStrip";
-// The sensing evidence behind closed-loop readiness, contacts in Medtronic form, reasons folded
-// (redesign phase 3).
+import NextBlocksCard from "./NextBlocksCard";
+import { OPTIMIZER_REQUEST } from "./optimizerRequest";
+// The decision: the setting programmed now beside the setting the joint search suggests, per side,
+// with the gain drawn against its own uncertainty.
+import DecisionStrip, { decisionHeadline } from "./DecisionStrip";
+// The sensing evidence behind closed-loop readiness.
 import SensingEvidenceTable from "./SensingEvidenceTable";
-import { TYPE, HEAD } from "./typeScale";
-import PAL from "views/Reports/ClosedLoopSim/palette";
+import { T, TYPE, SizedFold } from "./typeScale";
+// The page's status sentence and list: the answer, then why, in ✕ ▲ ○ items of five words or fewer.
+import StatusLine, { StatusSentence } from "./StatusLine";
+import { gateHeadline } from "./ClosedLoopChecks";
+import { ceilingFromResponse } from "./ceiling";
+import { ControlAnalysesSection } from "views/Reports/ControlAnalyses/ControlAnalysesCard";
+import { fmtDate } from "views/Reports/dates";
 
-/**
- * THE REQUEST THIS VIEW SENDS, WRITTEN OUT IN FULL RATHER THAN LEFT TO THE SERVER'S DEFAULTS.
- *
- * The endpoint takes six optional parameters besides the participant — the pain sites, the
- * hemispheres, the wash-in exclusion window, the figure backend, and the depth and width of the
- * forward simulation the two-stage path's own Stage 1 runs. They are documented on
- * `QueryStimOptimizer` in `BRAVO/Server/APIs/DataAnalysis.py` and applied in
- * `modules/StimOptimizer/bravo_service` `run_for_participant`, and the values below are exactly
- * those documented defaults. The request is therefore unchanged in what it asks the server for.
- *
- * What changes is that it is now written down here, which is what allows the result cache to key
- * on it. A cache key has to name everything that changes the answer; a request that relies on the
- * server's defaults names none of it, so a key derived from such a request would be blind to the
- * very parameters this page is about.
- */
-const OPTIMIZER_REQUEST = {
-  Sites: ["left_leg", "back"],
-  Hemispheres: ["Left", "Right"],
-  WashinMin: 1.0,
-  Backend: "none",
-  TwoStage: true,
-  NBatches: 3,
-  Q: 4,
-};
+/** The page's question, its title (SPEC.md section 5.3). */
+export const PAGE_QUESTION = "Should today's setting change, and can closed loop start?";
+
+/** The browser tab's title while this page is shown (TASTE_AUDIT.md C7, the PI's wording). */
+export const TAB_TITLE = "Stim optimizer";
+
+/** The slim contents row under the status list (SPEC.md section 4, rule 7). Drawn by the shared
+ *  jump-link row: separated by space only, never "·" (C11), and not underlined (C3). */
+export const CONTENTS = [
+  ["decision", "Proven better?"],
+  ["current-map", "Currents tried"],
+  ["closed-loop", "Closed loop"],
+  ["next-visit", "Next visit"],
+];
+
+/** The pain score the decision is fitted on, as the page's own label ("Left Leg VAS"). */
+function primaryPainScore(plan) {
+  const st = (plan && plan.stage1) || {};
+  const key = (st.frozen_configuration || {}).primary_item || ((plan && plan.manifest) || {}).primary_item
+    || st.primary_item || null;
+  if (!key) return null;
+  const k = String(key);
+  return painScoreLabel(/_vas$/.test(k) || k === "nrs" || k === "vas" ? k : `${k}_vas`);
+}
+
+// The request this view sends is written out in full in `optimizerRequest.js`.
+
+// The decision strip's per-side arms: the page has passed none since both stimulators were
+// modelled together (commit 542dc353). It is given this one empty object rather than a new `{}` on
+// every render, which made the strip rebuild each time the page re-rendered (speed-up item C6).
+const NO_ARMS = {};
 
 export default function StimOptimizer() {
   const { participant_uid } = useParams();
-  const queryAnalysis = useAnalysisQuery();
+  // The tab's title is the page's question in the PI's words, from the first paint on, the
+  // loading notice included (TASTE_AUDIT.md C7); the page head leaves it alone.
+  useDocumentTitle(TAB_TITLE);
 
   const cached = useCachedResult({
     moduleKey: MODULES.stimOptimizer,
@@ -102,8 +136,7 @@ export default function StimOptimizer() {
     // half of the cache slot, so including it would put the same value in the key twice.
     settings: OPTIMIZER_REQUEST,
     enabled: !!participant_uid,
-    autoFetch: false,
-    fetcher: () => queryAnalysis("/api/queryStimOptimizer",
+    fetcher: () => SessionController.query("/api/queryStimOptimizer",
       { ParticipantId: participant_uid, ...OPTIMIZER_REQUEST })
       .then((response) => (response && response.data) || {}),
   });
@@ -112,274 +145,160 @@ export default function StimOptimizer() {
   const loading = cached.loading;
   const errorText = cached.err;
 
-  // THE TWO-STAGE PLAN IS FETCHED ONLY ONCE THE PAGE'S OWN RESPONSE HAS ARRIVED. `afterMain` is
-  // this page's `data`; while it is null the hook issues nothing, so the first paint is unchanged.
-  // Called here, before any early return, because a hook must run on every render.
-  const twoStage = { data: data?.two_stage, loading, err: errorText };
+  // THE TWO-STAGE PLAN IS FETCHED ALONGSIDE THE PAGE'S OWN RESPONSE (speed-up item C2, 2026-10-01;
+  // it used to wait for it). The server works the two out in separate workers, so the plan no
+  // longer adds its whole computing time to the wait. Called here, before any early return,
+  // because a hook must run on every render.
+  const twoStage = useTwoStagePlan({
+    participantUid: participant_uid,
+    baseRequest: OPTIMIZER_REQUEST,
+  });
+  // The de-identified study code for the line under the title (SPEC section 4 rule 1); null when
+  // the participant record carries none.
+  const participantCode = useStudyCode(participant_uid);
+  // Whether the research-checks fold at the foot of the page has ever been opened: the checks are
+  // asked for from then on, not on page load (speed-up item C8, 2026-10-02). Here, before any early
+  // return, because a hook must run on every render.
+  const [checksOpened, setChecksOpened] = useState(false);
 
   // A spinner is shown while a request is in flight AND on the very first paint before the hook's
   // effect has started one. Without that second condition the page would show its "no parameter
   // surface could be built" notice for one frame on every first load, which is a false statement
   // about the data rather than a cosmetic flash.
-  if (loading) {
+  if (loading || (!cached.hasCached && !errorText)) {
     return (
       <DatabaseLayout>
         <MDBox pt={3} display="flex" alignItems="center" justifyContent="center" gap={2}>
-          <MDTypography variant="body2">
-            Loading this participant&apos;s recordings and the stored settings history, and running the
-            closed-loop readiness screen over every sensing contact and rate; the two-stage plan's
-            own joint fit follows shortly after. About ten seconds in all; the first load after an
-            ingest also rebuilds the settings history from the stored session reports and is slower.
+          <MDTypography variant="body2" sx={{ fontSize: TYPE.body, color: T.ink2 }}>
+            Loading the settings history and the readiness check, about 10 s (longer after an ingest).
           </MDTypography>
         </MDBox>
       </DatabaseLayout>
     );
   }
 
-  if (!data && !loading && !errorText) return <DatabaseLayout><MDBox pt={3}>
-    <MDTypography variant="h5">Joint stimulation optimizer</MDTypography>
-    <MDTypography variant="body2">Build the joint current map, two-stage plan and sensing evidence from approved recordings and pain reports.</MDTypography>
-    <MDButton onClick={cached.recompute} color="info">Run optimizer</MDButton>
-  </MDBox></DatabaseLayout>;
-
   if (errorText || !data || data.available === false) {
     return (
       <DatabaseLayout>
-        <MDBox pt={3}>
-          <MDAlert color="warning" dismissible={false}>
-            <MDTypography variant="body2" color="white">
-              No parameter surface could be built.{" "}
-              {errorText || data?.reason || "This participant has no exposure epochs carrying pain reports."}
-            </MDTypography>
-          </MDAlert>
+        <MDBox pt={3} sx={{ maxWidth: LAYOUT.contentMax, mx: "auto" }}>
+          <MDTypography variant="body2" component="p" sx={{ fontSize: TYPE.lead, color: T.ink }}>
+            {"○ No parameter surface could be built. "}
+            {errorText || data?.reason || "This participant has no stretches of unchanged settings carrying pain reports."}
+          </MDTypography>
         </MDBox>
       </DatabaseLayout>
     );
   }
 
   const dm = data.design_matrix || {};
+  const ceiling = ceilingFromResponse(data, twoStage.data);
+  const painScore = primaryPainScore(twoStage.data);
 
   return (
     <DatabaseLayout>
-      <MDBox pt={3}>
-        <MDBox display="grid" sx={{ rowGap: "16px" }}>
+      <MDBox pt={3} pb={8} sx={{ maxWidth: LAYOUT.contentMax, mx: "auto", color: T.ink2 }}>
 
-          {/* The Recompute control comes before the verdict, because whether the verdict was
-              computed under the settings now on the page has to be readable before the verdict is
-              read. Every panel below it is served from memory until it is pressed. */}
-          <MDBox>
-            <CacheStatusLine status={data.cache_status} />
-            <RecomputeBar
-              title="stim parameter optimizer"
-              stale={cached.stale}
-              staleReasons={cached.staleReasons}
-              computedAt={cached.computedAt}
-              loading={cached.loading}
-              notKept={cached.notKept}
-              // Both slots: the page's own response and the two-stage plan fetched after it.
-              onRecompute={cached.recompute}
-            />
-
+        {/* ---------- how the page opens (SPEC.md section 4, rule 1): the question, the pain score,
+            the answer, why (at most five items, each with its glyph), the safe ceiling read from
+            the response, and the contents row. Nothing in the head is folded. ---------- */}
+        <PageHead title={PAGE_QUESTION} participant={participantCode} painScore={painScore}
+          documentTitle=""
+          status={<StatusSentence data={data} plan={twoStage.data} planLoading={twoStage.loading} />}>
+          {/* The status list, its key and its fold (this page's own: its items carry the
+              decision-294 dagger and fold what each rests on), then the ceiling line and the
+              contents row. Built on the shared page head (TASTE_AUDIT.md C6). */}
+          <StatusLine data={data} plan={twoStage.data} planLoading={twoStage.loading} showHeadline={false} />
+          <MDBox mt={1.5}>
+            <CeilingLine leftMa={ceiling.leftMa} rightMa={ceiling.rightMa} />
           </MDBox>
+          <MDBox mt={2}>
+            <JumpRow label="Contents" items={CONTENTS.map(([id, label]) => ({ href: `#${id}`, label }))} />
+          </MDBox>
+        </PageHead>
 
-          {/* ---------- the decision: the setting in force beside the joint search's own
-              preference, per side (redesign phase 1, 2026-09-12; unchanged by the joint
-              redesign -- it already reads the two-stage plan, not the removed arms) ---------- */}
-          <Card>
-            <MDBox p={2}>
-              <MDTypography variant="h6" sx={{ fontSize: TYPE.headline, mb: 1 }}>
-                What the joint search prefers, per side
-              </MDTypography>
-              <DecisionStrip arms={{}} plan={twoStage.data} planLoading={twoStage.loading}
-                planErr={twoStage.err} inForce={data.in_force_by_side || null} />
-            </MDBox>
-          </Card>
-
-          {/* ---------- the sensing evidence behind closed-loop readiness ----------
-              A DIFFERENT question from the strip above it: the optimizer asks which setting
-              relieves pain best; this asks whether any sensed band moves with stimulation current,
-              which is the only lever adaptive mode has. The per-row reasons stay, folded, because a
-              refusal for want of data and a refusal on a measured negative are different clinical
-              conclusions. */}
-          {data.closed_loop && (
-            <Card>
-              <MDBox p={2}>
-                <SensingEvidenceTable closedLoop={data.closed_loop} />
+        {/* The Recompute control (the PI's own file, unchanged): every section below is served from
+            memory until it is pressed. Stored-result build times: one click away. */}
+        <MDBox mb={4}>
+          <RecomputeBar
+            title="stim parameter optimizer"
+            stale={cached.stale}
+            staleReasons={cached.staleReasons}
+            computedAt={cached.computedAt}
+            loading={cached.loading}
+            notKept={cached.notKept}
+            // Both slots: the page's own response and the two-stage plan fetched after it.
+            onRecompute={() => recomputeSlots(participant_uid, STIM_OPTIMIZER_SLOTS)}
+          />
+          {data && data.cache_status ? (
+            <SizedFold show="Stored-result build times" hide="Hide" dense mt={0.5}>
+              <MDBox data-testid="cache-status-fold-body">
+                <CacheStatusLine status={data.cache_status} />
               </MDBox>
-            </Card>
-          )}
-
-          {/* ---------- evidence base, one row of counts ---------- */}
-          <Card>
-            <MDBox p={2}>
-              <MDBox display="flex" alignItems="baseline" gap={1} flexWrap="wrap">
-                <MDTypography variant="h6" sx={{ fontSize: TYPE.section }}>Evidence base</MDTypography>
-                <MDTypography variant="caption" sx={{ fontSize: TYPE.small, color: PAL.neutral }}>
-                  a stretch is one continuous exposure to one setting; reports inside the wash-in are excluded
-                </MDTypography>
-              </MDBox>
-              <MDBox mt={1.2} display="flex" columnGap={4} rowGap={1.5} flexWrap="wrap">
-                {[
-                  ["stretches of unchanged settings", dm.n_epochs],
-                  ["pain reports used", dm.n_reports],
-                  ["first to last", `${dm.t_first ? String(dm.t_first).slice(0, 10) : "—"} → ${dm.t_last ? String(dm.t_last).slice(0, 10) : "—"}`],
-                  ["wash-in", data.washin_min != null ? `${data.washin_min} min` : "—"],
-                  ["left currents delivered", dm.amp_mA_Left_range ? `${Number(dm.amp_mA_Left_range[0]).toFixed(1)}–${Number(dm.amp_mA_Left_range[1]).toFixed(1)} mA` : "—"],
-                  ["right currents delivered", dm.amp_mA_Right_range ? `${Number(dm.amp_mA_Right_range[0]).toFixed(1)}–${Number(dm.amp_mA_Right_range[1]).toFixed(1)} mA` : "—"],
-                ].map(([k, v]) => (
-                  <MDBox key={k}>
-                    <MDTypography variant="caption" component="div" sx={HEAD}>{k}</MDTypography>
-                    <MDTypography variant="h6" sx={{ fontSize: TYPE.numLarge, fontFamily: PAL.mono, whiteSpace: "nowrap" }}>{v === null || v === undefined ? "—" : v}</MDTypography>
-                  </MDBox>
-                ))}
-              </MDBox>
-            </MDBox>
-          </Card>
-
-          {/* ---------- the titration session to run next (PI, 2026-09-12 evening) ---------- */}
-          {data.titration_plan && (
-            <TitrationSessionCard plan={data.titration_plan} participantUid={participant_uid} />
-          )}
-
-          {/* ---------- where the two currents have been tried, and the home schedule to fill
-              the record in (decision 158, 2026-09-14) -- placed directly above the two-stage
-              plan card, since it is the evidence behind that card's own current recommendation
-              (or the lack of one). ---------- */}
-          {twoStage.data && <CurrentMapCard plan={twoStage.data} />}
-          {data.current_map_schedule && <CurrentMapScheduleCard schedule={data.current_map_schedule} />}
-
-          {/* ---------- the two-stage plan: the joint open-loop search, the gate, and closed
-              loop -- the ONLY recommendation this page makes (PI, 2026-09-14) ---------- */}
-          <TwoStagePlanCard plan={twoStage.data} loading={twoStage.loading} err={twoStage.err} />
+            </SizedFold>
+          ) : null}
         </MDBox>
+
+        {/* ---------- 1. is any setting proven better than today's? The answer is COMPUTED from the
+            per-side verdicts in the same render, never a fixed description of the method. -------- */}
+        <Section id="decision" question="Candidate vs. current setting"
+          answer={`${decisionHeadline(twoStage.data, data.in_force_by_side || null)}.`}>
+          <DecisionStrip arms={NO_ARMS} plan={twoStage.data} planLoading={twoStage.loading}
+            planErr={twoStage.err} inForce={data.in_force_by_side || null} />
+        </Section>
+
+        {/* ---------- 2. where have currents been tried, and what does the fit predict? ---------- */}
+        {twoStage.data && <CurrentMapCard plan={twoStage.data} />}
+
+        {/* ---------- 3. can closed loop start? The allowed sensing pairs as sentence blocks, the
+            other combinations folded, then the four checks and what closed loop ruled out. ---------- */}
+        {/* The answer stays in view while the section is closed (2026-09-26): the checks' count. */}
+        <Section id="closed-loop" question="Closed-loop readiness" collapsible
+          answer={twoStage.data ? `${gateHeadline(twoStage.data)}.`
+            : (twoStage.loading ? "Still being checked: the two-stage plan is computing." : null)}>
+          {data.closed_loop && <SensingEvidenceTable closedLoop={data.closed_loop} />}
+          <MDBox mt={3}>
+            <TwoStagePlanCard plan={twoStage.data} loading={twoStage.loading} err={twoStage.err} />
+          </MDBox>
+        </Section>
+
+        {/* ---------- 4. what must the next visit deliver? The session to run in clinic, and the
+            home schedule inside it (the PI amended his two-cards ruling on 2026-09-26). ---------- */}
+        {data.titration_plan && (
+          <TitrationSessionCard plan={data.titration_plan} participantUid={participant_uid}
+            homeSchedule={data.current_map_schedule || null} />
+        )}
+        {/* Which Left contact and rate to test next (step C; the PI, 2026-10-01: "show both lists
+            on the page"): the tied, untested contacts, then the measured ones ranked. */}
+        <NextBlocksCard nextBlocks={((((twoStage.data || {}).stage1) || {}).clinic_stream || {}).next_blocks || null} />
+        {/* No titration plan on the response: the home schedule still shows, as its own section. */}
+        {!data.titration_plan && data.current_map_schedule && (
+          <Section id="next-visit" question="Next-visit requirements">
+            <CurrentMapScheduleCard schedule={data.current_map_schedule} />
+          </Section>
+        )}
+
+        {/* ---------- the evidence base, a quiet footer (no decision on the page reads it) ---------- */}
+        <MDBox data-testid="evidence-base-footer" mt={2}>
+          <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.small, lineHeight: "18px", color: T.ink3 }}>
+            {`Evidence base: ${dm.n_epochs ?? "—"} stretches of unchanged settings · ${dm.n_reports ?? "—"} pain reports used · `
+              + `${dm.t_first ? fmtDate(String(dm.t_first).slice(0, 10)) : "—"} → ${dm.t_last ? fmtDate(String(dm.t_last).slice(0, 10)) : "—"} · `
+              + `ratings in the first ${data.washin_min != null ? `${data.washin_min} min` : "—"} after a setting change left out · `
+              + `left currents delivered ${dm.amp_mA_Left_range ? `${Number(dm.amp_mA_Left_range[0]).toFixed(1)}–${Number(dm.amp_mA_Left_range[1]).toFixed(1)} mA` : "—"} · `
+              + `right ${dm.amp_mA_Right_range ? `${Number(dm.amp_mA_Right_range[0]).toFixed(1)}–${Number(dm.amp_mA_Right_range[1]).toFixed(1)} mA` : "—"} (history, not a proposal). `
+              + "A stretch is one continuous exposure to one setting."}
+          </MDTypography>
+        </MDBox>
+
+        {/* ---------- the research checks: saved, dated, run offline; they feed nothing above.
+            Folded and still mounted; their request goes out the first time the fold is opened
+            (speed-up item C8, 2026-10-02). ---------- */}
+        <SizedFold show="Chance and current checks (offline)" hide="Hide the research checks" mt={3}
+          onChange={(open) => { if (open) setChecksOpened(true); }}>
+          <SectionRevealedContext.Provider value={checksOpened}>
+            <ControlAnalysesSection participantUid={participant_uid} page="stim_optimizer" />
+          </SectionRevealedContext.Provider>
+        </SizedFold>
       </MDBox>
     </DatabaseLayout>
   );
 }
-
-export function resolutionOf(a) {
-  const num = (x) => (typeof x === "number" && Number.isFinite(x) ? x : null);
-  const cmp = (a && a.comparison) || {};
-  const served = a ? a.optimum_resolved : undefined;
-
-  let gain = num(cmp.gain);
-  let sdDiff = num(cmp.sd_of_difference);
-  let k = num(cmp.k);
-  let derivedLocally = false;
-
-  // Legacy payload: reconstruct only what is missing, and flag that it was reconstructed.
-  if (gain === null || sdDiff === null) {
-    const opt = (a && a.optimum) || {};
-    const muStar = num(opt.posterior_mean);
-    const sdStar = num(opt.posterior_sd);
-    const muInc = num(a && a.incumbent_mu);
-    const sdInc = num(a && a.incumbent_sd);
-    if (muStar !== null && muInc !== null && sdStar !== null && sdInc !== null) {
-      const g = muInc - muStar;
-      const s = Math.sqrt(sdStar * sdStar + sdInc * sdInc);
-      if (Number.isFinite(s) && s > 0) {
-        gain = g;
-        sdDiff = s;
-        derivedLocally = true;
-      } else {
-        gain = g;
-        sdDiff = null;
-      }
-    }
-  }
-  const marginLabel = k === null ? "declared margin (value not recorded)" : `declared margin (${k} standard deviations of the difference)`;
-
-  // An interval cannot be drawn around a centre that is not known. The renderer decides whether to
-  // draw the gain and its band by testing `sdDiff` alone, so a response carrying a standard
-  // deviation without a gain would have printed a band around a null centre. Tying them together
-  // here keeps that decision in one place rather than adding a second guard at the call site, where
-  // it would be easy to add a third display later and forget it.
-  if (gain === null) sdDiff = null;
-
-  // The SERVED verdict decides the state. The three cases are distinguished by identity, not by
-  // truthiness, because `null` here means the question could not be put and must not read as "no".
-  let state;
-  let why;
-  if (served === true) {
-    state = "resolved";
-    why = `the served comparison reports a gain exceeding its ${marginLabel}`;
-  } else if (served === false) {
-    state = "unresolved";
-    why = `the served comparison does not exceed its ${marginLabel}, so the two cells are not separated`;
-  } else {
-    state = "undeterminable";
-    why = "the difference against the setting in force could not be formed at all, because one of "
-          + "the two posteriors is degenerate — so this arm was not compared, rather than compared "
-          + "and found wanting. That needs the fit repaired rather than more exposure at the cell";
-  }
-
-  return {
-    state,
-    gain,
-    sdDiff,
-    k,
-    derivedLocally,
-    why: derivedLocally
-      ? `${why}. Note that the gain and its standard deviation shown here were reconstructed on `
-        + "this page because the response did not carry them, so they are not guaranteed to match "
-        + "the quantities the verdict was computed from"
-      : why,
-  };
-}
-
-// Chip appearance for the three states. "Not determinable" takes the neutral ink and an outline,
-// never the failure ink and never the same treatment as "not resolved": the first means the
-// question could not be put, the second means it was put and answered no, and a reader deciding
-// what to do next needs to tell them apart.
-const RESOLUTION_CHIP = {
-  resolved: { label: "resolved", color: "success", variant: "filled" },
-  unresolved: { label: "not resolved", color: "default", variant: "outlined" },
-  undeterminable: { label: "not determinable", color: "default", variant: "outlined" },
-};
-
-/**
- * The five figures, with the one that answers the page's question marked as primary.
- *
- * WHY ONE IS LARGER THAN THE OTHERS. Five figures at identical size read as five equally important
- * results, and they are not. The page exists to ask a single question — is the predicted optimum
- * separated from the setting currently in force? — and only the posterior surface answers it. The
- * other four say where to look NEXT, which is a different and secondary question: useful for
- * planning the next visit, not for deciding what to program. Rendering them all the same size left
- * a reader to work out that ranking for themselves, and the ordering alone did not convey it.
- *
- * The safe set is not a sixth figure. It is drawn as a contour ON the posterior surface, and the
- * numeric safety ceilings live in the tables above, so there is no separate safety panel to
- * separate out.
- */
-const FIGURES = [
-  ["posterior_surface", "Posterior objective surface with the safe set",
-   "Predicted pain objective across the frequency x amplitude grid. Lower is better. Tested cells are overlaid; the dashed contour is the safe-set boundary.",
-   "primary"],
-  ["acquisition", "Where the search explores versus exploits",
-   "The acquisition surface and its argmax, with the exploration share of each selection. A high exploration share means the surrogate cannot yet separate cells by predicted benefit.",
-   "secondary"],
-  ["trajectory", "Search trajectory across simulated batches",
-   "Parameters sampled, the safety value at each sample, and the running best estimate, over forward-simulated batches.",
-   "secondary"],
-  ["dual_model", "Composite objective against the preference model",
-   "The scalar objective and the illustrative preference model on shared axes, with both optima marked. Disagreement between them is informative, not an error.",
-   "secondary"],
-  ["coverage", "Coverage: what the grid has never tested",
-   "Posterior standard deviation across the grid, with the optimistic bound in never-tested cells. This is the visual form of the unexplored-region audit.",
-   "secondary"],
-];
-
-const fmt = (v, d = 2) =>
-  (v === null || v === undefined || Number.isNaN(Number(v))) ? "\u2014" : Number(v).toFixed(d);
-
-/**
- * One Plotly figure from server-supplied figure JSON.
- *
- * PLOT PERSISTENCE. `Plotly.react` updates the graph that is already in the page, diffing against
- * what is drawn, so a figure whose colours or labels changed does not rebuild the node and does not
- * discard the zoom, pan and legend selections the reader has set. The version this replaces purged
- * the node in the effect's cleanup, which ran before every redraw as well as on unmount — so
- * switching arms, or any change to the figure at all, tore the graph down and built it again from
- * nothing. The purge now happens only when the panel really goes away, which is where it is needed:
- * to release the graph's event handlers and any WebGL context it holds.
- */

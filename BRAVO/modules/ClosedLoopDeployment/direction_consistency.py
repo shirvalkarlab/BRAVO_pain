@@ -43,9 +43,6 @@ _WITHIN_VISIT_NOT_MOVING = (
 )
 
 
-
-# Aditya canonical compatibility imports/constants.
-
 def _f(v):
     try:
         x = float(v)
@@ -91,13 +88,22 @@ def implied_control_direction(within_visit_pooled, correlation_row):
             "this band's power, pooled across every visit tested")
         return out
 
-    if correlation_row is None:
+    if correlation_row is None or correlation_row.get("can_choose_band") is False:
         out["reason"] = ("no cross-visit correlation between this band's power and pain is "
                          "available for this sensing contact")
         return out
 
     r = _f(correlation_row.get("pearson_r"))
-    p = _f(correlation_row.get("p_selection_aware"))
+    if correlation_row.get("decided_by") == "chronic":
+        # Correlation and significance must come from the same source. The chronic
+        # rotation test is not the TD grid's window-selection-aware test.
+        p = _f((correlation_row.get("chronic") or {}).get("p_rotation"))
+        out["cross_visit_pain_source"] = "chronic"
+        out["cross_visit_pain_test"] = "exact rotation of matched chronic reports"
+    else:
+        p = _f(correlation_row.get("p_selection_aware"))
+        out["cross_visit_pain_source"] = "TD"
+        out["cross_visit_pain_test"] = "window-selection-aware TD test"
     out["cross_visit_pain_correlation_r"] = r
     out["cross_visit_pain_correlation_p"] = p
     if not (np.isfinite(r) and np.isfinite(p)):
@@ -156,7 +162,10 @@ def for_band(build, band_sweep_grid, sensing_contact, band_center_hz, *, min_poi
     """
     from . import amplitude_effect as _amp
 
-    # Participant-specific provenance and examples are maintained outside source control.
+    # `pooled` is the row from the STORED table, pooled from every run this participant has. Prefer
+    # it whenever the caller has one: `build` on a page request is truncated to the runs the page
+    # draws, and pooling that slice answers from only a fraction of the visits. Pooling from
+    # `build` remains valid for callers that genuinely hold every run and for tests.
     within_visit_pooled = (
         pooled if pooled is not None
         else _amp.pooled_shape_for_band(build, band_center_hz, sensing_contact,
@@ -166,6 +175,3 @@ def for_band(build, band_sweep_grid, sensing_contact, band_center_hz, *, min_poi
     out["sensing_contact"] = str(sensing_contact)
     out["band_center_hz"] = float(band_center_hz)
     return out
-
-
-# Retained active Aditya interfaces.

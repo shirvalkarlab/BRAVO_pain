@@ -37,8 +37,7 @@ import {
 
 // Material Dashboard 2 React context
 import { usePlatformContext } from "context";
-import ExpandLess from "@mui/icons-material/ExpandLess";
-import ExpandMore from "@mui/icons-material/ExpandMore";
+import { ExpandLess, ExpandMore } from "@mui/icons-material";
 
 function SidenavCollapse({ icon, name, active, open, children, ...rest }) {
   const [controller] = usePlatformContext();
@@ -74,7 +73,7 @@ function SidenavCollapse({ icon, name, active, open, children, ...rest }) {
             primary={name}
             sx={(theme) =>
               collapseText(theme, {
-                miniSidenav: miniSidenav && !showSidenav,
+                miniSidenav,
                 transparentSidenav,
                 whiteSidenav,
                 active,

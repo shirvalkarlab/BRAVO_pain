@@ -15,8 +15,10 @@ import OuraTimeline from "./OuraTimeline";
 import StimProgramSettings from "./NeuralData";
 import HomeNeuralData from "./HomeNeuralData";
 import MultimodalSummary from "./MultimodalSummary";
+import StandardMPQNotice from "./StandardMPQNotice";
 
 const EMPTY = [];
+const EMPTY_OBJECT = {};
 
 export default function RedcapTimeline() {
   const {participant_uid} = useParams();
@@ -55,9 +57,12 @@ export default function RedcapTimeline() {
         <MDTypography variant="body1">Survey outcomes, stimulation settings, medications and wearable data across the study.</MDTypography></div>
       <Button variant="outlined" disabled={query.loading} onClick={() => setRevision(r => r + 1)}>Refresh view</Button>
     </Stack>
-    {query.loading && <MDTypography role="status">Loading reviewed REDCap timeline…</MDTypography>}
+    {query.loading && <MDTypography role="status">Loading REDCap timeline…</MDTypography>}
     {query.error && <Alert severity="error">{query.error}</Alert>}
-    {query.data && <>
+    {query.freshnessError && <Alert severity="warning">{query.freshnessError}</Alert>}
+    <>
+      {query.data?.message && <Alert severity="info" sx={{mb:3}}>{query.data.message}</Alert>}
+      {view !== "summary" && <StandardMPQNotice provenance={query.data?.provenance?.standard_mpq} />}
       <Tabs value={view} onChange={(_, value) => setView(value)} variant="scrollable" scrollButtons="auto" aria-label="All data stream views" sx={{mb:3}}>
         <Tab value="summary" label="Multimodal Summary" />
         <Tab value="timeline" label="REDCap" />
@@ -67,11 +72,11 @@ export default function RedcapTimeline() {
         <Tab value="medications" label="Medications" />
         <Tab value="oura" label="Oura" />
       </Tabs>
-      {view !== "summary" && view !== "oura" && view !== "neural" && view !== "settings" && <Card sx={{p: 3, mb: 3}}><Stack spacing={3}>
+      {query.data && view !== "summary" && view !== "oura" && view !== "neural" && view !== "settings" && <Card sx={{p: 3, mb: 3}}><Stack spacing={3}>
         <Autocomplete multiple disableCloseOnSelect options={metrics} value={shown} getOptionLabel={m => m.label}
           isOptionEqualToValue={(a, b) => a.key === b.key} getOptionDisabled={m => !m.points.length}
           onChange={(_, values) => setSelected(values.map(m => m.key))}
-          renderInput={params => <TextField {...params} label="Clinical metrics" helperText="Choose from 27 clinical metrics. Measures with no reviewed observations are unavailable." />}
+          renderInput={params => <TextField {...params} label="Clinical metrics" helperText="Choose from the available clinical metrics. Measures with no observations are unavailable." />}
           renderOption={(props, metric) => <li {...props}>{metric.label} · {metric.range.join("–")} · {metric.points.length.toLocaleString()} observations</li>}
           sx={{"& .MuiInputBase-root": {fontSize: 17}, "& .MuiChip-label": {fontSize: 15}}} />
         {view !== "timeline" && <Button onClick={() => setSelected(DEFAULT_METRICS)}>Default metrics</Button>}
@@ -86,13 +91,13 @@ export default function RedcapTimeline() {
         </Stack>
         <Stack direction="row" flexWrap="wrap" gap={1}>{phases.map(phase => <Chip key={phase.key} variant="outlined" label={`${phase.label} · ${localTime(phase.start).slice(0, 10)}`}
           sx={{borderColor: phase.color, color: "#344767", fontSize: 15, height: "auto", "& .MuiChip-label": {whiteSpace: "normal", py: 1}}} />)}</Stack>
-        <MDTypography variant="body2">Dots are individual reviewed surveys; colors mark study phases. Hover for scores, dates and home-program settings. Drag to zoom; double-click to reset.</MDTypography>
-        {smooth && <MDTypography variant="body2">The red line is a continuous centered five-survey median, including QC-valid visit-day surveys. It crosses study phases and gaps; connecting segments do not imply measurements between surveys.</MDTypography>}
-        {contextVisible && <MDTypography variant="body2">X markers are QC-valid stimulation-test visit-day surveys. They contribute to this display’s median even when stimulation context is hidden; routine analysis QC is unchanged.</MDTypography>}
+        <MDTypography variant="body2">Dots are recorded survey scores; colors mark study phases. Hover for scores, dates and home-program settings. Drag to zoom; double-click to reset.</MDTypography>
+        {smooth && <MDTypography variant="body2">The red line is a continuous centered five-survey median, including supplied clinic-sheet ratings. It crosses study phases and gaps; connecting segments do not imply measurements between surveys.</MDTypography>}
+        {contextVisible && <MDTypography variant="body2">X markers are supplied clinic-sheet ratings. They contribute to this display’s median even when stimulation context is hidden; backend analysis rules are unchanged.</MDTypography>}
         {contextVisible && query.data.visits && !query.data.visits.available && <Alert severity="info">{query.data.visits.message}</Alert>}
         </>}
       </Stack></Card>}
-      {view === "timeline" && <>{!invalidRange && visibleUnknown.length > 0 && <Alert severity="info" sx={{mb: 3}}>Home settings are not established for part of this period. Survey tooltips mark these gaps instead of carrying earlier settings forward.</Alert>}
+      {query.data && view === "timeline" && <>{!invalidRange && visibleUnknown.length > 0 && <Alert severity="info" sx={{mb: 3}}>Home settings are not established for part of this period. Survey tooltips mark these gaps instead of carrying earlier settings forward.</Alert>}
       {!invalidRange && contextVisible && <StimulationContext events={events} selected={currentEvent} onSelect={selectTransition} previous={previous} limited={events.length > 12} openDetails={detailsExpanded} onDetailsChange={setDetailsExpanded} />}
       {invalidRange ? <Alert severity="warning">Choose valid dates with From on or before Through, and Through no later than today.</Alert> : <Stack spacing={3}>
         {!shown.length && <Alert severity="info">Select a clinical metric above to display its timeline.</Alert>}
@@ -106,16 +111,16 @@ export default function RedcapTimeline() {
               <MDTypography variant="h4">{metric.label}</MDTypography>
               <MDTypography variant="body2">{count.toLocaleString()} observations{visitCount > 0 && ` + ${visitCount} visit-day surveys (X)`} · scale {metric.range.join("–")}</MDTypography>
             </Stack>
-            {count || visitCount || medianCount ? <MetricChart metric={metric} phases={phases} range={dates} smooth={smooth} visits={visits} transitions={chartEvents} homeTransitions={transitions} unknownIntervals={unknownIntervals} showVisits={contextVisible} onTransition={selectTransition} /> : <Alert severity="info" sx={{my: 2}}>No reviewed observations for this metric in the selected period.</Alert>}
+            {count || visitCount || medianCount ? <MetricChart metric={metric} phases={phases} range={dates} smooth={smooth} visits={visits} transitions={chartEvents} homeTransitions={transitions} unknownIntervals={unknownIntervals} showVisits={contextVisible} onTransition={selectTransition} /> : <Alert severity="info" sx={{my: 2}}>No recorded observations for this metric in the selected period.</Alert>}
           </Card>;
         })}
       </Stack>}</>}
-      {view === "stimulation" && <StimulationPrograms participant={participant_uid} comparison={query.data.comparisons?.stimulation} metrics={shown} />}
-      {view === "medications" && <Medications comparison={query.data.comparisons?.medications} metrics={shown} today={defaults.end} phases={phases} />}
-      {view === "settings" && <StimProgramSettings key={participant_uid} participant={participant_uid} phases={phases} homeTransitions={transitions} unknownIntervals={unknownIntervals} />}
-      {view === "summary" && <MultimodalSummary key={participant_uid} participant={participant_uid} redcap={query.data} revision={revision} />}
-      {view === "neural" && <HomeNeuralData key={participant_uid} participant={participant_uid} />}
-      {view === "oura" && <OuraTimeline key={participant_uid} participant={participant_uid} phases={phases} homeTransitions={transitions} unknownIntervals={unknownIntervals} />}
-    </>}
+      {query.data && view === "stimulation" && <StimulationPrograms participant={participant_uid} comparison={query.data.comparisons?.stimulation} metrics={shown} />}
+      {query.data && view === "medications" && <Medications comparison={query.data.comparisons?.medications} metrics={shown} today={defaults.end} phases={phases} />}
+      {query.data && view === "settings" && <StimProgramSettings key={participant_uid} participant={participant_uid} phases={phases} homeTransitions={transitions} observations={query.data.stimulation?.settings_observations || EMPTY} unknownIntervals={unknownIntervals} />}
+      {view === "summary" && <MultimodalSummary key={participant_uid} participant={participant_uid} redcap={query.data || EMPTY_OBJECT} revision={revision} />}
+      {view === "neural" && <HomeNeuralData key={participant_uid} participant={participant_uid} refreshRevision={revision} />}
+      {view === "oura" && <OuraTimeline key={participant_uid} participant={participant_uid} refreshRevision={revision} phases={phases} homeTransitions={transitions} unknownIntervals={unknownIntervals} />}
+    </>
   </MDBox></DatabaseLayout>;
 }

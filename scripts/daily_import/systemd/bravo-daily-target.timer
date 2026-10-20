@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily import of completed retained-source batches
+
+[Timer]
+OnCalendar=*-*-* 23:45:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=bravo-daily-target.service
+
+[Install]
+WantedBy=timers.target

@@ -32,11 +32,6 @@ import json
 import sys
 
 
-
-# Aditya canonical compatibility imports/constants.
-
-
-
 def _num(x):
     return isinstance(x, (int, float)) and x == x  # finite-ish (not None, not NaN)
 
@@ -189,6 +184,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
-# Retained active Aditya interfaces.

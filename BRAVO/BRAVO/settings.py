@@ -10,12 +10,47 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
+from BRAVO import maths_threads  # noqa: F401  -- FIRST: one maths-library thread by default (A2)
 from pathlib import Path
 import os, sys
 import json
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# ---------------------------------------------------------------------------------------------
+# `modules/` ON THE IMPORT PATH, WHICH THE ANALYSIS PACKAGES ALREADY ASSUME.
+#
+# NINE module-level imports across seven files in `modules/ClosedLoopDeployment` are written in
+# the BARE spelling -- `from ClosedLoopDeployment import edges`, `from Biomarkers.routines import
+# analytics`, `from StimOptimizer.routines import percept_adaptive` -- which resolves only when
+# `modules/` is itself an import root. (Eight reach a SIBLING module; the ninth, `adapter.py`'s
+# `from ClosedLoopDeployment import edges`, is the package importing itself by bare name, which
+# needs the same path root. This comment said "eight" when it was written on 2026-09-09 and that
+# was wrong -- corrected 2026-09-10 after counting them from the syntax tree rather than by eye.) Nothing put it there: not this file, not `manage.py`, and
+# `PYTHONPATH` is unset in the container. The host test suite works only because it runs from
+# `BRAVO/modules` with `PYTHONPATH=.`.
+#
+# The consequence was silent rather than loud. `Server/APIs/DataAnalysis.py` wraps the adapter
+# import and the whole report in one `try/except Exception` and answers HTTP 200 with
+# `{"available": False, "reason": "deployment report error: " + str(e)}`, so the Closed-Loop
+# Deployment endpoint returned a plausible-looking refusal instead of failing. Confirmed through
+# `manage.py shell` -- the process shape gunicorn's workers use -- which raised
+# `ModuleNotFoundError: No module named 'ClosedLoopDeployment'`. `git log -L` dates the first such
+# import to `293a1c98`, 2026-09-04.
+#
+# BOTH SPELLINGS ARE ONE OBJECT since 2026-09-12 (decision 143): each analysis package's
+# `__init__` registers a finder (`DecodeCommon.import_alias`) so `modules.X.sub` and `X.sub` are
+# the same module. Before that, a worker that had served both a Biomarkers and a Closed-Loop
+# request held every in-process memo and every module-level switch twice.
+#
+# APPENDED, NOT INSERTED AT THE FRONT. `modules/` holds names like `utility`, `Resources`,
+# `Database.py` and `Event.py` that could shadow a standard-library or site-packages module if this
+# directory won the search. Appending means it is consulted only after everything else, so it can
+# add these packages without displacing anything.
+_MODULES_ROOT = str(BASE_DIR / "modules")
+if _MODULES_ROOT not in sys.path:
+    sys.path.append(_MODULES_ROOT)
 if os.path.exists(os.path.join(BASE_DIR, '.env')):
     with open(os.path.join(BASE_DIR, '.env'), "r") as file:
         config = json.load(file)
@@ -27,8 +62,6 @@ if os.path.exists(os.path.join(BASE_DIR, '.env')):
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
-if not SECRET_KEY:
-    raise RuntimeError("DJANGO_SECRET_KEY must be set")
 
 # Hard-drive Database Initiation
 DATASERVER_PATH = os.environ.get('DATASERVER_PATH')
@@ -44,36 +77,34 @@ os.makedirs(DATASERVER_PATH + "visualization", exist_ok=True)
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = not (os.environ.get('DJANGO_MODE') == "PRODUCTION")
-ALLOW_SELF_REGISTRATION = os.environ.get("ALLOW_SELF_REGISTRATION", "false").lower() in {
-    "1", "true", "yes"
-}
 
-
-def environment_list(name):
-    return [value.strip() for value in os.environ.get(name, "").split(",") if value.strip()]
-
-
-SERVER_HOSTS = environment_list("SERVER_HOST")
-SERVER_ORIGINS = environment_list("SERVER_ADDRESS")
-CSRF_TRUSTED_ORIGINS = ["http://localhost", "http://127.0.0.1"] + SERVER_ORIGINS
+CSRF_TRUSTED_ORIGINS = [o for o in [
+    "http://localhost:27286", "http://localhost", "http://localhost:80",
+    "http://127.0.0.1", "http://127.0.0.1:80", "http://127.0.0.1:27286",
+    os.environ.get('SERVER_ADDRESS'),
+] if o]
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
-SESSION_COOKIE_HTTPONLY = True
-# Browsers treat loopback as trustworthy; shared-host cookies always require HTTPS.
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
+SESSION_COOKIE_SAMESITE = "Lax"
+#SESSION_COOKIE_HTTPONLY = True
+#SESSION_COOKIE_SECURE = True
+#CSRF_COOKIIE_HTTPONLY = True
 SESSION_COOKIE_AGE = 3600*1  # 1 hour
+# Each BRAVO's own login-cookie names (decision 374; why: BRAVO/cookie_names.py).
+from BRAVO.cookie_names import cookie_names as _cookie_names
+SESSION_COOKIE_NAME, CSRF_COOKIE_NAME = _cookie_names()
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1"] + SERVER_HOSTS
-# Only the loopback-bound nginx proxy can reach this ASGI server.
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-SECURE_SSL_REDIRECT = True
-SECURE_HSTS_SECONDS = 86400
-SECURE_HSTS_INCLUDE_SUBDOMAINS = False
-SECURE_HSTS_PRELOAD = False
+ALLOWED_HOSTS = [h for h in ["localhost", "127.0.0.1", os.environ.get('SERVER_HOST')] if h]
 
-if not DEBUG:
-    SECURE_CONTENT_TYPE_NOSNIFF = True
-    SECURE_REFERRER_POLICY = "same-origin"
+# LOCAL DEV (DEBUG): make a localhost Docker instance "just work" -- accept any host and let the
+# SPA origin (served on :80) call the API with credentials whether same-origin or cross-origin to
+# :27286. Production (DJANGO_MODE=PRODUCTION) keeps the strict lists above.
+if DEBUG:
+    ALLOWED_HOSTS = ["*"]
+    CORS_ALLOWED_ORIGINS = [
+        "http://localhost", "http://localhost:80", "http://localhost:27286",
+        "http://127.0.0.1", "http://127.0.0.1:80", "http://127.0.0.1:27286",
+    ]
+    CORS_ALLOW_CREDENTIALS = True
 
 # Application definition
 
@@ -91,14 +122,12 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
-    'Server.Middlewares.LoopbackSecurity.LoopbackSecurityMiddleware',
+    'django.middleware.security.SecurityMiddleware',
     "whitenoise.middleware.WhiteNoiseMiddleware",
-    'Server.Middlewares.TransportCookies.TransportCookiesMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'Server.Middlewares.ReadOnlyAccount.ReadOnlyAccountMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     "Server.Middlewares.ErrorHandler.ErrorHandlingMiddleware",
@@ -107,6 +136,14 @@ MIDDLEWARE = [
 ROOT_URLCONF = 'BRAVO.urls'
 STATIC_ROOT = '/static/'
 STATIC_URL = '/resources/'
+# This project keeps no static assets of its own (the frontend is the separately-built React
+# bundle nginx serves directly; Django's own admin/DRF static files come from those apps' own
+# packages regardless of this list). The folder below is an extra STATICFILES_DIRS location that
+# has never held anything, so `python3 manage.py check` raised staticfiles.W004 ("the directory
+# ... does not exist") on a fresh checkout or image (pending item P-21, 2026-09-25). Ensuring it
+# exists, the same way the data-server folders above are ensured, silences the warning without
+# changing what is served.
+os.makedirs(os.path.join(BASE_DIR, 'static'), exist_ok=True)
 STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'static'),
 ]
@@ -138,8 +175,11 @@ TEMPLATES = [
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'Server.authentication.BRAVOAPIAuthentication',
-        'Server.authentication.ReadOnlyBasicAuthentication',
-        'rest_framework.authentication.SessionAuthentication',
+        'rest_framework.authentication.BasicAuthentication',
+        # DEBUG/local: skip CSRF enforcement so a stale browser cookie can't 403 every request
+        # (incl. /api/login). Production uses the stock CSRF-enforcing SessionAuthentication.
+        ('Server.authentication.CsrfExemptSessionAuthentication' if DEBUG
+         else 'rest_framework.authentication.SessionAuthentication'),
     ]
 }
 
@@ -213,11 +253,29 @@ LOGGING = {
             "filename": BASE_DIR / "bravo.log",
             "formatter": "verbose",
         },
+        # Console handler so application logs (and the upload/decode timing prints' siblings)
+        # surface in `docker compose logs`, not only in the in-container bravo.log file.
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
     },
     "loggers": {
         "": {
-            "level": "DEBUG" if DEBUG else "INFO",
-            "handlers": ["file"],
+            "level": "DEBUG",
+            "handlers": ["file", "console"],
+        },
+        # CRITICAL PERFORMANCE FIX: under DEBUG=True the django.db.backends logger emits ONE DEBUG
+        # record for EVERY SQL statement. With the root logger at DEBUG and a synchronous FileHandler,
+        # a Percept upload (hundreds-to-thousands of find/include/save/bulk_create queries, each also
+        # preceded by the monkeypatched `SELECT 1` connection health-check) wrote thousands of verbose
+        # log lines to bravo.log synchronously inside the request — turning a sub-second insert phase
+        # into a multi-minute hang. Pinning this logger at INFO stops per-query SQL logging while
+        # keeping warnings/errors. Application logging is unaffected.
+        "django.db.backends": {
+            "level": "INFO",
+            "handlers": ["file", "console"],
+            "propagate": False,
         },
     },
     "formatters": {
@@ -264,3 +322,4 @@ for name, config in settings.DATABASES.items():
             self.connect()
 
     module.DatabaseWrapper.ensure_connection = ensure_connection
+    

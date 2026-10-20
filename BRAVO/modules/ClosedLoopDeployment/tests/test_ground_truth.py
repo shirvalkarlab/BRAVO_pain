@@ -1,4 +1,4 @@
-"""Synthetic regression fixtures adapted from Prasad8146f069 for ground_truth."""
+"""Track G step 2: the device route's ceiling check and the ground-truth verdict rule."""
 import numpy as np
 import pandas as pd
 
@@ -28,10 +28,11 @@ def _device_stream(n_steps=3, hz=2.0, hold_s=90.0, level=200.0, spikes_at=()):
 
 def test_a_spike_above_the_historical_ceiling_is_excluded_and_counted_and_the_setting_is_kept(monkeypatch):
     from ClosedLoopDeployment import ceiling_thresholds as CT
-    monkeypatch.setitem(CT.POWER_DOMAIN_CEILINGS, ("TEST_CONTACT", 12.5), 1000.0)
+    monkeypatch.setattr(CT, "load_configuration", lambda uid: CT.CeilingConfiguration(
+        str(uid), "available", "synthetic", {"POWER_DOMAIN_CEILINGS": {("TEST_CONTACT", 12.5): 1000.0}}))
     st0, se, amps, t, p, a = _device_stream(spikes_at=(T0 + 90 + 70.0,))    # one spike in setting 2's window
     power, table = T3.settled_device_band_power(st0, se, amps, t, p, a, block=None,
-                                                sensing_contact="TEST_CONTACT", centre_hz=12.5)
+                                                sensing_contact="TEST_CONTACT", centre_hz=12.5, participant_uid="synthetic")
     assert table.loc[1, "n_spikes_excluded"] == 1 and table.loc[0, "n_spikes_excluded"] == 0
     assert np.isfinite(power[1]) and abs(power[1] - 400.0) < 1e-9, "the spike did not enter the average"
     assert table.loc[1, "ceiling_device_units"] == 1000.0
@@ -41,10 +42,11 @@ def test_with_no_historical_ceiling_the_check_does_not_run_and_nothing_is_refuse
     """A contact/centre this participant has no history for is not a reason to refuse the window --
     the ceiling check simply does not fire, exactly as when the ceiling used to be turned off."""
     from ClosedLoopDeployment import ceiling_thresholds as CT
-    monkeypatch.setattr(CT, "POWER_DOMAIN_CEILINGS", {})
+    monkeypatch.setattr(CT, "load_configuration", lambda uid: CT.CeilingConfiguration(
+        str(uid), "available", "synthetic", {"POWER_DOMAIN_CEILINGS": {}}))
     st0, se, amps, t, p, a = _device_stream(spikes_at=(T0 + 90 + 70.0,))
     power, table = T3.settled_device_band_power(st0, se, amps, t, p, a, block=None,
-                                                sensing_contact="NEVER_SEEN_BEFORE", centre_hz=12.5)
+                                                sensing_contact="NEVER_SEEN_BEFORE", centre_hz=12.5, participant_uid="synthetic")
     assert table.loc[1, "n_spikes_excluded"] == 0
     assert table.loc[1, "ceiling_device_units"] is None
     assert np.isfinite(power[1]), "with no basis to judge it, the spike is left in the average"
@@ -58,13 +60,14 @@ def test_a_window_that_is_mostly_spikes_is_correctly_caught_where_the_old_rule_c
     of how much of the window they make up -- and the window still correctly falls through
     afterward, for the right reason, because too few clean samples are left to trust."""
     from ClosedLoopDeployment import ceiling_thresholds as CT
-    monkeypatch.setitem(CT.POWER_DOMAIN_CEILINGS, ("TEST_CONTACT", 12.5), 1000.0)
+    monkeypatch.setattr(CT, "load_configuration", lambda uid: CT.CeilingConfiguration(
+        str(uid), "available", "synthetic", {"POWER_DOMAIN_CEILINGS": {("TEST_CONTACT", 12.5): 1000.0}}))
     st0, se, amps, t, p, a = _device_stream(hz=2.0)
     win = (t >= se[1] - 30.0) & (t < se[1]) & (a == 1.5)
     idx = np.flatnonzero(win)
     p[idx[: int(0.6 * idx.size)]] = 50_000.0
     power, table = T3.settled_device_band_power(st0, se, amps, t, p, a, block=None,
-                                                sensing_contact="TEST_CONTACT", centre_hz=12.5)
+                                                sensing_contact="TEST_CONTACT", centre_hz=12.5, participant_uid="synthetic")
     assert table.loc[1, "n_spikes_excluded"] == int(0.6 * idx.size), \
         "the old rule found 0 spikes here; the historical ceiling must find all of them"
     assert not np.isfinite(power[1]) and "excluded as spikes" in table.loc[1, "why_not_used"], \
@@ -73,13 +76,14 @@ def test_a_window_that_is_mostly_spikes_is_correctly_caught_where_the_old_rule_c
 
 def test_a_smaller_share_of_spikes_is_excluded_and_the_setting_still_succeeds(monkeypatch):
     from ClosedLoopDeployment import ceiling_thresholds as CT
-    monkeypatch.setitem(CT.POWER_DOMAIN_CEILINGS, ("TEST_CONTACT", 12.5), 1000.0)
+    monkeypatch.setattr(CT, "load_configuration", lambda uid: CT.CeilingConfiguration(
+        str(uid), "available", "synthetic", {"POWER_DOMAIN_CEILINGS": {("TEST_CONTACT", 12.5): 1000.0}}))
     st0, se, amps, t, p, a = _device_stream(hz=2.0)
     win = (t >= se[1] - 30.0) & (t < se[1]) & (a == 1.5)
     idx = np.flatnonzero(win)
     p[idx[: int(0.2 * idx.size)]] = 50_000.0    # 20% spikes: 80% clean, comfortably above 2/3
     power, table = T3.settled_device_band_power(st0, se, amps, t, p, a, block=None,
-                                                sensing_contact="TEST_CONTACT", centre_hz=12.5)
+                                                sensing_contact="TEST_CONTACT", centre_hz=12.5, participant_uid="synthetic")
     assert table.loc[1, "n_spikes_excluded"] == int(0.2 * idx.size)
     assert np.isfinite(power[1]) and abs(power[1] - 400.0) < 1e-9
 

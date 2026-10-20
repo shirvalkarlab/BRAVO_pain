@@ -71,7 +71,10 @@ function TherapyChangeHistory({JSONData, sessionDate, onUpdateTimeline}) {
   }
 
   const getTherapyModifications = (JSONData, device) => {
-    const therapyLogs = (JSONData.DiagnosticData?.EventLogs || []).filter((a) => {
+    if (!JSONData.DiagnosticData) return [];
+    if (!JSONData.DiagnosticData.EventLogs) return [];
+
+    const therapyLogs = JSONData.DiagnosticData.EventLogs.filter((a) => {
       return a.ParameterTrendId === "ParameterTrendIdDef.ActiveGroup";
     }).map((log) => {
       return {
@@ -84,7 +87,7 @@ function TherapyChangeHistory({JSONData, sessionDate, onUpdateTimeline}) {
       };
     });
 
-    if (therapyLogs.length > 0) therapyLogs.push({
+    therapyLogs.push({
       Id: "",
       Name: "",
       Type: "TherapyChangeGroup",
@@ -92,6 +95,8 @@ function TherapyChangeHistory({JSONData, sessionDate, onUpdateTimeline}) {
       Previous: therapyLogs[therapyLogs.length - 1].New,
       New: therapyLogs[therapyLogs.length - 1].New,
     });
+
+    onUpdateTimeline(therapyLogs);
 
     return [{
       Device: device,

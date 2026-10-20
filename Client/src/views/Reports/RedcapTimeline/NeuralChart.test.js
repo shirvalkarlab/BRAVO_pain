@@ -33,10 +33,10 @@ test('contact lead diagrams move into a complete local key on narrow screens wit
  let resize,frame;const disconnect=jest.fn();global.ResizeObserver=jest.fn(callback=>{resize=callback;return {observe:jest.fn(),disconnect};});
  global.requestAnimationFrame=jest.fn(callback=>{frame=callback;return 4;});global.cancelAnimationFrame=jest.fn();
  const contacts={...event,settings:{left:[{label:'Stimulation contacts',value:'C+2-' }],right:[{label:'Stimulation contacts',value:'C+10a-'}]}};
- act(()=>root.render(<NeuralChart {...props} events={[contacts]} participant="RCS08" metric={NEURAL_METRICS[0]}/>));
+ act(()=>root.render(<NeuralChart {...props} events={[{...contacts,lead_geometry:true}]} participant="SYNTHETIC_A1" metric={NEURAL_METRICS[0]}/>));
  const node=element.querySelector('[role="img"]');Object.defineProperty(node,'clientWidth',{value:342,configurable:true});act(()=>{resize();frame();});
  const call=Plotly.react.mock.calls.at(-1);expect(call[2].margin.l).toBe(45);expect(call[2].images).toEqual([]);expect(call[2].yaxis.showticklabels).toBe(true);
- const gallery=element.querySelector('[aria-label="Contact configuration schematics"]');expect(gallery.textContent).toContain('L GPe: C+2-');expect(gallery.textContent).toContain('R MD Thal: C+10a-');expect(gallery.querySelector('img').alt).toContain('C1: L GPe');
+ const gallery=element.querySelector('[aria-label="Contact configuration schematics"]');expect(gallery.textContent).toContain('L lead: C+2-');expect(gallery.textContent).toContain('R lead: C+10a-');expect(gallery.querySelector('img').alt).toContain('C1: L lead');
  Object.defineProperty(node,'clientWidth',{value:1200,configurable:true});act(()=>{resize();frame();});expect(element.querySelector('[aria-label="Contact configuration schematics"]')).toBeNull();expect(Plotly.react.mock.calls.at(-1)[2].images).toHaveLength(1);
  act(()=>root.unmount());expect(disconnect).toHaveBeenCalled();root=createRoot(element);
  global.ResizeObserver=original.resize;global.requestAnimationFrame=original.request;global.cancelAnimationFrame=original.cancel;
