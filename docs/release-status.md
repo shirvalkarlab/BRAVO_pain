@@ -1,23 +1,41 @@
 # Release status
 
 The shared site is [BRAVO on Jetstream](https://bravo-aditya.mde260021.projects.jetstream-cloud.org/).
-Access requires an individual authorized account. This is a research application;
+Access requires an individually authorized account or the shared read-only lab
+account supplied privately by the administrator. This is a research application;
 a chart or candidate is not a clinical programming instruction.
 
-The shared application is accepted at runtime revision
-`effa7a838a6e4bbf1de535dff1bae8b5e09a3217`. This revision includes the concurrent import-alias
-correction, upstream connection-reuse fix and sync refresh correction. It
-supersedes the intermediate `05ce6fa6` runtime after the `f79d381d` rollback.
+The October 20 shared-viewer application release is deployed. Its reviewed public
+source is merged through [PR #16](https://github.com/shirvalkarlab/BRAVO_pain/pull/16)
+at `86bbad6dbbe15263b01d486c47b7fe95c30003b0`; all five CI jobs passed for the
+reviewed public candidate `712e362ed15d01deaba5a15ab54ec3a6d44ea77c`. The release
+retains the earlier network-recovery, concurrent-import and sync-refresh corrections.
 
 The public source contains the reviewed publication variant described in
-[publication provenance](publication-provenance.md). Private deployment data and
-configuration are not included. Documentation commits do not change the installed
-application revision. Acceptance verifies the tested user journeys and deployment
-state; it does not guarantee complete data coverage or eliminate future network
-and provider failures. All seven Aditya views rendered and an explicit REDCap
-refresh completed. Sync-event and focus ordering were tested in isolation;
-acceptance did not initiate fresh provider collection. A completed wiring
-comparison can still withhold a recommendation when matching ratings are absent.
+[publication provenance](publication-provenance.md), rather than private deployment
+inputs or history. Documentation commits do not change the installed application.
+The operator's acceptance record retains the exact deployed image/revision identity.
+
+Normal shared-viewer sign-in, representative saved-data responses matching the
+authorized owner, permission denials and independent session logout passed live
+checks. Twenty independent sessions completed 40 concurrent lightweight reads
+without failures. A separate check launched twenty complete chart reads concurrently
+(ten REDCap and ten Oura); all succeeded with unchanged saved results, with the
+slowest response taking about a minute. This supports simultaneous viewing with
+that waiting-time limit, but is not a performance guarantee for twenty uncached
+heavy analyses. Application services and owned timers
+were preserved; these acceptance checks did not start a provider import.
+
+All seven Aditya tabs populated in the shared-viewer browser. Biomarkers and
+Stimulation Optimizer populated, and Closed-loop completed; all three disabled
+Recompute. Native Therapy History finished loading with device selection and dated
+history. The owner's initial Closed-loop load and the viewer's initial Stimulation
+Optimizer load recovered from network errors on fresh reloads; an initial viewer
+neural read recovered with **Refresh view**. This bounded browser check does not
+certify every optional native report or heavy uncached analysis. The release does not guarantee complete data
+coverage or eliminate future network and provider failures. A completed wiring comparison can still withhold a recommendation
+when matching ratings are absent. See [shared viewer](shared-viewer.md) for its
+permissions and the distinction between refreshing a view and running a sync.
 
 The fix handles transient browser connection errors with one bounded safe-read
 retry and prevents duplicate focus/visibility events from discarding a successful
