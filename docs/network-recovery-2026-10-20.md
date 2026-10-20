@@ -55,9 +55,11 @@ any comparison ran. Registration now uses a shared lock, keeps the first
 canonical module object and refuses a reverse finder. Isolated regressions cover
 both import orders, repeated registration, simultaneous cold imports and shared
 submodule identity; the helper has 100% statement and branch coverage. The wiring
-simulation tests also pass. An isolated image check must import the actual wiring
-dependencies after Django startup under both package orders before cutover;
-live wiring acceptance remains pending until recorded in [release status](release-status.md).
+simulation tests also pass. The isolated image gate imported the actual wiring
+dependencies after Django startup under both package orders in fresh processes,
+with shared module identity. The same gate rejected the earlier image at the
+reproduced alias recursion. Live wiring then completed on the corrected runtime;
+the bounded deployment checkpoint is recorded in [release status](release-status.md).
 
 The precise underlying cause of every historical connection drop remains
 unconfirmed. The change addresses demonstrated client recovery and refresh-ordering
