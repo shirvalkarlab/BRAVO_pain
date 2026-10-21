@@ -921,7 +921,26 @@ def band_sweep_grid_for_closed_loop(participant_uid, request_data=None, *, consu
             new_sweep[key] = new_rows
         out_sweeps[channel] = new_sweep
 
+    # THE CORRECTION ACROSS THE BAND CHOICES (wave 2, C9; a label and warning only): each band's q
+    # over every band the device's sensing rule allows with today's contacts, on this choosing view,
+    # put on here and never stored. `BRAVO_FAMILY_CORRECTION=0` skips it.
+    family_block = None
+    try:
+        try:
+            from Biomarkers.routines import family_correction as _family
+        except ImportError:                                      # pragma: no cover
+            from modules.Biomarkers.routines import family_correction as _family
+        if _family.ENABLED:
+            out_sweeps, family_block = _family.correct(
+                out_sweeps, _family.rule_block_for_participant(participant_uid),
+                label_metric=want.get("sweep_metric"))
+    except Exception:                                            # noqa: BLE001 - a label only
+        _log.warning("closed-loop: the correction across bands failed for %s", participant_uid,
+                     exc_info=True)
+        family_block = {"available": False, "words": "the correction across bands failed"}
+
     return {"available": True, "band_time_sweep": out_sweeps, "stamp": stamp,
+            **({"family_correction": family_block} if family_block is not None else {}),
             "grid_settings": grid_settings,
             "choosing_grid": _sweep_settings.CHOOSING_GRID,
             "cross_setting_stability_included": any_stability,

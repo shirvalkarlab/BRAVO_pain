@@ -47,6 +47,7 @@ from .routines import sheet_ratings
 from .routines import local_time
 from .routines import chronic_band_choice
 from .routines import time_split
+from .routines import family_correction
 #: the module under a name no function's local `sweep_settings` dict can hide (wave 2, C5)
 _SWEEP_SETTINGS_MODULE = sweep_settings
 from modules.DecodeCommon import data_start as _data_start
@@ -7778,8 +7779,36 @@ def deployment_summary(request_data):
     (`_deployment_summary_build`) and served to every request with the same inputs
     (`summary_input_fingerprints` plus the code). Inside one request scope, so the pain reports
     are fetched once."""
-    return _serve_saved_band_answer(DEPLOYMENT_SUMMARY_KIND, request_data,
-                                    lambda rd: _deployment_summary_build(rd))
+    out = _serve_saved_band_answer(DEPLOYMENT_SUMMARY_KIND, request_data,
+                                   lambda rd: _deployment_summary_build(rd))
+    return _attach_summary_family_q(out, request_data)
+
+
+def _attach_summary_family_q(summary, request_data):
+    """The sign-off summary's band q (wave 2, C9; a label and warning only), put on AFTER the
+    saved answer is served or built, so it is never stored and no key changes: the stored grid under
+    the summary's pain score and settings, corrected with today's contacts
+    (`family_correction.summary_block`), under ``evidence.family_correction``; its warning, when the
+    band is established or supported on the grid with q above 0.05, listed with the caveats. No
+    gate, verdict or ready_to_program reads it. A copy; the switch off returns the summary as it
+    was. Never raises."""
+    if (not family_correction.ENABLED or not isinstance(summary, dict)
+            or not summary.get("available")):
+        return summary
+    try:
+        ident = summary.get("identity") or {}
+        fq = family_correction.summary_block((request_data or {}).get("ParticipantId"),
+                                             request_data, ident.get("contact"),
+                                             ident.get("center_freq_hz"))
+        out = dict(summary)
+        out["evidence"] = dict(out.get("evidence") or {}, family_correction=fq)
+        if fq.get("family_q_warning"):
+            out["caveats"] = list(out.get("caveats") or []) + [
+                "Correction across bands (warning only): " + str(fq["family_q_warning"])]
+        return out
+    except Exception:                                      # noqa: BLE001 - a label only
+        _log.warning("Biomarkers: the summary's band q could not be attached", exc_info=True)
+        return summary
 
 
 #: The Closed-Loop panels saved on the server (decision 428; measured 3.9, 4.2 and 11-13 s on every
@@ -9217,8 +9246,10 @@ def band_time_sweep_for_participant(request_data):
             # The stability answer for THIS grid, read at request time (decision 185): it lands in
             # the store after the grid does, so it is never part of the stored response. The
             # device's sensing rule with TODAY's contacts likewise (2026-09-26).
-            return attach_sensing_rule(attach_stored_stability_answers(stored, participant_uid),
-                                       participant_uid)
+            # the correction across the band choices (wave 2, C9), with today's contacts: after
+            # the sensing rule, which names the family's pairs; never stored (decision 185's way)
+            return family_correction.attach(attach_sensing_rule(
+                attach_stored_stability_answers(stored, participant_uid), participant_uid))
 
     # Through the SAME memo the cell drill-down reads, so a grid that actually builds also leaves
     # this worker ready for the first hover on it. Deliberately placed AFTER the stored-response
@@ -9342,8 +9373,10 @@ def band_time_sweep_for_participant(request_data):
         participant_uid, request_data,
         sweep_key=(out["sweep_key"] or {}).get("signature_key"),
         done_metric=label_metric)
-    # after the write above: today's contacts are never part of the stored grid (2026-09-26)
-    return attach_sensing_rule(attach_stored_stability_answers(out, participant_uid), participant_uid)
+    # after the write above: today's contacts are never part of the stored grid (2026-09-26), nor
+    # the correction across the band choices that follows them (wave 2, C9)
+    return family_correction.attach(attach_sensing_rule(
+        attach_stored_stability_answers(out, participant_uid), participant_uid))
 
 
 #: The request key that asks for one cell's underlying (band power, pain score) pairs alone,
