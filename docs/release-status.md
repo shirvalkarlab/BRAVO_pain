@@ -21,6 +21,13 @@ confirmed application services, existing daily/manual timers and provider enable
 flags. Source refresh remains separate from application deployment: an enabled
 timer does not prove a future import succeeded or all upstream files are current.
 
+A separately reviewed withheld source was accepted through a bounded import.
+A repeat added no duplicates, and read-only canonical checks verified the added
+data while preserving existing records and reviewed contact qualifications.
+Unverified device identities remain withheld by the normal importer. Earlier
+failed sync receipts remain historical records; this repair is not a claim that
+a new all-stream sync has completed.
+
 ## Earlier shared-viewer acceptance
 
 The October 20 shared-viewer application release was deployed and is now superseded
