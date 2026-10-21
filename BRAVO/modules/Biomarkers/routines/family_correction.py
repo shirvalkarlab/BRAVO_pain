@@ -3,8 +3,13 @@ WARNING ONLY (wave 2, C9; the PI, 2026-10-18: "correction family = the allowed s
 centres x the choosing sources, for the CURRENT pain score only"; 2026-10-21: a label and warning,
 like C6-C8).
 
-WHAT THE FAMILY IS. Every band that could be chosen for closed loop under today's contacts, for the
-one pain score the request asks for:
+ONE FAMILY PER CONTACT PAIR (the PI, 2026-10-21: "the multiple comparisons correction Q should
+only be corrected on each bipolar contact pair separately ... the left side ... should be corrected
+... independently from the right side"). Each allowed pair is corrected over its own bands only;
+no pair's p values enter another pair's q.
+
+WHAT EACH FAMILY IS. Every band that could be chosen for closed loop on one allowed pair under
+today's contacts, for the one pain score the request asks for:
   * the sensing pairs the device allows while today's contacts stimulate (decision 217's rule,
     `DecodeCommon.sensing_rule`, read from the contacts in force when the grid is read; never typed
     in here: with RCS08 stimulating on contacts 1 and 2 of both leads that is L 0-3 and R 0-3);
@@ -67,14 +72,15 @@ STATUS_NO_RULE = "no sensing-pair rule on record (no contacts in force), so no f
 STATUS_NO_TD = "this pair has no TD-only grid, so none of its bands is in the family"
 
 #: The fields this puts on a row (the band tables leave them out; see the module note).
-ROW_FIELDS = ("family_q", "family_p", "family_p_source", "family_q_status", "family_q_warning")
+ROW_FIELDS = ("family_q", "family_p", "family_p_source", "family_q_status", "family_q_warning",
+              "family_n")
 #: The start of the warning, as it is appended to `why`.
 WARNING_HEAD = "After correcting for the"
 
 NOT_STORED = ("attached when the grid is read, never part of its key or payload: the family follows "
               "the contacts in force, which change without the recordings or the ratings changing")
-WHAT = ("Benjamini-Hochberg q across every band that could be chosen under today's contacts: the "
-        "sensing pairs the device allows x the band centres built, each band once, by the rotation p "
+WHAT = ("Benjamini-Hochberg q within each sensing pair the device allows under today's contacts, "
+        "corrected separately per pair: that pair's band centres built, each band once, by the rotation p "
         "of the source that decides it (the chronic log where it decides, else the TD-only grid), "
         "for this pain score only. A label and warning only: it changes no answer, status, verdict, "
         "gate or p")
@@ -204,7 +210,7 @@ def _copy_sweep(sweep):
 
 def _blank(row, status):
     row.update(family_q=None, family_p=None, family_p_source=None, family_q_status=status,
-               family_q_warning=None)
+               family_q_warning=None, family_n=None)
 
 
 def _label(sweep, ch):
@@ -245,7 +251,7 @@ def correct(sweeps, rule_block, *, label_metric=None):
                 _blank(r, STATUS_NO_P)
                 r["family_p_source"] = src
             else:
-                family.append((r, p, src))
+                family.append((r, p, src, ch))
     for ch in allowed:
         if ch not in new:
             missing.append({"channel": ch, "display": ch,
@@ -253,35 +259,49 @@ def correct(sweeps, rule_block, *, label_metric=None):
     labels = [_label(new.get(ch), ch) for ch in sorted(allowed)]
     pairs_txt = ", ".join(labels)
     n = len(family)
-    q = bh_fdr(np.array([p for _r, p, _s in family], dtype=float)) if n else np.array([])
+    q = np.full(n, np.nan)
+    per_pair = {}
+    for ch in sorted({c for _r, _p, _s, c in family}):          # one correction per pair
+        idx = [i for i, f in enumerate(family) if f[3] == ch]
+        q[idx] = bh_fdr(np.array([family[i][1] for i in idx], dtype=float))
+        per_pair[ch] = {"display": _label(new.get(ch), ch), "n_in_family": len(idx),
+                        "smallest_p": min(family[i][1] for i in idx),
+                        "smallest_q": float(np.min(q[idx])),
+                        "n_q_at_most_q_warn": int(np.sum(q[idx] <= Q_WARN))}
     n_warned = 0
-    for (r, p, src), qi in zip(family, q):
+    for (r, p, src, ch), qi in zip(family, q):
         qv = float(qi)
+        k = per_pair[ch]["n_in_family"]
         r.update(family_q=qv, family_p=p, family_p_source=src, family_q_status=STATUS_IN,
-                 family_q_warning=None)
+                 family_q_warning=None, family_n=k)
         st = standing(r)
         if st is not None and qv > Q_WARN:
-            w = (f"{WARNING_HEAD} {n} bands tested across the allowed sensing pairs ({pairs_txt}), "
+            w = (f"{WARNING_HEAD} {k} bands tested on {per_pair[ch]['display']}, "
                  f"this band's q is {qv:.2f}: it may be a chance finding")
             r["family_q_warning"] = w
             r["why"] = _append(r.get("why"), w)
             n_warned += 1
-    ps = [p for _r, p, _s in family]
+            per_pair[ch]["n_warned"] = per_pair[ch].get("n_warned", 0) + 1
+    ps = [p for _r, p, _s, _c in family]
     block = {
         "available": bool(rule_ok and allowed),
         "method": METHOD, "q_warn": Q_WARN, "pain_score": label_metric,
         "allowed_pairs": sorted(allowed), "allowed_pairs_display": labels,
         "pairs_outside": sorted(ch for ch in new if ch not in allowed),
         "n_in_family": n, "n_built": int(n_built),
-        "n_from_chronic": sum(1 for _r, _p, s in family if s == "chronic"),
-        "n_from_td": sum(1 for _r, _p, s in family if s == "TD"),
+        "n_from_chronic": sum(1 for _r, _p, s, _c in family if s == "chronic"),
+        "n_from_td": sum(1 for _r, _p, s, _c in family if s == "TD"),
+        "per_pair": per_pair, "corrected_per_pair": True,
         "missing": missing,
         "smallest_p": (min(ps) if ps else None),
         "smallest_q": (float(np.min(q)) if n else None),
         "n_q_at_most_q_warn": int(np.sum(q <= Q_WARN)) if n else 0,
         "n_warned": n_warned,
-        "words": (f"corrected across {n} of {n_built} built (the allowed sensing pairs "
-                  f"{pairs_txt or 'none'}; each band once, by the p of the source that decides it)"
+        "words": ((f"corrected within each pair separately: "
+                   + "; ".join(f"{v['display']} across {v['n_in_family']} bands"
+                               for v in per_pair.values())
+                   + f" ({n_built} built; each band once, by the p of the source that decides it)")
+                  if per_pair else f"no allowed pair has bands to correct (allowed: {pairs_txt or 'none'})"
                   if rule_ok else STATUS_NO_RULE),
         "what": WHAT, "not_stored": NOT_STORED, "rule_decision": DECISION_RULE,
         "rule_reason": (None if rule_ok else (rule_block or {}).get("reason")),

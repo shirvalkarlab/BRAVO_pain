@@ -1,13 +1,15 @@
 """The correction across the band choices: a Benjamini-Hochberg q beside each band, a LABEL AND
 WARNING ONLY (wave 2, C9; the PI, 2026-10-18 and 2026-10-21; `routines/family_correction.py`).
 
-The family (the PI): the sensing pairs the device's rule allows with the contacts in force
+One family PER CONTACT PAIR (the PI, 2026-10-21: each bipolar pair corrected separately, the left
+independently of the right). Each family (the PI): one sensing pair the device's rule allows with the contacts in force
 (decision 217, read at the time, never typed in), x the 22 band centres, x the sources that choose
 a band (the TD-only grid's correlation rows, and the chronic log's answer where it decides the
 band), for the one pain score the request asks for. Each band is counted once, by the rotation p of
 the source that decides it. Held here, on values:
   * the family counts only what was built; a missing pair, grid or p lowers N and no p is made up;
-  * q matches a Benjamini-Hochberg written out by hand;
+  * q matches a Benjamini-Hochberg written out by hand, within each pair, and one pair's p values
+    never move another pair's q;
   * the pairs come from the rule, so other contacts give other pairs;
   * rows on pairs outside the family, and rows that never choose, get `family_q: None` and why;
   * the chronic answer's p is used where it decides the band;
@@ -140,7 +142,11 @@ def test_the_family_counts_only_what_was_built():
     blk = out["family_correction"]
     assert blk["n_in_family"] == 22 + 10
     assert blk["n_built"] == 22 + 10 + 22                    # every pair's choosing p, built
-    assert blk["words"].startswith("corrected across 32 of 54 built")
+    assert blk["words"].startswith("corrected within each pair separately: L 0⁻3⁺ across 22 bands; "
+                                    "R 0⁻3⁺ across 10 bands (54 built")
+    assert {k: v["n_in_family"] for k, v in blk["per_pair"].items()} == {
+        "ZERO_THREE_LEFT": 22, "ZERO_THREE_RIGHT": 10}
+    assert all(r["family_n"] == 10 for r in _td_rows(out, "ZERO_THREE_RIGHT"))
     assert blk["allowed_pairs"] == ["ZERO_THREE_LEFT", "ZERO_THREE_RIGHT"]
 
 
@@ -171,18 +177,34 @@ def test_a_missing_pair_or_source_lowers_n_and_makes_up_no_p():
     assert [m["channel"] for m in blk2["missing"]] == ["ZERO_THREE_RIGHT"]
 
 
-def test_q_matches_a_benjamini_hochberg_written_out():
+def test_q_matches_a_benjamini_hochberg_written_out_within_each_pair():
     sweeps = _three_pairs()
     out = FC.attach(_resp(sweeps, _rule({1, 2}, {1, 2})))
-    rows = _td_rows(out, "ZERO_THREE_LEFT") + _td_rows(out, "ZERO_THREE_RIGHT")
-    p = [r["p_selection_aware"] for r in rows]
-    want = _bh_by_hand(p)
-    got = [r["family_q"] for r in rows]
-    assert got == want                                      # no tolerance
-    assert [r["family_p"] for r in rows] == p
-    assert all(r["family_q_status"] == FC.STATUS_IN for r in rows)
+    all_p, all_q = [], []
+    for ch in ("ZERO_THREE_LEFT", "ZERO_THREE_RIGHT"):
+        rows = _td_rows(out, ch)
+        p = [r["p_selection_aware"] for r in rows]
+        want = _bh_by_hand(p)                                # this pair's 22 bands only
+        assert [r["family_q"] for r in rows] == want        # no tolerance
+        assert [r["family_p"] for r in rows] == p
+        assert all(r["family_q_status"] == FC.STATUS_IN and r["family_n"] == 22 for r in rows)
+        assert out["family_correction"]["per_pair"][ch]["smallest_q"] == min(want)
+        all_p += p
+        all_q += want
     blk = out["family_correction"]
-    assert blk["smallest_p"] == min(p) and blk["smallest_q"] == min(want)
+    assert blk["smallest_p"] == min(all_p) and blk["smallest_q"] == min(all_q)
+    assert blk["corrected_per_pair"] is True
+
+
+def test_one_pairs_p_values_never_move_the_other_pairs_q():
+    a = FC.attach(_resp(_three_pairs(), _rule({1, 2}, {1, 2})))
+    sweeps = _three_pairs()
+    for r in sweeps["ZERO_THREE_RIGHT"]["by_source_grid"]["td"]["best_correlation_rows"]:
+        r["p_selection_aware"] = 1e-4                         # the right pair all very small
+    b = FC.attach(_resp(sweeps, _rule({1, 2}, {1, 2})))
+    assert ([r["family_q"] for r in _td_rows(a, "ZERO_THREE_LEFT")]
+            == [r["family_q"] for r in _td_rows(b, "ZERO_THREE_LEFT")])
+    assert [r["family_q"] for r in _td_rows(b, "ZERO_THREE_RIGHT")] == [1e-4] * 22
 
 
 def test_pairs_outside_the_family_get_null_and_say_why():
@@ -225,7 +247,8 @@ def test_the_warning_goes_only_on_established_or_supported_bands_above_005():
     assert got[0]["family_q"] > 0.05 and got[1]["family_q"] > 0.05
     for r in got[:2]:                                        # established; supported (decision 210)
         assert r["family_q_warning"] and r["why"] == "td why. " + r["family_q_warning"]
-        assert "44 bands" in r["family_q_warning"] and "L 0⁻3⁺, R 0⁻3⁺" in r["family_q_warning"]
+        assert "22 bands tested on L 0⁻3⁺," in r["family_q_warning"]
+        assert "R 0" not in r["family_q_warning"]
         assert ("q is %.2f" % r["family_q"]) in r["family_q_warning"]
     assert got[2]["family_q_warning"] is None and got[2]["why"] == "td why"
     assert out["family_correction"]["n_warned"] == 2

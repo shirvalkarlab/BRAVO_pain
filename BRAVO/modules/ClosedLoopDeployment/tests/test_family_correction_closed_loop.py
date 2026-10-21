@@ -83,7 +83,10 @@ def test_the_closed_loop_grid_carries_q_from_the_allowed_pairs(grid_sandbox, mon
     blk = got["family_correction"]
     assert blk["allowed_pairs"] == ["ZERO_THREE_LEFT", "ZERO_THREE_RIGHT"]
     assert blk["n_in_family"] == 44 and blk["n_built"] == 66
-    assert blk["words"].startswith("corrected across 44 of 66 built")
+    assert blk["words"].startswith("corrected within each pair separately: L 0⁻3⁺ across 22 bands; "
+                                    "R 0⁻3⁺ across 22 bands (66 built")
+    assert {k: v["n_in_family"] for k, v in blk["per_pair"].items()} == {
+        "ZERO_THREE_LEFT": 22, "ZERO_THREE_RIGHT": 22}
     left = got["band_time_sweep"]["ZERO_THREE_LEFT"]["best_correlation_rows"]
     assert all(r["family_q_status"] == FC.STATUS_IN for r in left)
     assert all(isinstance(r["family_q"], float) for r in left)
@@ -119,7 +122,7 @@ def test_the_summary_reads_its_band_q_from_the_stored_grid_and_never_builds_one(
     assert calls == [sweep_settings.GRID_KIND]          # found at its own direction, one read
     assert b["family_q_status"] == FC.STATUS_IN and isinstance(b["family_q"], float)
     assert b["family_p"] == 0.02 + 0.01 * 4
-    assert b["words"].startswith("corrected across 44 of 66 built")
+    assert b["words"].startswith("corrected within each pair separately")
     assert payload == kept                                   # the stored grid is not changed
     assert b["grid_match_direction"] == sweep_settings.sweep_settings_tag_from_request({})["match_direction"]
     # the summary's own "prior" direction: the grid at the page's direction is read, and named
