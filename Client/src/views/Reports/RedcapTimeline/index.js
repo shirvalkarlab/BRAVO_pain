@@ -51,7 +51,11 @@ export default function RedcapTimeline() {
     setView("summary"); setSelected(DEFAULT_METRICS); setRange(null); setSelectedTransition(""); setDetailsExpanded(false);
   }, [participant_uid, dispatch]);
   const invalidRange = !dates.start || !dates.end || dates.start > dates.end || dates.end > defaults.end;
-  return <DatabaseLayout><MDBox py={3}>
+  return <DatabaseLayout><MDBox py={3} sx={{
+    // Plotly uses a separate SVG for hover labels. Let that layer float beyond
+    // the chart canvas while preserving the measurement layers' clipping.
+    '& .js-plotly-plot .svg-container > svg.main-svg:has(> .hoverlayer)': {overflow:'visible', zIndex:3},
+  }}>
     <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2} mb={3}>
       <div><MDTypography variant="h3">Aditya - All Data Streams</MDTypography>
         <MDTypography variant="body1">Survey outcomes, stimulation settings, medications and wearable data across the study.</MDTypography></div>
