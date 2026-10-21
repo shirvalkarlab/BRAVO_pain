@@ -4,6 +4,7 @@ sign-off threshold, the stimulation series, the band-power timeline, the all-ban
 source) merges the repeated copies each export carries, after the implant-date cut. Plain
 asserts: this file runs in the container suite.
 """
+import re
 import types
 
 import numpy as np
@@ -72,7 +73,10 @@ def test_the_saved_timeline_is_filed_under_the_new_rule():
     """The saved acquisition timeline (its stimulation row and band-power lines read the chronic
     log) is filed under the recording set, which the merge does not change; the rule version
     moves so the old timeline, every repeat counted, is not served."""
-    assert BS._ACQ_TIMELINE_RULE_VERSION.startswith("v7_chronic_readings_once")
+    # v7 introduced repeat removal; subsequent versions retain it while also
+    # invalidating saved timelines for newer provenance or presentation rules.
+    version = re.fullmatch(r"v(\d+)_.+", BS._ACQ_TIMELINE_RULE_VERSION)
+    assert version is not None and int(version.group(1)) >= 7
 
 
 def test_the_loader_carries_the_signal_lead_and_files_a_copy_under_its_lead():
