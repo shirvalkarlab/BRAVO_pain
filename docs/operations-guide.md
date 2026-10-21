@@ -82,3 +82,28 @@ The public snapshot deliberately omits installation-specific anatomy overrides,
 private clinical evidence and historical operational measurements. Reintroducing
 such inputs requires an authenticated, reviewed configuration path; do not encode
 a participant-to-anatomy or safety-limit lookup in public source.
+
+
+## Reviewed continuity and PSD contact assignments
+
+Recent recorded observations also appear in Multimodal Summary. Keep power,
+current, missing intervals and settings provenance distinct. Repeated observations
+can be deduplicated only when their relevant source provenance agrees; equal
+values from different channels or settings remain distinct observations.
+
+A reviewed participant context may opt into `home_continuity` with policy
+`assume_until_documented_stim`, a last stimulation date, confirmation date,
+operator-confirmation source kind and private evidence digest. Reviewed dated
+sessions can supplement stored clinic calendars. Change the context revision when
+evidence changes. Keep evidence manifests and identifiers outside the repository
+and client responses. The service does not automatically read Slack. This policy
+labels assumed home continuity; it does not certify physical location, activation
+or controlling stimulation contacts. Preserve historical eligibility intervals
+and the inclusive averaging-bin exclusion margins.
+
+A `ContactAdjudication` overlay must validate the exact recording, hemisphere,
+native clock, raw identity, stored spectrum and source claims before it supplies
+a timeline-reviewed contact. Apply or remove it through a journaled metadata-only
+transaction under the import lock. Preserve the arrays and conflicting source
+claims. Invalid overlays retain the ordinary contact-specific exclusion; a
+reviewed assignment must not be presented as source agreement.

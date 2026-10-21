@@ -252,6 +252,7 @@ def mergeEventData(stored, incoming, *, stored_source=None, incoming_source=None
 
 
 def extractBrainSenseEventRecording(data, DBSDevices):
+    from .ContactAdjudication import validated_contact_adjudication
     Device = DBSDevices.filter(uid=data["Device"]).first().get_info() # TODO: SQL-Specific Syntax
     EventPSDs = []
     for hemisphere in data["Metadata"].keys():
@@ -261,6 +262,9 @@ def extractBrainSenseEventRecording(data, DBSDevices):
                 ChannelName = Device["Electrodes"][k]["CustomName"]
                 break
 
+        block = data["Metadata"][hemisphere]
+        adjudication = validated_contact_adjudication(
+            block, hemisphere=hemisphere, recording_uid=data.get("Id"))
         EventPSDs.append({
             "Device": data["Device"],
             "DeviceHeritage": Device["Heritage"],
@@ -268,8 +272,10 @@ def extractBrainSenseEventRecording(data, DBSDevices):
             "Frequency": data["Metadata"][hemisphere]["Frequency"],
             "Power": data["Metadata"][hemisphere]["FFTBinData"],
             "Date": data["Date"],
-            "SenseConfig": data["Metadata"][hemisphere]["SenseID"],
-            "SenseConfigStatus": data["Metadata"][hemisphere].get("SenseIDStatus", "unverified"),
+            "SenseConfig": adjudication["sense_id"] if adjudication else block["SenseID"],
+            "SenseConfigStatus": adjudication["status"] if adjudication else block.get("SenseIDStatus", "unverified"),
+            "SenseConfigRawStatus": block.get("SenseIDStatus", "unverified"),
+            "SenseConfigAdjudicationSummary": adjudication["summary"] if adjudication else None,
             "SenseConfigUnavailableReason": data["Metadata"][hemisphere].get("SpectrumIdentityReason"),
             "SenseConfigConflict": bool(data["Metadata"][hemisphere].get("SenseIDConflict", False))
         })

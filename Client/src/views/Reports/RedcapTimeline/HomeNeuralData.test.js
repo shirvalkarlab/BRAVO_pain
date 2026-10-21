@@ -187,3 +187,25 @@ test('current-only canonical lead remains visible and does not claim all recordi
  expect(element.textContent).toContain('this lead’s recorded current at its own sample times');
  expect(element.textContent).not.toContain('No eligible home recordings for this side');
 });
+
+test('operator-confirmed continuity replaces blanket home uncertainty without verifying physical location or sensing settings',async()=>{
+ mockQuery.data.observation_windows=[observed('current')];
+ mockQuery.data.observation_provenance={calendar_status:'stored_snapshot',home_status:'assumed_continuing_home',home_status_basis:'operator_confirmed_no_new_stimulation_visits',home_status_confirmed_through:'2026-10-20'};
+ await mount();
+ expect(element.textContent).toContain('study operator confirmed no intervening stimulation visits through 2026-10-20');
+ expect(element.textContent).toContain('A clinic sheet or weekly stimulation summary documenting a new session');
+ expect(element.textContent).toContain('Physical location is not independently verified');
+ expect(element.textContent).toContain('does not establish sensing contacts or a controlling stimulation relationship');
+ expect(element.textContent).not.toContain('at-home status remain unverified');
+ delete mockQuery.data.observation_provenance.home_status_confirmed_through;await mount();
+ expect(element.textContent).toContain('confirmed no intervening stimulation visits.');
+ mockQuery.data.observation_provenance.home_status_basis='unknown';await mount();
+ expect(element.textContent).toContain('at-home status remain unverified');
+ expect(element.textContent).not.toContain('Home period assumed to continue');
+ mockQuery.data.observation_provenance={calendar_status:'stored_snapshot',home_status:'assumed_continuing_home',home_status_basis:'documented_stimulation_calendar',home_confirmation_status:'superseded_by_documented_session',last_documented_stimulation_date:'2026-10-22'};
+ await mount();expect(element.textContent).toContain('last documented stimulation session was 2026-10-22');
+ expect(element.textContent).toContain('supersedes the earlier no-new-visits confirmation');
+ expect(element.textContent).not.toContain('at-home status remain unverified');
+ delete mockQuery.data.observation_provenance.last_documented_stimulation_date;await mount();
+ expect(element.textContent).toContain('the last documented stimulation session;');
+});

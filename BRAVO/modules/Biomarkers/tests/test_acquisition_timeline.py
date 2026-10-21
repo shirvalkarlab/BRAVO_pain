@@ -19,6 +19,24 @@ ACQ_KEYS = {"records", "stim", "freq_bands", "span", "samples", "lsb_overview", 
 PAIN_KEYS = {"pain", "psd_scan_index"}
 
 
+def test_event_contact_adjudication_provenance_reaches_acquisition_records(monkeypatch):
+    event = {"channel": "ONE_THREE_LEFT", "t": 1700000000., "name": "Synthetic event",
+             "contact_status": "timeline_adjudicated", "contact_source_conflict": True,
+             "contact_assignment_note": "Assigned from sensing-change timeline; conflicting export labels retained.",
+             "private_evidence": "must not be exposed"}
+    monkeypatch.setattr(bs, "_event_psd_index", lambda *a, **kw: [event])
+    monkeypatch.setattr(bs, "_event_psd_lsb_blocks", lambda *a, **kw: [])
+    monkeypatch.setattr(bs, "_load_patient_events", lambda *a, **kw: [])
+    monkeypatch.setattr(bs, "_load_montage_psd_events", lambda *a, **kw: [])
+    result = bs._build_availability("synthetic", chronic_list=[], powerdomain_list=[], td_list=[],
+                                    region_map={}, psd_list=[])
+    assert not result.get("failed")
+    row, = result["records"]
+    for key in ("contact_status", "contact_source_conflict", "contact_assignment_note"):
+        assert row[key] == event[key]
+    assert "private_evidence" not in row
+
+
 def test_the_timeline_key_carries_the_recording_set_the_constants_and_a_rule_version_and_no_report():
     k1 = bs._acquisition_timeline_key(("P", 1, 1, "hash one"))
     k2 = bs._acquisition_timeline_key(("P", 1, 2, "hash two"))

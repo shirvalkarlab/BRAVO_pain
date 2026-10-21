@@ -5,6 +5,12 @@ Access requires an individually authorized account or the shared read-only lab
 account supplied privately by the administrator. This is a research application;
 a chart or candidate is not a clinical programming instruction.
 
+A recent-neural follow-up is under validation. It adds recent observations to
+Multimodal Summary, explicit reviewed home-continuity assumptions, source-preserving
+PSD contact overlays and clearer sensing/implant-date uncertainty labels. This
+source update is not a claim of completed deployment or fresh data collection.
+The accepted hosting checkpoint below remains separate until live verification.
+
 The October 20 shared-viewer application release is deployed. Its reviewed public
 source is merged through [PR #16](https://github.com/shirvalkarlab/BRAVO_pain/pull/16)
 at `86bbad6dbbe15263b01d486c47b7fe95c30003b0`; all five CI jobs passed for the
@@ -47,7 +53,9 @@ cause of every historical connection drop remains unconfirmed.
 
 ## Known limits
 
-- Unresolved PSD contact assignments remain ambiguous, with raw spectra retained.
+- Conflicting PSD source labels remain retained. A separately reviewed timeline
+  assignment is explicitly distinguished from source agreement; unresolved
+  assignments remain ambiguous and raw spectra remain available.
 - Unverified recent neural periods are labeled and remain separate from reviewed
   home analysis eligibility.
 - Provider availability, completed imports and valid analysis inputs are separate

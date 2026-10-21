@@ -4,9 +4,10 @@ import MDTypography from 'components/MDTypography';
 import {localTime, past28Range} from './data';
 import {useOuraTimeline} from './useOuraTimeline';
 import {useHomeNeuralTimeline} from './useHomeNeuralTimeline';
-import {homeNeuralPlot, neuralSourceLabel} from './homeNeuralChartData';
+import {neuralSourceLabel} from './homeNeuralChartData';
+import {summaryNeuralGroups, summaryNeuralPlot} from './summaryNeuralData';
 import {NeuralLegend, NeuralSensingIntervals} from './HomeNeuralChart';
-import {NeuralSettingsSelector, NeuralAnalysisPolicy} from './HomeNeuralData';
+import {NeuralSettingsSelector, NeuralAnalysisPolicy, ObservationProvenance} from './HomeNeuralData';
 import StimulationContext from './StimulationContext';
 import MultimodalChart from './MultimodalChart';
 import StandardMPQNotice from './StandardMPQNotice';
@@ -19,22 +20,26 @@ function Legend({left,right}) {
     <span style={{color:SUMMARY_COLORS[1]}}>● {right} · right axis</span>
   </Stack>;
 }
-function NeuralSummary({panel,period,participant,chartProps}) {
-  const plot = useMemo(() => homeNeuralPlot(panel,period,participant,600), [panel,period,participant]);
+function NeuralSummary({group,participant,chartProps}) {
+  const plot = useMemo(() => summaryNeuralPlot(group,participant), [group,participant]);
+  const {segments,parts,side} = group;
+  const observational = parts.some(({period})=>period.display_basis === 'recorded_observations');
+  const independentCurrent = parts.some(({panel})=>Array.isArray(panel.amplitude_series));
+  const provenance = [...new Set(parts.map(({panel})=>panel.amplitude_provenance).filter(Boolean))];
   const [selection,setSelection] = useState(null), [open,setOpen] = useState(false);
-  const selected = panel.segments.find(segment=>segment.id === selection) || panel.segments.at(-1);
+  const selected = segments.find(segment=>segment.id === selection) || segments.at(-1);
   const choose = useCallback(id=>{setSelection(id);setOpen(true);}, []);
-  const target = neuralSourceLabel(panel.side,participant);
+  const target = neuralSourceLabel(side,participant);
   return <Card sx={{p:{xs:1,md:3},minWidth:0}}>
-    <MDTypography variant="h5" px={1}>{target} · home neural recordings</MDTypography>
-    <NeuralLegend target={target} traces={plot.traces} independentCurrent={Array.isArray(panel.amplitude_series)}/>
-    {panel.amplitude_provenance&&<Alert severity="info">{panel.amplitude_provenance}</Alert>}
-    <MultimodalChart {...chartProps} title={`${target} Multimodal Summary neural timeline`} traces={plot.traces} neuralPeriod={period} onPoint={choose} left="Biomarker (LSB)" right="Stim amp (mA)"/>
-    <MDTypography variant="body2" px={1}>{plot.observedPower.toLocaleString()} biomarker averages · {plot.observedAmplitude.toLocaleString()} amplitude averages. {plot.latestTime !== null && <>Latest recorded average: {localTime(plot.latestTime).slice(0,16)} Pacific. </>}Native ten-minute records; no rolling median is applied. Points are recorded averages; connecting lines are guides. Missing ten-minute bins and unavailable values remain open.</MDTypography>
-    {!plot.observedPower && <Alert severity="info">No established biomarker samples in this range.</Alert>}
+    <MDTypography variant="h5" px={1}>{target} · {observational ? 'recorded neural power and channel amplitude' : 'home neural recordings'}</MDTypography>
+    <NeuralLegend target={target} traces={plot.traces} independentCurrent={independentCurrent} observational={observational}/>
+    {provenance.map(message=><Alert key={message} severity="info">{message}</Alert>)}
+    <MultimodalChart {...chartProps} title={`${target} Multimodal Summary neural timeline`} traces={plot.traces} neuralPeriod={parts[0].period} onPoint={choose} left={observational ? 'Neural power (LSB)' : 'Biomarker (LSB)'} right={independentCurrent || observational ? 'Recorded amp (mA)' : 'Stim amp (mA)'}/>
+    <MDTypography variant="body2" px={1}>{plot.observedPower.toLocaleString()} {observational ? 'neural-power' : 'biomarker'} averages · {plot.observedAmplitude.toLocaleString()} amplitude averages. {plot.latestTime !== null && <>Latest recorded average: {localTime(plot.latestTime).slice(0,16)} Pacific. </>}Native ten-minute records; no rolling median is applied. Points are recorded averages; connecting lines are guides. Missing ten-minute bins and unavailable values remain open.</MDTypography>
+    {!plot.observedPower && <Alert severity="info">{observational ? 'No recorded neural-power samples in this range.' : 'No established biomarker samples in this range.'}</Alert>}
     {!plot.observedAmplitude && <Alert severity="info">No established amplitude samples in this range.</Alert>}
     <NeuralSensingIntervals descriptions={plot.descriptions} onSegment={choose}/>
-    <NeuralSettingsSelector segments={panel.segments} selected={selected} participant={participant} open={open} setOpen={setOpen} choose={choose} hasRecordedCurrent={plot.observedAmplitude > 0}/>
+    <NeuralSettingsSelector segments={segments} selected={selected} participant={participant} open={open} setOpen={setOpen} choose={choose} observational={observational} hasRecordedCurrent={plot.observedAmplitude > 0}/>
   </Card>;
 }
 
@@ -49,6 +54,7 @@ export default function MultimodalSummary({participant,redcap,revision}) {
   const oura = useOuraTimeline(participant,revision);
   const request = recent ? 'past28' : {window:'custom',start_date:range.start,end_date:range.end};
   const neural = useHomeNeuralTimeline(valid ? participant : null,revision,request,true);
+  const neuralGroups = useMemo(()=>summaryNeuralGroups(neural.data),[neural.data]);
   const metrics = redcap.metrics || EMPTY, phases = redcap.phases || EMPTY;
   const homes = redcap.stimulation?.home_transitions || EMPTY, unknown = redcap.stimulation?.home_unknown_intervals || EMPTY;
   const visits = redcap.visits?.metrics || EMPTY_OBJECT;
@@ -81,7 +87,7 @@ export default function MultimodalSummary({participant,redcap,revision}) {
       {!surveyMetrics[1]?.points.some(point => Number.isFinite(point.value)) && <Alert severity="info">Standard MPQ (0–45) observations are unavailable. The distinct legacy MPQ sum is not substituted.</Alert>}
       <MDTypography variant="body2">One Pacific calendar range for every plot. Drag to zoom all plots together; hover shows the observation and a shared date guide. Daily Oura values are placed at noon for alignment, not as a measurement time.</MDTypography>
       <MDTypography variant="body2">Dots show recorded observations; X marks supplied clinic-sheet ratings and Oura observations on reviewed visit days. Raw points and X markers remain visible when overlays or medians are hidden. Lines show centered medians of up to five observations, calculated before date filtering; missing days remain gaps.</MDTypography>
-      <MDTypography variant="body2">Neural panels follow the stimulated side and identify the actual sensing source below each plot. Clinic-testing dates and overlapping averaging bins remain excluded from home recordings. Recorded settings do not establish exact activation times. Dashed lines show configured control thresholds; ten-minute averages cannot reveal every threshold crossing. Sensing-only intervals have no active control threshold. Click a neural observation or interval for complete settings.</MDTypography>
+      <MDTypography variant="body2">Neural panels include reviewed historical periods and recent recorded observations on the same date axis. Each interval identifies its recorded sensing source; recorded lead current remains at its own sample times and does not establish a controlling relationship. Known clinic-testing dates and overlapping averaging bins remain excluded. Recorded settings do not establish exact activation times. Dashed lines show configured control thresholds; ten-minute averages cannot reveal every threshold crossing. Sensing-only intervals have no active control threshold. Click a neural observation or interval for complete settings.</MDTypography>
     </Stack></Card>
     {!valid ? <Alert severity="warning">Choose valid dates with From on or before Through, no later than today.</Alert> : <>
       {context && <StimulationContext events={events} selected={selected} previous={previous} onSelect={choose} limited={events.length>12} openDetails={details} onDetailsChange={setDetails}/>}
@@ -108,8 +114,9 @@ export default function MultimodalSummary({participant,redcap,revision}) {
       {neural.error && <Alert severity="error">{neural.error} Use Refresh view to retry.</Alert>}
       {neural.freshnessError && <Alert severity="warning">{neural.freshnessError}</Alert>}
       <NeuralAnalysisPolicy policy={neural.data?.chronic_analysis_policy}/>
-      {neural.data && !neural.data.windows?.length && <Alert severity="info">{neural.data.message || "A reviewed stimulation-visit calendar is needed to define home neural periods."}</Alert>}
-      {neural.data?.windows?.map(period => period.panels.map(panel => <NeuralSummary key={panel.side} participant={participant} period={period} panel={panel} chartProps={chartProps}/>))}
+      <ObservationProvenance provenance={neural.data?.observation_provenance}/>
+      {neural.data && !neuralGroups.length && <Alert severity="info">{neural.data.message || "A reviewed stimulation-visit calendar is needed to define home neural periods."}</Alert>}
+      {neuralGroups.map(group => <NeuralSummary key={group.side} participant={participant} group={group} chartProps={chartProps}/>)}
     </>}
   </Stack>;
 }

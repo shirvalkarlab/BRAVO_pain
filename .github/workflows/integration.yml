@@ -86,6 +86,15 @@ jobs:
       - run: uv sync --frozen --python 3.12
       - name: Portable upstream scientific tests (disposable DB and storage)
         run: uv run --frozen python scripts/run_portable_tests.py
+      - name: Reviewed contact assignment branch coverage (synthetic)
+        run: |
+          uv run --frozen python scripts/run_portable_tests.py BRAVO/modules/MedtronicPercept/tests/test_contact_adjudication.py --cov=modules.MedtronicPercept.ContactAdjudication --cov-config=/dev/null --cov-branch --cov-report=json:contact-adjudication-coverage.json
+          uv run --frozen python - <<'PYTHON'
+          import json
+          files = json.load(open("contact-adjudication-coverage.json"))["files"]
+          summary = files["BRAVO/modules/MedtronicPercept/ContactAdjudication.py"]["summary"]
+          assert summary["num_branches"] > 0 and summary["covered_branches"] / summary["num_branches"] >= 0.95, summary
+          PYTHON
       - name: Chronic band decisions and daily swing branch coverage (synthetic)
         run: |
           uv run --frozen python scripts/run_portable_tests.py BRAVO/modules/Biomarkers/tests/test_chronic_band_choice.py BRAVO/modules/Biomarkers/tests/test_daily_swing.py --cov=BRAVO/modules/Biomarkers/routines --cov-config=/dev/null --cov-branch --cov-report=json:chronic-choice-coverage.json
@@ -118,7 +127,9 @@ jobs:
           --collectCoverageFrom=src/views/Reports/RedcapTimeline/useHomeNeuralTimeline.js
           --collectCoverageFrom=src/views/Reports/RedcapTimeline/useStoredTimeline.js
           --collectCoverageFrom=src/views/Reports/RedcapTimeline/HomeNeuralData.js
-          --coverageThreshold='{"./src/components/Navbars/DashboardNavbar/ManualSyncButton.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/useHomeNeuralTimeline.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/useStoredTimeline.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/HomeNeuralData.js":{"branches":95,"statements":95}}'
+          --collectCoverageFrom=src/views/Reports/RedcapTimeline/summaryNeuralData.js
+          --collectCoverageFrom=src/views/Reports/psdContactProvenance.js
+          --coverageThreshold='{"./src/components/Navbars/DashboardNavbar/ManualSyncButton.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/useHomeNeuralTimeline.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/useStoredTimeline.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/HomeNeuralData.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/summaryNeuralData.js":{"branches":95,"statements":95},"./src/views/Reports/psdContactProvenance.js":{"branches":95,"statements":95}}'
       - name: Production bundle
         working-directory: Client
         run: CI=false GENERATE_SOURCEMAP=false npm run build

@@ -21,6 +21,7 @@ import pandas as pd
 from Server import models
 from modules import Database
 from modules.HelperFunctions import json_compliant_handler
+from modules.MedtronicPercept.ContactAdjudication import validated_contact_adjudication
 
 from . import pipeline
 from . import adapter
@@ -697,8 +698,10 @@ def _event_psd_rows(participant_uid, sensing_index=None):
         for hemi_key, hb in md.items():
             if not isinstance(hb, dict):
                 continue
-            # Conflicting source contacts must not be guessed from a temporal fallback.
-            if hb.get("SenseIDConflict") or hb.get("SenseIDStatus") == "ambiguous":
+            # A reviewed exact-event decision is distinct from an automatic temporal guess.
+            adjudication = validated_contact_adjudication(
+                hb, hemisphere=hemi_key, recording_uid=getattr(r, "uid", None))
+            if not adjudication and (hb.get("SenseIDConflict") or hb.get("SenseIDStatus") == "ambiguous"):
                 continue
             freq = hb.get("Frequency")
             power = hb.get("FFTBinData")
@@ -713,13 +716,16 @@ def _event_psd_rows(participant_uid, sensing_index=None):
                 t = getattr(r, "date", None)
             if t is None:
                 continue
-            ch = _resolve_event_channel(hemi_key, hb.get("SenseID"),
+            ch = _resolve_event_channel(hemi_key, adjudication["sense_id"] if adjudication else hb.get("SenseID"),
                                         t_event=float(t), sensing_index=sensing_index)
             if ch is None:
                 continue
             rows.append({"channel": ch, "source": EVENT_PSD_SOURCE, "t": float(t),
                          "freq": np.asarray(freq, dtype=float),
-                         "power": np.asarray(power, dtype=float)})
+                         "power": np.asarray(power, dtype=float),
+                         **({"contact_status": adjudication["status"],
+                             "contact_source_conflict": adjudication["source_conflict"],
+                             "contact_assignment_note": adjudication["summary"]} if adjudication else {})})
     return rows
 
 
@@ -740,8 +746,9 @@ def _event_psd_index(participant_uid, sensing_index=None):
         for hemi_key, hb in md.items():
             if not isinstance(hb, dict):
                 continue
-            # Conflicting source contacts must not be guessed from a temporal fallback.
-            if hb.get("SenseIDConflict") or hb.get("SenseIDStatus") == "ambiguous":
+            adjudication = validated_contact_adjudication(
+                hb, hemisphere=hemi_key, recording_uid=getattr(r, "uid", None))
+            if not adjudication and (hb.get("SenseIDConflict") or hb.get("SenseIDStatus") == "ambiguous"):
                 continue
             freq = hb.get("Frequency"); power = hb.get("FFTBinData")
             if not (isinstance(freq, (list, tuple)) and isinstance(power, (list, tuple))
@@ -754,12 +761,15 @@ def _event_psd_index(participant_uid, sensing_index=None):
                 t = getattr(r, "date", None)
             if t is None:
                 continue
-            ch = _resolve_event_channel(hemi_key, hb.get("SenseID"),
+            ch = _resolve_event_channel(hemi_key, adjudication["sense_id"] if adjudication else hb.get("SenseID"),
                                         t_event=float(t), sensing_index=sensing_index)
             if ch is None:
                 continue
             out.append({"t": float(t), "channel": ch, "source": EVENT_PSD_SOURCE,
-                        "name": ev_name})
+                        "name": ev_name,
+                        **({"contact_status": adjudication["status"],
+                            "contact_source_conflict": adjudication["source_conflict"],
+                            "contact_assignment_note": adjudication["summary"]} if adjudication else {})})
     return out
 
 def _event_psd_lsb_blocks(participant_uid, sensing_hz_by_channel=None, sensing_index=None):
@@ -3886,6 +3896,7 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
                                                              # the lane tick keys on product/event_name
                     "t_start": float(ev["t"]), "dur_s": 30.0,
                     "meta": {"center_hz": None, "peak_hz": None, "n": None},
+                    **{key: ev[key] for key in ("contact_status", "contact_source_conflict", "contact_assignment_note") if key in ev},
                 })
             records.sort(key=lambda x: (x["channel"], x["t_start"]))
         except Exception as e:
@@ -4008,7 +4019,7 @@ _ACQ_TIMELINE_KIND = "acquisition_timeline"
 # v2 (decision 313): a chronic file spanning the implant date is dated from it, not from 2025-06-18.
 # v3 (item P-11, 2026-10-06): indefinite streaming adds modelled points at the band in force.
 # v4 (decision 461, 2026-10-06): each streaming run's own band; chronic samples under the pair in force.
-_ACQ_TIMELINE_RULE_VERSION = "v7_chronic_readings_once_event_censoring"
+_ACQ_TIMELINE_RULE_VERSION = "v8_event_contact_adjudication_provenance"
 
 
 def _acquisition_timeline_key(recording_set):

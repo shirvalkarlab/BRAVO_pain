@@ -118,3 +118,31 @@ test('summary uses independent current on the proper lead and shows its provenan
  const neural=charts().find(chart=>chart.neuralPeriod);
  expect(neural.traces).toHaveLength(1);expect(neural.traces[0].yaxis).toBe('y2');expect(neural.traces[0].y).toEqual([0]);
 });
+
+test('recent observations extend the same side panels and retain the common custom date and zoom axis',async()=>{
+ const later=point('2026-09-02',0).time;
+ mockNeural.data.observation_windows=[{id:'recent',display_basis:'recorded_observations',start:later-3600,end:later+86400,panels:[{side:'left',segments:[{id:'left',start:later-3600,end:later+86400,points:[{time:later,power:44}],sensing_provenance:{status:'unverified',metadata_available:false}}],amplitude_series:[{time:later+300,amplitude:0}]}]}];
+ await mount();
+ expect(charts()).toHaveLength(4);const chart=charts()[2];
+ expect(chart.traces.filter(trace=>trace.mode==='lines+markers'&&trace.yaxis==='y').flatMap(trace=>trace.y)).toEqual([20,null,30,44]);
+ expect(chart.traces.filter(trace=>trace.yaxis==='y2').flatMap(trace=>trace.y)).toContain(0);
+ expect(chart.left).toBe('Neural power (LSB)');expect(chart.right).toBe('Recorded amp (mA)');
+ expect(element.textContent).toContain('Latest recorded average: 2026-09-02 12:05');expect(element.textContent).toContain('Unverified sensing labels');
+ const recentId=chart.traces.find(trace=>trace.y.includes(44)).customdata[0][0];
+ await act(async()=>chart.onPoint(recentId));expect(element.querySelector('.MuiAccordionSummary-root').getAttribute('aria-expanded')).toBe('true');
+ await input('Summary from','2026-08-01');await input('Summary through','2026-09-02');
+ expect(charts().every(chart=>chart.range.start==='2026-08-01'&&chart.range.end==='2026-09-02')).toBe(true);
+ await act(async()=>charts()[2].onRange(['2026-09-01','2026-09-02']));
+ expect(charts().every(chart=>JSON.stringify(chart.xRange)==='["2026-09-01","2026-09-02"]')).toBe(true);
+});
+
+test('a sync revision replaces recent samples and can display current without historical or sensing metadata',async()=>{
+ const later=point('2026-09-02',0).time;
+ const response=value=>({observation_windows:[{id:'recent',display_basis:'recorded_observations',start:later-3600,end:later+86400,panels:[{side:'right',amplitude_series:[{time:later,amplitude:value}]}]}]});
+ mockNeural.data=response(0);await mount();expect(charts()).toHaveLength(3);
+ expect(charts()[2].traces[0].y).toEqual([0]);expect(element.textContent).toContain('no sensing settings interval');
+ expect(element.textContent).not.toContain('calendar is needed');
+ mockNeural.data=response(2);await mount({revision:3});
+ expect(mockRequests.at(-1)).toEqual(['SYNTHETIC_A1',3,'past28',true]);expect(charts()[2].traces[0].y).toEqual([2]);
+ expect(element.textContent).toContain('1 amplitude averages');
+});

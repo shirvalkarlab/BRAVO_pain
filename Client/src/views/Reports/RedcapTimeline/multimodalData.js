@@ -84,7 +84,7 @@ export function summaryLayout({range, xRange, width, left, right, limits, events
       color: SUMMARY_COLORS[0], automargin: true, zeroline: false, gridcolor: '#edf0f4'},
     yaxis2: {title: {text: right, standoff: 8}, ...(limits?.[1] ? {range: limits[1]} : {rangemode: 'tozero'}),
       color: SUMMARY_COLORS[1], overlaying: 'y', side: 'right', automargin: true, zeroline: false, showgrid: false},
-    ...(neuralPeriod ? (() => {const neural = homeNeuralLayout(neuralPeriod,width); return {yaxis:neural.yaxis,yaxis2:neural.yaxis2};})() : {}),
+    ...(neuralPeriod ? (() => {const neural = homeNeuralLayout(neuralPeriod,width); return {yaxis:{...neural.yaxis,title:{...neural.yaxis.title,text:left}},yaxis2:{...neural.yaxis2,title:{...neural.yaxis2.title,text:right}}};})() : {}),
     shapes: context.shapes, annotations: context.annotations, showlegend: false, hovermode: 'closest',
     hoverlabel: {align: 'left'}, uirevision: `${range.start}:${range.end}`};
 }

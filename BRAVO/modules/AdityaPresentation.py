@@ -4,8 +4,10 @@ Optional private JSON at BRAVO_ADITYA_PRESENTATION_METADATA has schema_version=1
 participants keyed by database uid. Each entry must have reviewed=true and revision.
 Only reviewed display context belongs there; never credentials or raw source paths.
 Home eligibility is explicit half-open UTC home_intervals [{start,end}], reconciled
-with the authoritative clinic schedule by the reviewer. No nearest-setting fill,
-new importer, private cache, or inferred study dates are introduced here.
+with the authoritative clinic schedule by the reviewer. An optional reviewed
+home_continuity policy labels later observations as assumed home between documented
+sessions; it does not extend historical eligibility or establish device activation.
+No nearest-setting fill, new importer, or private cache is introduced here.
 """
 from collections import defaultdict
 from copy import deepcopy
@@ -16,7 +18,7 @@ import os
 import re
 from zoneinfo import ZoneInfo
 
-VERSION = "prasad-presentation-v4-standard-mpq-aggregates"
+VERSION = "prasad-presentation-v5-home-continuity"
 PACIFIC = ZoneInfo("America/Los_Angeles")
 ALIASES = {"nrs": "nrs_intensity", "vas": "vas_intensity",
            "left_leg_vas": "left_leg_vas_intensity"}
@@ -46,10 +48,11 @@ def read_context(participant_uid):
         return {}
     # Explicit allowlist prevents returning arbitrary private metadata to browsers.
     allowed = ("revision", "phases", "visit_days", "home_intervals", "comparisons",
-               "home_transitions", "home_unknown_intervals", "neural_scope", "neural_observation_scope")
+               "home_transitions", "home_unknown_intervals", "neural_scope", "neural_observation_scope", "home_continuity")
     context = {key: deepcopy(entry[key]) for key in allowed if key in entry}
     neural_scope(context)
     neural_observation_scope(context)
+    home_continuity_policy(context)
     return context
 
 
@@ -488,6 +491,75 @@ def neural_observation_scope(context):
     return {"start": start, "end": end, "description": description.strip()}
 
 
+def home_continuity_policy(context):
+    """Validate reviewed, server-only continuity assumptions and dated evidence.
+
+    This is a presentation policy, never evidence of location, settings activation,
+    or absence of undocumented events. Evidence digests bind private review notes;
+    their contents and provider identifiers are not exposed to the browser.
+    """
+    if "home_continuity" not in context:
+        return None
+    policy = context["home_continuity"]
+    required = {"policy", "last_stimulation_date", "confirmation_date", "source_kind", "evidence_sha256"}
+    if (not isinstance(policy, dict) or set(policy) not in (required, required | {"documented_sessions"})
+            or policy["policy"] != "assume_until_documented_stim"
+            or policy["source_kind"] != "operator_confirmation"):
+        raise ValueError("Invalid home continuity policy")
+    def day(value):
+        if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError("Invalid home continuity date")
+        return date.fromisoformat(value)
+    def evidence(value):
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise ValueError("Invalid home continuity evidence digest")
+    last, confirmed = day(policy["last_stimulation_date"]), day(policy["confirmation_date"])
+    if confirmed < last:
+        raise ValueError("Home continuity confirmation precedes stimulation")
+    evidence(policy["evidence_sha256"])
+    sessions = policy.get("documented_sessions", [])
+    if not isinstance(sessions, list):
+        raise ValueError("Invalid documented stimulation sessions")
+    for session in sessions:
+        if (not isinstance(session, dict) or set(session) != {"date", "source_kind", "evidence_sha256"}
+                or session["source_kind"] not in ("clinic_sheet", "slack_stimulation_summary")):
+            raise ValueError("Invalid documented stimulation session")
+        day(session["date"])
+        evidence(session["evidence_sha256"])
+    if neural_observation_scope(context) is None or context["neural_observation_scope"].get("mode") != "automatic":
+        raise ValueError("Home continuity requires automatic observations")
+    return deepcopy(policy)
+
+
+def home_continuity_provenance(context, calendar, today):
+    """Apply the assumption between documented session days; preserve uncertainty."""
+    policy = home_continuity_policy(context)
+    if policy is None:
+        return {}, [], []
+    if date.fromisoformat(policy["confirmation_date"]) > today:
+        raise ValueError("Home continuity confirmation is in the future")
+    cutoff = today.isoformat()
+    documented = {row["date"] for row in policy.get("documented_sessions", [])}
+    documented.add(policy["last_stimulation_date"])
+    known = set(context.get("visit_days", []) + calendar["days"]) | documented
+    # Tomorrow's known session has a pre-midnight exclusion margin today, but
+    # cannot yet become the latest completed-date anchor or supersede confirmation.
+    anchors = {day for day in set(calendar["clinic_days"]) | documented if day <= cutoff}
+    latest = max(day for day in known if day <= cutoff)
+    superseded = latest > policy["last_stimulation_date"]
+    provenance = {
+        "home_status": "assumed_continuing_home",
+        "home_status_basis": "documented_stimulation_calendar" if superseded else "operator_confirmed_no_new_stimulation_visits",
+        "home_status_confirmed_through": None if superseded else policy["confirmation_date"],
+        "home_confirmation_status": "superseded_by_documented_session" if superseded else "current",
+        "last_documented_stimulation_date": latest,
+        "home_policy_confirmation_date": policy["confirmation_date"],
+        "message": ("Home periods continue by reviewed assumption between documented stimulation sessions. "
+                    "Known testing days and inclusive 600-second margins are excluded; new stored clinic dates and reviewed stimulation summaries update these exclusions. "
+                    "This does not verify physical location, device settings activation or calendar completeness.")}
+    return provenance, sorted(known), sorted(anchors)
+
+
 def observation_intervals(scope, visit_days):
     """Subtract known Pacific testing days, including both 600-second margins.
 
@@ -540,8 +612,13 @@ def neural_timeline(request, context, recordings, native_series, pair_keys, now=
             for segment in panel["segments"]:
                 segment["display_basis"] = "recorded_observations"
                 segment["mapping_status"] = "unknown"
-                segment["evidence"] = ("Native LFPTrendLogs outside reviewed home coverage; known documented testing days and inclusive 600-second margins excluded. "
-                    "Physical home/location and testing-calendar completeness are unverified. No stimulation-side mapping, control mode or thresholds inferred.")
+                continuity = result.get("observation_provenance", {}).get("home_status") == "assumed_continuing_home"
+                segment["evidence"] = ("Native LFPTrendLogs outside historical reviewed home coverage; known documented testing days and inclusive 600-second margins excluded. "
+                    + ("Home continuity follows the reviewed assumption between documented stimulation sessions; physical location is not directly verified. " if continuity else
+                       "Physical home/location and testing-calendar completeness are unverified. ")
+                    + "No stimulation-side mapping, control mode or thresholds inferred.")
+                if continuity:
+                    segment["home_status"] = "assumed_continuing_home"
                 timestamps.extend(point["time"] for point in segment["points"])
         if not timestamps:
             continue
@@ -600,7 +677,8 @@ def clinic_calendar(manifest, steps, stamp, receipt, participant_uid, parse_day,
 
 def automatic_observations(context, recordings, calendar, now=None):
     """Derive observational coverage, never reviewed eligibility or physical location."""
-    instant = (now or datetime.now(PACIFIC)).timestamp()
+    current = now or datetime.now(PACIFIC)
+    instant = current.timestamp()
     calendar = calendar or {"status": "unavailable"}
     provenance = {"mode": "automatic", "calendar_status": calendar["status"],
                   "calendar_built_at": calendar.get("built_at"), "freshness": "upstream_unverified",
@@ -611,6 +689,8 @@ def automatic_observations(context, recordings, calendar, now=None):
             if calendar.get("reason") == "changed_during_read" else
             "Accepted clinic calendar unavailable; automatic observations withheld. Historical reviewed periods are unchanged.")
         return None, [], [], provenance
+    continuity, policy_exclusions, policy_anchors = home_continuity_provenance(context, calendar, current.astimezone(PACIFIC).date())
+    provenance.update(continuity)
     start = neural_scope(context)["coverage_end"]
     times = [finite(value) for row in recordings for value in row.get("Time", [])
              if not isinstance(value, (str, bool))]
@@ -620,4 +700,6 @@ def automatic_observations(context, recordings, calendar, now=None):
         return None, [], [], provenance
     scope = {"start": start, "end": math.nextafter(max(valid), math.inf),
              "description": neural_observation_scope(context)["description"]}
-    return scope, sorted(set(context.get("visit_days", [])) | set(calendar["days"])), calendar["clinic_days"], provenance
+    exclusions = policy_exclusions if continuity else sorted(set(context.get("visit_days", [])) | set(calendar["days"]))
+    anchors = policy_anchors if continuity else calendar["clinic_days"]
+    return scope, exclusions, anchors, provenance

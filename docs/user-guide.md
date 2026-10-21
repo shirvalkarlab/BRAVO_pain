@@ -29,7 +29,7 @@ still be visible. Use an individually authorized account for those actions.
 
 | Tab | Contents and requirements |
 | --- | --- |
-| Multimodal Summary | Survey, wearable and neural measures together; coverage differs by stream |
+| Multimodal Summary | Survey, wearable and neural measures together, including recent recorded observations; coverage differs by stream |
 | REDCap | Imported survey metrics and separately supplied clinic/study context |
 | Stim Program Boxplots | Outcomes grouped by reviewed program assignments; settings alone do not establish home assignments |
 | Stim Program Settings | Device settings observed at recorded times |
@@ -49,9 +49,29 @@ provenance and limitations before comparing measures.
 
 Neural snapshot spectra, time-domain recordings and chronic device summaries are
 different products. Their units and coverage are not interchangeable. Recent
-recorded observations can extend beyond reviewed home periods, but do not by
-themselves establish location, home eligibility or a complete testing calendar.
-Unverified periods stay labeled and do not silently enter reviewed home analyses.
+recorded observations can extend beyond reviewed historical home periods and also
+appear in Multimodal Summary under its shared date filter. Their bounds come from
+actual samples; power and current keep separate timestamps and gaps. A reviewed
+home-continuity policy may label periods as assumed home between documented
+stimulation sessions. The display names that assumption and its confirmation
+boundary; it does not verify physical location or continuous device activation.
+Known testing dates and overlapping averaging bins remain excluded. New stored
+clinic dates update those exclusions, while other session evidence requires an
+operator review. Future scheduled visits alone do not prove a session occurred.
+These observations do not silently expand the historical analysis eligibility.
+
+Sensing-contact or frequency changes between exports may leave the exact change
+time unknown without making the recorded hemisphere unknown. Inherited sensing
+settings stay qualified. A missing implant date is shown as unavailable rather
+than a date manufactured from an empty value.
+
+A separately reviewed PSD contact assignment can use the sensing-change timeline
+only when it is bound to the exact event, spectrum and retained source claims.
+Such results are labeled **Assigned from sensing-change timeline; conflicting
+export labels retained**. This is not agreement between the source exports.
+Changing the spectrum or source claims invalidates the assignment until reviewed
+again. Unresolved assignments remain explicit, and the original spectra remain
+available.
 
 ## Refresh versus sync
 
