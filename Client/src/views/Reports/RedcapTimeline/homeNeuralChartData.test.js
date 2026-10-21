@@ -162,7 +162,8 @@ test('schedule uncertainty labels inherited source, contacts and frequency witho
  const value=plot({segments:[{...segment,sensing_provenance}]});
  expect(value.traces[0].y).toEqual([0,12]);expect(value.traces[1].y).toEqual([0,2.4]);
  expect(value.descriptions[0]).toMatchObject({source:'Right lead (unverified)',contacts:'8 and 10 (unverified)',center:'20 Hz center (unverified)',band:'18–22 Hz (unverified)'});
- expect(value.descriptions[0].schedule).toContain('exported sensing settings disagree');
+ expect(value.descriptions[0].schedule).toContain('earlier and later exported sensing settings differ');
+ expect(value.descriptions[0].schedule).toContain('the exact change time is not established');
  expect(value.descriptions[0].schedule).toContain('inherited without a direct settings record');
  expect(value.traces[0].customdata[0][1]).toContain('Unverified sensing labels:');
  expect(value.traces[0].customdata[0][1].replace(/<br>/g,' ')).toContain('Prasad’s selected labels');
@@ -172,11 +173,21 @@ test('schedule labels distinguish recorded evidence, absent evidence, inherited 
  expect(neuralScheduleLabel(undefined)).toBe('');
  expect(neuralScheduleLabel({status:'recorded',metadata_available:true,conflicting_settings:false,inherited_settings:false})).toBe('Sensing labels follow the recorded schedule.');
  expect(neuralScheduleLabel({status:'recorded',metadata_available:false,conflicting_settings:false,inherited_settings:false})).toContain('complete schedule provenance is unavailable');
- expect(neuralScheduleLabel({status:'recorded',metadata_available:true,conflicting_settings:true,inherited_settings:false})).toContain('settings disagree');
+ expect(neuralScheduleLabel({status:'recorded',metadata_available:true,conflicting_settings:true,inherited_settings:false})).toContain('settings differ');
  expect(neuralScheduleLabel({status:'recorded',metadata_available:true,conflicting_settings:false,inherited_settings:true})).toContain('without a direct settings record');
  expect(neuralScheduleLabel({status:'unknown',metadata_available:true,conflicting_settings:false,inherited_settings:false})).toContain('schedule status is unresolved');
  const known=neuralSegmentDescription({...segment,sensing_provenance:{status:'recorded',metadata_available:true,conflicting_settings:false,inherited_settings:false}},'Synthetic participant');
  expect(known.source).toBe('Right lead');expect(known.center).toBe('20 Hz center');
+});
+
+test('contact and frequency disagreement does not make a recorded sensing lead unknown',()=>{
+ const sensing_provenance={status:'unverified',metadata_available:true,conflicting_settings:true,inherited_settings:false};
+ const value=plot({segments:[{...segment,sensing_provenance}]});
+ expect(value.descriptions[0]).toMatchObject({source:'Right lead',contacts:'8 and 10 (unverified)',center:'20 Hz center (unverified)'});
+ expect(value.descriptions[0].schedule).toContain('settings differ');
+ expect(value.traces[0].y).toEqual([0,12]);
+ const absent=neuralSegmentDescription({...segment,sensing_side:null,sensing_provenance},'Synthetic participant');
+ expect(absent.source).toBe('Sensing source unresolved');
 });
 
 test('canonical current stays on its own lead and times, preserves zero and conflict gaps, and never borrows power settings',()=>{

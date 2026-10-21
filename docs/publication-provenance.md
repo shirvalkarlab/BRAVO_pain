@@ -21,6 +21,11 @@ interface, synthetic-test and generic-documentation changes on the existing lab
 lineage, retaining the repository boundaries below. Account credentials are not
 included.
 
+The recent-neural follow-up adds reviewed code and independently synthetic tests
+for recent summary coverage, explicit continuity assumptions and source-preserving
+contact assignments. It remains on the existing lab lineage. Clinical evidence
+manifests and operator decisions are not part of this source publication.
+
 ## Repository boundaries
 
 - Historical deployment logs, participant-derived descriptions and private

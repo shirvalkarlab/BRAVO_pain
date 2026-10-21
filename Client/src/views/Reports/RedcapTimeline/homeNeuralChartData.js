@@ -33,7 +33,7 @@ export function neuralScheduleLabel(provenance) {
       && provenance.conflicting_settings === false && provenance.inherited_settings === false)
     return 'Sensing labels follow the recorded schedule.';
   const reasons = [];
-  if (provenance.conflicting_settings) reasons.push('exported sensing settings disagree; Prasad’s selected labels are retained');
+  if (provenance.conflicting_settings) reasons.push('earlier and later exported sensing settings differ; the exact change time is not established; Prasad’s selected labels are retained');
   if (provenance.inherited_settings) reasons.push('labels are inherited without a direct settings record for this interval');
   if (!provenance.metadata_available) reasons.push('complete schedule provenance is unavailable');
   return `Unverified sensing labels: ${reasons.join('; ') || 'schedule status is unresolved'}.`;
@@ -52,7 +52,11 @@ export function neuralSegmentDescription(segment, participant) {
   const schedule = neuralScheduleLabel(segment.sensing_provenance);
   const unverified = schedule.startsWith('Unverified');
   const label = value => unverified ? `${value} (unverified)` : value;
-  return {source:label(source), contacts:label(contacts), center:label(center), band:label(band), mode, schedule};
+  // A disagreement between the earlier/later contact or frequency settings does
+  // not make the recorded lead itself unknown. Missing/inherited schedule
+  // evidence still qualifies the source as well as the selected sensing labels.
+  const sourceUnverified = unverified && (segment.sensing_provenance?.inherited_settings || !segment.sensing_provenance?.metadata_available);
+  return {source:sourceUnverified ? label(source) : source, contacts:label(contacts), center:label(center), band:label(band), mode, schedule};
 }
 
 export function neuralSettingsLines(segment, side, participant) {

@@ -37,6 +37,7 @@ import { gutterGeometry, fitRowLabel, F_TICK, eventsRowSubtitle, matchedRowSubti
 import { T } from "assets/theme/base/tokens";
 import { PAIN, SIDE, CONTEXT, CATEGORICAL, SEQUENTIAL } from "assets/theme/base/dataColors";
 import { MONTH_GRID, FONT_FAMILY } from "views/Reports/figureStyle";
+import { psdContactProvenance, TIMELINE_CONTACT_NOTE } from "../psdContactProvenance";
 
 // COLOURS ONLY (the redesign of 2026-09-26, SPEC.md section 5.1 item 4, through the
 // bravo-timeline-layout skill): every colour below comes from the shared tokens and data colours.
@@ -739,7 +740,7 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         // kind of recording it is (the raw product keys `survey_psd` / `montage_psd` are not printed).
         const MONTAGE_KIND = { survey_psd: "survey recording", montage_psd: "montage recording" };
         const tickLabel = (r) => (isEvent(r)
-          ? `PSD<br>${r.event_name || "Event"} (patient event)`
+          ? `PSD<br>${r.event_name || "Event"} (patient event)${psdContactProvenance(r) ? `<br>${psdContactProvenance(r).note}` : ''}`
           : `TD (montage)<br>${MONTAGE_KIND[r.product] || "montage or survey recording"}`);
         picksRef.current[traces.length] = psd.map((r) => ({ Channel: r.channel, Dtype: "psd",
           Product: r.product, TStart: tEpoch(r.t_start) }));
@@ -1253,6 +1254,9 @@ export default function BiomarkerDataTimeline({ data, height, painOverride,
         </MDBox>
       ) : null}
       <div ref={ref} style={{ width: "100%" }} />
+      {(av.records || []).some(record => record.contact_status === 'timeline_adjudicated') && <div role="note" style={{fontSize:14,color:SUB_INK,padding:'4px 8px'}}>
+        Event PSD contacts: {TIMELINE_CONTACT_NOTE} These assignments are distinct from contact labels that agree across source exports.
+      </div>}
       {zeroRunsLine(av.zero_runs_left_out) ? (
         <div data-testid="zero-runs-line" style={{ fontSize: 14, color: SUB_INK, padding: "4px 8px 0" }}>
           {zeroRunsLine(av.zero_runs_left_out)}

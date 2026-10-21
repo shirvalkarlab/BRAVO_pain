@@ -148,7 +148,7 @@ def test_only_explicit_consistent_redcap_binding(api,binding,expected):
     assert api._bound_record(binding)==expected
 
 
-@pytest.mark.parametrize('field', ['neural_observation_scope', 'observation_scope', 'home_intervals', 'visit_days'])
+@pytest.mark.parametrize('field', ['neural_observation_scope', 'observation_scope', 'home_intervals', 'visit_days', 'home_continuity'])
 def test_observational_scope_cannot_be_selected_by_client(api, monkeypatch, field):
     monkeypatch.setattr(api.presentation, 'read_context', lambda *args: pytest.fail('unsupported client scope must fail before context read'))
     response = call(api.QueryHomeNeuralTimeline, {'ParticipantId':'p', field: {'start':1,'end':2,'description':'injected'}})

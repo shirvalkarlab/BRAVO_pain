@@ -71,6 +71,9 @@ export function NeuralAnalysisPolicy({policy}) {
   return <Alert severity="info">Prasad’s analysis policy excludes exact-zero chronic power and device-invalid power codes from these views. This is an analysis exclusion, not evidence that zero is physiologically invalid. Raw recordings and zero-current readings are preserved.</Alert>;
 }
 
+const continuingHome = provenance => provenance?.home_status === 'assumed_continuing_home'
+  && ['operator_confirmed_no_new_stimulation_visits','documented_stimulation_calendar'].includes(provenance.home_status_basis);
+
 export function ObservationProvenance({provenance}) {
   if (!provenance) return null;
   const labels={stored_snapshot:'Latest stored clinic snapshot', unavailable:'Clinic snapshot unavailable', invalid:'Clinic snapshot could not be verified'};
@@ -78,7 +81,12 @@ export function ObservationProvenance({provenance}) {
   return <Alert severity="info">
     {labels[provenance.calendar_status] || 'Clinic snapshot status unknown'}.
     {Number.isFinite(built) && <> Snapshot prepared: {stamp(built/1000)} Pacific.</>}
-    {' '}A stored snapshot does not confirm the latest upstream sync succeeded. Testing-calendar completeness, physical location and at-home status remain unverified.
+    {' '}A stored snapshot does not confirm the latest upstream sync succeeded.
+    {continuingHome(provenance)
+      ? <> Home period assumed to continue: {provenance.home_status_basis === 'operator_confirmed_no_new_stimulation_visits'
+        ? <>the study operator confirmed no intervening stimulation visits{provenance.home_status_confirmed_through && <> through {provenance.home_status_confirmed_through}</>}</>
+        : <>the last documented stimulation session{provenance.last_documented_stimulation_date && <> was {provenance.last_documented_stimulation_date}</>}; this updated calendar supersedes the earlier no-new-visits confirmation</>}. A clinic sheet or weekly stimulation summary documenting a new session ends this continuity assumption. Physical location is not independently verified; sensing settings retain their own source labels.</>
+      : <> Testing-calendar completeness, physical location and at-home status remain unverified.</>}
     {provenance.message && <> {provenance.message}</>}
   </Alert>;
 }
@@ -119,7 +127,9 @@ export default function HomeNeuralData({participant,refreshRevision=0}) {
     {query.data && !windows.length && <Alert severity="info">{query.data.message || 'A reviewed stimulation-visit calendar is needed to define these periods.'}</Alert>}
     {observations.length > 0 && <Stack spacing={2} component="section" aria-label="Recent recorded observations">
       <MDTypography variant="h4">Recent recorded observations · latest imported data</MDTypography>
-      <Alert severity="info">Physical location and at-home status are unverified, and the testing calendar may be incomplete. Known testing days and overlapping averaging bins are excluded. These plots show recorded observations, not a reviewed at-home analysis.</Alert>
+      <Alert severity="info">{continuingHome(query.data?.observation_provenance)
+        ? 'These recorded observations use the continuing-home assumption described above. Physical location is not independently verified; this assumption does not establish sensing contacts or a controlling stimulation relationship.'
+        : 'Physical location and at-home status are unverified, and the testing calendar may be incomplete. These plots show recorded observations, not a reviewed at-home analysis.'} Known testing days and overlapping averaging bins are excluded.</Alert>
       {observationScope && <MDTypography variant="body2">
         Date limits for this recent view: {stamp(observationScope.start)} → {stamp(observationScope.end)} Pacific (end excluded).
         {' '}{observationScope.description}

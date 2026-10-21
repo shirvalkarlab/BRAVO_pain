@@ -11,7 +11,7 @@
 * The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 */
 
-import { useCallback, useState, useEffect, useMemo } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { useResizeDetector } from 'react-resize-detector';
 
 import LoadingProgress from "components/LoadingProgress";
@@ -26,6 +26,8 @@ import { PlotlyRenderManager } from "graphing-utility/Plotly";
 
 import { usePlatformContext } from "context";
 import { dictionary, dictionaryLookup } from "assets/translation";
+import { SessionController } from "database/session-control";
+import { EventPsdContactNotes } from "../psdContactProvenance";
 
 const filter = createFilterOptions();
 
@@ -135,9 +137,13 @@ function EventPowerSpectrum({dataToRender, activeChannel, figureTitle}) {
     skipOnMount: false
   });
 
-  return useMemo(() => (
+  return <>
     <MDBox ref={ref} id={figureTitle} style={{marginTop: 5, marginBottom: 10, height: 600, width: "100%", display: ""}}/>
-  ), [renderData]);
+    <EventPsdContactNotes records={(dataToRender || []).flatMap(event => event.EventPSDs || []).filter(record => record.TherapyLabel === activeChannel)}
+      formatDate={value => typeof value === 'number' && Number.isFinite(value)
+        ? new Date(SessionController.decodeTimestamp(value * 1000)).toLocaleString(language)
+        : 'Date not recorded'} />
+  </>;
 }
 
 export default EventPowerSpectrum;

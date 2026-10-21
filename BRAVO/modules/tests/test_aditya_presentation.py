@@ -682,3 +682,168 @@ def test_current_timestamps_missing_conflicts_and_eligibility_are_not_aligned_to
     assert [point['amplitude'] for point in left['amplitude_series']]==[None,None,None,0]
     assert left['amplitude_series'][0]['amplitude_conflict'] is True
     assert right['amplitude_series']==[]
+
+
+def continuity_context():
+    context = auto_context(datetime(2026, 1, 8, tzinfo=p.PACIFIC).timestamp())
+    context['visit_days'] = ['2026-01-07']
+    context['home_continuity'] = {
+        'policy': 'assume_until_documented_stim', 'last_stimulation_date': '2026-01-07',
+        'confirmation_date': '2026-01-20', 'source_kind': 'operator_confirmation', 'evidence_sha256': 'a' * 64}
+    return context
+
+
+def continuity_calendar():
+    return {'status': 'stored_snapshot', 'days': ['2026-01-07'], 'clinic_days': ['2026-01-07']}
+
+
+def test_home_continuity_keeps_historical_arrays_and_raw_setting_uncertainty():
+    from copy import deepcopy
+    context = continuity_context()
+    now = datetime(2026, 1, 21, tzinfo=p.PACIFIC)
+    times = [datetime(2026, 1, day, 12, tzinfo=p.PACIFIC).timestamp() for day in (8, 19, 20)]
+    rows = [observational_recording(times)]
+    request = {'window': 'custom', 'start_date': '2026-01-08', 'end_date': '2026-01-20'}
+    before = deepcopy(context)
+    legacy = deepcopy(context)
+    legacy.pop('home_continuity')
+    expected = p.neural_timeline(request, legacy, rows, synthetic_native, synthetic_pairs, now, continuity_calendar())
+    result = p.neural_timeline(request, context, rows, synthetic_native, synthetic_pairs, now, continuity_calendar())
+    assert result['windows'] == expected['windows'] and context == before
+    assert result['observation_scope'] == expected['observation_scope']
+    provenance = result['observation_provenance']
+    assert provenance['home_status'] == 'assumed_continuing_home'
+    assert provenance['home_status_basis'] == 'operator_confirmed_no_new_stimulation_visits'
+    assert provenance['home_status_confirmed_through'] == '2026-01-20'
+    assert provenance['home_confirmation_status'] == 'current'
+    assert provenance['last_documented_stimulation_date'] == '2026-01-07'
+    assert provenance['location_status'] == provenance['testing_calendar_completeness'] == 'unverified'
+    assert 'evidence_sha256' not in json.dumps(result)
+    segments = result['observation_windows'][0]['panels'][0]['segments']
+    old_segments = expected['observation_windows'][0]['panels'][0]['segments']
+    assert [s['points'] for s in segments] == [s['points'] for s in old_segments]
+    assert all(s['mapping_status'] == 'unknown' and s['mode'] == 'unknown' and s['thresholds'] == [] for s in segments)
+    assert all(s['home_status'] == 'assumed_continuing_home' and 'reviewed assumption' in s['evidence'] for s in segments)
+
+
+def test_new_stored_clinic_session_supersedes_confirmation_and_excludes_whole_day():
+    context = continuity_context()
+    calendar = continuity_calendar()
+    calendar['days'].append('2026-01-22')
+    calendar['clinic_days'].append('2026-01-22')
+    now = datetime(2026, 1, 25, tzinfo=p.PACIFIC)
+    times = [datetime(2026, 1, day, 12, tzinfo=p.PACIFIC).timestamp() for day in (21, 22, 23)]
+    request = {'window': 'custom', 'start_date': '2026-01-20', 'end_date': '2026-01-24'}
+    result = p.neural_timeline(request, context, [observational_recording(times)], synthetic_native, synthetic_pairs, now, calendar)
+    provenance = result['observation_provenance']
+    assert provenance['home_status'] == 'assumed_continuing_home'
+    assert provenance['home_status_basis'] == 'documented_stimulation_calendar'
+    assert provenance['home_status_confirmed_through'] is None
+    assert provenance['home_confirmation_status'] == 'superseded_by_documented_session'
+    assert provenance['last_documented_stimulation_date'] == '2026-01-22'
+    actual = [v['time'] for w in result['observation_windows'] for panel in w['panels'] for seg in panel['segments'] for v in seg['points']]
+    assert actual == [times[0], times[2]]
+
+
+def test_reviewed_slack_and_sheet_dates_join_calendar_without_future_anchors():
+    context = continuity_context()
+    context['home_continuity']['documented_sessions'] = [
+        {'date': '2026-01-23', 'source_kind': 'slack_stimulation_summary', 'evidence_sha256': 'b' * 64},
+        {'date': '2026-01-24', 'source_kind': 'clinic_sheet', 'evidence_sha256': 'c' * 64},
+        {'date': '2026-01-28', 'source_kind': 'slack_stimulation_summary', 'evidence_sha256': 'd' * 64}]
+    calendar = continuity_calendar()
+    calendar['days'].append('2026-01-29')
+    calendar['clinic_days'].append('2026-01-29')
+    today = datetime(2026, 1, 25, tzinfo=p.PACIFIC).date()
+    provenance, excluded, anchors = p.home_continuity_provenance(context, calendar, today)
+    assert excluded == ['2026-01-07', '2026-01-23', '2026-01-24', '2026-01-28', '2026-01-29']
+    assert anchors == ['2026-01-07', '2026-01-23', '2026-01-24']
+    assert provenance['last_documented_stimulation_date'] == '2026-01-24'
+    assert provenance['home_policy_confirmation_date'] == '2026-01-20'
+    assert p.home_continuity_provenance({}, calendar, today) == ({}, [], [])
+
+
+def test_home_continuity_is_private_participant_bound_and_copied(monkeypatch, tmp_path):
+    context = continuity_context()
+    document = {'schema_version': 1, 'participants': {'a': dict(context, reviewed=True, revision='review-1')}}
+    path = tmp_path / 'reviewed-context.json'
+    path.write_text(json.dumps(document))
+    monkeypatch.setenv('BRAVO_ADITYA_PRESENTATION_METADATA', str(path))
+    actual = p.read_context('a')
+    assert actual['home_continuity'] == context['home_continuity']
+    assert 'home_continuity' not in p.read_context('other')
+    p.home_continuity_policy(context)['confirmation_date'] = '2026-01-21'
+    assert context['home_continuity']['confirmation_date'] == '2026-01-20'
+
+
+@pytest.mark.parametrize('policy', [None, [], {}, {'policy': 'other'}])
+def test_invalid_continuity_policy_shape(policy):
+    context = continuity_context()
+    context['home_continuity'] = policy
+    with pytest.raises(ValueError):
+        p.home_continuity_policy(context)
+
+
+@pytest.mark.parametrize('key,value', [
+    ('policy', 'verify_home'), ('source_kind', 'device_location'),
+    ('last_stimulation_date', True), ('last_stimulation_date', '20260107'),
+    ('last_stimulation_date', '2026-02-30'), ('confirmation_date', '2026-01-06'),
+    ('evidence_sha256', None), ('evidence_sha256', 'x' * 64),
+    ('documented_sessions', {}), ('documented_sessions', [None]),
+    ('documented_sessions', [{'date': '2026-01-10'}]),
+    ('documented_sessions', [{'date': '2026-01-10', 'source_kind': 'plan', 'evidence_sha256': 'b' * 64}]),
+    ('documented_sessions', [{'date': '2026-99-10', 'source_kind': 'clinic_sheet', 'evidence_sha256': 'b' * 64}]),
+    ('documented_sessions', [{'date': '2026-01-10', 'source_kind': 'clinic_sheet', 'evidence_sha256': 'b'}]),
+    ('unexpected', 'not permitted')])
+def test_invalid_home_continuity_fields_fail_closed(key, value):
+    context = continuity_context()
+    context['home_continuity'][key] = value
+    with pytest.raises(ValueError):
+        p.home_continuity_policy(context)
+
+
+def test_home_continuity_requires_automatic_context_and_no_future_confirmation():
+    context = continuity_context()
+    with pytest.raises(ValueError, match='future'):
+        p.home_continuity_provenance(context, continuity_calendar(), datetime(2026, 1, 19).date())
+    context.pop('neural_observation_scope')
+    with pytest.raises(ValueError, match='automatic'):
+        p.home_continuity_policy(context)
+    context['neural_observation_scope'] = {'start': context['neural_scope']['coverage_end'],
+        'end': context['neural_scope']['coverage_end'] + 100, 'description': 'Explicit'}
+    with pytest.raises(ValueError, match='automatic'):
+        p.home_continuity_policy(context)
+
+
+def test_home_policy_does_not_bypass_missing_canonical_calendar():
+    result = p.neural_timeline({}, continuity_context(), [], None, None, calendar={'status': 'unavailable'})
+    assert result['observation_windows'] == []
+    assert 'home_status' not in result['observation_provenance']
+
+
+@pytest.mark.parametrize('source', ['stored_clinic', 'reviewed_slack'])
+def test_tomorrow_session_excludes_tonight_margin_without_advancing_home_anchor(source):
+    context = continuity_context()
+    calendar = continuity_calendar()
+    if source == 'stored_clinic':
+        calendar['days'].append('2026-01-22')
+        calendar['clinic_days'].append('2026-01-22')
+    else:
+        context['home_continuity']['documented_sessions'] = [
+            {'date': '2026-01-22', 'source_kind': 'slack_stimulation_summary', 'evidence_sha256': 'b' * 64}]
+    now = datetime(2026, 1, 21, 23, 59, tzinfo=p.PACIFIC)
+    midnight = datetime(2026, 1, 22, tzinfo=p.PACIFIC).timestamp()
+    times = [midnight - 601, midnight - 600, midnight - 300]
+    rows = [observational_recording(times)]
+    request = {'window': 'custom', 'start_date': '2026-01-21', 'end_date': '2026-01-21'}
+    result = p.neural_timeline(request, context, rows, synthetic_native, synthetic_pairs, now, calendar)
+    actual = [point['time'] for window in result['observation_windows']
+              for panel in window['panels'] for segment in panel['segments'] for point in segment['points']]
+    assert actual == [midnight - 601]
+    provenance = result['observation_provenance']
+    assert provenance['last_documented_stimulation_date'] == '2026-01-07'
+    assert provenance['home_confirmation_status'] == 'current'
+    assert provenance['home_status_confirmed_through'] == '2026-01-20'
+    _, excluded, anchors, _ = p.automatic_observations(context, rows, calendar, now)
+    assert excluded == ['2026-01-07', '2026-01-22']
+    assert anchors == ['2026-01-07']

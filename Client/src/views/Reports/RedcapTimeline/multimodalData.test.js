@@ -92,3 +92,9 @@ test('standard MPQ retains its actual values and scale when legacy values are pr
  expect(traces).toHaveLength(1);expect(traces[0].y).toEqual([31]);expect(traces[0].yaxis).toBe('y2');
  expect(summarySurveyTraces([legacy,{...standard,points:[]}],{},[],range,false,[],[]).flatMap(trace=>trace.y)).toEqual([]);
 });
+
+test('neural axes retain recorded-observation labels and shared dates rather than claiming a control mapping',()=>{
+ const layout=summaryLayout({range,events:[],width:342,left:'Neural power (LSB)',right:'Recorded amp (mA)',neuralPeriod:{id:'historical',start:1,end:2}});
+ expect(layout.yaxis.title.text).toBe('Neural power (LSB)');expect(layout.yaxis2.title.text).toBe('Recorded amp (mA)');
+ expect(layout.yaxis2.rangemode).toBe('tozero');expect(layout.xaxis.range).toEqual(['2026-08-01 00:00:00','2026-08-07 23:59:59']);
+});

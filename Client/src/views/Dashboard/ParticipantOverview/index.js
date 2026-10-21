@@ -60,6 +60,7 @@ import LoadingProgress from "components/LoadingProgress";
 
 import routes from "routes.js";
 import SetExperimentView from "./SetExperimentView";
+import { recordedImplantDate } from "./implantDate";
 
 const filter = createFilterOptions();
 
@@ -310,7 +311,7 @@ export default function ParticipantOverview() {
                           </TableCell>
                           <TableCell key={"implantdate"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
                             <MDTypography align="center" style={{marginBottom: 0}} fontSize={12}>
-                              {new Date(SessionController.decodeTimestamp(device.Date*1000)).toLocaleString(language, SessionController.getDateTimeOptions("DateNumeric"))}
+                              {recordedImplantDate(device.Date, SessionController.decodeTimestamp)?.toLocaleString(language, SessionController.getDateTimeOptions("DateNumeric")) || "Not recorded"}
                             </MDTypography>
                           </TableCell>
                           <TableCell key={"viewedit"} style={{borderBottom: "1px solid rgba(224, 224, 224, 0.4)"}}>
