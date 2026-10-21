@@ -12,9 +12,8 @@
       "commit": "b680c96e7808ca2946adcdd75b77726644b1e9e9"
     },
     "aditya": {
-      "repository": "https://github.com/ABehal2020/BRAVO",
-      "branch": "aditya",
-      "commit": "b3c5481355f597431ae970da63fc0ed4e6e13a58"
+      "contribution": "Aditya visualization and presentation layer",
+      "integration": "Reviewed application content maintained on this repository's aditya branch."
     }
   },
   "strategy": "Fixel baseline; reviewed Prasad-preferred application content, followed by semantic compatibility and privacy adaptations. Aditya presentation page uses canonical backend adapters. This manifest records initial import provenance, not final-file hashes or validation claims.",

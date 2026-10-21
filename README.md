@@ -11,7 +11,7 @@ The former laptop and Tailscale link are no longer required.
 This `aditya` branch combines the Fixel development platform, Prasad's pain
 analysis modules and Aditya's **All Data Streams** page. Prasad's analysis services
 remain the scientific backend. The public source snapshot excludes private
-clinical configuration, source data, operational receipts and private Git history.
+clinical configuration, source data and operational receipts.
 
 ## Start here
 
