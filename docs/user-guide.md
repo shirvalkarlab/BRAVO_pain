@@ -99,6 +99,13 @@ pending computation or a device-feasibility refusal can be legitimate outcomes.
 Analysis computation is separate from source import and can take time. Avoid
 launching competing repeated computations.
 
+To find the histograms, open a participant, then **Choosing stimulation settings →
+View → Biomarkers exploration → Report–recording pairing**. The timing histogram
+shows neural samples relative to reports. Open **Adjust matching parameters** to
+view the high/low pain split histogram. Its labels identify the matched-neural or
+fallback daily-report distribution; empty matching data are not zero observations.
+This is separate from Aditya's **Stim Program Boxplots** tab.
+
 Band choice uses time-domain evidence; a device PSD-only grid cannot independently
 select a band. Read each grid's own settings and status. **Last scan** refers to a
 separate all-band scan and can be uncomputed while an individual grid is populated.
