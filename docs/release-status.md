@@ -5,20 +5,41 @@ Access requires an individually authorized account or the shared read-only lab
 account supplied privately by the administrator. This is a research application;
 a chart or candidate is not a clinical programming instruction.
 
-## Settings and source context — validation in progress
+## Settings and source context — live acceptance passed
 
-The source update links neural intervals to the original reports that contributed
-their samples. Details retain recovered program settings, dated observations,
-configured controller relationships and limits on activation chronology. Readable
-settings labels and tooltips preserve source values; empty settings actions are
-replaced with meaningful sensing details. The seven Aditya views also retain
-usable selectors, expandable details and supported stored wearable defaults.
-See [Reading settings and source context](settings-source-context.md).
+The settings/source-context release is deployed. Neural intervals link to the
+original reports contributing their samples; details retain recovered program
+settings, controller relationships, dated observations and chronology limits.
+Source configuration does not establish continuous adaptive delivery between
+observations. Conflicting configurations remain individually inspectable.
+Readable labels preserve source values, and settings actions expose populated
+recorded settings or meaningful sensing details. See
+[Reading settings and source context](settings-source-context.md).
 
-Local implementation checks and public CI are being verified for this source
-candidate. Live deployment acceptance remains pending; the accepted earlier
-runtime described below remains the deployment reference until that separate
-acceptance completes. Source publication alone does not certify live behavior.
+All seven Aditya tab journeys passed normal read-only browser checks covering
+populated charts, physical tooltips, available selectors and expanded details.
+Checks included a real source conflict, settings source values, medication
+regimen/condition details, supported wearable defaults and daily/sleep-sample
+hovers. Tooltip clipping was checked at desktop and narrow viewport sizes.
+Oura Refresh view preserved its selected metrics and repopulated all five saved
+charts. This is bounded
+journey and sampled-data evidence, not certification of every observation,
+optional native analysis or complete upstream coverage.
+
+Normal owner/viewer saved-data reads preserved scientific values and access
+boundaries. Read-only checks preserved reviewed PSD assignments, their source
+qualifications and raw spectra. Runtime identity, services and existing target
+timers passed final operational checks; acceptance started no provider import.
+The native saved Closed-loop view recovered from initial browser network errors
+on a normal reload; optional analyses are outside this acceptance.
+Continuous activation, missing home assignments and historical medication use
+remain qualified where the source evidence does not establish them.
+
+The public application candidate `10bc3e248415b7246076f5ed502e6730172c8fb9`
+passed all five validation jobs. The final publication and its exact review/CI
+revision are tracked in [PR #21](https://github.com/shirvalkarlab/BRAVO_pain/pull/21).
+Public source retains the existing lab lineage and publication boundaries.
+Documentation commits do not change the deployed application.
 
 ## Earlier accepted recent-neural release
 
