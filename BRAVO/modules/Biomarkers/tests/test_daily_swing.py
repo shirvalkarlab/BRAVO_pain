@@ -238,6 +238,7 @@ def test_the_neutral_setting_files_grids_under_the_rule_before_c6():
             "print(S.DAILY_SWING, S.GRID_RULE_VERSION, T.RULE_VERSION)" % here)
     env = dict(os.environ)
     env.pop("BRAVO_DAILY_SWING", None)
+    env["BRAVO_RECENT_CHECK"] = "0"          # C8 off, so the rule in force is C6's own (v33)
     on = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
                         timeout=120).stdout.split()
     env["BRAVO_DAILY_SWING"] = "0"

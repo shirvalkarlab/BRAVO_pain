@@ -6367,7 +6367,7 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
                                from_device_spectrum=None, from_clinic_sheet=None,
                                covariate=None, covariate_label=None,
                                current_removed_check=False, by_recording_source=True,
-                               report_times_s=None):
+                               report_times_s=None, recent_check=None):
     """The whole grid: for every band centre and every length of signal averaged into one
     measurement, how well that band's power tracks the chosen pain score.
 
@@ -6409,6 +6409,12 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     (California local time) of the reports its chosen cell used (`daily_swing.report_hours`), for
     the caller to complete with the chronic log's daily profile. A warning only: it draws no random
     number and moves no other number. None (the neutral setting) skips it.
+
+    ``recent_check`` (wave 2, C8; ``{"cut": time_split.cut_block(...), "report_times_s": one UTC time
+    per pain report}``): every best correlation row gains ``recent_check``, its link with pain on its
+    own chosen cell's reports filed after the request's one cut (`time_split.recent_check`), each
+    row on its own generator, so no other number moves. A warning only; the caller appends its text
+    to `why` (`time_split.append_to_rows`). None (the neutral setting) skips it.
 
     ``by_recording_source=False`` leaves out ``correlation_by_recording_source`` (each cell split into
     its TD-read and PSD-read reports): the TD-only and PSD-only grids (wave 2, C4) hold one source
@@ -6598,6 +6604,10 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     if report_times_s is not None:
         # wave 2, C6: the hours of day of each row's own reports, a warning only (no random number)
         _attach_report_hours(best_corr_rows, X, pain, kept_req, report_times_s)
+    if recent_check is not None:
+        # wave 2, C8: the recent-reports check, a warning only (its own generators)
+        _attach_recent_check(best_corr_rows, X, pain, kept_req, recent_check, seed=int(seed),
+                             n_boot=int(n_boot))
 
     # The headline row for each band centre names ONE cell -- the length of signal that won. The
     # mark has to travel with it, or a reader who never looks at the grid itself would see a
@@ -7310,6 +7320,29 @@ def _attach_report_hours(rows, X, pain, requested, report_times_s):
         x = X[req.index(float(s)), :, c]
         m = np.isfinite(x) & np.isfinite(y)
         row["daily_swing"] = {"report_hours": _ds.report_hours(rt[m])}
+
+
+def _attach_recent_check(rows, X, pain, requested, recent, *, seed, n_boot):
+    """``recent_check`` on each best correlation row (wave 2, C8): the row's chosen cell (its band, at
+    the length of signal it names) read again on its reports after the cut (`time_split.
+    recent_check`), on a generator of its own per band centre. In place; nothing else is read or
+    moved. A row with no chosen length (nothing measured) gets none."""
+    from . import time_split as _ts
+    rt = np.asarray(recent.get("report_times_s"), dtype=float)
+    y = np.asarray(pain, dtype=float)
+    if rt.size != X.shape[1]:
+        return
+    req = [float(v) for v in requested]
+    for c, row in enumerate(rows or []):
+        if not isinstance(row, dict):
+            continue
+        s = row.get("integration_seconds_requested")
+        if s is None or float(s) not in req or row.get("pearson_r") is None:
+            continue
+        x = X[req.index(float(s)), :, c]
+        row["recent_check"] = _ts.recent_check(
+            x, y, rt, recent.get("cut"), r_all=row.get("pearson_r"), n_boot=n_boot,
+            rng=np.random.default_rng([int(seed), 8, int(c)]))
 
 
 #: The words beside the current-removed check, wherever it is printed (decision 484).

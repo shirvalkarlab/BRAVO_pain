@@ -336,7 +336,8 @@ def answer_for(x, y, cov, *, n_boot, seed, key):
 
 def chronic_band_choice(samples_by_pair, currents_by_side, report_t, pain, *, centres, tol_s,
                         match_direction="nearest", allow_window_reuse=False, n_boot=None, seed=0,
-                        pairs=None, chronic_match=CHRONIC_MATCH_DEFAULT, daily_swing=False):
+                        pairs=None, chronic_match=CHRONIC_MATCH_DEFAULT, daily_swing=False,
+                        recent_cut=None):
     """``{pair: block}`` for every pair in ``pairs`` (default: every pair the chronic log holds).
 
     ``block``: ``{"frequencies": [one entry per chronic frequency on the pair], "by_centre":
@@ -352,7 +353,11 @@ def chronic_band_choice(samples_by_pair, currents_by_side, report_t, pain, *, ce
     ``daily_swing`` (wave 2, C6; a warning only): each entry also carries `daily_swing.swing_block`,
     the hourly profile of ALL the readings at that frequency on the pair and the hours of day of
     the reports its answer used. It reads nothing the answer reads and moves no number. False (the
-    neutral setting) skips it."""
+    neutral setting) skips it.
+
+    ``recent_cut`` (wave 2, C8; the request's one `time_split.cut_block`; a warning only): each
+    entry also carries `recent_check`, its answer's link with pain on its own matched reports after
+    the cut, on a generator of its own. It moves no number. None (the neutral setting) skips it."""
     if chronic_match not in CHRONIC_MATCH_CHOICES:
         raise ValueError(f"chronic_match must be one of {CHRONIC_MATCH_CHOICES}, got {chronic_match!r}")
     warning = non_default_warning(chronic_match, tol_s)
@@ -442,6 +447,11 @@ def chronic_band_choice(samples_by_pair, currents_by_side, report_t, pain, *, ce
                 used_r = np.isfinite(xv) & np.isfinite(py)
                 entry["daily_swing"] = _ds.swing_block(_ds.hourly_profile(ts, ys),
                                                        _ds.report_hours(rt[used_r]), freq_hz=f)
+            if recent_cut is not None:
+                from . import time_split as _ts
+                entry["recent_check"] = _ts.recent_check(
+                    xv, py, rt, recent_cut, r_all=ans.get("pearson_r"), n_boot=n_boot,
+                    rng=np.random.default_rng([int(seed), 5, *key, 4]))
             block["frequencies"].append(entry)
             if centre is not None:
                 prev = block["by_centre"].get(centre)
@@ -464,7 +474,7 @@ def row_block(pair_block, centre):
             "n_reports", "pearson_r", "pearson_r_low", "pearson_r_high", "p_rotation",
             "n_rotations", "answer", "direction", "current_removed_check", "covered", "why",
             "n_reports_in_gap", "n_reports_log_elsewhere", "chronic_match", "warning",
-            "daily_swing")
+            "daily_swing", "recent_check")
     out = {k: entry.get(k) for k in keep if k in entry}
     if not out["covered"]:
         out["words"] = (f"home record at this band too thin to decide: {out.get('why')}"

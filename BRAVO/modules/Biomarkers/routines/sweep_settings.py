@@ -70,7 +70,17 @@ CHRONIC_CHOICE = SOURCE_GRIDS and _os.environ.get("BRAVO_CHRONIC_CHOICE", "1").s
 #: (`BRAVO_DAILY_SWING=0`): the code path is skipped, the grid and its key as before C6. Needs the
 #: chronic log's answer (C5), so it is off when that is.
 DAILY_SWING = CHRONIC_CHOICE and _os.environ.get("BRAVO_DAILY_SWING", "1").strip() != "0"
-GRID_RULE_VERSION = "v33_daily_swing"  # v33 2026-10-19: the daily swing of each band's power in the chronic log and the hours of day of its reports on every best correlation row and chronic answer, a warning only (wave 2, C6; the PI's ruling of 2026-10-19, "Drop blocks, warn"); v32 2026-10-19: the chronic log's answer on every TD-only row, deciding the band where it covers it, each report paired with the one 10-minute chronic average covering it (wave 2, C5; the PI's ruling of 2026-10-19). "v31_chronic_choice" was the first C5 build (window median), saved by the refresh job while it was being proved and never to be served; v30 2026-10-19: a TD-only and a PSD-only grid beside the mixed one, the band chosen from the TD grid (wave 2, C4); v29 2026-10-18: the current-removed check on every band row, a warning only, and the adjusted grid always built (decision 484); v28 2026-10-18: the current taken out read at each report's own pieces of recording (decision 483); v27 2026-10-03: device PSD snapshots judged by 7 MAD above their own median, not the TD chunks' (decision 411); v26: single 3 s chunks dropped only when more than 7 MAD above their contact's own median, every contact of every participant (decision 410); v25 3 MAD both sides; v24 exact rotation null, tablet clock  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+#: THE RECENT-REPORTS CHECK, A WARNING ONLY (wave 2, C8; the PI, 2026-10-21: "Recent-reports check,
+#: warn"). True: every best correlation row of the three grids and every chronic answer carries
+#: `recent_check` (its link with pain on its own matched reports after the rolling 70% cut by time,
+#: `routines/time_split.py`), and a sign that does not hold, or a note when too few or no reports
+#: fall after the cut, is appended to `why`. It moves no answer, status, verdict, gate or p; band
+#: choice stays on all the data. False is the neutral setting (`BRAVO_RECENT_CHECK=0`): the code path
+#: is skipped, the grid and its key as before C8. Follows the chain of the settings before it.
+RECENT_CHECK = DAILY_SWING and _os.environ.get("BRAVO_RECENT_CHECK", "1").strip() != "0"
+GRID_RULE_VERSION = "v34_recent_check"  # v34 2026-10-21: the recent-reports check on every best correlation row and chronic answer, a warning only (wave 2, C8; the PI's ruling of 2026-10-21, "Recent-reports check, warn"); v33 2026-10-19: the daily swing of each band's power in the chronic log and the hours of day of its reports on every best correlation row and chronic answer, a warning only (wave 2, C6; the PI's ruling of 2026-10-19, "Drop blocks, warn"); v32 2026-10-19: the chronic log's answer on every TD-only row, deciding the band where it covers it, each report paired with the one 10-minute chronic average covering it (wave 2, C5; the PI's ruling of 2026-10-19). "v31_chronic_choice" was the first C5 build (window median), saved by the refresh job while it was being proved and never to be served; v30 2026-10-19: a TD-only and a PSD-only grid beside the mixed one, the band chosen from the TD grid (wave 2, C4); v29 2026-10-18: the current-removed check on every band row, a warning only, and the adjusted grid always built (decision 484); v28 2026-10-18: the current taken out read at each report's own pieces of recording (decision 483); v27 2026-10-03: device PSD snapshots judged by 7 MAD above their own median, not the TD chunks' (decision 411); v26: single 3 s chunks dropped only when more than 7 MAD above their contact's own median, every contact of every participant (decision 410); v25 3 MAD both sides; v24 exact rotation null, tablet clock  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+if not RECENT_CHECK:                                  # the neutral setting: the rule before C8
+    GRID_RULE_VERSION = "v33_daily_swing"
 if not DAILY_SWING:                                   # the neutral setting: the rule before C6
     GRID_RULE_VERSION = "v32_chronic_covering"
 if not CHRONIC_CHOICE:                                # the neutral setting: the rule before C5
@@ -572,7 +582,10 @@ CHRONIC_DECIDES_FIELDS = ("pearson_r", "pearson_r_abs", "pearson_r_low", "pearso
                           "pearson_r_adjusted", "pearson_r_adjustment", "pearson_r_adjusted_n",
                           # wave 2, C6 (only on rows built with the daily swing): the chronic answer's
                           # own daily swing, its report hours those the chronic answer used
-                          "daily_swing")
+                          "daily_swing",
+                          # wave 2, C8 (only on rows built with the recent check): the chronic
+                          # answer's own recent-reports check
+                          "recent_check")
 
 
 def chronic_decides(row):
@@ -624,6 +637,12 @@ def chronic_decides(row):
         w = (ch["daily_swing"] or {}).get("warning")
         if w:
             out["why"] = out["why"] + ". " + w
+    if isinstance(ch.get("recent_check"), dict):
+        # wave 2, C8: the chronic answer's own recent-reports check, a warning only (the PI, 2026-10-21)
+        out["recent_check"] = ch["recent_check"]
+        t = ch["recent_check"].get("warning") or ch["recent_check"].get("note")
+        if t:
+            out["why"] = out["why"] + ". " + t
     return out
 
 
