@@ -131,3 +131,7 @@ For support, share page/tab, dates, build revision and sanitized error privately
 with the operator. Do not put participant identifiers, credentials or clinical
 exports in public issues. [Release status](release-status.md) states the actual
 validation boundary; this guide is not a guarantee of complete data coverage.
+
+
+For interval details, source configurations and activation limits across all seven tabs,
+see [Reading settings and source context](settings-source-context.md).

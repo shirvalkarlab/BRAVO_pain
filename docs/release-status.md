@@ -5,6 +5,23 @@ Access requires an individually authorized account or the shared read-only lab
 account supplied privately by the administrator. This is a research application;
 a chart or candidate is not a clinical programming instruction.
 
+## Settings and source context — validation in progress
+
+The source update links neural intervals to the original reports that contributed
+their samples. Details retain recovered program settings, dated observations,
+configured controller relationships and limits on activation chronology. Readable
+settings labels and tooltips preserve source values; empty settings actions are
+replaced with meaningful sensing details. The seven Aditya views also retain
+usable selectors, expandable details and supported stored wearable defaults.
+See [Reading settings and source context](settings-source-context.md).
+
+Local implementation checks and public CI are being verified for this source
+candidate. Live deployment acceptance remains pending; the accepted earlier
+runtime described below remains the deployment reference until that separate
+acceptance completes. Source publication alone does not certify live behavior.
+
+## Earlier accepted recent-neural release
+
 The recent-neural follow-up is deployed and passed live acceptance checks.
 Multimodal Summary and Neural Data displayed matching recent observations with
 actual timestamps and gaps. All seven Aditya tabs loaded; native PSD and Biomarkers

@@ -224,3 +224,15 @@ def test_rotation_badge_never_substitutes_nonfinite_or_unavailable_rotation(monk
     monkeypatch.setattr(BS, "VERDICT_P_SOURCE", "glmer")
     assert "n.s." in BS._band_decide_verdict(dict(base, p=None), {})
     assert BS._band_decide_verdict(base, {}).startswith("VALIDATED")
+
+
+def test_original_recording_source_identity_is_authoritative_and_request_local(monkeypatch):
+    cached={'row':{'Time':[100,700],'Data':np.array([[2,0],[3,1]]),'SourceId':'stale','RecordingId':'stale'}}
+    row=types.SimpleNamespace(uid='row',type=CH,metadata={},
+        source=types.SimpleNamespace(uid='original-source',metadata={'SessionEndTimestamp':800}))
+    monkeypatch.setattr(BS,'_decoded_payloads',lambda *args:cached)
+    out=BS._decoded_with_row_labels('person',[row])[0]
+    assert out['SourceId']=='original-source' and out['RecordingId']=='row' and out['SourceSessionEnd']==800
+    assert cached['row']['SourceId']=='stale' and cached['row']['RecordingId']=='stale'
+    row.source.metadata=None
+    assert BS._decoded_with_row_labels('person',[row])[0]['SourceSessionEnd'] is None

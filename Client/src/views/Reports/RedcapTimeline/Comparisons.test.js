@@ -103,3 +103,22 @@ test('historical medication view uses reviewed end, explains ongoing notes and r
   await render(<Medications comparison={{...comparison,provenance:{period_start:start,period_end_exclusive:Date.parse('2026-10-15T00:00:00-07:00')/1000}}} metrics={[]} today="2026-09-03"/>);
   expect(plot('Documented medication regimens over time').layout.xaxis.range[1]).toBe('2026-09-03 23:59:59');
 });
+
+test('program cards expose details only when supplied rows exist, including home-setting fallback rows',async()=>{
+ const source={available:true,id:'reference',mode:'open_loop',settings:[],home_settings:{group:[{label:'Group',value:'GroupIdDef.GROUP_C'}],left:[{label:'Frequency',value:'55 Hz'}],right:[]}};
+ const comparison={available:true,metrics:[{...selected,conditions:[],top:{}}],finalized_open_loop:source};
+ await render(<StimulationPrograms comparison={comparison} metrics={[selected]}/>);
+ const details=element.querySelector('details');expect(details).not.toBeNull();expect(details.textContent).toContain('Group: Group C');expect(details.textContent).toContain('Left · Frequency: 55 Hz');
+ await act(async()=>details.querySelector('summary').click());expect(details.open).toBe(true);
+ await render(<StimulationPrograms comparison={{...comparison,finalized_open_loop:{...source,home_settings:undefined}}} metrics={[selected]}/>);
+ expect(element.querySelector('details')).toBeNull();
+});
+
+test('medication regimen and condition details use readable terms and retain recorded dates',async()=>{
+ const source={...condition('med',2),drug_class:'opioid_analgesic',label:'Synthetic | 5 mg | bid | oral',status:'prn_available',frequency:'bid'};
+ const episode={id:'regimen',name:'Synthetic',drug_class:'opioid_analgesic',dose:'5 mg',frequency:'bid',start:1735758000,end:null,ongoing:true};
+ await render(<Medications comparison={{available:true,episodes:[episode],metrics:[{...selected,conditions:[source]}]}} metrics={[selected]} today="2026-09-03"/>);
+ expect(element.textContent).toContain('opioid analgesic · Synthetic · 5 mg · Twice daily');
+ expect(element.textContent).toContain('Synthetic · 5 mg · Twice daily · Oral');
+ expect(element.textContent).toContain('Recorded start');expect(element.textContent).not.toContain('opioid_analgesic');
+});

@@ -17,6 +17,8 @@ clinical configuration, source data and operational receipts.
 
 - [Lab user guide](docs/user-guide.md): find the custom modules, understand tabs,
   refresh data and interpret missing results.
+- [Settings and source context](docs/settings-source-context.md): recorded settings,
+  contributing reports and limits on activation timing.
 - [Shared viewer guide](docs/shared-viewer.md): read-only permissions, simultaneous
   sessions and refresh behavior.
 - [Release status](docs/release-status.md): source version, deployed version,

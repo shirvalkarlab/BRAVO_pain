@@ -135,7 +135,7 @@ test('all recorded changes are passed to charts up to twelve, annotation selecti
   const events=[transition('first','2025-01-01'),transition('second','2025-07-16')];
   SessionController.query.mockResolvedValue({data:{...payload,stimulation:{home_transitions:events}}});
   await mount();expect(charts().every(c=>c.transitions.length===2)).toBe(true);
-  expect(text()).toContain('Changed second · complete settings');
+  expect(text()).toContain('Changed second · recorded settings');
   expect(element.querySelector('.MuiAccordionSummary-root').getAttribute('aria-expanded')).toBe('false');
   await click('Select mood_vas second');
   expect(element.querySelector('.MuiAccordionSummary-root').getAttribute('aria-expanded')).toBe('true');
@@ -143,8 +143,8 @@ test('all recorded changes are passed to charts up to twelve, annotation selecti
   expect(element.querySelector('.MuiAccordionSummary-root').getAttribute('aria-expanded')).toBe('false');
   await click('Select mood_vas second');
   expect(element.querySelector('.MuiAccordionSummary-root').getAttribute('aria-expanded')).toBe('true');
-  await click('Select mood_vas first');expect(text()).toContain('Changed first · complete settings');
-  await selectTransition('second');expect(text()).toContain('Changed second · complete settings');
+  await click('Select mood_vas first');expect(text()).toContain('Changed first · recorded settings');
+  await selectTransition('second');expect(text()).toContain('Changed second · recorded settings');
   await input('From','2025-02-01');expect(text()).toContain('Last record before this window:');
   expect(text()).toContain('This does not establish continuous delivery');expect(charts().every(c=>c.transitions.length===1&&c.transitions[0].id==='second')).toBe(true);
   await toggle('Stimulation context');expect(charts().every(c=>c.transitions.length===0)).toBe(true);

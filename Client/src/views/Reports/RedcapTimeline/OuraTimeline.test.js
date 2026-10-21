@@ -36,6 +36,20 @@ test('new Oura view uses its own endpoint and ordered approved metrics, units an
   expect(charts()[0].phases.map(phase=>phase.key)).toEqual(['pre','stage1','stage2']);
 });
 
+test('current stored API streams populate default charts with their own names and units',async()=>{
+  const specs=[['steps','Steps','steps','day'],['active_calories','Active calories','kcal','day'],['sleep_heart_rate','Sleep heart rate','bpm','sample'],['sleep_hrv','Sleep heart rate variability','ms','sample'],['sleep_total','Total recorded sleep','hours','day']];
+  const metrics=specs.map(([key,label,unit,resolution],index)=>({key,label,unit,resolution,points:[point('2026-09-03',index+10)]}));
+  SessionController.query.mockResolvedValue({data:{metrics}});
+  await render();
+  expect(charts().map(chart=>chart.metric.key)).toEqual(['steps','sleep_heart_rate','sleep_hrv','active_calories','sleep_total']);
+  expect(charts().map(chart=>chart.metric.points[0].value)).toEqual([10,12,13,11,14]);
+  expect(element.textContent).toContain('Active calories');expect(element.textContent).not.toContain('Total calories');
+  await openOptions();await option('Sleep heart rate');
+  expect(charts().some(chart=>chart.metric.key==='sleep_heart_rate')).toBe(false);
+  await click('Default Oura metrics');expect(charts()).toHaveLength(5);
+  expect(element.textContent).toContain('No reviewed home-program markers are available in this window');
+});
+
 test('metric selector adds/removes optional metrics, disables unavailable choices and restores defaults',async()=>{
   await render();await openOptions();
   const unavailable=[...document.querySelectorAll('[role="option"]')].find(node=>node.textContent.startsWith('readiness ·'));

@@ -2,7 +2,7 @@ import {useCallback, useMemo, useState} from 'react';
 import {Alert, Autocomplete, Button, Card, Chip, FormControlLabel, Stack, Switch, TextField} from '@mui/material';
 import MDTypography from 'components/MDTypography';
 import {filterPoints, localTime, past28Range, unknownIntervalsInRange} from './data';
-import {OURA_DEFAULTS, ouraPoints, ouraRange, visiblePhases} from './ouraData';
+import {defaultOuraMetricKeys, ouraPoints, ouraRange, visiblePhases} from './ouraData';
 import {useOuraTimeline} from './useOuraTimeline';
 import OuraChart from './OuraChart';
 import StimulationContext from './StimulationContext';
@@ -10,7 +10,7 @@ import StimulationContext from './StimulationContext';
 const EMPTY = [];
 export default function OuraTimeline({participant, refreshRevision=0, phases = EMPTY, homeTransitions = EMPTY, unknownIntervals = EMPTY}) {
   const [revision, setRevision] = useState(0);
-  const [selected, setSelected] = useState(OURA_DEFAULTS);
+  const [selected, setSelected] = useState(null);
   const [range, setRange] = useState(null);
   const [smooth, setSmooth] = useState(true);
   const [context, setContext] = useState(true);
@@ -26,7 +26,7 @@ export default function OuraTimeline({participant, refreshRevision=0, phases = E
   const recent = past28Range(today);
   const isRecent = dates.start === recent.start && dates.end === recent.end;
   const valid = Boolean(dates.start && dates.end && dates.start <= dates.end && dates.end <= today);
-  const shown = selected.map(key => metrics.find(metric => metric.key === key)).filter(Boolean);
+  const shown = (selected ?? defaultOuraMetricKeys(metrics)).map(key => metrics.find(metric => metric.key === key)).filter(Boolean);
   const studyPhases = useMemo(() => valid ? visiblePhases(phases, dates) : EMPTY, [valid, phases, dates]);
   const events = useMemo(() => valid ? filterPoints(homeTransitions, dates.start, dates.end).map((event, index) => ({...event, number: index + 1})) : EMPTY, [valid, homeTransitions, dates]);
   const currentEvent = events.find(event => event.id === selectedTransition) || events[events.length - 1];
@@ -49,7 +49,7 @@ export default function OuraTimeline({participant, refreshRevision=0, phases = E
         <TextField label="From" type="date" value={dates.start} InputLabelProps={{shrink: true}} onChange={event => setRange({...dates, start: event.target.value})} />
         <TextField label="Through" type="date" value={dates.end} inputProps={{max: today}} InputLabelProps={{shrink: true}} onChange={event => setRange({...dates, end: event.target.value})} />
         <Button onClick={() => setRange(null)}>Full Oura history</Button>
-        <Button onClick={() => setSelected(OURA_DEFAULTS)}>Default Oura metrics</Button>
+        <Button onClick={() => setSelected(null)}>Default Oura metrics</Button>
         <FormControlLabel control={<Switch checked={smooth} onChange={event => setSmooth(event.target.checked)} />} label="5-point rolling median" />
         <FormControlLabel control={<Switch checked={isRecent} onChange={event => setRange(event.target.checked ? recent : null)} />} label="Past 28 days" />
         <FormControlLabel control={<Switch checked={context} onChange={event => setContext(event.target.checked)} />} label="Stimulation context" />
@@ -62,7 +62,7 @@ export default function OuraTimeline({participant, refreshRevision=0, phases = E
     </Stack></Card>
     {query.data && valid && context && <StimulationContext events={events} selected={currentEvent} onSelect={selectTransition} previous={previous} limited={events.length > 12} openDetails={detailsExpanded} onDetailsChange={setDetailsExpanded} />}
     {query.data && valid && visibleUnknown.length > 0 && <Alert severity="info">Home settings are not established for part of this period. Timed-reading tooltips mark these gaps instead of carrying earlier settings forward.</Alert>}
-    {context && <MDTypography variant="body2">Red markers show reviewed home-program records. Click a marker label for complete settings. Daily totals can span stimulation changes; they are not assigned a single program.</MDTypography>}
+    {context && <MDTypography variant="body2">{chartEvents.length > 0 ? 'Red markers show reviewed home-program records. Click a marker label for recorded settings.' : 'No reviewed home-program markers are available in this window. Recorded program snapshots can be inspected in the Stim Program Settings tab.'} Daily totals can span stimulation changes; they are not assigned a single program.</MDTypography>}
     {query.loading && <MDTypography role="status">Loading Oura timeline…</MDTypography>}
     {query.error && <Alert severity="error">{query.error}</Alert>}
     {query.freshnessError && <Alert severity="warning">{query.freshnessError}</Alert>}

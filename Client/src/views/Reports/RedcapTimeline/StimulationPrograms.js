@@ -28,13 +28,15 @@ export default function StimulationPrograms({comparison,metrics,participant}) {
               <MDTypography variant="h5">{label}</MDTypography>
               <ComparisonChart plot={plot} label={`${selected.label} ${label.toLowerCase()} program comparison`}/>
               <Box sx={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(min(100%, 240px), 1fr))',gap:2,minWidth:0}}>
-                {plot.programs.map(({condition,title,countLabel,settings},index)=><Box component="section" aria-label={`${title} settings`} key={`${condition.id}-${index}`} sx={{p:2,border:'1px solid #e1e6ef',borderRadius:2,minWidth:0,overflowWrap:'anywhere'}}>
+                {plot.programs.map(({condition,title,countLabel,settings},index)=>{
+                  const details=stimulationDetailRows(condition,participant);
+                  return <Box component="section" aria-label={`${title} settings`} key={`${condition.id}-${index}`} sx={{p:2,border:'1px solid #e1e6ef',borderRadius:2,minWidth:0,overflowWrap:'anywhere'}}>
                   <MDTypography variant="h6">{title}</MDTypography>
                   <MDTypography variant="body2">{countLabel}</MDTypography>
                   <MDTypography variant="body2">{condition.count?`Median ${condition.median}`:'No eligible surveys'}</MDTypography>
                   <Box sx={{mt:1}}>{(settings.length?settings:['Settings not available']).map((line,i)=><MDTypography component="div" variant="body2" key={i}>{line}</MDTypography>)}</Box>
-                  <details style={{marginTop:12}}><summary>All recorded settings</summary><ul style={{paddingLeft:20}}>{stimulationDetailRows(condition,participant).map((line,i)=><li key={i}>{line}</li>)}</ul></details>
-                </Box>)}
+                  {details.length>0&&<details style={{marginTop:12}}><summary>All recorded settings</summary><ul style={{paddingLeft:20}}>{details.map((line,i)=><li key={i}>{line}</li>)}</ul></details>}
+                </Box>;})}
               </Box>
             </Box>)}
             <MDTypography variant="body2">Solid dark lines mark each program’s median; boxes span the middle 50% of survey scores. Hover over a survey point for settings and its score. Days count distinct Pacific survey dates.</MDTypography>

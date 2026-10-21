@@ -1,6 +1,8 @@
 import {trialPhaseBands} from './trialPhases';
 import {escapeText, localTime} from './data';
 import {displayTarget,displayTargetText} from 'utils/participantTargets';
+import {settingValueLabel} from './settingDisplay';
+import {medicationTerm,medicationLabel} from './medicationDisplay';
 
 const PALETTE=['#35669B','#99723A','#6F5599','#317C71','#A65364','#687842'];
 const finitePoints=condition=>condition.points.filter(point=>Number.isFinite(point.value)&&Number.isFinite(point.time));
@@ -37,10 +39,10 @@ export function topPrograms(metric,mode) {
 export function conditionSummary(condition) {
   const rows=condition.settings || [];
   const medication=['drug_class','status','dose','frequency','route','timing','background'];
-  const details=[...rows.map(row=>`${condition.mode==='open_loop'&&/threshold/i.test(row.label)?`Stored ${row.label} (not controlling stimulation)`:row.label}: ${row.value}`),...medication.filter(key=>condition[key]).map(key=>`${key.replace('_',' ')}: ${condition[key]}`)];
+  const details=[...rows.map(row=>`${condition.mode==='open_loop'&&/threshold/i.test(row.label)?`Stored ${row.label} (not controlling stimulation)`:row.label}: ${settingValueLabel(row)}`),...medication.filter(key=>condition[key]).map(key=>`${key.replace('_',' ')}: ${medicationTerm(condition[key])}`)];
   const lines=[];
   for(let i=0;i<details.length;i+=2) lines.push(details.slice(i,i+2).map(escapeText).join(' · '));
-  return [`<b>${escapeText(condition.label)}</b>`,...lines].join('<br>');
+  return [`<b>${escapeText(condition.drug_class ? medicationLabel(condition.label) : condition.label)}</b>`,...lines].join('<br>');
 }
 
 export function conditionPlot(metric,conditions,horizontal=false) {
@@ -48,18 +50,18 @@ export function conditionPlot(metric,conditions,horizontal=false) {
   conditions.forEach((condition,index)=>{
     const points=finitePoints(condition),color=PALETTE[index%PALETTE.length];
     const values=points.map(point=>point.value),positions=points.map(()=>index);
-    const summary=conditionSummary(condition);
+    const summary=conditionSummary(condition),label=condition.drug_class?medicationLabel(condition.label):condition.label;
     const axes=horizontal?{x:values,y:positions}:{x:positions,y:values};
-    traces.push({type:'box',...axes,orientation:horizontal?'h':'v',name:condition.label,boxpoints:false,width:0.55,
+    traces.push({type:'box',...axes,orientation:horizontal?'h':'v',name:label,boxpoints:false,width:0.55,
       line:{color,width:2},fillcolor:`rgba(${[1,3,5].map(at=>parseInt(color.slice(at,at+2),16)).join(',')},0.15)`,opacity:1,showlegend:false,
       hovertemplate:`${summary}<br>n=${condition.count} · median=${condition.median}<extra></extra>`});
     const jitter=points.map((_,i)=>index+((i*37%101)/100-0.5)*0.32);
     const dots=horizontal?{x:values,y:jitter}:{x:jitter,y:values};
-    traces.push({type:'scatter',...dots,mode:'markers',name:condition.label,marker:{color,size:6,opacity:0.68},showlegend:false,
+    traces.push({type:'scatter',...dots,mode:'markers',name:label,marker:{color,size:6,opacity:0.68},showlegend:false,
       customdata:points.map(point=>[localTime(point.time),point.value]),
       hovertemplate:`<b>${escapeText(metric.label)}: %{customdata[1]:.1f}</b><br>%{customdata[0]} Pacific<br>${summary}<extra></extra>`});
   });
-  const ticks=conditions.map((condition,index)=>`${index+1}. ${compactLabel(condition.label)}<br>n=${condition.count} · median ${condition.median}`);
+  const ticks=conditions.map((condition,index)=>`${index+1}. ${compactLabel(condition.drug_class?medicationLabel(condition.label):condition.label)}<br>n=${condition.count} · median ${condition.median}`);
   const category={tickmode:'array',tickvals:conditions.map((_,i)=>i),ticktext:ticks,automargin:true,range:[-0.65,conditions.length-0.35],zeroline:false};
   const score={title:{text:`Score (${metric.range.join('–')})`,font:{size:17}},range:metric.range,automargin:true,zeroline:false,gridcolor:'#edf0f4'};
   // Draw medians above the individual points, including zero-IQR boxes and
@@ -114,10 +116,10 @@ function homeSettingLines(condition,participant) {
       lines.push(thresholdMode(fields.get('Threshold mode')));
       const sensingSide=sourceSide(fields.get('Sensing source hemisphere'),side);
       const sensingTarget=targetName(participant,sensingSide);
-      lines.push(`BrainSense ${sensingTarget}: ${fields.get('Sensing contacts') || 'contacts not recorded'} · ${fields.get('Biomarker center frequency') || 'frequency not recorded'}`);
+      lines.push(`BrainSense ${sensingTarget}: ${fields.get('Sensing contacts') ? settingValueLabel({label:'Sensing contacts',value:fields.get('Sensing contacts')}) : 'contacts not recorded'} · ${fields.get('Biomarker center frequency') || 'frequency not recorded'}`);
       const lower=fields.get('Lower LFP threshold'),upper=fields.get('Upper LFP threshold');
       lines.push(`LFP thresholds: lower ${lower || 'not recorded'} · upper ${upper || 'not recorded'}`);
-      if(fields.get('Adaptive state')) lines.push(`Adaptive state: ${fields.get('Adaptive state')}`);
+      if(fields.get('Adaptive state')) lines.push(`Adaptive state: ${settingValueLabel({label:'Adaptive state',value:fields.get('Adaptive state')})}`);
     }
   }
   return lines;
@@ -150,7 +152,7 @@ export function stimulationSettingLines(condition,participant) {
       lines.push(`LFP thresholds: lower ${value(`${side} lower lfp threshold (LSB)`) || 'not recorded'} · upper ${value(`${side} upper lfp threshold (LSB)`) || 'not recorded'} LSB`);
       const ganged=value(`${side} ganged to`);
       if(ganged&&!/none|not.ganged/i.test(ganged)) lines.push(`Ganged to: ${targetName(participant,sourceSide(ganged,side.toLowerCase()),ganged)} (sensing values above are recorded for ${target})`);
-      if(value(`${side} adaptive status`)) lines.push(`Adaptive state: ${value(`${side} adaptive status`)}`);
+      if(value(`${side} adaptive status`)) lines.push(`Adaptive state: ${settingValueLabel({label:'Adaptive status',value:value(`${side} adaptive status`)})}`);
     }
   }
   return lines;
@@ -162,9 +164,11 @@ export function stimulationAxisSettings(condition,participant) {
 }
 
 export function stimulationDetailRows(condition,participant) {
-  return (condition.settings || []).map(row=>{
+  const rows=condition.settings?.length?condition.settings:['group','left','right'].flatMap(side=>
+    (condition.home_settings?.[side] || []).map(row=>({...row,label:side==='group'?row.label:`${side==='left'?'Left':'Right'} · ${row.label}`,displayValue:settingValueLabel(row)})));
+  return rows.map(row=>{
     const label=condition.mode==='open_loop'&&/threshold/i.test(row.label)?`Stored ${row.label} (not controlling stimulation)`:row.label;
-    return displayTargetText(participant,`${label}: ${row.value}`);
+    return displayTargetText(participant,`${label}: ${row.displayValue ?? settingValueLabel(row)}`);
   });
 }
 
@@ -220,7 +224,7 @@ export function orderedMedicationConditions(conditions) {
 const groupRows = ordered => {
   const groups=[],positions=[];
   ordered.forEach((condition,index)=>{
-    if(!index||condition.drug_class!==ordered[index-1].drug_class) groups.push({label:condition.drug_class,start:index+(groups.length*0.7),end:0});
+    if(!index||condition.drug_class!==ordered[index-1].drug_class) groups.push({label:medicationTerm(condition.drug_class),start:index+(groups.length*0.7),end:0});
     positions.push(index+(groups.length-1)*0.7);groups[groups.length-1].end=positions[index];
   });
   return {groups,positions};
@@ -235,7 +239,7 @@ export function medicationConditionPlot(metric,conditions) {
   plot.layout.yaxis={...plot.layout.yaxis,tickvals:positions,range:[(positions.at(-1)??0)+0.6,-1],autorange:false};
   plot.layout.shapes=[...classShapes(groups),...plot.layout.shapes.map((shape,i)=>({...shape,y0:shape.y0+positions[i]-i,y1:shape.y1+positions[i]-i}))];
   plot.layout.annotations=classHeaders(groups);
-  plot.rowLabels=ordered.map((condition,index)=>`${index+1}. ${condition.drug_class} · ${condition.label} · n=${condition.count} · median ${condition.median}`);
+  plot.rowLabels=ordered.map((condition,index)=>`${index+1}. ${medicationTerm(condition.drug_class)} · ${medicationLabel(condition.label)} · n=${condition.count} · median ${condition.median}`);
   plot.fitWidth=true;
   return plot;
 }
@@ -267,7 +271,7 @@ export function medicationTimeline(episodes,throughDay,periodStart,phases=[],per
     if((knownEnd&&Number.isFinite(periodStart)&&episode.end<periodStart)||(knownStart&&startText>endOfView)) return [];
     const complete=knownStart&&(knownEnd||episode.ongoing);
     const x=complete?[startText,end||endOfView]:[startText||end||(Number.isFinite(periodStart)?localTime(periodStart):endOfView)];
-    const details=[episode.drug_class,episode.dose,episode.frequency,episode.route,episode.timing,episode.note].filter(Boolean).map(escapeText).join('<br>');
+    const details=[episode.drug_class,episode.dose,episode.frequency,episode.route,episode.timing,episode.note].filter(Boolean).map(value=>escapeText(medicationTerm(value))).join('<br>');
     const availability=episode.prn?'PRN available; use is not confirmed':'Documented regimen; use is not confirmed';
     const startLabel=knownStart?`From ${localTime(episode.start)} Pacific`:'Start date not recorded; endpoint marker only';
     const endLabel=knownEnd?`Documented end ${localTime(episode.end)} Pacific`:episode.ongoing?(scope.bounded?'Recorded as ongoing in historical notes; later use is unverified':'Documented as ongoing; shown through current day'):'End date not recorded; start marker only';
@@ -288,9 +292,9 @@ export function medicationTimeline(episodes,throughDay,periodStart,phases=[],per
     return annotation;
   });
   const topMargin=Math.max(45,headerHeight+20);
-  return {traces,fitWidth:true,rowLabels:ordered.map((episode,index)=>`${index+1}. ${episode.drug_class} · ${[episode.name,episode.dose,episode.frequency].filter(Boolean).join(' · ')}`),layout:{height:Math.max(350,ordered.length*55+groups.length*25+110)+topMargin-45,margin:{l:250,r:35,t:topMargin,b:75},
+  return {traces,fitWidth:true,rowLabels:ordered.map((episode,index)=>`${index+1}. ${medicationTerm(episode.drug_class)} · ${[episode.name,episode.dose,medicationTerm(episode.frequency,'')].filter(Boolean).join(' · ')}`),layout:{height:Math.max(350,ordered.length*55+groups.length*25+110)+topMargin-45,margin:{l:250,r:35,t:topMargin,b:75},
     xaxis:{type:'date',title:{text:'Date · Pacific time',font:{size:17}},nticks:7,automargin:true,...(Number.isFinite(periodStart)?{range:[localTime(periodStart),endOfView]}:{})},
-    yaxis:{tickmode:'array',tickvals:positions,ticktext:ordered.map(episode=>compactLabel([episode.name,episode.dose,episode.frequency].filter(Boolean).join(' · '))),range:[(positions.at(-1)??0)+0.6,-1],autorange:false,automargin:true},
+    yaxis:{tickmode:'array',tickvals:positions,ticktext:ordered.map(episode=>compactLabel([episode.name,episode.dose,medicationTerm(episode.frequency,'')].filter(Boolean).join(' · '))),range:[(positions.at(-1)??0)+0.6,-1],autorange:false,automargin:true},
     shapes:[...trialPhaseBands(phases,{start:Number.isFinite(periodStart)?localTime(periodStart).slice(0,10):traces.flatMap(t=>t.x).sort()[0]?.slice(0,10),end:bandEnd}),...classShapes(groups),...boundaries.map(phase=>({type:'line',xref:'x',yref:'paper',x0:localTime(phase.start),x1:localTime(phase.start),y0:0,y1:1,line:{color:phase.color,dash:'dash',width:1}}))],
     annotations:[...classHeaders(groups),...boundaryHeaders]}};
 }

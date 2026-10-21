@@ -3,9 +3,10 @@ import {Accordion, AccordionDetails, AccordionSummary, Alert, Autocomplete, Butt
 import MDTypography from 'components/MDTypography';
 import {displayTarget, displayTargetText} from 'utils/participantTargets';
 import {localTime} from './data';
+import {settingValueLabel} from './settingDisplay';
 import {useHomeNeuralTimeline} from './useHomeNeuralTimeline';
 import HomeNeuralChart from './HomeNeuralChart';
-import {homeNeuralPlot, neuralContactLabel, neuralSegmentDescription, neuralScheduleLabel} from './homeNeuralChartData';
+import {homeNeuralPlot, neuralContactLabel, neuralSegmentDescription, neuralScheduleLabel, neuralModeLabel, neuralMappingLabel, neuralThresholdLabel, neuralDetailsLabel, hasNeuralSettings} from './homeNeuralChartData';
 
 const EMPTY = [];
 const periodName = id => id === 'current' ? 'Current' : id === 'previous' ? 'Previous' : 'Selected';
@@ -16,23 +17,44 @@ const title = (segment, participant) => {
   return `${stamp(segment.start)} · ${source} · contacts ${contacts} · ${center} · ${mode}`;
 };
 
+function RecordedSettings({settings, participant}) {
+  return <Stack direction={{xs:'column', md:'row'}} gap={3}>
+    {['group','left','right'].filter(scope => (settings?.[scope] || EMPTY).length > 0).map(scope => <div key={scope} style={{flex:1,minWidth:0}}>
+      <MDTypography variant="h6">{scope === 'group' ? 'Device / group' : target(participant, scope)}</MDTypography>
+      <dl style={{margin:0,fontSize:14}}>{settings[scope].map((row,i) => <div key={i} style={{padding:'7px 0',borderBottom:'1px solid #edf0f4'}}>
+        <dt style={{color:'#526179',fontWeight:600}}>{row.label === 'Tablet target' ? 'Target' : row.label}</dt>
+        <dd style={{margin:0,overflowWrap:'anywhere',whiteSpace:'pre-line'}}>{row.label === 'Tablet target' ? target(participant,scope)
+          : row.label === 'Sensing source hemisphere' ? displayTarget(participant,row.value)
+            : /Sensing contacts$/i.test(row.label) ? neuralContactLabel(settingValueLabel(row))
+            : displayTargetText(participant,settingValueLabel(row))}</dd>
+      </div>)}</dl>
+    </div>)}
+  </Stack>;
+}
+
+export function NeuralSourceSettings({context, participant}) {
+  if (!context) return null;
+  return <Stack spacing={1} aria-label="Linked source settings">
+    <Alert severity={context.status === 'source_linked' ? 'info' : 'warning'}>{displayTargetText(participant,context.message)}</Alert>
+    {(context.observations || EMPTY).map(observation => <div key={observation.id} style={{overflowWrap:'anywhere'}}>
+      <MDTypography variant="body2">{observation.kind} · {stamp(observation.time)} Pacific · source {observation.source_id}</MDTypography>
+      {observation.evidence && <MDTypography variant="body2">{displayTargetText(participant,observation.evidence)}</MDTypography>}
+      {context.status === 'conflict' && hasNeuralSettings(observation) && <details>
+        <summary>Configuration in this source observation</summary>
+        <RecordedSettings settings={observation.settings} participant={participant}/>
+      </details>}
+    </div>)}
+  </Stack>;
+}
+
 function SettingsDetails({segment, participant}) {
   return <Stack spacing={2}>
     <MDTypography variant="body2">{displayTargetText(participant,segment.evidence)}</MDTypography>
     {segment.sensing_provenance && <Alert severity={segment.sensing_provenance.status === 'recorded' ? 'info' : 'warning'}>{neuralScheduleLabel(segment.sensing_provenance)}</Alert>}
-    <MDTypography variant="body2">{displayTargetText(participant,segment.threshold_status)}</MDTypography>
-    <Stack direction={{xs:'column', md:'row'}} gap={3}>
-      {['group','left','right'].map(scope => <div key={scope} style={{flex:1,minWidth:0}}>
-        <MDTypography variant="h6">{scope === 'group' ? 'Device / group' : target(participant, scope)}</MDTypography>
-        <dl style={{margin:0,fontSize:14}}>{(segment.settings?.[scope] || EMPTY).map((row,i) => <div key={i} style={{padding:'7px 0',borderBottom:'1px solid #edf0f4'}}>
-          <dt style={{color:'#526179',fontWeight:600}}>{row.label === 'Tablet target' ? 'Target' : row.label}</dt>
-          <dd style={{margin:0,overflowWrap:'anywhere',whiteSpace:'pre-line'}}>{row.label === 'Tablet target' ? target(participant,scope)
-            : row.label === 'Sensing source hemisphere' ? displayTarget(participant,row.value)
-              : /Sensing contacts$/i.test(row.label) ? neuralContactLabel(row.value)
-              : displayTargetText(participant,row.value)}</dd>
-        </div>)}</dl>
-      </div>)}
-    </Stack>
+    <MDTypography variant="body2">{neuralModeLabel(segment.mode,participant)}. {neuralMappingLabel(segment.control_mapping || segment.mapping_status,participant)}. {neuralThresholdLabel(segment.threshold_status,participant)}</MDTypography>
+    <MDTypography variant="body2">Sensing: {neuralSegmentDescription(segment,participant).source} · contacts {neuralContactLabel(segment.sensing_contacts)} · {neuralSegmentDescription(segment,participant).center}.</MDTypography>
+    <NeuralSourceSettings context={segment.settings_context} participant={participant}/>
+    <RecordedSettings settings={segment.settings} participant={participant}/>
   </Stack>;
 }
 
@@ -41,10 +63,10 @@ export function NeuralSettingsSelector({segments,selected,participant,open,setOp
       <Autocomplete disableClearable options={segments} value={selected} getOptionLabel={s=>title(s,participant)}
         isOptionEqualToValue={(a,b)=>a.id===b.id} onChange={(_,s)=>choose(s.id)}
         renderOption={(props,s)=><li {...props} key={s.id}>{title(s,participant)}</li>}
-        renderInput={params=><TextField {...params} label="Recorded settings interval" helperText="Hover over the plot for details, or choose an interval here. Settings are tied to their source observation."/>}
+        renderInput={params=><TextField {...params} label="Recorded sensing interval" helperText="Choose a recorded interval for its sensing details and any linked source settings. A settings snapshot does not establish continuous activation."/>}
         sx={{'& .MuiInputBase-root':{fontSize:14}}}/>
       <Accordion expanded={open} onChange={(_,value)=>setOpen(value)} disableGutters sx={{boxShadow:'none',border:'1px solid #e3e8ef'}}>
-        <AccordionSummary expandIcon={<span aria-hidden="true">⌄</span>}><MDTypography variant="body2">{displayTargetText(participant,selected.mode)} · contacts, sensing, thresholds and complete settings</MDTypography></AccordionSummary>
+        <AccordionSummary expandIcon={<span aria-hidden="true">⌄</span>}><MDTypography variant="body2">{neuralDetailsLabel(selected)}</MDTypography></AccordionSummary>
         <AccordionDetails><SettingsDetails segment={selected} participant={participant}/></AccordionDetails>
       </Accordion>
     </Stack> : <Alert severity="info">{hasRecordedCurrent ? 'Recorded lead current is shown; no sensing settings interval is available for this side in this period.' : observational ? 'No recorded neural observations for this channel in this period.' : 'No eligible home recordings for this side in this visit period.'}</Alert>;

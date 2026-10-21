@@ -17,6 +17,7 @@ from rest_framework.views import APIView
 
 from modules import Database
 from modules import AdityaPresentation as presentation
+from modules import AdityaNeuralSettings as neural_settings
 
 _log = logging.getLogger(__name__)
 
@@ -154,7 +155,8 @@ def _home_revision(participant_uid, context, request, clinic_identity):
     rows = models.Recording.find_all(source__in=sources, type__in=bravo_service.CHRONIC_TYPES)
     rows = sorted((str(row.uid), str(row.hashed), str(row.type), str(row.pointer),
                    json.dumps(row.metadata, sort_keys=True, default=str)) for row in rows)
-    identity = ["automatic-observations-v1", presentation.VERSION, participant_uid, context, clinic_identity, rows,
+    source_identity = sorted((str(source.uid), str(source.hashed), json.dumps(source.metadata, sort_keys=True, default=str)) for source in sources)
+    identity = ["automatic-observations-v1", presentation.VERSION, neural_settings.VERSION, participant_uid, context, clinic_identity, rows, source_identity,
                 bravo_service._recording_set_identity(participant_uid),
                 presentation.date_windows(request, context), datetime.now(presentation.PACIFIC).date().isoformat()]
     return hashlib.sha256(json.dumps(identity, sort_keys=True, default=str, allow_nan=False).encode()).hexdigest()
@@ -177,6 +179,16 @@ def _home(participant_uid, context, request):
             calendar = {"status": "unavailable", "reason": "changed_during_read"}
     result = presentation.neural_timeline(request, context, recordings, representation.native_lsb_by_channel,
         representation.chronic_pair_keys, calendar=calendar, stim_series=availability.stim_series)
+    if any(recording.get("SourceId") for recording in recordings):
+        from Server import models
+        from modules import DataCurator
+        person = models.Participant.find(uid=participant_uid)
+        sources = {str(source.uid): source for source in models.SourceFile.find_all(owner=person)}
+        # Selected original sources only; share the canonical device clock tables.
+        tables = DataCurator.clock_anchor_tables(person)
+        result = neural_settings.link_settings(result, recordings,
+            lambda uid: DataCurator.loadPerceptJSON(sources[uid], table=tables.get(sources[uid].device or '')),
+            native_series=representation.native_lsb_by_channel, pair_keys=representation.chronic_pair_keys)
     result["revision"] = revision
     return result
 
