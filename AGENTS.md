@@ -3,7 +3,9 @@
 - This is the public `shirvalkarlab/BRAVO_pain` Aditya integration snapshot. Read
   `docs/release-status.md`, `docs/publication-provenance.md` and the user guide.
 - Preserve dirty/unrelated work and existing history. Do not reset, force-push,
-  merge private source ancestry or publish clinical data/configuration.
+  import unrelated source history or publish clinical data/configuration.
+- Keep lab-facing code and documentation self-contained. Do not reference personal
+  repositories, their branches or local checkout paths.
 - Code imports are reviewed snapshots. Fixel supplies the base; Prasad owns
   scientific/backend semantics; Aditya supplies the presentation layer.
 - Keep raw inputs, participant identities, clinical evidence, credentials,
