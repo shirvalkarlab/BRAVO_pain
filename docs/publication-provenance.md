@@ -26,6 +26,16 @@ for recent summary coverage, explicit continuity assumptions and source-preservi
 contact assignments. It remains on the existing lab lineage. Clinical evidence
 manifests and operator decisions are not part of this source publication.
 
+The settings/source-context follow-up is tracked in
+[PR #21](https://github.com/shirvalkarlab/BRAVO_pain/pull/21). It adds a read-only
+contributing-report reader,
+qualified settings chronology, readable device enums and nonempty details actions
+across the Aditya views. It preserves source measurements, scientific selection
+rules and the public presentation boundaries below. Regression fixtures are
+synthetic; device reports, clinic evidence and operational receipts remain
+separately provisioned inputs. Source validation and deployed acceptance are
+recorded separately in [release status](release-status.md).
+
 ## Repository boundaries
 
 - Historical deployment logs, participant-derived descriptions and private

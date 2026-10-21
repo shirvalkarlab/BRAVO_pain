@@ -105,3 +105,17 @@ test('unreviewed snapshots are not labeled home-program activations',async()=>{
  expect(element.textContent).toContain('Program-setting observation');
  expect(element.textContent).not.toContain('Red dashed lines mark reviewed home-program transitions');
 });
+
+test('recorded settings humanize known enums, preserve expandable source values and explain missing sides',async()=>{
+ const settings={group:[{label:'Group',value:'GroupIdDef.GROUP_D'}],left:[{label:'Sensing contacts',value:'SensingElectrodeConfigDef.ONE_AND_THREE'},{label:'Frequency',value:'24.4 Hz'}]};
+ const selected={...event,kind:'settings_observation',settings};
+ const before=JSON.stringify(selected);
+ await render({events:[selected],selected,openDetails:true,onDetailsChange:jest.fn()});
+ expect(element.textContent).toContain('recorded settings');expect(element.textContent).not.toContain('complete settings');
+ const details=element.querySelectorAll('details');expect(details).toHaveLength(2);
+ expect(details[0].textContent).toContain('GroupIdDef.GROUP_D');expect(details[1].textContent).toContain('SensingElectrodeConfigDef.ONE_AND_THREE');
+ expect(element.textContent).toContain('Group D');expect(element.textContent).toContain('1 and 3');expect(element.textContent).toContain('24.4 Hz');
+ expect(element.textContent).toContain('No settings recorded for this side in this observation');
+ await act(async()=>details[0].querySelector('summary').click());expect(details[0].open).toBe(true);
+ expect(JSON.stringify(selected)).toBe(before);
+});

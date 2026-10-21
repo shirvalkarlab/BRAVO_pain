@@ -1,4 +1,5 @@
 import {displayTarget, routeParticipant} from "utils/participantTargets";
+import {settingValueLabel, NO_VERIFIED_HOME_ASSIGNMENT} from './settingDisplay';
 
 export const DEFAULT_METRICS = ["mood_vas", "nrs_intensity", "vas_intensity", "left_leg_vas_intensity", "back_vas_intensity", "mpq_standard_sensory_0_33", "mpq_standard_affective_0_12", "mpq_standard_0_45", "firey", "tingly", "electrocuting"];
 const DAY = 86400000;
@@ -44,13 +45,14 @@ export function eventTimeLabel(event) {
 }
 
 export function homeTiming(event, point) {
+  if (["settings_observed", "settings_observation"].includes(event.kind)) {
+    return `Settings observed ${escapeText(eventTimeLabel(event))}; activation time not established.`;
+  }
   if (event.time_precision === "day") {
     const sameDay = point && localTime(point.time).slice(0, 10) === localTime(event.time).slice(0, 10);
     return `${escapeText(eventTimeLabel(event))}. ${sameDay ? "Settings changed this day; survey may precede change." : "Exact change time is not recorded."}`;
   }
-  return event.kind === "settings_observed"
-    ? `Home settings observed ${escapeText(eventTimeLabel(event))}; activation time not established.`
-    : escapeText(event.evidence || "Home-program timing details not recorded.");
+  return escapeText(event.evidence || "Home-program timing details not recorded.");
 }
 
 const LABELS = {
@@ -69,8 +71,8 @@ const CONTROLLER = new Set(["Sensing source hemisphere", "Sensing contacts", "Bi
 const PRIMARY = ["Stimulation contacts", "Frequency", "Amplitude", "Fixed / paused amplitude", "Adaptive amplitude range", "Pulse width"];
 const rowText = (row, participant) => {
   const value = row.label === "Sensing source hemisphere" ? displayTarget(participant, row.value)
-    : row.label === "Threshold mode" ? String(row.value).replace(/^(single|dual)[ _-]*threshold$/i, (_, mode) => `${mode[0].toUpperCase()}${mode.slice(1).toLowerCase()} threshold`)
-    : row.value;
+    : row.label === "Threshold mode" ? settingValueLabel(row).replace(/^(single|dual)[ _-]*threshold$/i, (_, mode) => `${mode[0].toUpperCase()}${mode.slice(1).toLowerCase()} threshold`)
+    : settingValueLabel(row);
   return `${LABELS[row.label] || row.label}: ${value}`;
 };
 const running = rows => rows.some(row => row.label === "Adaptive state" && /^running$/i.test(String(row.value)));
@@ -85,7 +87,7 @@ const chunks = values => {
 // Reformat source-provided rows only: preserve units, unknowns, program labels
 // and controller identity; never infer a setting from another field.
 export function settingsSummary(settings, participant = routeParticipant()) {
-  if (!settings) return "Home settings not established";
+  if (!settings) return "No settings recorded in this observation";
   const group = settings.group || [], left = settings.left || [], right = settings.right || [];
   const leftSource = left.find(row => row.label === "Sensing source hemisphere");
   const rightSource = right.find(row => row.label === "Sensing source hemisphere");
@@ -126,14 +128,14 @@ export function metricTraces(metric, phases, range, smooth, visits = [], homeTra
   const context = (point, visit) => {
     const title = visit ? "Visit day · Home program context; clinic testing may differ" : "Home program context";
     const unknown = unknownIntervals.find(interval => point.time >= interval.start && (interval.end === null || point.time < interval.end));
-    if (unknown) return `${escapeText(phaseMap[point.phase]?.label || "")}<br>${title}<br>Home settings not established for this interval.<br>${escapeText(unknown.reason)}`;
+    if (unknown) return `${escapeText(phaseMap[point.phase]?.label || "")}<br>${title}<br>${NO_VERIFIED_HOME_ASSIGNMENT}<br>${escapeText(unknown.reason)}`;
     let lo = 0, hi = homes.length;
     while (lo < hi) {
       const middle = Math.floor((lo + hi) / 2);
       if (homes[middle].time <= point.time) lo = middle + 1;
       else hi = middle;
     }
-    const setting = lo ? `${summaries[lo - 1]}<br>${homeTiming(homes[lo - 1], point)}` : "Home settings not established";
+    const setting = lo ? `${summaries[lo - 1]}<br>${homeTiming(homes[lo - 1], point)}` : NO_VERIFIED_HOME_ASSIGNMENT;
     return `${escapeText(phaseMap[point.phase]?.label || "")}<br>${title}<br>${setting}`;
   };
   const hover = `<b>${escapeText(metric.label)}: %{y:.1f}</b><br>%{x} Pacific<br>%{customdata}<extra></extra>`;
@@ -177,11 +179,11 @@ export function transitionLayout(events) {
       y0: 0, y1: 1, line: {color: "#C62828", width: 1.5, dash: "dash"}, layer: "below"})),
     annotations: events.map((event, i) => {
       const parts = String(event.label).split(" · ");
-      const label = event.kind === "settings_observed"
+      const label = ["settings_observed", "settings_observation"].includes(event.kind)
         ? `${escapeText(short(parts[0]))}${parts.length > 1 ? `<br>${escapeText(short(parts[1]))}` : ""}`
         : escapeText(short(String(event.label)));
       return {xref: "x", yref: "paper", x: localTime(event.time), y: 1.08 + (i % 3) * 0.15,
-      text: `${event.number}. ${label}`, hovertext: `${settingsSummary(event.settings)}<br>${homeTiming(event)}<br>Click for complete settings`,
+      text: `${event.number}. ${label}`, hovertext: `${settingsSummary(event.settings)}<br>${homeTiming(event)}<br>Click for recorded settings`,
       name: event.id, showarrow: false, captureevents: true, font: {size: 12, color: "#B71C1C"},
       bgcolor: "rgba(255,255,255,0.9)", borderpad: 2, xanchor: "center"};
     }),

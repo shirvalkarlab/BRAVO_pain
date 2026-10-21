@@ -1,3 +1,4 @@
+import {NO_VERIFIED_HOME_ASSIGNMENT} from './settingDisplay';
 import {DEFAULT_METRICS, localTime, fullRange, filterPoints, rollingMedian, metricTraces, stageShapes, past28Range, transitionLayout, calendarTicks, settingsSummary, eventTimeLabel, homeTiming, unknownIntervalsInRange} from './data';
 
 const point=(day,value,phase='pre',extra={})=>({time:Date.parse(`${day}T12:00:00-08:00`)/1000,value,phase,source:'Reviewed form',record:'synthetic',...extra});
@@ -68,7 +69,7 @@ test('observed tooltips show score, time and home context without form/record cl
   const metric={label:'Mood <img onerror="bad">',points:[point('2025-01-01',0),point('2025-01-02',10,'unknown')]};
   const [observed]=metricTraces(metric,phases,range,false);
   expect(observed).toMatchObject({type:'scatter',mode:'markers',y:[0,10],marker:{color:['#111111','#777777']}});
-  expect(observed.customdata).toEqual(['Pre-trial<br>Home program context<br>Home settings not established','<br>Home program context<br>Home settings not established']);
+  expect(observed.customdata).toEqual([`Pre-trial<br>Home program context<br>${NO_VERIFIED_HOME_ASSIGNMENT}`,`<br>Home program context<br>${NO_VERIFIED_HOME_ASSIGNMENT}`]);
   expect(observed.hovertemplate).toContain('Pacific');expect(observed.hovertemplate).not.toMatch(/Form:|Record:/);
   expect(observed.hovertemplate).toContain('Mood &lt;img onerror=&quot;bad&quot;&gt;');expect(observed.hovertemplate).not.toContain('<img');
 });
@@ -119,7 +120,7 @@ test('transition red lines carry escaped selectable labels/evidence and stagger 
   expect(layout.shapes).toHaveLength(4);
   expect(layout.shapes[0]).toMatchObject({type:'line',x0:'2025-01-01 12:00:00',x1:'2025-01-01 12:00:00',y0:0,y1:1,line:{color:'#C62828',dash:'dash'},layer:'below'});
   expect(layout.annotations.map(a=>a.y)).toEqual([1.08,1.23,1.3800000000000001,1.08]);
-  expect(layout.annotations[0]).toMatchObject({name:'transition-0',text:'1. Group &lt;B&gt; &quot;test&quot;',hovertext:'Home settings not established<br>Observed &lt;img&gt; &amp; not onset<br>Click for complete settings',captureevents:true,showarrow:false});
+  expect(layout.annotations[0]).toMatchObject({name:'transition-0',text:'1. Group &lt;B&gt; &quot;test&quot;',hovertext:'No settings recorded in this observation<br>Observed &lt;img&gt; &amp; not onset<br>Click for recorded settings',captureevents:true,showarrow:false});
   expect(transitionLayout([])).toEqual({shapes:[],annotations:[]});
 });
 
@@ -132,7 +133,7 @@ test('snapshot annotation shows compact group and mode while full evidence remai
   expect(annotations[0].text).toBe('1. Group A<br>Open loop');
   expect(annotations[0].hovertext).not.toContain('Observed not onset');
   expect(annotations[1].text).toBe('2. &lt;Group&gt;<br>&quot;mode&quot; &amp; unknown');
-  expect(annotations[1].hovertext).toContain('Home settings not established');
+  expect(annotations[1].hovertext).toContain('No settings recorded in this observation');
   expect(annotations[2].text).toBe('3. Group only');
   expect(annotations[3].text).toBe('4. A very long device change l…');
   expect(annotations[3].hovertext).toContain('Recorded');
@@ -153,7 +154,7 @@ test('concise settings include true units, all controller/timing fields and shar
   expect(summary.match(/Lower threshold: 50 LFP Power \(LSB\)/g)).toHaveLength(1);
   expect(summary).toContain('Upper threshold: 100 LFP Power (LSB)');expect(summary).toContain('Stored upper threshold (not controlling stimulation): 110 LFP Power (LSB)');
   for (const value of ['1000 ms','200 ms','300 ms','400 ms','500 ms','600 ms','700 ms','Program 2 · Frequency: 130 Hz']) expect(summary).toContain(value);
-  expect(settingsSummary()).toBe('Home settings not established');
+  expect(settingsSummary()).toBe('No settings recorded in this observation');
   expect(settingsSummary({})).toBe('L: Settings not recorded<br>R: Settings not recorded');
 });
 
@@ -171,7 +172,7 @@ test('point tooltips use only the latest home transition at or before each exact
   const metric={label:'NRS',points:[point('2025-01-01',1),point('2025-01-02',2),point('2025-01-03',3),point('2025-01-04',4)]};
   const homes=[{time:point('2025-01-03',0).time,settings:{group:[row('Group','Group B')]}},{time:point('2025-01-02',0).time,settings:completeSettings}];
   const [observed]=metricTraces(metric,phases,range,false,[],homes);
-  expect(observed.customdata[0]).toContain('Home settings not established');
+  expect(observed.customdata[0]).toContain('No verified home-program assignment for this time');
   expect(observed.customdata[1]).toContain('Group: Group A');expect(observed.customdata[2]).toContain('Group: Group B');expect(observed.customdata[3]).toContain('Group: Group B');
   const zoomed=metricTraces(metric,phases,{start:'2025-01-04',end:'2025-01-04'},false,[],homes)[0];
   expect(zoomed.customdata).toEqual([observed.customdata[3]]);
@@ -193,13 +194,21 @@ test('day-precision home changes never imply a midnight activation and same-day 
   expect(homeTiming(event)).toContain('Exact change time is not recorded');
   const metric={label:'NRS',points:[point('2026-09-02',1),point('2026-09-03',2),point('2026-09-04',3)]};
   const trace=metricTraces(metric,[],{start:'2026-09-02',end:'2026-09-04'},false,[],[event])[0];
-  expect(trace.customdata[0]).toContain('Home settings not established');
+  expect(trace.customdata[0]).toContain('No verified home-program assignment for this time');
   expect(trace.customdata[1]).toContain('166 LFP Power (LSB)');expect(trace.customdata[1]).toContain('Settings changed this day; survey may precede change');
   expect(trace.customdata[1]).not.toContain('00:00:00');expect(trace.customdata[2]).not.toContain('survey may precede change');
   const observed={...event,time_precision:'second',kind:'settings_observed'};
   expect(eventTimeLabel(observed)).toBe('2026-09-03 00:00:00 Pacific');
   expect(homeTiming(observed)).toContain('activation time not established');
   expect(homeTiming({time:event.time,evidence:'Documented change <exact>'})).toBe('Documented change &lt;exact&gt;');
+});
+
+test.each(['settings_observed','settings_observation'])('settings snapshot timing does not imply home location or an activation (%s)',kind=>{
+  const event={kind,time:Date.parse('2026-09-03T19:00:00Z')/1000};
+  expect(homeTiming(event)).toBe('Settings observed 2026-09-03 12:00:00 Pacific; activation time not established.');
+  const day=homeTiming({...event,time_precision:'day'},{time:event.time});
+  expect(day).toBe('Settings observed 2026-09-03 · time not recorded; activation time not established.');
+  expect(day).not.toMatch(/Home settings observed|Settings changed this day/);
 });
 
 test('unknown home intervals override prior settings at inclusive start and stop at exclusive end without changing scores',()=>{
@@ -212,10 +221,10 @@ test('unknown home intervals override prior settings at inclusive start and stop
   const unknown=metricTraces(metric,[],range,true,[],homes,false,intervals);
   expect(unknown[0].customdata[0]).toContain('Group: Group A');
   for (const index of [1,2]) {
-    expect(unknown[0].customdata[index]).toContain('Home settings not established for this interval');
+    expect(unknown[0].customdata[index]).toContain('No verified home-program assignment for this time');
     expect(unknown[0].customdata[index]).toContain('Missing visit &lt;Final&gt; &amp; conflicting settings');
     expect(unknown[0].customdata[index]).not.toContain('3.5 mA');
-    expect(unknown[1].customdata[index]).toContain('Home settings not established for this interval');
+    expect(unknown[1].customdata[index]).toContain('No verified home-program assignment for this time');
   }
   expect(unknown[0].customdata[3]).toContain('Group: Group A');
   expect(unknown[0].y).toEqual(normal[0].y);expect(unknown[1].y).toEqual(normal[1].y);

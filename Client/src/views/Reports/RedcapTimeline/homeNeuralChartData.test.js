@@ -1,4 +1,4 @@
-import {homeNeuralPlot,homeNeuralLayout,neuralTime,neuralSourceLabel,neuralSegmentDescription,neuralSettingsLines,neuralHoverLines,neuralContactLabel,neuralScheduleLabel} from './homeNeuralChartData';
+import {homeNeuralPlot,homeNeuralLayout,neuralTime,neuralSourceLabel,neuralSegmentDescription,neuralSettingsLines,neuralHoverLines,neuralContactLabel,neuralScheduleLabel,neuralModeLabel,neuralMappingLabel,neuralThresholdLabel,hasNeuralSettings,neuralDetailsLabel} from './homeNeuralChartData';
 
 const time=Date.parse('2026-09-01T19:00:00Z')/1000;
 const period={id:'current',label:'Current settings',start:time,end:time+7200};
@@ -74,9 +74,9 @@ test('unresolved sensing is explicit; an unknown side is never labeled ipsilater
  const result=plot({side:'right',segments:[{...segment,sensing_side:null,mapping_status:null,mode:null,adaptive_state:null,evidence:null,sensing_contacts:null,power_band_label:null,center_frequency_hz:null,settings:null}]});
  expect(result.traces[0].name).toBe('Sensing source unresolved biomarker');
  expect(result.traces[1].name).toBe('Right lead stimulation amplitude');
- expect(result.descriptions[0]).toMatchObject({source:'Sensing source unresolved',contacts:'Contacts not recorded',band:'Power band not recorded',mode:'Mode not established'});
- expect(result.traces[0].customdata[0][1]).toContain('Adaptive state: Not recorded');
- expect(result.traces[0].customdata[0][1]).toContain('Control mapping: Not established');
+ expect(result.descriptions[0]).toMatchObject({source:'Sensing source unresolved',contacts:'Contacts not recorded',band:'Power band not recorded',mode:'Stimulation mode not linked to this recording'});
+ expect(result.traces[0].customdata[0][1].replace(/<br>/g,' ')).toContain('Adaptive state: Not linked to this recording');
+ expect(result.traces[0].customdata[0][1].replace(/<br>/g,' ')).toContain('Control mapping: Sensing-to-stimulation control relationship not established');
  expect(neuralSourceLabel('left','other')).toBe('Left lead');expect(neuralSourceLabel('right','other')).toBe('Right lead');
 });
 
@@ -215,4 +215,93 @@ test('current-only lead is visible without a neural trace; empty current series 
  expect(homeNeuralPlot({amplitude_series:[{time,amplitude:NaN}]},period,'synthetic').traces).toEqual([]);
  expect(homeNeuralPlot({amplitude_series:[]},{start:null,end:null},'synthetic').traces).toEqual([]);
  expect(homeNeuralPlot({amplitude_series:[]},{start:time,end:null},'synthetic').traces).toEqual([]);
+});
+
+
+test('recorded sensing enums are readable and never imply verified control settings',()=>{
+ const input={...segment,mode:'unknown',sensing_contacts:'ZERO_TWO_LEFT',power_band_label:'25.2 Hz',center_frequency_hz:25.2,mapping_status:'recorded',threshold_status:'unavailable',settings:{group:[],left:[],right:[]},thresholds:[]};
+ const original=JSON.stringify(input),result=plot({segments:[input]});
+ expect(result.descriptions[0]).toMatchObject({contacts:'0 and 2',hasSettings:false,detailsLabel:'Sensing details',mode:'Stimulation mode not linked to this recording',mappingStatus:'Sensing-to-stimulation control relationship not established',thresholdStatus:'Control thresholds are not linked to this recording.'});
+ const tooltip=result.traces[0].customdata[0][1].replace(/<br>/g,' ');
+ expect(tooltip).toContain('Click for sensing details');expect(tooltip).not.toContain('complete settings');
+ expect(tooltip).not.toContain('ONE_THREE_LEFT');expect(tooltip).not.toContain('unavailable');
+ expect(JSON.stringify(input)).toBe(original);
+ expect(neuralContactLabel('ZERO_THREE_RIGHT')).toBe('0 and 3');
+ expect(neuralContactLabel('NOVEL_CONTACT_LEFT')).toBe('NOVEL_CONTACT_LEFT');
+ expect(neuralContactLabel('ONE_THREE')).toBe('ONE_THREE');
+ for(const value of [null,undefined,'','   ','unknown','Unavailable','Not established','not recorded','recorded']) {
+  expect(neuralModeLabel(value,'synthetic')).toContain('not linked');
+  expect(neuralMappingLabel(value,'synthetic')).toContain('not established');
+  expect(neuralThresholdLabel(value,'synthetic')).toContain('not linked');
+ }
+ expect(neuralModeLabel('Sensing only','synthetic')).toBe('Sensing only');
+ expect(neuralMappingLabel('Contralateral','synthetic')).toBe('Contralateral');
+ expect(neuralThresholdLabel('Lower threshold recorded','synthetic')).toBe('Lower threshold recorded');
+ expect(hasNeuralSettings({})).toBe(false);expect(hasNeuralSettings(segment)).toBe(true);
+ expect(neuralDetailsLabel(segment)).toBe('Recorded settings and sensing details');
+});
+
+
+test('linked settings tooltip identifies configuration evidence without claiming continuous delivery',()=>{
+ const linked={...segment,settings_context:{status:'source_linked',observations:[{id:'synthetic-source',time}]},thresholds:[],threshold_status:'Configured thresholds in linked report; activation limits in details'};
+ const result=plot({segments:[linked]});
+ const text=result.traces[0].customdata[0][1].replace(/<br>/g,' ');
+ expect(text).toContain('Linked report configuration; see details for source dates and activation limits.');
+ expect(result.traces.filter(t=>t.mode==='lines')).toHaveLength(0);
+ expect(result.traces[0].y).toEqual([0,12]);
+});
+
+
+test('source configuration labels convey the actual controller and retain configured rather than delivered amplitudes',()=>{
+ expect(neuralMappingLabel('source_recorded')).toContain('linked source configuration');
+ expect(neuralThresholdLabel('source_recorded')).toContain('interval-wide activation is not established');
+ expect(neuralThresholdLabel('not_configured')).toContain('not configured in the linked source');
+ const source={...segment,mapping_status:'source_recorded',control_mapping:'Left sensing → Right stimulation (source configuration)',
+  settings:{left:[{label:'Stimulation contacts (source)',value:'1a− 1b− 1c− C+'},{label:'Paused amplitude (configured)',value:'2.2 mA'},{label:'Adaptive minimum (configured)',value:'0.6 mA'},{label:'Adaptive maximum (configured)',value:'3.2 mA'}]}};
+ const result=plot({segments:[source]});
+ expect(result.descriptions[0].mappingStatus).toBe(source.control_mapping);
+ const hover=result.traces[0].customdata[0][1].replace(/<br>/g,' ');
+ expect(hover).toContain('Left sensing → Right stimulation (source configuration)');
+ expect(hover).toContain('1a− 1b− 1c− C+');expect(hover).toContain('paused 2.2 mA');
+ expect(hover).toContain('configured minimum 0.6 mA');expect(hover).toContain('configured maximum 3.2 mA');
+ expect(result.traces[1].y).toEqual([0,2.4]);
+});
+
+
+test('actual source schema exposes lead-local contacts and source-conflict details without an empty promise',()=>{
+ const settings={right:[{label:'Stimulation contacts (lead-local source)',value:'1a− 2a− C+'}]};
+ expect(neuralSettingsLines({settings},'right','synthetic')).toEqual(['Right lead lead-local source contacts 1a− 2a− C+']);
+ const conflict={settings_context:{status:'conflict',observations:[{settings:{left:[{label:'Frequency',value:'55 Hz'}]}}]}};
+ expect(hasNeuralSettings(conflict)).toBe(true);expect(neuralDetailsLabel(conflict)).toBe('Recorded settings and sensing details');
+ expect(hasNeuralSettings({settings_context:{observations:[{}]}})).toBe(false);
+});
+
+
+test('conflicting recovered configurations are not described as absent source settings',()=>{
+ const conflict={...segment,settings:{},settings_context:{status:'conflict',observations:[{settings:{left:[{label:'Frequency',value:'55 Hz'}]}}]}};
+ expect(neuralSettingsLines(conflict,'left','synthetic')).toEqual(['Left lead source configurations differ; inspect dated settings']);
+ expect(neuralSegmentDescription(conflict,'synthetic')).toMatchObject({sourceContextStatus:'conflict',hasSettings:true,detailsLabel:'Recorded settings and sensing details'});
+ const hover=plot({segments:[conflict]}).traces[0].customdata[0][1].replace(/<br>/g,' ');
+ expect(hover).toContain('source configurations differ');expect(hover).not.toContain('stimulation settings not recorded');
+});
+
+
+test('source-configured thresholds appear in tooltip context without becoming active threshold guides',()=>{
+ const source={...segment,thresholds:[],adaptive_state:undefined,settings_context:{status:'source_linked',observations:[{id:'synthetic-source',time}]},settings:{left:[
+  {label:'Lower threshold (configured)',value:'100 LSB'},{label:'Upper threshold (configured)',value:'200 LSB'}]}};
+ const result=plot({segments:[source]}),hover=result.traces[0].customdata[0][1].replace(/<br>/g,' ');
+ expect(hover).toContain('Source-configured thresholds: lower 100 LSB · upper 200 LSB');
+ expect(hover).toContain('Per-sample delivery unverified');expect(hover).not.toContain('Adaptive state: Not linked');
+ expect(result.traces).toHaveLength(2);
+ expect(neuralSettingsLines({settings:{left:[{label:'Upper threshold (configured)',value:'200 LSB'}]}},'left','synthetic')).toContain('Source-configured thresholds: upper 200 LSB');
+});
+
+
+test('unavailable source context never advertises linked configurations or dated source states',()=>{
+ const unavailable={...segment,settings:{},thresholds:[],adaptive_state:undefined,settings_context:{status:'unavailable',observations:[],message:'Original report could not be read.'}};
+ const hover=plot({segments:[unavailable]}).traces[0].customdata[0][1].replace(/<br>/g,' ');
+ expect(hover).toContain('Source settings could not be verified; see details for the source gap.');
+ expect(hover).toContain('Delivery state is not established by the available source evidence');
+ expect(hover).not.toContain('Linked report configuration');expect(hover).not.toContain('dated source observation states');
+ expect(neuralDetailsLabel(unavailable)).toBe('Sensing details');
 });

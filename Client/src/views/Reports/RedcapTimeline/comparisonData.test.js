@@ -306,7 +306,7 @@ test('medication plots expose complete source row labels for responsive keys wit
   const name='A complete unusually long medicine name extending beyond the old forty-eight-character limit';
   const med={id:'long',name,drug_class:'Analgesic',drug_class_order:1,dose:'10 mg',frequency:'daily',start:time('2026-07-01'),ongoing:true};
   const timeline=medicationTimeline([med],'2026-09-03');
-  expect(timeline.fitWidth).toBe(true);expect(timeline.minWidth).toBeUndefined();expect(timeline.rowLabels).toEqual([`1. Analgesic · ${name} · 10 mg · daily`]);
+  expect(timeline.fitWidth).toBe(true);expect(timeline.minWidth).toBeUndefined();expect(timeline.rowLabels).toEqual([`1. Analgesic · ${name} · 10 mg · Daily`]);
   const conditions=medicationConditionPlot({label:'NRS',range:[0,10]},[{...med,label:name,count:1,median:4,points:[{time:time('2026-07-01'),value:4}]}]);
   expect(conditions.fitWidth).toBe(true);expect(conditions.minWidth).toBeUndefined();expect(conditions.rowLabels[0]).toContain(name);expect(conditions.rowLabels[0]).toContain('n=1 · median 4');
 });
@@ -339,4 +339,29 @@ test('invalid medication display bounds fail closed while omitted bounds preserv
   expect(()=>medicationTimeline([], '2026-09-03',1,[],0)).toThrow(RangeError);
   const end=Date.parse('2026-10-07T00:00:00-07:00')/1000;
   expect(medicationDisplayScope({period_start:1,period_end_exclusive:end}).lastDay).toBe('2026-10-06');
+});
+
+test('all recorded settings recovers supplied home-setting rows when no flat rows exist and preserves exact values',()=>{
+ const source={mode:'open_loop',settings:[],home_settings:{group:[{label:'Group',value:'GroupIdDef.GROUP_C'}],left:[{label:'Frequency',value:'55 Hz'},{label:'Lower LFP threshold',value:'22 LSB'}],right:[{label:'Pulse width',value:'60 µs'}]}};
+ const before=JSON.stringify(source),details=stimulationDetailRows(source,'synthetic');
+ expect(details).toEqual(['Group: Group C','Left · Frequency: 55 Hz','Stored Left · Lower LFP threshold (not controlling stimulation): 22 LSB','Right · Pulse width: 60 µs']);
+ expect(JSON.stringify(source)).toBe(before);expect(stimulationDetailRows({})).toEqual([]);
+});
+
+test('home-program comparison summaries humanize recorded controller enums without borrowing another side',()=>{
+ const source={mode:'closed_loop',home_settings:{group:[],left:[{label:'Sensing contacts',value:'SensingElectrodeConfigDef.ONE_AND_THREE'},{label:'Adaptive state',value:'RUNNING'},{label:'Biomarker center frequency',value:'24.4 Hz'},{label:'Lower LFP threshold',value:'15 LSB'}],right:[]}};
+ const before=JSON.stringify(source),lines=stimulationSettingLines(source,'synthetic').join(' · ');
+ expect(lines).toContain('1 and 3 · 24.4 Hz');expect(lines).toContain('Adaptive state: Running');expect(lines).toContain('lower 15 LSB · upper not recorded');
+ expect(lines).not.toContain('SensingElectrodeConfigDef');expect(lines).not.toContain('BrainSense R');expect(JSON.stringify(source)).toBe(before);
+});
+
+test('medication axes, trace names, regimen keys and tooltips translate codes while preserving numeric observations',()=>{
+ const source={...condition('medicine',2),drug_class:'opioid_analgesic',label:'Synthetic | 5 mg | bid | oral',frequency:'bid',status:'prn_available'};
+ const plot=medicationConditionPlot({label:'NRS',range:[0,10]},[source]);
+ expect(plot.traces[0].name).toBe('Synthetic · 5 mg · Twice daily · Oral');
+ expect(plot.layout.yaxis.ticktext[0].replace(/<br>/g,' ')).toContain('Twice daily');
+ expect(plot.rowLabels[0]).toContain('opioid analgesic');
+ expect(plot.traces[1].hovertemplate).toContain('PRN available; use not confirmed');
+ expect(plot.traces[1].hovertemplate).not.toMatch(/opioid_analgesic|prn_available|\| bid/);
+ expect(plot.traces[0].x).toEqual(source.points.map(point=>point.value));
 });

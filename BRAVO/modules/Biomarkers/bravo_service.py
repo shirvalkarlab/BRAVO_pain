@@ -622,6 +622,15 @@ def _decoded_with_row_labels(participant_uid, recs, *, require_complete=False):
         # IDENTICAL key set), so the only reliable BrainSense-vs-Indefinite discriminator is the
         # Recording.type from the query — without this, indefinite streams are indistinguishable
         # from BrainSense streaming downstream and silently mislabel.
+        # Preserve immutable source/row identity for read-only presentation joins.
+        source = getattr(rec, "source", None)
+        if source is not None:
+            for d in (data if isinstance(data, list) else [data]):
+                if isinstance(d, dict):
+                    d["RecordingId"] = str(rec.uid)
+                    d["SourceId"] = str(source.uid)
+                    source_md = getattr(source, "metadata", {})
+                    d["SourceSessionEnd"] = source_md.get("SessionEndTimestamp") if isinstance(source_md, dict) else None
         rtype = getattr(rec, "type", None)
         if rtype is not None:
             for d in (data if isinstance(data, list) else [data]):

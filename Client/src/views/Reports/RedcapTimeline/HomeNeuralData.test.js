@@ -1,7 +1,7 @@
 import React from 'react';
 import {createRoot} from 'react-dom/client';
 import {act} from 'react-dom/test-utils';
-import HomeNeuralData, {NeuralAnalysisPolicy} from './HomeNeuralData';
+import HomeNeuralData, {NeuralAnalysisPolicy,NeuralSourceSettings} from './HomeNeuralData';
 const SYNTHETIC_PARTICIPANT = 'synthetic-participant';
 let mockQuery, mockProps;
 jest.mock('./useHomeNeuralTimeline',()=>({useHomeNeuralTimeline:(...props)=>{mockProps=props;return mockQuery;}}));
@@ -208,4 +208,30 @@ test('operator-confirmed continuity replaces blanket home uncertainty without ve
  expect(element.textContent).not.toContain('at-home status remain unverified');
  delete mockQuery.data.observation_provenance.last_documented_stimulation_date;await mount();
  expect(element.textContent).toContain('the last documented stimulation session;');
+});
+
+
+test('linked source configuration shows source identity, observation time and exact activation limit',async()=>{
+ const only=window('current');
+ only.panels[0].segments=[{...segment('linked'),settings:{group:[{label:'Group',value:'GroupIdDef.GROUP_D'}],left:[{label:'Sensing contacts',value:'SensingElectrodeConfigDef.ONE_AND_THREE'},{label:'Adaptive status',value:'RUNNING'}]},
+  settings_context:{status:'source_linked',message:'Group D source configuration. Simultaneous state events do not establish continuous activation.',
+   observations:[{id:'obs-1',time,source_id:'synthetic-source-1',kind:'Initial device configuration',evidence:'Original report linked to this recording.'}]}}];
+ mockQuery.data={windows:[only]};await mount();await click('Inspect linked');
+ const context=element.querySelector('[aria-label="Linked source settings"]');
+ expect(context.textContent).toContain('source synthetic-source-1');expect(context.textContent).toContain('2026-09-02 00:00 Pacific');
+ expect(context.textContent).toContain('do not establish continuous activation');expect(context.textContent).toContain('Original report linked');
+ expect(element.textContent).toContain('Group D');expect(element.textContent).toContain('1 and 3');expect(element.textContent).toContain('Running');
+ expect(element.textContent).not.toContain('GroupIdDef');
+});
+
+test('source conflicts retain each nonempty configuration for inspection and source gaps have no empty action',async()=>{
+ await act(async()=>root.render(<NeuralSourceSettings participant="Synthetic" context={{status:'conflict',message:'Source configurations disagree.',observations:[
+  {id:'a',time,source_id:'source-a',kind:'Earlier configuration',settings:{left:[{label:'Frequency',value:'55 Hz'}]}},
+  {id:'b',time:time+600,source_id:'source-b',kind:'Later configuration',settings:{right:[{label:'Frequency',value:'65 Hz'}]}},
+  {id:'empty',time,source_id:'source-c',kind:'No configuration',settings:{}}]}}/>));
+ expect(element.querySelectorAll('details')).toHaveLength(2);expect(element.textContent).toContain('55 Hz');expect(element.textContent).toContain('65 Hz');
+ expect(element.textContent).toContain('Source configurations disagree');
+ await act(async()=>root.render(<NeuralSourceSettings context={{status:'unavailable',message:'Original report has no group configuration.'}}/>));
+ expect(element.querySelector('details')).toBeNull();expect(element.textContent).toContain('no group configuration');
+ await act(async()=>root.render(<NeuralSourceSettings/>));expect(element.textContent).toBe('');
 });

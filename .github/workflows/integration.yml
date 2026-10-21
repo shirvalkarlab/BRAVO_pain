@@ -67,11 +67,11 @@ jobs:
         run: PYTHONPATH=BRAVO:BRAVO/modules uv run --frozen pytest tests/core -q
       - name: Aditya presentation contracts (separate Django settings process)
         run: |
-          uv run --frozen pytest BRAVO/modules/tests/test_aditya_presentation.py BRAVO/modules/tests/test_aditya_presentation_api.py BRAVO/modules/tests/test_standard_mpq.py -q --cov=BRAVO/modules --cov=BRAVO/Server/APIs --cov-config=/dev/null --cov-branch --cov-report=json:presentation-coverage.json
+          uv run --frozen pytest BRAVO/modules/tests/test_aditya_presentation.py BRAVO/modules/tests/test_aditya_presentation_api.py BRAVO/modules/tests/test_aditya_neural_settings.py BRAVO/modules/tests/test_standard_mpq.py -q --cov=BRAVO/modules --cov=BRAVO/Server/APIs --cov-config=/dev/null --cov-branch --cov-report=json:presentation-coverage.json
           uv run --frozen python - <<'PYTHON'
           import json
           files = json.load(open("presentation-coverage.json"))["files"]
-          for name in ("BRAVO/modules/AdityaPresentation.py", "BRAVO/Server/APIs/AdityaPresentation.py", "BRAVO/modules/SurveyForms/StandardMPQ.py"):
+          for name in ("BRAVO/modules/AdityaPresentation.py", "BRAVO/modules/AdityaNeuralSettings.py", "BRAVO/Server/APIs/AdityaPresentation.py", "BRAVO/modules/SurveyForms/StandardMPQ.py"):
               summary = files[name]["summary"]
               assert summary["num_branches"] > 0 and summary["covered_branches"] / summary["num_branches"] >= 0.95, (name, summary)
           PYTHON
@@ -128,8 +128,14 @@ jobs:
           --collectCoverageFrom=src/views/Reports/RedcapTimeline/useStoredTimeline.js
           --collectCoverageFrom=src/views/Reports/RedcapTimeline/HomeNeuralData.js
           --collectCoverageFrom=src/views/Reports/RedcapTimeline/summaryNeuralData.js
+          --collectCoverageFrom=src/views/Reports/RedcapTimeline/homeNeuralChartData.js
+          --collectCoverageFrom=src/views/Reports/RedcapTimeline/data.js
+          --collectCoverageFrom=src/views/Reports/RedcapTimeline/comparisonData.js
+          --collectCoverageFrom=src/views/Reports/RedcapTimeline/ouraData.js
+          --collectCoverageFrom=src/views/Reports/RedcapTimeline/settingDisplay.js
+          --collectCoverageFrom=src/views/Reports/RedcapTimeline/medicationDisplay.js
           --collectCoverageFrom=src/views/Reports/psdContactProvenance.js
-          --coverageThreshold='{"./src/components/Navbars/DashboardNavbar/ManualSyncButton.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/useHomeNeuralTimeline.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/useStoredTimeline.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/HomeNeuralData.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/summaryNeuralData.js":{"branches":95,"statements":95},"./src/views/Reports/psdContactProvenance.js":{"branches":95,"statements":95}}'
+          --coverageThreshold='{"./src/components/Navbars/DashboardNavbar/ManualSyncButton.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/useHomeNeuralTimeline.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/useStoredTimeline.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/HomeNeuralData.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/summaryNeuralData.js":{"branches":95,"statements":95},"./src/views/Reports/psdContactProvenance.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/homeNeuralChartData.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/data.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/comparisonData.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/ouraData.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/settingDisplay.js":{"branches":95,"statements":95},"./src/views/Reports/RedcapTimeline/medicationDisplay.js":{"branches":95,"statements":95}}'
       - name: Production bundle
         working-directory: Client
         run: CI=false GENERATE_SOURCEMAP=false npm run build

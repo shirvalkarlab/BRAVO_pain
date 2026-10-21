@@ -70,11 +70,11 @@ test('dense transition histories share one selected marker and selection updates
  await act(async()=>mockContext.onSelect('event-0'));expect(charts().every(c=>c.events[0].id==='event-0')).toBe(true);
 });
 
-test('neural point selection opens the source interval and complete settings; missing values keep thresholds independent',async()=>{
+test('neural point selection opens the source sensing interval; missing values keep thresholds independent',async()=>{
  await mount();expect(element.textContent).toContain('Configured threshold(s)');expect(element.textContent).toContain('Latest recorded average:');
  await act(async()=>charts()[2].onPoint('left'));
  expect(element.querySelector('.MuiAccordionSummary-root').getAttribute('aria-expanded')).toBe('true');
- expect(element.textContent).toContain('contacts, sensing, thresholds and complete settings');
+ expect(element.textContent).toContain('Sensing details');
  await act(async()=>element.querySelector('.MuiAccordionSummary-root').click());expect(element.querySelector('.MuiAccordionSummary-root').getAttribute('aria-expanded')).toBe('false');
  mockNeural={data:{windows:[{...period,panels:[{side:'left',segments:[{...period.panels[0].segments[0],points:[]}]}]}]}};await mount();expect(charts()[2].traces).toHaveLength(1);expect(element.textContent).toContain('No established biomarker');
 });

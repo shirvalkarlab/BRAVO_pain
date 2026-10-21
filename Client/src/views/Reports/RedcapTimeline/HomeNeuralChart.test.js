@@ -38,7 +38,7 @@ test('unknown and empty records report missing evidence; plural configuration de
  expect(element.textContent).toContain('No established biomarker samples');expect(element.textContent).toContain('No established stimulation-amplitude samples');
  expect(element.querySelector('details')).toBeNull();expect(element.textContent).not.toContain('Configured threshold(s)');
  act(()=>root.render(<HomeNeuralChart {...props} panel={{side:'left',segments:[{...segment,thresholds:[],mapping_status:null,threshold_status:null},{...segment,id:'b'}]}}/>));
- expect(element.querySelectorAll('[data-sensing-interval]')).toHaveLength(2);expect(element.textContent).toContain('Recorded sensing intervals · 2');expect(element.textContent).toContain('Control mapping: Not established');
+ expect(element.querySelectorAll('[data-sensing-interval]')).toHaveLength(2);expect(element.textContent).toContain('Recorded sensing intervals · 2');expect(element.textContent).toContain('Control mapping: Sensing-to-stimulation control relationship not established');
 });
 
 test('resize changes tick density and font size without a width floor and releases its observer',()=>{
@@ -114,4 +114,35 @@ test('independent lead current has an honest legend and provenance even without 
  expect(element.textContent).toContain('Recorded right lead current; no power alignment inferred.');
  expect(element.textContent).toContain('0 biomarker · 1 amplitude.');
  expect(Plotly.react.mock.calls.at(-1)[1][0].y).toEqual([0]);
+});
+
+
+test('recorded-only card avoids duplicate frequency and empty complete-settings action',()=>{
+ const only={...segment,mode:'unknown',sensing_contacts:'ZERO_TWO_LEFT',power_band_label:'25.2 Hz',center_frequency_hz:25.2,mapping_status:'recorded',threshold_status:'unavailable',settings:{},thresholds:[]};
+ act(()=>root.render(<HomeNeuralChart {...props} panel={{side:'left',segments:[only]}} onSegment={jest.fn()}/>));
+ const card=element.querySelector('[data-sensing-interval]');
+ expect(card.textContent).toContain('contacts 0 and 2');expect(card.textContent.match(/25.2 Hz/g)).toHaveLength(1);
+ expect(card.textContent).not.toContain('unknown');expect(card.textContent).not.toContain('unavailable');expect(card.textContent).not.toContain('Complete settings');
+ expect(card.querySelector('button').textContent).toBe('Sensing details');
+ expect(card.querySelector('button').getAttribute('aria-label')).toContain('Sensing details for');
+});
+
+
+test('unverified sensing frequency is qualified once without duplicating the same center',()=>{
+ const only={...segment,power_band_label:'25.2 Hz',center_frequency_hz:25.2,
+  sensing_provenance:{status:'unverified',metadata_available:true,conflicting_settings:true,inherited_settings:false}};
+ act(()=>root.render(<HomeNeuralChart {...props} panel={{side:'left',segments:[only]}}/>));
+ const card=element.querySelector('[data-sensing-interval]');
+ expect(card.textContent.match(/25.2 Hz/g)).toHaveLength(1);
+ expect(card.textContent).toContain('25.2 Hz center (unverified)');
+ expect(card.textContent).toContain('earlier and later exported sensing settings differ');
+});
+
+
+test('conflicting original-source configurations are visible before opening recorded details',()=>{
+ const conflict={...segment,settings_context:{status:'conflict',observations:[{settings:{group:[{label:'Group',value:'Group D'}]}}]}};
+ act(()=>root.render(<HomeNeuralChart {...props} panel={{side:'left',segments:[conflict]}} onSegment={jest.fn()}/>));
+ const card=element.querySelector('[data-sensing-interval]');
+ expect(card.textContent).toContain('Source configurations differ; inspect the dated settings.');
+ expect(card.querySelector('button').textContent).toBe('Recorded settings and sensing details');
 });

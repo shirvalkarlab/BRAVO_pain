@@ -445,6 +445,7 @@ def home_timeline(request, context, recordings, native_series, pair_keys, now=No
                 for run_index, (sensing, run) in enumerate(runs):
                     segments.append({"id": f"{side}:{channel}:{hz}:{run_index}", "start": run[0]["time"], "end": min(window["end"], math.nextafter(run[-1]["time"], math.inf)),
                                      "end_basis": "exclusive_sample_envelope", "sensing_provenance": sensing,
+                                     "source_channel": channel,
                                      "mode": "unknown", "sensing_side": side if "_" in channel else None, "sensing_contacts": channel if "_" in channel else None,
                                      "center_frequency_hz": hz, "power_band_label": f"{hz:g} Hz" if hz is not None else "Recorded band; center unknown",
                                      "mapping_status": "recorded" if "_" in channel else "unknown", "threshold_status": "unavailable",

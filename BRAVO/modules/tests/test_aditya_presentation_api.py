@@ -203,7 +203,7 @@ def test_revision_request_is_read_only_authorized_and_no_decode(api,monkeypatch)
 def test_revision_hash_covers_same_count_mutations_context_calendar_and_windows(api,monkeypatch):
     import copy
     rows=[SimpleNamespace(uid='private-uid',hashed='first',type='chronic',pointer='/private/path',metadata={'ContactSchedule':[1]})]
-    sources=object();person=object()
+    sources=[SimpleNamespace(uid='source',hashed='source-hash',metadata={'SessionEndTimestamp':200})];person=object()
     models=SimpleNamespace(Participant=SimpleNamespace(find=lambda **kw:person),
         SourceFile=SimpleNamespace(find_all=lambda **kw:sources),Recording=SimpleNamespace(find_all=lambda **kw:rows))
     server=ModuleType('Server');server.models=models;monkeypatch.setitem(sys.modules,'Server',server)
@@ -217,6 +217,9 @@ def test_revision_hash_covers_same_count_mutations_context_calendar_and_windows(
     assert get(context={'revision':'changed'})!=baseline
     assert get(request={'start':2})!=baseline
     assert get(calendar={'receipt':'new'})!=baseline
+    sources[0].metadata['SessionEndTimestamp']=201
+    assert get()!=baseline
+    sources[0].metadata['SessionEndTimestamp']=200
     service._recording_set_identity=lambda uid:('implant',2)
     assert get()!=baseline
     previous=get()
@@ -532,3 +535,28 @@ def test_full_stored_surveys_use_real_canonical_formatter_without_network_or_wri
     assert api._pain('p',{})['metrics']==[]
     service.redcap_client.pull_redcap.assert_not_called()
     service._snapshot_pain_reports.assert_not_called()
+
+
+def test_home_links_only_owned_original_sources_and_uses_canonical_batch_clock(api,monkeypatch):
+    import copy
+    import modules
+    from modules.tests.test_aditya_neural_settings import report, segment
+    source=SimpleNamespace(uid='source-a',hashed='hash',metadata={},device='device-a')
+    person=SimpleNamespace(uid='person-a')
+    reads=[]
+    server=ModuleType('Server');server.models=SimpleNamespace(Participant=SimpleNamespace(find=lambda **kw:person),
+        SourceFile=SimpleNamespace(find_all=lambda **kw:reads.append(('scope',kw)) or [source]))
+    monkeypatch.setitem(sys.modules,'Server',server)
+    rows=[{'SourceId':'source-a','RecordingId':'row-a','SourceSessionEnd':400,'ChannelNames':['LEFT a'],'Time':[150]}]
+    bio=ModuleType('modules.Biomarkers');bio.bravo_service=SimpleNamespace(CHRONIC_TYPES=['chronic'],_load_recordings=lambda *args:rows)
+    monkeypatch.setitem(sys.modules,'modules.Biomarkers',bio)
+    decode=ModuleType('modules.DecodeCommon');decode.representation=SimpleNamespace(native_lsb_by_channel=None,chronic_pair_keys=None)
+    monkeypatch.setitem(sys.modules,'modules.DecodeCommon',decode)
+    curator=SimpleNamespace(clock_anchor_tables=lambda owner:reads.append(('anchors',owner)) or {'device-a':'canonical-table'},
+        loadPerceptJSON=lambda original,table:reads.append(('raw',original,table)) or report())
+    monkeypatch.setattr(modules,'DataCurator',curator,raising=False)
+    timeline={'windows':[{'panels':[{'side':'left','segments':[segment()]}]}]}
+    monkeypatch.setattr(api.presentation,'neural_timeline',lambda *args,**kwargs:copy.deepcopy(timeline))
+    result=api._home('person-a',{'home_intervals':[{'start':1,'end':500}]},{'window':'past28'})
+    assert reads==[('scope',{'owner':person}),('anchors',person),('raw',source,'canonical-table')]
+    assert result['windows'][0]['panels'][0]['segments'][0]['settings_context']['source_ids']==['source-a']

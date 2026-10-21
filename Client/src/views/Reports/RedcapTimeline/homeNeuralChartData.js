@@ -24,6 +24,10 @@ export function neuralSourceLabel(side, participant) {
 // Apply this only to sensing-contact display fields; keep API/source values intact.
 export function neuralContactLabel(value) {
   if (typeof value !== 'string' || !value.trim()) return 'Contacts not recorded';
+  const words = ['ZERO','ONE','TWO','THREE','FOUR','FIVE','SIX','SEVEN','EIGHT','NINE','TEN','ELEVEN','TWELVE','THIRTEEN','FOURTEEN','FIFTEEN'];
+  const pair = value.match(/^([A-Z]+)_([A-Z]+)_(?:LEFT|RIGHT)$/);
+  if (pair && words.includes(pair[1]) && words.includes(pair[2]))
+    return `${words.indexOf(pair[1])} and ${words.indexOf(pair[2])}`;
   return value.replace(/\b(\d+)\s*[–-]\s*(\d+)\b/g, '$1 and $2');
 }
 
@@ -39,6 +43,23 @@ export function neuralScheduleLabel(provenance) {
   return `Unverified sensing labels: ${reasons.join('; ') || 'schedule status is unresolved'}.`;
 }
 
+// Source enums describe missing associations, not measured neural values.
+const absentSetting = value => typeof value !== 'string' || !value.trim()
+  || /^(unknown|unavailable|not established|not recorded|recorded)$/i.test(value.trim());
+export const neuralModeLabel = (value, participant) => absentSetting(value)
+  ? 'Stimulation mode not linked to this recording' : displayTargetText(participant,value);
+export const neuralMappingLabel = (value, participant) => value === 'source_recorded'
+  ? 'Control relationship recorded in linked source configuration' : absentSetting(value)
+  ? 'Sensing-to-stimulation control relationship not established' : displayTargetText(participant,value);
+export const neuralThresholdLabel = (value, participant) => value === 'source_recorded'
+  ? 'Configured thresholds are in linked source settings; interval-wide activation is not established.'
+  : value === 'not_configured' ? 'Control thresholds are not configured in the linked source settings.' : absentSetting(value)
+  ? 'Control thresholds are not linked to this recording.' : displayTargetText(participant,value);
+const hasSettingRows = settings => ['group','left','right'].some(side => (settings?.[side] || []).length > 0);
+export const hasNeuralSettings = segment => hasSettingRows(segment.settings)
+  || (segment.settings_context?.observations || []).some(observation => hasSettingRows(observation.settings));
+export const neuralDetailsLabel = segment => hasNeuralSettings(segment) ? 'Recorded settings and sensing details' : 'Sensing details';
+
 export function neuralSegmentDescription(segment, participant) {
   const source = neuralSourceLabel(segment.sensing_side,participant);
   const contacts = neuralContactLabel(segment.sensing_contacts);
@@ -48,7 +69,7 @@ export function neuralSegmentDescription(segment, participant) {
   // A center frequency alone does not establish a power-band width.
   const band = segment.power_band_label || (finite(segment.center_frequency_hz)
     ? `${segment.center_frequency_hz} Hz center · band width not recorded` : 'Power band not recorded');
-  const mode = displayTargetText(participant,segment.mode) || 'Mode not established';
+  const mode = neuralModeLabel(segment.mode,participant);
   const schedule = neuralScheduleLabel(segment.sensing_provenance);
   const unverified = schedule.startsWith('Unverified');
   const label = value => unverified ? `${value} (unverified)` : value;
@@ -56,7 +77,7 @@ export function neuralSegmentDescription(segment, participant) {
   // not make the recorded lead itself unknown. Missing/inherited schedule
   // evidence still qualifies the source as well as the selected sensing labels.
   const sourceUnverified = unverified && (segment.sensing_provenance?.inherited_settings || !segment.sensing_provenance?.metadata_available);
-  return {source:sourceUnverified ? label(source) : source, contacts:label(contacts), center:label(center), band:label(band), mode, schedule};
+  return {source:sourceUnverified ? label(source) : source, contacts:label(contacts), center:label(center), band:label(band), mode, schedule, sourceContextStatus:segment.settings_context?.status, hasSettings:hasNeuralSettings(segment), detailsLabel:neuralDetailsLabel(segment)};
 }
 
 export function neuralSettingsLines(segment, side, participant) {
@@ -69,13 +90,19 @@ export function neuralSettingsLines(segment, side, participant) {
   }
   const target = neuralSourceLabel(side,participant), lines = [];
   for (const [program,rows] of programs) {
-    lines.push(`${target}${program ? ` · Program ${program}` : ''} ${rows['Stimulation contacts'] || 'Contacts not recorded'}`);
-    const values = ['Frequency','Amplitude','Fixed / paused amplitude','Adaptive amplitude range','Pulse width']
+    lines.push(`${target}${program ? ` · Program ${program}` : ''} ${rows['Stimulation contacts'] || rows['Stimulation contacts (source)'] || (rows['Stimulation contacts (lead-local source)'] ? `lead-local source contacts ${rows['Stimulation contacts (lead-local source)']}` : 'Contacts not recorded')}`);
+    const values = ['Frequency','Amplitude','Fixed / paused amplitude','Paused amplitude (configured)','Adaptive amplitude range','Adaptive minimum (configured)','Adaptive maximum (configured)','Pulse width']
       .filter(label=>rows[label] !== undefined).map(label=>label === 'Adaptive amplitude range' ? `range ${rows[label]}`
-        : label === 'Fixed / paused amplitude' ? `paused ${rows[label]}` : rows[label]);
+        : ['Fixed / paused amplitude','Paused amplitude (configured)'].includes(label) ? `paused ${rows[label]}`
+          : label === 'Adaptive minimum (configured)' ? `configured minimum ${rows[label]}`
+          : label === 'Adaptive maximum (configured)' ? `configured maximum ${rows[label]}` : rows[label]);
     if (values.length) lines.push(values.join(' · '));
+    const thresholds = ['Lower threshold (configured)','Upper threshold (configured)']
+      .filter(label=>rows[label] !== undefined).map(label=>`${label.startsWith('Lower') ? 'lower' : 'upper'} ${rows[label]}`);
+    if (thresholds.length) lines.push(`Source-configured thresholds: ${thresholds.join(' · ')}`);
   }
-  if (!programs.size) lines.push(`${target} stimulation settings not recorded`);
+  if (!programs.size) lines.push(segment.settings_context?.status === 'conflict'
+    ? `${target} source configurations differ; inspect dated settings` : `${target} stimulation settings not recorded`);
   const group = (segment.settings?.group || []).filter(row=>['Group','Cycling'].includes(row.label));
   lines.push(...group.map(row=>`${row.label}: ${row.value}`));
   return lines;
@@ -98,6 +125,7 @@ export function homeNeuralPlot(panel, period, participant, maxGapSeconds = MAX_G
     const a = Math.max(start,segmentStart), b = Math.min(end,segmentEnd);
     if (a >= b) continue;
     const description = neuralSegmentDescription(segment,participant);
+    const hasDatedSources = (segment.settings_context?.observations || []).length > 0;
     const points = (segment.points || []).map(point=>({...point,time:neuralTime(point.time)}))
       .filter(point=>point.time !== null && point.time >= a && point.time < b)
       .sort((p,q)=>p.time-q.time);
@@ -105,19 +133,20 @@ export function homeNeuralPlot(panel, period, participant, maxGapSeconds = MAX_G
     // intervals with actual plotted observations belong in the visible key.
     if (points.some(point => (finite(point.power) && !point.power_conflict) || (!independentCurrent && finite(point.amplitude) && !point.amplitude_conflict))) {
     descriptions.push({id:segment.id,start:a,end:b,...description,
-      mappingStatus:displayTargetText(participant,segment.mapping_status),
-      thresholdStatus:displayTargetText(participant,segment.threshold_status)});
+      mappingStatus:neuralMappingLabel(segment.control_mapping || segment.mapping_status,participant),
+      thresholdStatus:neuralThresholdLabel(segment.threshold_status,participant)});
     }
     const sensingOnly = /sensing[ _-]*only/i.test(description.mode);
     const thresholdLines = (sensingOnly ? [] : segment.thresholds || []).filter(threshold=>finite(threshold.value))
       .map(threshold=>`${threshold.label || 'Configured threshold'}: ${threshold.value} LSB`);
     const detail = neuralHoverLines([...neuralSettingsLines(segment,panel.side,participant),
-      `Mode: ${description.mode}`,`Adaptive state: ${segment.adaptive_state || 'Not recorded'}`,
+      `Mode: ${description.mode}`,`Adaptive state: ${absentSetting(segment.adaptive_state) ? (hasDatedSources ? 'Per-sample delivery unverified; dated source observation states are in details' : segment.settings_context ? 'Delivery state is not established by the available source evidence' : 'Not linked to this recording') : segment.adaptive_state}`,
       `${observational ? 'Sensing source' : 'Biomarker source'}: ${description.source}`,`Sensing contacts: ${description.contacts}`,description.center,description.band,
-      `Control mapping: ${displayTargetText(participant,segment.mapping_status) || 'Not established'}`,
+      `Control mapping: ${neuralMappingLabel(segment.control_mapping || segment.mapping_status,participant)}`,
       ...(description.schedule ? [description.schedule] : []),...thresholdLines,
-      ...(segment.threshold_status ? [displayTargetText(participant,segment.threshold_status)] : []),
-      'Click for complete settings']);
+      neuralThresholdLabel(segment.threshold_status,participant),
+      ...(segment.settings_context ? [hasDatedSources ? 'Linked report configuration; see details for source dates and activation limits.' : 'Source settings could not be verified; see details for the source gap.'] : []),
+      `Click for ${neuralDetailsLabel(segment).toLowerCase()}`]);
     for (const metric of (independentCurrent ? ['power'] : ['power','amplitude'])) {
       const x = [], y = [], customdata = [];
       let previous = null, count = 0;

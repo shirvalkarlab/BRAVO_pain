@@ -4,6 +4,7 @@ import ComparisonChart from './ComparisonChart';
 import TrialPhaseLegend from './TrialPhaseLegend';
 import {localTime} from './data';
 import {comparisonCoverage,medicationConditionPlot,medicationTimeline,medicationDisplayScope,orderedMedicationConditions} from './comparisonData';
+import {medicationTerm,medicationLabel} from './medicationDisplay';
 
 export default function Medications({comparison,metrics,today,phases}) {
   if(!comparison?.available) return <Alert severity="info">{comparison?.message || 'Medication comparisons are not available for this participant.'}</Alert>;
@@ -18,7 +19,12 @@ export default function Medications({comparison,metrics,today,phases}) {
     <Card sx={{p:3}}><MDTypography variant="h4">Medication timeline</MDTypography>
       <MDTypography variant="body2">Thicker lines show primary regimens; thinner lines show supportive treatments. Dotted lines indicate PRN availability. Arrows mark earlier starts or ongoing regimens; an open diamond marks a known endpoint when the other date is missing. Regimens without either date remain in the documented-regimen list below the timeline.</MDTypography>
       {comparison.episodes.length?<><TrialPhaseLegend phases={phases} range={phaseRange}/><ComparisonChart plot={timeline} label="Documented medication regimens over time"/>
-        <details><summary>All documented medication regimens</summary><ul>{comparison.episodes.map(episode=><li key={episode.id}>{episode.drug_class} · {episode.name} · {episode.dose} · {episode.frequency}{episode.prn?' · PRN available':''}</li>)}</ul></details>
+        <details><summary>All documented medication regimens</summary><ul>{comparison.episodes.map(episode=><li key={episode.id}>
+          {medicationTerm(episode.drug_class)} · {episode.name} · {medicationTerm(episode.dose,'Dose not recorded')} · {medicationTerm(episode.frequency,'Frequency not recorded')}{episode.prn?' · PRN available; use not confirmed':''}
+          {' · '}{Number.isFinite(episode.start)?`Recorded start ${localTime(episode.start)} Pacific`:'Start date not recorded'}
+          {' · '}{Number.isFinite(episode.end)?`Recorded end ${localTime(episode.end)} Pacific`:episode.ongoing?'Recorded as ongoing in source notes; later use is unverified':'End date not recorded'}
+          {episode.note&&<> · {episode.note}</>}
+        </li>)}</ul></details>
       </>:<Alert severity="info">No documented medication intervals are available.</Alert>}
     </Card>
     {!metrics.length&&<Alert severity="info">Select a clinical metric above to compare medication conditions.</Alert>}
@@ -29,7 +35,7 @@ export default function Medications({comparison,metrics,today,phases}) {
       return <Card key={selected.key} sx={{p:3}}><MDTypography variant="h4">{selected.label}</MDTypography>
         <MDTypography variant="body2">All recorded conditions, grouped by drug class and regimen. Solid dark lines mark medians; boxes span the middle 50% of survey scores. Dots show individual eligible surveys; no top-three selection is applied.</MDTypography>
         {ordered.length?<><ComparisonChart plot={medicationConditionPlot(metric,ordered)} label={`${selected.label} medication conditions`}/>
-          <details><summary>Condition details and survey counts</summary><ol>{ordered.map(condition=><li key={condition.id}>{condition.drug_class} · {condition.label} · {condition.count} surveys · median {condition.median}</li>)}</ol></details>
+          <details><summary>Condition details and survey counts</summary><ol>{ordered.map(condition=><li key={condition.id}>{medicationTerm(condition.drug_class)} · {medicationLabel(condition.label)} · {condition.count} surveys · median {condition.median}</li>)}</ol></details>
         </>:<Alert severity="info">No eligible medication-condition surveys for this metric.</Alert>}
       </Card>;
     })}

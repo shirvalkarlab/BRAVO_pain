@@ -16,15 +16,16 @@ export function NeuralSensingIntervals({descriptions,onSegment}) {
         <div style={{color:'#526179',fontSize:12}}>{stamp(description.start)} → {stamp(description.end)} Pacific</div>
         <div style={{fontWeight:600,color:HOME_NEURAL_COLORS.power}}>Sensing: {description.source} · contacts {description.contacts}</div>
         <div style={{fontWeight:600}}>{description.center}</div>
-        {description.band !== description.center&&<div>{description.band}</div>}
+        {description.band.replace(/ Hz center\b/, ' Hz') !== description.center.replace(/ Hz center\b/, ' Hz')&&<div>{description.band}</div>}
         <div>{description.mode}</div>
+        {description.sourceContextStatus === 'conflict'&&<div>Source configurations differ; inspect the dated settings.</div>}
         {description.schedule&&<div>{description.schedule}</div>}
         <div>Control mapping: {description.mappingStatus || 'Not established'}</div>
         {description.thresholdStatus&&<div>{description.thresholdStatus}</div>}
         {onSegment&&<button type="button" onClick={()=>onSegment(description.id)}
-          aria-label={`Complete settings for ${description.source}, ${stamp(description.start)}`}
+          aria-label={`${description.detailsLabel} for ${description.source}, ${stamp(description.start)}`}
           style={{border:0,background:'none',color:HOME_NEURAL_COLORS.power,padding:'4px 0 0',font:'inherit',textAlign:'left',cursor:'pointer',textDecoration:'underline'}}>
-          Complete settings
+          {description.detailsLabel}
         </button>}
       </div>)}
     </div>

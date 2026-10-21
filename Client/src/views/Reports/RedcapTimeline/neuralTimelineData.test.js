@@ -15,6 +15,17 @@ test('defaults include all requested source settings with explicit physical unit
   expect(NEURAL_METRICS.filter(item=>item.unit).map(item=>item.unit)).toEqual(['Hz','mA','µs']);
 });
 
+test('snapshot hover offers recorded settings while retaining source values and timing limits',()=>{
+ const source=event(3,{Frequency:'55 Hz'},{},{kind:'settings_observation'});
+ const before=JSON.stringify(source);
+ const plot=neuralPlot([source],metric('frequency'),range,'synthetic');
+ const text=JSON.stringify(plot.traces);
+ expect(text).toContain('Click for recorded settings');expect(text).not.toContain('complete settings');
+ expect(text).toContain('55 Hz');expect(text).toContain('activation time not established');
+ expect(text).toContain('Settings observed');expect(text).not.toContain('Home settings observed');
+ expect(JSON.stringify(source)).toBe(before);
+});
+
 test.each([
   ['0 mA','mA',0],[' +2.5 Hz ','Hz',2.5],['.5 s','s',0.5],['1. µs','µs',1],
   ['90 μs','µs',90],['90 us','µs',90],['3mA','mA',3],['1 s','s',1],

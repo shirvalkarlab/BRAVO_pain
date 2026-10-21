@@ -65,7 +65,7 @@ test('28-day ticks and home tooltips remain stable when visible context and visi
   expect(Plotly.react.mock.calls[2][2].showlegend).toBe(false);
   act(()=>root.render(<MetricChart metric={metric} phases={[]} range={range} smooth={true} visits={visits} homeTransitions={homeTransitions} showVisits={false}
     unknownIntervals={[{start:metric.points[0].time,end:null,reason:'No confirming home snapshot'}]}/>));
-  expect(Plotly.react.mock.calls[3][1][0].customdata[0]).toContain('Home settings not established for this interval');
+  expect(Plotly.react.mock.calls[3][1][0].customdata[0]).toContain('No verified home-program assignment for this time');
   expect(Plotly.react.mock.calls[3][1][0].customdata[0]).not.toContain('Group: Group A');
   expect(Plotly.react.mock.calls[3][1][1].y).toEqual([5,5]);
 });

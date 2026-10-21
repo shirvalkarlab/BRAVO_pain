@@ -5,6 +5,44 @@ Access requires an individually authorized account or the shared read-only lab
 account supplied privately by the administrator. This is a research application;
 a chart or candidate is not a clinical programming instruction.
 
+## Settings and source context — live acceptance passed
+
+The settings/source-context release is deployed. Neural intervals link to the
+original reports contributing their samples; details retain recovered program
+settings, controller relationships, dated observations and chronology limits.
+Source configuration does not establish continuous adaptive delivery between
+observations. Conflicting configurations remain individually inspectable.
+Readable labels preserve source values, and settings actions expose populated
+recorded settings or meaningful sensing details. See
+[Reading settings and source context](settings-source-context.md).
+
+All seven Aditya tab journeys passed normal read-only browser checks covering
+populated charts, physical tooltips, available selectors and expanded details.
+Checks included a real source conflict, settings source values, medication
+regimen/condition details, supported wearable defaults and daily/sleep-sample
+hovers. Tooltip clipping was checked at desktop and narrow viewport sizes.
+Oura Refresh view preserved its selected metrics and repopulated all five saved
+charts. This is bounded
+journey and sampled-data evidence, not certification of every observation,
+optional native analysis or complete upstream coverage.
+
+Normal owner/viewer saved-data reads preserved scientific values and access
+boundaries. Read-only checks preserved reviewed PSD assignments, their source
+qualifications and raw spectra. Runtime identity, services and existing target
+timers passed final operational checks; acceptance started no provider import.
+The native saved Closed-loop view recovered from initial browser network errors
+on a normal reload; optional analyses are outside this acceptance.
+Continuous activation, missing home assignments and historical medication use
+remain qualified where the source evidence does not establish them.
+
+The public application candidate `10bc3e248415b7246076f5ed502e6730172c8fb9`
+passed all five validation jobs. The final publication and its exact review/CI
+revision are tracked in [PR #21](https://github.com/shirvalkarlab/BRAVO_pain/pull/21).
+Public source retains the existing lab lineage and publication boundaries.
+Documentation commits do not change the deployed application.
+
+## Earlier accepted recent-neural release
+
 The recent-neural follow-up is deployed and passed live acceptance checks.
 Multimodal Summary and Neural Data displayed matching recent observations with
 actual timestamps and gaps. All seven Aditya tabs loaded; native PSD and Biomarkers

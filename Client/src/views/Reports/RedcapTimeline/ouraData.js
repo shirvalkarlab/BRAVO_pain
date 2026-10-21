@@ -1,6 +1,14 @@
 import {escapeText, homeTiming, localTime, rollingMedian, settingsSummary} from './data';
+import {NO_VERIFIED_HOME_ASSIGNMENT} from './settingDisplay';
 
 export const OURA_DEFAULTS = ['steps', 'heart_rate', 'hrv', 'total_calories', 'sleep_duration', 'sleep_total'];
+export function defaultOuraMetricKeys(metrics) {
+  const available = new Set(metrics.filter(metric=>metric.points?.some(point=>Number.isFinite(point.value))).map(metric=>metric.key));
+  // Prefer the current stored streams, retaining distinct legacy measures when
+  // supplied. Active calories and total calories are not interchangeable.
+  const keys = ['steps',available.has('sleep_heart_rate')?'sleep_heart_rate':'heart_rate',available.has('sleep_hrv')?'sleep_hrv':'hrv','active_calories','total_calories','sleep_duration','sleep_total'];
+  return keys.filter(key=>available.has(key));
+}
 const DAY = 86400000;
 const stamp = day => Date.parse(`${day}T12:00:00Z`);
 export const ouraPoints = (points, range) => points.filter(p => Number.isFinite(p.value) && p.day >= range.start && p.day <= range.end);
@@ -37,7 +45,7 @@ export function ouraTraces(metric, range, phases, smooth, markers, homes = [], u
     name: trend ? '5-point rolling median' : metric.label, x: series.map(p => p.day), y: series.map(p => p.value),
     connectgaps: false, line: {color: trend ? '#A84747' : '#356E9B', width: trend ? 2.5 : 1.5},
     marker: {size: 6, color: series.map(p => phaseFor(p.day)?.color || '#356E9B')},
-    customdata: series.map(p => `${escapeText(phaseFor(p.day)?.label || '')}${trend ? '<br>Centered median of up to five observed daily values' : ''}<br>Daily summary; stimulation may change within this Oura day. See home-program records for timing and settings.`),
+    customdata: series.map(p => `${escapeText(phaseFor(p.day)?.label || '')}${trend ? '<br>Centered median of up to five observed daily values' : ''}<br>Daily summary; stimulation may change within this Oura day. Recorded program snapshots are in the Stim Program Settings tab; daily totals are not assigned to an active program.`),
     hovertemplate: `<b>${escapeText(trend ? 'Rolling median' : metric.label)}: %{y:.2f} ${escapeText(metric.unit)}</b><br>%{x} · Oura day<br>%{customdata}<extra></extra>`});
   const traces = [makeTrace(dailySeries(ouraPoints(eligible, range)), false)];
   if (smooth) traces.push(makeTrace(dailySeries(ouraPoints(fivePointMedian(eligible), range)), true));
@@ -67,10 +75,10 @@ export function sampleHomeContext(homes, unknownIntervals) {
   return point => {
     if (!Number.isFinite(point.value)) return '';
     const unknown = unknownIntervals.find(interval => point.time >= interval.start && (interval.end === null || point.time < interval.end));
-    if (unknown) return `Home settings not established for this interval.<br>${escapeText(unknown.reason)}`;
+    if (unknown) return `${NO_VERIFIED_HOME_ASSIGNMENT}<br>${escapeText(unknown.reason)}`;
     let lo = 0, hi = sorted.length;
     while (lo < hi) {const mid = (lo + hi) >> 1; if (sorted[mid].time <= point.time) lo = mid + 1; else hi = mid;}
-    if (!lo) return 'Home settings not established';
+    if (!lo) return NO_VERIFIED_HOME_ASSIGNMENT;
     const home = sorted[lo-1];
     const day = home.time_precision === 'day' ? point.day || localTime(point.time).slice(0,10) : '';
     const key = `${lo}:${day}`;

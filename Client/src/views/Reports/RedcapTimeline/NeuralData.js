@@ -25,7 +25,7 @@ export default function NeuralData({participant,phases=EMPTY,homeTransitions=EMP
   return <Stack spacing={3}>
     <Card sx={{p:{xs:2,md:3},minWidth:0}}><Stack spacing={2}>
       <MDTypography variant="h4">Stim Program Settings</MDTypography>
-      <MDTypography variant="body2">Recorded stimulation settings across the study. Snapshot markers show settings at an observation; they may come from clinic testing and do not establish home use. Hover or click an observation for complete settings.</MDTypography>
+      <MDTypography variant="body2">Recorded stimulation settings across the study. Snapshot markers show settings at an observation; they may come from clinic testing and do not establish home use. Hover or click an observation for its recorded settings.</MDTypography>
       <Autocomplete multiple disableCloseOnSelect options={NEURAL_METRICS} value={shown} getOptionLabel={m=>m.label} isOptionEqualToValue={(a,b)=>a.key===b.key} onChange={(_,items)=>setSelected(items.map(m=>m.key))} renderInput={params=><TextField {...params} label="Settings to display"/>}/>
       <Stack direction="row" flexWrap="wrap" gap={2} alignItems="center">
         <TextField type="date" label="From" value={dates.start} InputLabelProps={{shrink:true}} onChange={e=>setRange({...dates,start:e.target.value})}/>
