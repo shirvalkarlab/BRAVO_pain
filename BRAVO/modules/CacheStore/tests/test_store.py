@@ -14,6 +14,7 @@ import os
 import pickle
 import shutil
 import tempfile
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -494,6 +495,24 @@ def test_load_newest_reports_an_unreadable_entry_and_discards_it():
         assert st.load_newest("amplitude_effect_by_band", UID, root=root) == (None, None)
 
 
+def test_readonly_newest_retains_broken_payload_and_missing_payload_evidence():
+    for missing in (False, True):
+        with _Sandbox() as root:
+            st.store("amplitude_effect_by_band", UID, ("amp", 9), pd.DataFrame({"x": [1.0]}),
+                     writer="closed_loop", provenance=[], root=root)
+            directory = st.kind_dir("amplitude_effect_by_band", create=False, root=root)
+            payload = next(os.path.join(directory, f) for f in os.listdir(directory) if f.endswith(".parquet"))
+            if missing:
+                os.unlink(payload)
+            else:
+                with open(payload, "wb") as stream:
+                    stream.write(b"garbage")
+            before = {name: Path(directory, name).read_bytes() for name in os.listdir(directory)}
+            result, stamp = st.load_newest("amplitude_effect_by_band", UID, root=root, discard_invalid=False)
+            assert result is None and stamp["writer"] == "closed_loop"
+            assert {name: Path(directory, name).read_bytes() for name in os.listdir(directory)} == before
+
+
 def test_the_page_status_reads_the_sidecar_and_says_when_there_is_nothing_yet():
     with _Sandbox() as root:
         none = st.status_for_page("stim_optimizer_response", UID, ("s", 1), what_it_means="m", root=root)
@@ -814,3 +833,29 @@ def test_a_file_that_cannot_be_mapped_is_a_miss_and_is_kept():
             _mmap_mod.mmap = real
         assert os.path.exists(path)
         assert st.load(_MAPPED_KIND, UID, _MAPPED_SIG) is not None
+
+
+def test_newest_invalid_format_is_a_miss_without_discard_and_legacy_wrapper_is_read():
+    with _Sandbox() as root:
+        st.store('synthetic_wrapped', UID, ('sig',1), {'x':1}, writer='synthetic', provenance=[], root=root)
+        directory=st.kind_dir('synthetic_wrapped', create=False, root=root)
+        meta_path=next(Path(directory,name) for name in os.listdir(directory)if name.endswith('.meta.json'))
+        metadata=json.loads(meta_path.read_text())
+        payload_path=Path(directory,str(meta_path.name).removesuffix('.meta.json')+st._EXT_FOR_FORMAT[metadata['format']])
+        with payload_path.open('wb') as stream:
+            pickle.dump({'signature':('sig',1),'payload':{'wrapped':True}},stream)
+        assert st.load_newest('synthetic_wrapped',UID,root=root,discard_invalid=False)[0]=={'wrapped':True}
+        metadata['format']='unsupported-format';meta_path.write_text(json.dumps(metadata))
+        before=_tree(root)
+        assert st.load_newest('synthetic_wrapped',UID,root=root,discard_invalid=False)==(None,None)
+        assert _tree(root)==before
+
+
+def test_default_newest_still_discards_entry_with_missing_payload():
+    with _Sandbox() as root:
+        st.store('synthetic_missing', UID, ('sig',1), {'x':1}, writer='synthetic', provenance=[], root=root)
+        directory=st.kind_dir('synthetic_missing',create=False,root=root)
+        payload=next(Path(directory,name)for name in os.listdir(directory)if not name.endswith('.meta.json'))
+        payload.unlink()
+        result,stamp=st.load_newest('synthetic_missing',UID,root=root)
+        assert result is None and stamp and not os.listdir(directory)

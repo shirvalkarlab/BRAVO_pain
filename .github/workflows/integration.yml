@@ -67,11 +67,11 @@ jobs:
         run: PYTHONPATH=BRAVO:BRAVO/modules uv run --frozen pytest tests/core -q
       - name: Aditya presentation contracts (separate Django settings process)
         run: |
-          uv run --frozen pytest BRAVO/modules/tests/test_aditya_presentation.py BRAVO/modules/tests/test_aditya_presentation_api.py BRAVO/modules/tests/test_aditya_neural_settings.py BRAVO/modules/tests/test_standard_mpq.py -q --cov=BRAVO/modules --cov=BRAVO/Server/APIs --cov-config=/dev/null --cov-branch --cov-report=json:presentation-coverage.json
+          uv run --frozen pytest BRAVO/modules/tests/test_aditya_presentation.py BRAVO/modules/tests/test_aditya_presentation_api.py BRAVO/modules/tests/test_aditya_neural_settings.py BRAVO/modules/tests/test_standard_mpq.py tests/test_aditya_program_comparisons.py -q --cov=BRAVO/modules --cov=BRAVO/Server/APIs --cov-config=/dev/null --cov-branch --cov-report=json:presentation-coverage.json
           uv run --frozen python - <<'PYTHON'
           import json
           files = json.load(open("presentation-coverage.json"))["files"]
-          for name in ("BRAVO/modules/AdityaPresentation.py", "BRAVO/modules/AdityaNeuralSettings.py", "BRAVO/Server/APIs/AdityaPresentation.py", "BRAVO/modules/SurveyForms/StandardMPQ.py"):
+          for name in ("BRAVO/modules/AdityaPresentation.py", "BRAVO/modules/AdityaNeuralSettings.py", "BRAVO/modules/AdityaProgramComparisons.py", "BRAVO/Server/APIs/AdityaPresentation.py", "BRAVO/modules/SurveyForms/StandardMPQ.py"):
               summary = files[name]["summary"]
               assert summary["num_branches"] > 0 and summary["covered_branches"] / summary["num_branches"] >= 0.95, (name, summary)
           PYTHON

@@ -5737,12 +5737,12 @@ def attach_stored_stability_answers(resp, participant_uid):
 CLINIC_SHEET_STEPS_KIND = "clinic_pain_steps"
 
 
-def load_clinic_sheet_steps(participant_uid):
+def load_clinic_sheet_steps(participant_uid, *, discard_invalid=True):
     'Implementation details are defined by the code and its regression contracts.'
     try:
         payload, _stamp = _cache_store.load_newest(
             CLINIC_SHEET_STEPS_KIND, participant_uid, consumer="biomarkers",
-            root=_SHARED_CACHE_DIR_OVERRIDE)
+            root=_SHARED_CACHE_DIR_OVERRIDE, discard_invalid=discard_invalid)
     except Exception as exc:                                    # noqa: BLE001
         _log.warning("biomarkers: the clinic-sheet steps could not be read for %s",
                      participant_uid, exc_info=True)
@@ -7697,7 +7697,7 @@ def _deployment_summary_build(request_data):
 
 
 @_pro_scoped
-def pain_scores_for_participant(request_data):
+def pain_scores_for_participant(request_data, *, discard_invalid_clinic=True):
     'Implementation details are defined by the code and its regression contracts.'
     from .routines.analytics import _f
 
@@ -7718,7 +7718,8 @@ def pain_scores_for_participant(request_data):
     t = _pro_times_utc_series(pro)
     _sheet_points, _sheet_added = {}, {}
     if _include_clinic_sheet_ratings_param(request_data):
-        _steps, _why = load_clinic_sheet_steps(participant_uid)
+        _steps, _why = (load_clinic_sheet_steps(participant_uid) if discard_invalid_clinic
+                       else load_clinic_sheet_steps(participant_uid, discard_invalid=False))
         if _steps is not None:
             for key in sheet_ratings.SHEET_COLUMN_FOR_METRIC:
                 st, sv, _setting = sheet_ratings.sheet_ratings_for_metric(_steps, key)

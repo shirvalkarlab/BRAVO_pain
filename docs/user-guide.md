@@ -31,7 +31,7 @@ still be visible. Use an individually authorized account for those actions.
 | --- | --- |
 | Multimodal Summary | Survey, wearable and neural measures together, including recent recorded observations; coverage differs by stream |
 | REDCap | Imported survey metrics and separately supplied clinic/study context |
-| Stim Program Boxplots | Outcomes grouped by reviewed program assignments; settings alone do not establish home assignments |
+| Stim Program Boxplots | Automatically updated survey outcomes grouped by source-supported settings; whole documented Pacific clinic and home stimulation-testing days are excluded |
 | Stim Program Settings | Device settings observed at recorded times |
 | Neural Data | Reviewed home periods plus separately labeled recent recorded observations |
 | Medications | Comparisons requiring reviewed medication episodes and saved analysis results |
@@ -46,6 +46,13 @@ It requires the verified item/aggregate mapping shown by the application; the
 standard score is distinct from legacy expanded measures. The display does not
 rescale a legacy total to manufacture a standard score. Read the displayed
 provenance and limitations before comparing measures.
+
+Program comparisons apply their own source and testing-date eligibility to all
+available metrics, including standard MPQ. Medication comparisons still require
+separately reviewed assignments. Read [stimulation-program comparisons](program-comparisons.md)
+for eligibility, lower pain versus higher relief ranking, source chronology and
+automatic saved-data updates. Coverage dates do not verify upstream completeness
+or continuous stimulation delivery.
 
 Neural snapshot spectra, time-domain recordings and chronic device summaries are
 different products. Their units and coverage are not interchangeable. Recent

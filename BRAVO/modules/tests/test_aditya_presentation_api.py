@@ -30,8 +30,14 @@ def api(monkeypatch):
     module._test_stim_series = availability.stim_series
     module._actual_home_revision = module._home_revision
     module._actual_timeline_revision = module._timeline_revision
+    module._actual_program_comparisons = module._program_comparisons
+    module._actual_program_revision = module._program_revision
+    module._actual_program_period_start = module._program_period_start
     monkeypatch.setattr(module,"_home_revision",lambda *args:"synthetic-revision")
     monkeypatch.setattr(module,"_timeline_revision",lambda *args:"a"*64)
+    monkeypatch.setattr(module,"_program_revision",lambda *args: ["synthetic-program-inputs"])
+    monkeypatch.setattr(module,"_program_comparisons",lambda *args: {"available":False,"metrics":[]})
+    monkeypatch.setattr(module,"_program_period_start",lambda *args: None)
     return module
 
 
@@ -51,7 +57,7 @@ def test_authentication_and_study_scope(api,monkeypatch):
     assert seen == [("p",{"study_uid":"study-a"})]
 
 
-@pytest.mark.parametrize("data",[{},[],{"ParticipantId":None},{"ParticipantId":5},{"ParticipantId":" "},{"ParticipantId":"p","ProcessedPRO":[]},{"ParticipantId":"p","ActiveStudy":"other"},{"ParticipantId":"p","IncludeClinicSheetRatings":False}])
+@pytest.mark.parametrize("data",[{},[],{"ParticipantId":None},{"ParticipantId":5},{"ParticipantId":" "},{"ParticipantId":"p","ProcessedPRO":[]},{"ParticipantId":"p","ActiveStudy":"other"},{"ParticipantId":"p","IncludeClinicSheetRatings":False},{"ParticipantId":"p","program_mode_evidence":[]}])
 def test_malformed_and_scientific_override_rejected(api,data):
     assert call(api.QueryRedcapTimeline,data).status_code == 400
 
@@ -85,7 +91,7 @@ def test_service_wiring_is_canonical_readonly(api,monkeypatch):
     server=ModuleType("Server"); server.models=models
     monkeypatch.setitem(sys.modules,"Server",server)
     biomarkers=ModuleType("modules.Biomarkers")
-    service=SimpleNamespace(_load_pt_config=lambda *a:{"pt":"synthetic-record"},pain_scores_for_participant=lambda data:{"metrics":[]},_load_recordings=lambda *a:[],CHRONIC_TYPES=["MedtronicChronicBrainSense"])
+    service=SimpleNamespace(_load_pt_config=lambda *a:{"pt":"synthetic-record"},pain_scores_for_participant=lambda data,**kwargs:{"metrics":[]},_load_recordings=lambda *a:[],CHRONIC_TYPES=["MedtronicChronicBrainSense"])
     biomarkers.bravo_service=service
     monkeypatch.setitem(sys.modules,"modules.Biomarkers",biomarkers)
     therapy=SimpleNamespace(therapy_from_data_start=lambda snapshots,changes,start:(snapshots,changes))
@@ -95,7 +101,8 @@ def test_service_wiring_is_canonical_readonly(api,monkeypatch):
     decode.representation=SimpleNamespace(native_lsb_by_channel=lambda *a:{},chronic_pair_keys=lambda *a:[])
     monkeypatch.setitem(sys.modules,"modules.DecodeCommon",decode)
     calls=[]
-    def canonical_read(request):
+    def canonical_read(request, **kwargs):
+        assert kwargs == {"discard_invalid_clinic":False}
         calls.append(request)
         # Duplicate REDCap points and a sheet observation at the same instant must stay distinct.
         points = [{"t_epoch":101,"v":4}, {"t_epoch":101,"v":4}]
@@ -240,7 +247,7 @@ def install_clinic_double(api,monkeypatch,tmp_path):
     stamp={'kind':'clinic_pain_steps','participant_uid':'p','signature_key':'a'*40,'written_utc':'2026-01-02T00:00:00+00:00'}
     receipt={'format':1,'target_participant_uid':'p','canonical_store_key':'clinic_pain_steps/p/'+'a'*40,
              'repeat_wrote':False,'workbook_files':1,'parsed_steps':1}
-    clinic=SimpleNamespace(CLINIC_PAIN_KIND='clinic_pain_steps',_cache_store=SimpleNamespace(load_newest=lambda *args:(payload,stamp)),
+    clinic=SimpleNamespace(CLINIC_PAIN_KIND='clinic_pain_steps',_cache_store=SimpleNamespace(load_newest=lambda *args,**kwargs:(payload,stamp)),
         _visit_date_from_title=lambda name:day,_infer_setting=lambda name:'clinic')
     optimizer=ModuleType('modules.StimOptimizer');optimizer.clinic_pain=clinic
     monkeypatch.setitem(sys.modules,'modules.StimOptimizer',optimizer)
@@ -262,7 +269,7 @@ def test_clinic_reader_exact_accepted_product_and_private_failure_messages(api,m
     assert api._clinic_snapshot('p')[0]['status']=='unavailable'
     path.write_text('{bad')
     assert api._clinic_snapshot('p')==({'status':'invalid'},None)
-    clinic._cache_store.load_newest=lambda *args:(None,None)
+    clinic._cache_store.load_newest=lambda *args,**kwargs:(None,None)
     assert api._clinic_snapshot('p')==({'status':'unavailable'},None)
 
 
@@ -356,7 +363,10 @@ def test_full_revision_is_preload_and_concurrent_source_update_stays_detectable(
     monkeypatch.setattr(api,helper,load)
     view=getattr(api,klass)
     result=call(view,{'ParticipantId':'p'})
-    assert result.status_code==200 and result.data['revision']=='a'*64
+    if helper == '_pain':
+        assert result.status_code == 503  # A mixed comparison snapshot is withheld.
+    else:
+        assert result.status_code==200 and result.data['revision']=='a'*64
     assert call(view,{'ParticipantId':'p','RequestType':'Revision'}).data['revision']=='b'*64
     def fail(*args):raise ValueError('/private/identity')
     monkeypatch.setattr(api,'_timeline_revision',fail)
@@ -473,7 +483,7 @@ def test_stored_revision_covers_exact_corrections_binding_clinic_therapy_and_our
 
 
 @pytest.mark.parametrize('standard_mapping', [False, True])
-def test_full_stored_surveys_use_real_canonical_formatter_without_network_or_writes(api,monkeypatch,standard_mapping):
+def test_full_stored_surveys_use_real_canonical_formatter_without_network_or_writes(api,monkeypatch,standard_mapping,tmp_path):
     import modules
     from modules.Biomarkers.routines import availability
     import modules.Biomarkers as biomarkers
@@ -506,7 +516,16 @@ def test_full_stored_surveys_use_real_canonical_formatter_without_network_or_wri
     monkeypatch.setattr(service,'_load_pt_config',lambda *args:binding)
     monkeypatch.setattr(service.redcap_client,'pull_redcap',Mock(side_effect=AssertionError('display must not fetch')))
     monkeypatch.setattr(service,'_snapshot_pain_reports',Mock(side_effect=AssertionError('display must not write')))
-    monkeypatch.setattr(service,'load_clinic_sheet_steps',lambda uid:(None,'synthetic missing clinic'))
+    from modules.CacheStore import ledger
+    monkeypatch.setattr(ledger,'ENABLED',False)
+    monkeypatch.setattr(service,'_SHARED_CACHE_DIR_OVERRIDE',str(tmp_path))
+    service._cache_store.store(service.CLINIC_SHEET_STEPS_KIND,'p',('synthetic',),{'steps':[]},writer='synthetic',provenance=[],root=str(tmp_path))
+    directory=Path(service._cache_store.kind_dir(service.CLINIC_SHEET_STEPS_KIND,create=False,root=str(tmp_path)))
+    payload=next(path for path in directory.iterdir() if not path.name.endswith('.meta.json'))
+    payload.write_bytes(b'corrupt-test-payload')
+    before={path.name:path.read_bytes()for path in directory.iterdir()}
+    discard=Mock(side_effect=AssertionError('canonical display cannot discard cache'))
+    monkeypatch.setattr(service._cache_store,'_discard_entry',discard)
     monkeypatch.setattr(modules,'Therapy',SimpleNamespace(therapy_from_data_start=lambda a,b,c:(a,b)),raising=False)
     from modules.DecodeCommon import data_start
     monkeypatch.setattr(data_start,'data_start_s',lambda person:0.)
@@ -528,6 +547,8 @@ def test_full_stored_surveys_use_real_canonical_formatter_without_network_or_wri
     else:
         assert 'mpq_standard_0_45' not in bykey
     assert 'Stored REDCap surveys' in result['message']
+    discard.assert_not_called()
+    assert {path.name:path.read_bytes()for path in directory.iterdir()}==before
     # A same-count replacement is read immediately, without any cross-request memo.
     rows[0][2][0][0]=3.
     assert api._pain('p',{})['metrics'][0]['points'][0]['value']==3.
@@ -560,3 +581,205 @@ def test_home_links_only_owned_original_sources_and_uses_canonical_batch_clock(a
     result=api._home('person-a',{'home_intervals':[{'start':1,'end':500}]},{'window':'past28'})
     assert reads==[('scope',{'owner':person}),('anchors',person),('raw',source,'canonical-table')]
     assert result['windows'][0]['panels'][0]['segments'][0]['settings_context']['source_ids']==['source-a']
+
+
+def install_program_double(monkeypatch):
+    import modules
+    program = ModuleType('modules.AdityaProgramComparisons')
+    program.POLICY_VERSION = 'synthetic-program-policy'
+    program.prepare_source = lambda source: {'id':source['id'],'hash':source['hash'],'prepared':program.POLICY_VERSION}
+    def build(surveys,metrics,sources,days,**kwargs):
+        return {'available':kwargs['calendar_verified'], 'metrics':[dict(metric) for metric in metrics],
+                'provenance':{},'inputs':{'surveys':surveys,'sources':sources,'days':days,**kwargs}}
+    program.build_comparisons = build
+    monkeypatch.setitem(sys.modules,'modules.AdityaProgramComparisons',program)
+    monkeypatch.setattr(modules,'AdityaProgramComparisons',program,raising=False)
+    return program
+
+
+def test_program_envelope_keeps_duplicate_times_all_metrics_and_relief_direction(api,monkeypatch):
+    from modules.SurveyForms import StandardMPQ
+    install_program_double(monkeypatch)
+    monkeypatch.setattr(api,'_clinic_snapshot',lambda uid:({'status':'stored_snapshot','days':['2026-01-02']},'receipt'))
+    monkeypatch.setattr(api,'_program_inputs',lambda person:([],{},'source-identity'))
+    monkeypatch.setattr(api,'_prepared_program_sources',lambda *args:[])
+    keys=['nrs','vas','left_leg_vas','back_vas','relief','mpq_sum','mpq_sen','mpq_aff',
+          *[m[0] for m in StandardMPQ.METRICS],'electrocuting','tingly']
+    metrics=[{'key':key,'label':key,'range':[0,100],'points':[]} for key in keys]
+    reports=[{key:0 for key in keys},{key:None for key in keys}]
+    snapshot={'rows':[('first',101,[]),('second',101,[])]}
+    result=api._actual_program_comparisons(SimpleNamespace(uid='p'),snapshot,reports,{'metrics':metrics},{'visit_days':['2026-01-01']})
+    assert len(result['metrics'])==13
+    assert [s['id'] for s in result['inputs']['surveys']]==['first','second']
+    assert [s['time'] for s in result['inputs']['surveys']]==[101,101]
+    assert result['inputs']['surveys'][0]['values']['nrs']==0
+    assert result['inputs']['surveys'][1]['values']['nrs'] is None
+    assert result['inputs']['preserved_testing_days']==['2026-01-01']
+    assert result['inputs']['days']==['2026-01-02']
+    assert next(m for m in result['metrics']if m['key']=='relief')['direction']=='higher'
+    assert next(m for m in result['metrics']if m['key']=='nrs_intensity')['direction']=='lower'
+    with pytest.raises(ValueError,match='correspondence'):
+        api._actual_program_comparisons(SimpleNamespace(uid='p'),snapshot,reports[:1],{'metrics':metrics},{})
+
+
+@pytest.mark.parametrize('status',['invalid','unavailable'])
+def test_bad_program_calendar_never_decodes_sources_or_uses_stale_rankings(api,monkeypatch,status):
+    install_program_double(monkeypatch)
+    monkeypatch.setattr(api,'_clinic_snapshot',lambda uid:({'status':status},None))
+    monkeypatch.setattr(api,'_program_inputs',lambda *args:pytest.fail('invalid calendar must stop source reads'))
+    result=api._actual_program_comparisons(SimpleNamespace(uid='p'),None,[],{'metrics':[]},{'comparisons':{'stimulation':{'available':True}}})
+    assert result['available'] is False and not result['inputs']['sources']
+
+
+def test_bad_program_report_withholds_only_comparisons_and_keeps_calendar_status(api,monkeypatch):
+    install_program_double(monkeypatch)
+    monkeypatch.setattr(api,'_clinic_snapshot',lambda uid:({'status':'stored_snapshot','days':[]},None))
+    def unreadable(*args):raise OSError('/private/raw/path')
+    monkeypatch.setattr(api,'_program_inputs',unreadable)
+    result=api._actual_program_comparisons(SimpleNamespace(uid='p'),None,[],{'metrics':[]},{})
+    assert result['available'] is False and result['provenance']['calendar_verified'] is True
+    assert result['provenance']['source_validation_failed'] is True and '/private' not in str(result)
+
+
+def test_compact_program_memo_invalidates_source_clock_policy_and_is_bounded(api,monkeypatch):
+    import modules
+    program=install_program_double(monkeypatch)
+    api._PROGRAM_FACTS.clear();monkeypatch.setattr(api,'_PROGRAM_FACTS_LIMIT',2)
+    calls=[];curator=ModuleType('modules.DataCurator')
+    curator.loadPerceptJSON=lambda source,**kw:calls.append((source.uid,kw)) or {'synthetic':'raw-array-not-retained'}
+    monkeypatch.setitem(sys.modules,'modules.DataCurator',curator)
+    monkeypatch.setattr(modules,'DataCurator',curator,raising=False)
+    source=SimpleNamespace(uid='s',hashed='h',type='MedtronicJSON',pointer='synthetic-path',metadata={},device='d')
+    person=SimpleNamespace(uid='p');table=object();identity=[[],[['d','clock-a']],'config-a']
+    load=lambda:api._prepared_program_sources(person,[source],{'d':table},identity)
+    first=load();assert calls==[('s',{'table':table,'settings_only':True})]
+    first[0]['id']='caller-mutation';assert load()[0]['id']=='s' and len(calls)==1
+    source.hashed='changed';load();assert len(calls)==2
+    identity[1]=[['d','clock-b']];load();assert len(calls)==3 and len(api._PROGRAM_FACTS)==2
+    program.POLICY_VERSION='changed-policy';load();assert len(calls)==4
+    person.uid='another-participant';load();assert len(calls)==5
+    assert 'raw-array' not in str(api._PROGRAM_FACTS)
+    def fail(*args,**kwargs):raise ValueError('bad-source')
+    curator.loadPerceptJSON=fail;source.hashed='broken'
+    for _ in range(2):
+        with pytest.raises(ValueError,match='bad-source'):load()
+    assert len(api._PROGRAM_FACTS)==2
+
+
+def test_program_dependency_identity_is_db_clock_only_and_covers_corrections(api,monkeypatch):
+    import modules
+    source=SimpleNamespace(uid='s',hashed='h',type='MedtronicJSON',pointer='synthetic-path',metadata={'ClockAnchor':{}},device='d')
+    models=SimpleNamespace(SourceFile=SimpleNamespace(find_all=lambda **kwargs:[SimpleNamespace(type='OuraRingAPISource'),source]))
+    server=ModuleType('Server');server.models=models;monkeypatch.setitem(sys.modules,'Server',server)
+    clock=['a'];config=['cfg'];curator=ModuleType('modules.DataCurator')
+    curator.clock_anchor_tables=lambda person:{'d':SimpleNamespace(digest=lambda:clock[0])}
+    curator.loadPerceptJSON=lambda *a,**kw:pytest.fail('revision cannot parse original reports')
+    monkeypatch.setitem(sys.modules,'modules.DataCurator',curator);monkeypatch.setattr(modules,'DataCurator',curator,raising=False)
+    decode=ModuleType('modules.DecodeCommon');decode.private_clinical_config=SimpleNamespace(config_digest=lambda:config[0])
+    monkeypatch.setitem(sys.modules,'modules.DecodeCommon',decode)
+    person=SimpleNamespace(uid='p');sources,tables,identity=api._program_inputs(person)
+    assert sources==[source] and tables['d'].digest()=='a'
+    source.metadata['ClockAnchor']['correction']=1;assert api._program_inputs(person)[2]!=identity
+    source.metadata['ClockAnchor'].clear();clock[0]='b';assert api._program_inputs(person)[2]!=identity
+    clock[0]='a';config[0]='changed';assert api._program_inputs(person)[2]!=identity
+
+
+def test_real_program_builder_thirteen_metric_envelope_and_native_epoch_gate(api,monkeypatch):
+    from modules import AdityaProgramComparisons as programs
+    from datetime import datetime,timezone
+    t=datetime(2026,6,2,19,tzinfo=timezone.utc).timestamp()
+    states=[{'Electrode':'ElectrodeDef.ONE','ElectrodeStateResult':'ElectrodeStateDef.Negative'},
+            {'Electrode':'ElectrodeDef.CASE','ElectrodeStateResult':'ElectrodeStateDef.Positive'}]
+    setting={'Programs':[{'AmplitudeInMilliAmps':1,'PulseWidthInMicroSecond':60,'RateInHertz':130,'ElectrodeState':states}]}
+    group={'GroupId':'GroupIdDef.GROUP_A','ActiveGroup':True,'GroupSettings':{'Cycling':{'Enabled':False}},
+           'ProgramSettings':{'LeftHemisphere':setting,'RightHemisphere':setting}}
+    report={'SessionDate':datetime.fromtimestamp(t,timezone.utc).isoformat(),
+            'SessionEndDate':datetime.fromtimestamp(t+60,timezone.utc).isoformat(),
+            'Stimulation':{'InitialStimStatus':'StimStateDef.ON','FinalStimStatus':'StimStateDef.ON'},'Groups':{'Initial':[group],'Final':[group]}}
+    facts=programs.prepare_sources([{'id':'synthetic-source','hash':'synthetic-hash','report':report}])
+    monkeypatch.setattr(api,'_clinic_snapshot',lambda uid:({'status':'stored_snapshot','days':['2026-06-01']},None))
+    monkeypatch.setattr(api,'_program_inputs',lambda person:([],{},[]))
+    monkeypatch.setattr(api,'_prepared_program_sources',lambda *args:facts)
+    monkeypatch.setattr(api,'_program_period_start',lambda person:t-600)
+    keys=['nrs','vas','left_leg_vas','back_vas','relief','mpq_sum','mpq_sen','mpq_aff',
+          'mpq_standard_sensory_0_33','mpq_standard_affective_0_12','mpq_standard_0_45','electrocuting','tingly']
+    metrics=[{'key':key,'label':key,'range':[0,100]}for key in keys]
+    rows=[(str(i),t-300,[])for i in range(6)]+[('before-implant',t-900,[])]
+    reports=[{key:i for key in keys}for i in range(7)]
+    result=api._actual_program_comparisons(SimpleNamespace(uid='p'),{'rows':rows},reports,{'metrics':metrics},
+        {'visit_days':[],'neural_scope':{'coverage_start':t+10000}})
+    assert result['available'] and len(result['metrics'])==13
+    nrs=next(m for m in result['metrics']if m['key']=='nrs_intensity')
+    assert nrs['conditions'][0]['count']==6 and nrs['conditions'][0]['median']==2.5
+    assert nrs['provenance']['excluded_period']==1
+    assert len(nrs['top']['open_loop'])==1 and not nrs['top']['closed_loop']
+    assert len({p['record']for p in nrs['conditions'][0]['points']})==6
+
+
+def test_program_revision_binds_policy_and_calendar_without_source_decode(api,monkeypatch):
+    program=install_program_double(monkeypatch)
+    identity=[[],[],[]];calendar={'status':'stored_snapshot','days':['2026-01-01']}
+    monkeypatch.setattr(api,'_program_inputs',lambda person:([],{},identity))
+    monkeypatch.setattr(api,'_clinic_snapshot',lambda uid:(calendar,{'receipt':'one'}))
+    person=SimpleNamespace(uid='p');before=api._actual_program_revision(person)
+    import copy
+    before=copy.deepcopy(before)
+    calendar['days']=['2026-01-02'];assert api._actual_program_revision(person)!=before
+    calendar['days']=['2026-01-01'];program.POLICY_VERSION='changed';assert api._actual_program_revision(person)!=before
+
+
+@pytest.mark.parametrize('value,expected',[(None,None),(0,None),(-1,None),(float('nan'),None),(100,100.)])
+def test_program_native_period_start_is_not_neural_coverage(api,monkeypatch,value,expected):
+    decode=ModuleType('modules.DecodeCommon');decode.data_start=SimpleNamespace(data_start_s=lambda person:value)
+    monkeypatch.setitem(sys.modules,'modules.DecodeCommon',decode)
+    assert api._actual_program_period_start(SimpleNamespace(uid='p'))==expected
+
+
+@pytest.mark.parametrize('metadata', [None, [], {}, {'ClockAnchor':[]}, {'ClockAnchor':{'rule':'unknown'}},
+    {'ClockAnchor':{'rule':'SessionEndDate-Final'}},
+    {'ClockAnchor':{'rule':'SessionEndDate-Final','session_date_s':True,'anchor_s':1,'final_offset_s':1}},
+    {'ClockAnchor':{'rule':'SessionEndDate-Final','session_date_s':2,'anchor_s':1,'final_offset_s':0}},
+    {'ClockAnchor':{'rule':'SessionEndDate-Final','session_date_s':1,'anchor_s':1,'final_offset_s':40000}},
+    {'ClockAnchor':{'rule':'SessionEndDate-Final','session_date_s':1,'anchor_s':float('inf'),'final_offset_s':0}},
+    {'ClockAnchor':{'rule':'SessionEndDate-Final','session_date_s':1e100,'anchor_s':1e100,'final_offset_s':0}},
+])
+def test_program_prefilter_unknown_metadata_conservatively_keeps_source(api,metadata):
+    source=SimpleNamespace(metadata=metadata)
+    assert api._source_may_match(source,{'2026-01-01'}) is True
+    assert api._source_may_match(source,set()) is False
+
+
+@pytest.mark.parametrize('start,end,day,expected',[
+    ('2026-07-02T05:00:00+00:00','2026-07-02T06:00:00+00:00','2026-07-01',True),
+    ('2026-07-02T05:00:00+00:00','2026-07-02T06:00:00+00:00','2026-07-02',False),
+    ('2026-07-02T06:30:00+00:00','2026-07-02T07:30:00+00:00','2026-07-02',True),
+    ('2026-03-08T08:00:00+00:00','2026-03-08T14:00:00+00:00','2026-03-08',True),
+    ('2026-11-01T08:30:00+00:00','2026-11-01T09:30:00+00:00','2026-11-01',True),
+])
+def test_program_prefilter_uses_both_pacific_boundaries_and_real_dst(api,start,end,day,expected):
+    from datetime import datetime
+    low=datetime.fromisoformat(start).timestamp();high=datetime.fromisoformat(end).timestamp()
+    source=SimpleNamespace(metadata={'ClockAnchor':{'rule':'SessionEndDate-Final','session_date_s':low,
+        'anchor_s':high-100,'final_offset_s':100}})
+    assert api._source_may_match(source,{day}) is expected
+
+
+def test_exact_pdf_annotation_is_passed_and_invalidates_only_compact_source_fact(api,monkeypatch):
+    import modules,copy
+    program=install_program_double(monkeypatch);seen=[]
+    def prepare(source):
+        seen.append(copy.deepcopy(source));return {'id':source['id'],'hash':source['hash'],'prepared':program.POLICY_VERSION}
+    program.prepare_source=prepare
+    curator=ModuleType('modules.DataCurator');curator.loadPerceptJSON=lambda *args,**kw:{'Groups':{}}
+    monkeypatch.setitem(sys.modules,'modules.DataCurator',curator);monkeypatch.setattr(modules,'DataCurator',curator,raising=False)
+    source=SimpleNamespace(uid='source',hashed='h'*64,type='MedtronicJSON',pointer='synthetic',device='d',metadata={'UpstreamSource':{'raw_sha256':'a'*64}})
+    evidence={'reviewed':True,'source_id':'source','source_hash':'h'*64,'raw_sha256':'a'*64,'pdf_sha256':'b'*64,'phase':'Initial','side':'left','mode':'SENSING_ONLY'}
+    unrelated=[None,{**evidence,'reviewed':False},{**evidence,'source_id':'other'},{**evidence,'source_hash':'other'},{**evidence,'raw_sha256':'other'}]
+    api._PROGRAM_FACTS.clear()
+    load=lambda:api._prepared_program_sources(SimpleNamespace(uid='p'),[source],{},[[],[]],[evidence,*unrelated])
+    load();assert seen[0]['raw_sha256']=='a'*64 and seen[0]['mode_evidence']==[evidence]
+    load();assert len(seen)==1
+    evidence['pdf_sha256']='c'*64;load();assert len(seen)==2
+    source.metadata=None
+    api._prepared_program_sources(SimpleNamespace(uid='p'),[source],{},[[],[]],[evidence])
+    assert seen[-1]['raw_sha256'] is None and seen[-1]['mode_evidence']==[]

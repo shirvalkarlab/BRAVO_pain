@@ -1,4 +1,4 @@
-import {surveyCount,stimulationSettingLines,stimulationSummary,stimulationDetailRows,finalizedProgram,stimulationAxisSettings,comparisonCoverage,compactLabel,topPrograms,conditionSummary,conditionPlot,medicationTimeline,medicationDisplayScope,stimulationPlot,medicationConditionPlot,orderedMedicationConditions} from './comparisonData';
+import {surveyCount,stimulationSettingLines,stimulationSummary,stimulationDetailRows,finalizedProgram,stimulationAxisSettings,comparisonCoverage,compactLabel,topPrograms,conditionSummary,conditionPlot,medicationTimeline,medicationDisplayScope,stimulationPlot,medicationConditionPlot,orderedMedicationConditions,programRankingLabel,programMetricCoverage,programSourceCoverage,reviewedReferenceTiming} from './comparisonData';
 const time=day=>Date.parse(`${day}T19:00:00Z`)/1000;
 const points=values=>values.map((value,i)=>({time:time('2026-08-01')+i*86400,value}));
 const condition=(id,median,count=5)=>({id,label:`Program ${id}`,mode:'open_loop',median,count,points:points(Array.from({length:count},()=>median))});
@@ -27,6 +27,61 @@ test('top programs use metric-specific eligible IDs, at least five finite scores
   expect(topPrograms(metric,'open_loop').map(c=>c.id)).toEqual(['d','b','c']);
   expect(topPrograms(metric,'closed_loop').map(c=>c.id)).toEqual(['c','a']);
   expect(topPrograms({conditions},'open_loop')).toEqual([]);expect(topPrograms({...metric,top:{}},'open_loop')).toEqual([]);
+});
+
+test('relief ranks higher medians first while pain ranks lower, retaining backend order for ties and excluding nonfinite summaries',()=>{
+ const conditions=[condition('a',7),condition('b',2),condition('c',7),condition('d',9),condition('invalid',NaN)];
+ const top={open_loop:['c','a','d','b','invalid']},before=JSON.stringify(conditions);
+ expect(topPrograms({conditions,top,direction:'higher'},'open_loop').map(c=>c.id)).toEqual(['d','c','a']);
+ expect(topPrograms({conditions,top,direction:'lower'},'open_loop').map(c=>c.id)).toEqual(['b','c','a']);
+ expect(programRankingLabel({direction:'higher'})).toBe('Higher observed medians first');
+ expect(programRankingLabel({direction:'lower'})).toBe('Lower observed medians first');
+ expect(JSON.stringify(conditions)).toBe(before);
+});
+
+test('metric coverage distinguishes all eligible surveys, verified assignments, exclusions and exact stored timestamps',()=>{
+ const metric={provenance:{total_surveys:23,eligible:15,assigned:10,unassigned:5,excluded_testing:4,excluded_period:0,missing_value:3,invalid:1,open_loop:6,closed_loop:3,off:1,latest_survey:time('2026-08-02'),latest_assigned:time('2026-08-01'),reasons:{testing_day:4,before_period:1,no_same_day_source:3,conflicting_equidistant_sources:2,custom_source_reason:1,missing_reason:0,invalid_counter:NaN}}};
+ const before=JSON.stringify(metric),lines=programMetricCoverage(metric).join(' | ');
+ for(const expected of ['23 total surveys','15 eligible non-testing surveys','10 program-assigned surveys','5 eligible surveys without a verified program','4 excluded on documented testing days','3 with missing metric values','1 invalid surveys','6 open-loop surveys','3 closed-loop surveys','1 stimulation-OFF surveys','Latest stored survey evaluated for this metric: 2026-08-02 12:00:00 Pacific','Latest eligible program-assigned survey: 2026-08-01 12:00:00 Pacific','Documented Pacific testing day: 4','No settings source on the same Pacific day: 3','Equally close source configurations disagree: 2','custom source reason: 1']) expect(lines).toContain(expected);
+ expect(lines).not.toMatch(/invalid.counter|missing.reason/);expect(JSON.stringify(metric)).toBe(before);
+ expect(lines).toContain('0 excluded before the reviewed comparison period');expect(lines).toContain('Before the reviewed comparison period: 1');
+ expect(programMetricCoverage({})).toEqual(['Eligibility and exclusion counts are not supplied for this metric.']);
+ expect(programMetricCoverage({provenance:{}})).toEqual(['Eligibility and exclusion counts are not supplied for this metric.']);
+ expect(programMetricCoverage({provenance:{eligible:0,assigned:0,excluded_testing:0}})).toEqual(['0 eligible non-testing surveys','0 program-assigned surveys','0 excluded on documented testing days']);
+});
+
+test('source coverage names stored programmer/survey bounds and full testing-day scope without claiming upstream completeness',()=>{
+ const provenance={policy_version:'synthetic-v1',period_start:time('2026-07-01'),source_min:time('2026-07-30'),source_max:time('2026-08-03'),source_min_survey:time('2026-08-01'),source_max_survey:time('2026-08-02'),latest_assigned:time('2026-08-01'),calendar_verified:true,calendar:{testing_days:['2026-08-01','2026-08-02'],first_day:'2026-08-01',last_day:'2026-08-02'}};
+ const before=JSON.stringify(provenance),text=programSourceCoverage(provenance).join(' | ');
+ expect(text).toContain('Calculated automatically from currently stored');expect(text).toContain('does not verify the latest upstream import');
+ expect(text).toContain('Stored device-report observation bounds: 2026-07-30 12:00:00 → 2026-08-03 12:00:00 Pacific');
+ expect(text).toContain('Stored survey bounds: 2026-08-01 12:00:00 → 2026-08-02 12:00:00 Pacific');
+ expect(text).toContain('Reviewed comparison period begins: 2026-07-01 12:00:00 Pacific');
+ expect(text).toContain('Latest eligible program-assigned survey across metrics: 2026-08-01 12:00:00 Pacific');
+ expect(text).toContain('2 documented testing days');expect(text).toContain('Entire Pacific testing days are excluded, whether testing occurred in clinic or at home');
+ expect(text).toContain('Upstream calendar completeness is not independently verified');expect(text).toContain('Documented testing-calendar date bounds: 2026-08-01 → 2026-08-02');
+ expect(JSON.stringify(provenance)).toBe(before);
+ expect(programSourceCoverage()).toEqual(['Source coverage details are not available.']);
+ expect(programSourceCoverage({calendar_verified:false})).toEqual(['The stored testing calendar is not verified; program rankings are withheld.']);
+ expect(programSourceCoverage({calendar_verified:true,testing_days:[]})).toEqual([expect.stringContaining('0 documented testing days')]);
+ expect(programSourceCoverage({calendar_verified:true,calendar:{first_day:'2026-08-01'}})[0]).not.toContain('documented testing days');
+ expect(programSourceCoverage({source_max_survey:time('2026-08-01')})).toEqual([expect.stringContaining('Matching source contains surveys through')]);
+});
+
+test('each explicitly recorded legacy program retains its own contacts and fixed stimulation values in compact summaries',()=>{
+ const source={mode:'open_loop',settings:[{label:'Cycle',value:'Off'},
+  {label:'Left program 1 contacts',value:'C+ 1a-'},{label:'Left program 1 rate hz',value:'55'},{label:'Left program 1 amplitude mA',value:'1.5'},{label:'Left program 1 pulse width us',value:'60'},
+  {label:'Left program 2 contacts',value:'C+ 2b-'},{label:'Left program 2 rate hz',value:'80'},{label:'Left program 2 amplitude mA',value:'2.5'},{label:'Left program 2 pulse width us',value:'90'},
+  {label:'Right contacts',value:'C+ 9a-'},{label:'Right rate hz',value:'100'},{label:'Right amplitude mA',value:'0'},{label:'Right pulse width us',value:'120'}]};
+ const before=JSON.stringify(source),lines=stimulationSettingLines(source,'synthetic');
+ expect(lines).toEqual(['Continuous stimulation','L · Program 1 C+ 1a-','55 Hz · 1.5 mA · 60 µs','L · Program 2 C+ 2b-','80 Hz · 2.5 mA · 90 µs','R C+ 9a-','100 Hz · 0 mA · 120 µs']);
+ expect(JSON.stringify(source)).toBe(before);
+});
+
+test('reviewed reference timestamps qualify historical settings and never establish current delivery',()=>{
+ expect(reviewedReferenceTiming({source:{as_of:time('2026-08-01')}})).toBe('Reviewed source as of 2026-08-01 12:00:00 Pacific; later settings and continuous delivery are not established by this reference.');
+ expect(reviewedReferenceTiming({source:{as_of:'2026-08-01'}})).toContain('Reviewed source as of 2026-08-01;');
+ for(const reference of [{},{source:{}},{source:{as_of:'not a recorded date'}},{source:{as_of:null}}]) expect(reviewedReferenceTiming(reference)).toContain('this historical reference may be stale');
 });
 
 test('compact labels remain bounded and escaped, while setting tooltips retain full units and qualify open-loop thresholds',()=>{
@@ -203,8 +258,8 @@ test('current CL is fixed fourth on the closed-loop side, including sparse, dupl
   const reference={available:true,id:'ol',mode:'open_loop',settings:[]},current={available:true,id:'cl',mode:'closed_loop',settings:[]};
   const plot=stimulationPlot(metric,[ol],[cl],reference,current);
   expect(plot.layout.xaxis.tickvals).toEqual([0,3,5,8]);
-  expect(plot.traces.filter(t=>t.type==='box').map(t=>t.name)).toEqual(['Program ol','Finalized OL','Program cl','Current CL']);
-  expect(plot.programs[3]).toMatchObject({title:'Current CL',countLabel:'n = 2 surveys (2 days)'});
+  expect(plot.traces.filter(t=>t.type==='box').map(t=>t.name)).toEqual(['Program ol','Finalized OL','Program cl','Reviewed CL reference']);
+  expect(plot.programs[3]).toMatchObject({title:'Reviewed CL',countLabel:'n = 2 surveys (2 days)'});
   expect(plot.layout.shapes.filter(s=>s.name==='Condition median').map(s=>(s.x0+s.x1)/2)).toEqual([0,3,5,8]);
   const empty=stimulationPlot({...metric,conditions:[]},[],[],null,current);
   expect(empty.layout.xaxis.tickvals).toEqual([8]);expect(empty.layout.xaxis.range).toEqual([-0.65,8.65]);
@@ -254,7 +309,7 @@ test('split mode comparisons preserve every score/reference slot while only surv
   const plot=stimulationPlot(metric,[ol],[cl],null,current,{mode:'closed_loop',participant:'SYNTHETIC_A1'});
   expect(plot.fitWidth).toBe(true);expect(plot.minWidth).toBeUndefined();expect(plot.layout.hovermode).toBe('closest');
   expect(plot.layout.xaxis.tickvals).toEqual([0,3]);expect(plot.layout.xaxis.range).toEqual([-0.65,3.65]);
-  expect(plot.programs.map(program=>program.title)).toEqual(['CL 1','Current CL']);
+  expect(plot.programs.map(program=>program.title)).toEqual(['CL 1','Reviewed CL']);
   expect(plot.traces.filter(trace=>trace.type==='box').map(trace=>trace.y)).toEqual([cl.points.map(p=>p.value),cl.points.map(p=>p.value)]);
   for(const box of plot.traces.filter(trace=>trace.type==='box')) {expect(box.hoverinfo).toBe('skip');expect(box.hovertemplate).toBeUndefined();}
   expect(plot.traces[1].hovertemplate).toContain('Mode: Single threshold direct');

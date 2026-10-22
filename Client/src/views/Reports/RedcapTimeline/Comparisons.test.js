@@ -23,8 +23,8 @@ test('stimulation comparisons stack full-width OL and CL plots with matching pro
   expect(open.fitWidth).toBe(true);expect(closed.fitWidth).toBe(true);
   expect(open.layout.xaxis.tickvals).toEqual([0,1,2]);expect(closed.layout.xaxis.tickvals).toEqual([0]);
   expect(element.querySelectorAll('[data-plot]')).toHaveLength(2);
-  expect(element.querySelectorAll('section')).toHaveLength(4);expect(element.querySelector('[aria-label="OL 1 settings"]').textContent).toContain('n = 5 surveys (5 days)');
-  expect(element.textContent).toContain('Stimulation OFF reference');expect(element.textContent).toContain('Stage 1 onward');expect(element.textContent).toContain('lowest observed median');
+  expect(element.querySelectorAll('section[aria-label$=" settings"]')).toHaveLength(4);expect(element.querySelector('[aria-label="OL 1 settings"]').textContent).toContain('n = 5 surveys (5 days)');
+  expect(element.textContent).toContain('Stimulation OFF reference');expect(element.textContent).toContain('Stage 1 onward');expect(element.textContent).toContain('Lower observed medians first');
 });
 
 test('stimulation empty, unavailable, sparse-mode and absent-metric states are explicit',async()=>{
@@ -72,7 +72,7 @@ test('fixed finalized OL reference renders independently of metric ranking and l
   expect(element.textContent).toContain('always shown in the fourth open-loop position');
   expect(element.querySelector('a').getAttribute('href')).toBe(finalized_open_loop.source.url);
   expect(element.textContent).toContain('Home programs!B2:C5');
-  expect(element.querySelectorAll('section')).toHaveLength(2);
+  expect(element.querySelectorAll('section[aria-label$=" settings"]')).toHaveLength(2);
   await render(<StimulationPrograms comparison={{available:true,metrics:[{...metric,conditions:[],top:{}}],finalized_open_loop:{...finalized_open_loop,source:undefined}}} metrics={[selected]}/>);
   expect(plot('Overall NRS open loop program comparison').traces).toHaveLength(0);
   expect(element.textContent).toContain('No eligible surveys');expect(element.textContent).toContain('reviewed home-program settings');
@@ -86,7 +86,7 @@ test('current CL is independently visible with source provenance even when no me
   expect(element.textContent).toContain('fourth closed-loop position');expect(element.textContent).toContain('Home!D2:E5');
   expect(element.querySelector('a').textContent).toBe('Current home settings');
   await render(<StimulationPrograms comparison={{available:true,metrics:[metric],current_closed_loop:{...current_closed_loop,source:undefined}}} metrics={[selected]}/>);
-  expect(element.textContent).toContain('reviewed current home-program settings');expect(element.textContent).toContain('No eligible surveys');
+  expect(element.textContent).toContain('reviewed home-program settings');expect(element.textContent).toContain('No eligible surveys');
 });
 
 
@@ -121,4 +121,44 @@ test('medication regimen and condition details use readable terms and retain rec
  expect(element.textContent).toContain('opioid analgesic · Synthetic · 5 mg · Twice daily');
  expect(element.textContent).toContain('Synthetic · 5 mg · Twice daily · Oral');
  expect(element.textContent).toContain('Recorded start');expect(element.textContent).not.toContain('opioid_analgesic');
+});
+
+test('automatic comparisons expose eligible/excluded counts, stored source bounds and relief direction without upstream freshness claims',async()=>{
+ const relief={key:'relief',label:'Relief',range:[0,100],direction:'higher'};
+ const metric={...relief,conditions:[condition('lower',20),condition('higher',80)],top:{open_loop:['higher','lower'],closed_loop:[]},provenance:{total_surveys:15,eligible:12,assigned:10,unassigned:2,excluded_testing:3,missing_value:0,invalid:0,open_loop:10,closed_loop:0,off:0,latest_survey:1735844400,latest_assigned:1735758000,reasons:{testing_day:3,no_same_day_source:2}}};
+ const provenance={policy_version:'synthetic-automatic-v1',source_min:1735758000,source_max:1735844400,source_min_survey:1735758000,source_max_survey:1735844400,calendar_verified:true,calendar:{testing_days:['2025-01-02'],first_day:'2025-01-02',last_day:'2025-01-02'}};
+ const comparison={available:true,metrics:[metric],provenance,message:'Settings association follows reviewed source boundaries.'};
+ const before=JSON.stringify(comparison);
+ await render(<StimulationPrograms comparison={comparison} metrics={[relief]}/>);
+ expect(plot('Relief open loop program comparison').traces.filter(t=>t.type==='box').map(t=>t.name)).toEqual(['Program higher','Program lower']);
+ const coverage=element.querySelector('[aria-label="Relief eligibility and exclusions"]');
+ expect(coverage.textContent).toContain('12 eligible non-testing surveys');expect(coverage.textContent).toContain('3 excluded on documented testing days');expect(coverage.textContent).toContain('2 eligible surveys without a verified program');
+ expect(element.textContent).toContain('Higher observed medians first');expect(element.textContent).toContain('whether testing occurred in clinic or at home');expect(element.textContent).toContain('Stored device-report observation bounds');
+ expect(element.textContent).toContain('does not verify the latest upstream import');expect(element.textContent).toContain(comparison.message);expect(JSON.stringify(comparison)).toBe(before);
+ // Exercise all canonical presentation keys with synthetic observations, including relief direction.
+ const keys=['nrs_intensity','vas_intensity','left_leg_vas_intensity','back_vas','relief','mpq_sum','mpq_aff','mpq_sen','mpq_standard_sensory_0_33','mpq_standard_affective_0_12','mpq_standard_0_45','electrocuting','tingly'];
+ const all=keys.map((key,i)=>({...metric,key,label:`Recorded metric ${i}`,direction:key==='relief'?'higher':'lower'}));
+ await render(<StimulationPrograms comparison={{...comparison,metrics:all}} metrics={all}/>);
+ expect(element.querySelectorAll('[aria-label$="eligibility and exclusions"]')).toHaveLength(13);
+ expect(element.querySelectorAll('[data-plot]')).toHaveLength(13);
+ expect(element.textContent.match(/Higher observed medians first/g)).toHaveLength(1);
+ expect(element.textContent.match(/Lower observed medians first/g)).toHaveLength(12);
+});
+
+test('unverified stored calendar withholds all ranking charts and retains the backend explanation',async()=>{
+ const comparison={available:true,metrics:[{...selected,conditions:[condition('a',2)],top:{open_loop:['a']}}],provenance:{calendar_verified:false}};
+ await render(<StimulationPrograms comparison={comparison} metrics={[selected]}/>);
+ expect(element.textContent).toContain('A verified stored testing calendar is required');expect(element.querySelector('[data-plot]')).toBeNull();
+ await render(<StimulationPrograms comparison={{...comparison,message:'Stored calendar receipt is invalid.'}} metrics={[selected]}/>);
+ expect(element.textContent).toBe('Stored calendar receipt is invalid.');
+});
+
+test('historical CL references remain readable and dated while source labels are rendered as text',async()=>{
+ const current_closed_loop={available:true,id:'historic',mode:'closed_loop',settings:[{label:'Frequency',value:'55 Hz'}],source:{as_of:'2025-01-02'}};
+ const metric={...selected,conditions:[],top:{},provenance:{eligible:0,assigned:0,reasons:{'long_source_reason_<untrusted>':2}}};
+ await render(<StimulationPrograms comparison={{available:true,metrics:[metric],current_closed_loop}} metrics={[selected]}/>);
+ expect(element.textContent).toContain('Reviewed CL reference');expect(element.textContent).not.toContain('Current CL is');
+ expect(element.textContent).toContain('Reviewed source as of 2025-01-02');expect(element.textContent).toContain('later settings and continuous delivery are not established');
+ expect(element.textContent).toContain('long source reason <untrusted>: 2');expect(element.querySelector('untrusted')).toBeNull();
+ expect(plot('Overall NRS closed loop program comparison').programs[0].title).toBe('Reviewed CL');
 });
