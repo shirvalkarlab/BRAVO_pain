@@ -45,7 +45,7 @@ import { TRACKS } from "./stateTracks";
 import { provisionalCaveat } from "./ProvisionalNote";
 import { fmtHz } from "./deployFormat";
 import ParameterTable, { ParameterDetails } from "./PrescriptionPanel";
-import SignoffRecord, { useSignoffActions, StaleNotice, SnapshotFigures } from "./DeploySignoffCard";
+import SignoffRecord, { useSignoffActions, StaleNotice, SnapshotFigures, decidingP } from "./DeploySignoffCard";
 import WhatWouldChangeThis from "./WhatWouldChangeThis";
 import { JUMP_ROW_CLASS } from "views/Reports/paper/links";
 import BandCandidateIdentity from "./BandCandidateIdentity";
@@ -395,7 +395,8 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
             </Section>
             {bc.contact ? (
               <Section title="The band as chosen">
-                <BandCandidateIdentity bc={bc} envelope={chosenBand} />
+                <BandCandidateIdentity bc={bc} envelope={chosenBand}
+                  decides={decidingP(summary && summary.data ? summary.data : null)} />
               </Section>
             ) : null}
           </Fold>

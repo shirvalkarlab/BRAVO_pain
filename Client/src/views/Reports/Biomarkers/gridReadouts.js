@@ -28,12 +28,15 @@
  */
 import { T } from "assets/theme/base/tokens";
 
-/** "q 0.03 (fdr 22 bands)" -- never "p" for a corrected q (the PI, 2026-09-26: a q and a p are
+/** "grid q 0.03 (fdr 22 bands)" -- never "p" for a corrected q (the PI, 2026-09-26: a q and a p are
  *  different numbers; 2026-09-27: shortened from "(p corrected for testing 22 bands)" to the
  *  "fdr" shorthand -- his standing rule now, once context is clear). 22 is the fixed row count the
- *  heat maps have always drawn, the same source `ALLOWANCE` named before this rewording. */
-function qWords(q, n = 22) {
-  return `q ${fmtQ(q)} (fdr ${n} bands)`;
+ *  heat maps have always drawn, the same source `ALLOWANCE` named before this rewording.
+ *  "grid q" since wave 2 (decisions 497, 498): this is the shown grid's own q, over its own 22
+ *  bands; the q that is "corrected within each pair" by the deciding source's p is a different
+ *  number and is printed bare, "q 0.84" (`familyQWords`), so the two are never given one name. */
+export function qWords(q, n = 22) {
+  return `grid q ${fmtQ(q)} (fdr ${n} bands)`;
 }
 
 /** "9s", "1m" -- the delivered length of signal a row holds. */
@@ -243,8 +246,14 @@ export function deviceSpectrumBullets(sw) {
   const tot = ((sw && sw.device_spectrum_total_grid) || []).reduce((m, row) => Math.max(m, ...(row || [0])), 0);
   const share = tot > 0 ? ` (${Math.round((100 * n) / tot)}%)` : "";
   const ofTot = tot > 0 ? ` of ${tot}` : "";
+  // Wave 2, C4 (decision 492): the maps above are the mixed grid, which no longer chooses; the
+  // caption names the grid and its source counts, in place of the old mixed-source sentence.
+  // A grid stored before C4 carries no `grid_source`, and its mixed grid did choose: the old words.
+  const name = gridSourceName(sw && sw.grid_source);
   return [
-    `${n}${ofTot} matched reports${share} had no TD in match window; read from PSD`,
+    name
+      ? `${name}: ${n}${ofTot} matched reports${share} read from PSD (no TD in match window); shown, cannot choose`
+      : `${n}${ofTot} matched reports${share} had no TD in match window; read from PSD`,
     "Match window defined under \"Adjust matching parameters\"",
   ];
 }
@@ -336,4 +345,173 @@ export function sourceSplitLine(sw, colIndex, rowIndex) {
   const parts = [part("TD", split.td), part("PSD", split.psd)].filter(Boolean);
   // One source per line (the PI, 2026-10-02): TD, then PSD on a new line.
   return parts.length ? parts.join("\n") : null;
+}
+
+
+// ---- WAVE 2: WHICH GRID CHOOSES, WHO DECIDES, AND THE WARNINGS ON EACH BAND (decisions 484, 492-498)
+// Every word below is read off the response; nothing is worked out here but the formatting. A field
+// a response does not carry prints nothing (an older stored grid), never a guess.
+
+/** The grid a sweep or row came from, in the PI's words (C4, decision 492: `grid_source`). */
+const GRID_SOURCE_NAME = {
+  td: "TD only",
+  psd: "PSD only",
+  td_psd_where_no_td: "Mixed grid (TD, PSD where no TD)",
+};
+export function gridSourceName(src) {
+  return GRID_SOURCE_NAME[src] || null;
+}
+
+/** "chooses" / "shown, cannot choose" for one best row (`can_choose_band`), null when not carried. */
+export function chooseWords(row) {
+  if (!row || row.can_choose_band == null) return null;
+  return row.can_choose_band ? "chooses the band" : "shown, cannot choose";
+}
+
+/** A grid's title for the heat maps by source: "TD only · chooses the band". */
+export function sourceGridTitle(sw) {
+  const rows = (sw && sw.best_correlation_rows) || [];
+  const name = gridSourceName(rows[0] && rows[0].grid_source) || gridSourceName(sw && sw.grid_source);
+  const choose = chooseWords(rows[0]);
+  return [name, choose].filter(Boolean).join(" · ") || null;
+}
+
+/** Why a grid cannot choose (`cannot_choose_why`), read off its first best row; null when it can. */
+export function cannotChooseWhy(sw) {
+  const rows = (sw && sw.best_correlation_rows) || [];
+  const r = rows.find((x) => x && x.can_choose_band === false && x.cannot_choose_why);
+  return r ? r.cannot_choose_why : null;
+}
+
+/** Whose answer a row chooses by (C5, decision 493): "home" where the home record (chronic log)
+ *  decides (`decided_by`, on the choosing view; or `choice_source` with a covering chronic block, on
+ *  the Biomarkers grid), "TD" where TD does, "none" for a row that never chooses, null if unknown. */
+export function deciderOf(row) {
+  if (!row) return null;
+  if (row.decided_by === "chronic") return "home";
+  if (row.choice_source === "chronic" && row.chronic && row.chronic.covered) return "home";
+  if (row.choice_source === "TD" || row.choice_source === "chronic") return "TD";
+  if (row.choice_source === "none") return "none";
+  return null;
+}
+
+/** "Decided by: home record" / "Decided by: TD" / "Shown, cannot choose". */
+export function decidedByWords(row) {
+  const d = deciderOf(row);
+  if (d === "home") return "Decided by: home record";
+  if (d === "TD") return "Decided by: TD";
+  if (d === "none") return "Shown, cannot choose";
+  return null;
+}
+
+/** The deciding answer's r, interval and count: the chronic block's where the home record decides on
+ *  the Biomarkers grid (there the row's own fields are still TD's), else the row's own (on the
+ *  choosing view `chronic_decides` has already put the chronic answer into them). */
+export function decidingValues(row) {
+  if (!row) return null;
+  if (deciderOf(row) === "home" && row.decided_by !== "chronic") {
+    const c = row.chronic || {};
+    return { r: c.pearson_r, lo: c.pearson_r_low, hi: c.pearson_r_high, n: c.n_reports,
+      currentRemoved: c.current_removed_check, dailySwing: c.daily_swing, recent: c.recent_check,
+      matchWarning: c.warning || null };
+  }
+  return { r: row.pearson_r, lo: row.pearson_r_low, hi: row.pearson_r_high, n: row.n_pain_reports,
+    currentRemoved: row.current_removed_check, dailySwing: row.daily_swing, recent: row.recent_check,
+    matchWarning: row.chronic_match_warning || null };
+}
+
+/** "r +0.08 [−0.30, +0.30], n=30". */
+export function rIntervalN(r, lo, hi, n) {
+  if (r == null || !Number.isFinite(Number(r))) return "no r";
+  const iv = (lo != null && hi != null) ? ` [${fmtR(lo)}, ${fmtR(hi)}]` : "";
+  return `r ${fmtR(r)}${iv}${n != null ? `, n=${n}` : ""}`;
+}
+
+/** The home record's report counts on one band (`n_reports`, `n_reports_in_gap`,
+ *  `n_reports_log_elsewhere`): "30 matched · 429 in a gap · 142 log elsewhere"; null without them. */
+export function chronicCountsWords(ch) {
+  if (!ch || !ch.covered || ch.n_reports == null) return null;
+  const parts = [`${ch.n_reports} matched`];
+  if (ch.n_reports_in_gap != null) parts.push(`${ch.n_reports_in_gap} in a gap`);
+  if (ch.n_reports_log_elsewhere != null) parts.push(`${ch.n_reports_log_elsewhere} log elsewhere`);
+  return parts.join(" · ");
+}
+
+const CURRENT_STATUS_WORD = { holds: "holds", warning: "▲ warning", "constant current": "constant current",
+  "not assessed": "not assessed" };
+/** The current-removed check (decision 484, a warning only): "holds · p 0.03", "▲ warning · p 0.72". */
+export function currentOutWords(chk) {
+  if (!chk) return null;
+  const word = CURRENT_STATUS_WORD[chk.status] || chk.status || "not assessed";
+  const p = chk.p_rotation != null ? chk.p_rotation : chk.p;
+  return p != null && Number.isFinite(Number(p)) ? `${word} · p ${fmtP(p)}` : word;
+}
+
+/** The daily swing (decision 494, a warning only): "▲ 2.6-fold (low 17:00, high 00:00)", or the
+ *  server's status where nothing was measured ("no home record at this band"). */
+export function dailySwingWords(ds) {
+  if (!ds) return null;
+  if (ds.status !== "measured" || ds.ratio == null) return ds.status || null;
+  const hh = (h) => `${String(h).padStart(2, "0")}:00`;
+  const warn = ds.warn_at_ratio != null && Number(ds.ratio) >= Number(ds.warn_at_ratio);
+  return `${warn ? "▲ " : ""}${Number(ds.ratio).toFixed(1)}-fold (low ${hh(ds.hour_low)}, high ${hh(ds.hour_high)})`;
+}
+
+/** The recent-reports check (decision 496, a warning only; no p, the recent reports were also used
+ *  in choosing): "▲ r −0.22 [−0.53, +0.13], n=25", "too few (n=8)", "none". */
+export function recentWords(rc) {
+  if (!rc) return null;
+  if (rc.status === "checked") {
+    return `${rc.warning ? "▲ " : ""}${rIntervalN(rc.pearson_r, rc.pearson_r_low, rc.pearson_r_high, rc.n_after)}`;
+  }
+  if (rc.status === "too few recent reports") return `too few (n=${rc.n_after != null ? rc.n_after : "?"})`;
+  return rc.status || null;
+}
+
+/** The q corrected within each contact pair (decisions 497, 498): "q 0.84", "▲ q 0.87" when warned,
+ *  or the row's status when it is outside the family ("not an allowed sensing pair"). */
+export function familyQWords(row) {
+  if (!row || !row.family_q_status) return null;
+  if (row.family_q == null) return row.family_q_status;
+  return `${row.family_q_warning ? "▲ " : ""}q ${fmtP(row.family_q)}`;
+}
+
+/** The footnote under the q: "q: corrected within each pair: L 0⁻3⁺ across 22 bands; R 0⁻3⁺ across
+ *  22 bands", from the block's `per_pair`; the server's own `words` when there is no per-pair block. */
+export function familyFootnote(fc) {
+  if (!fc || fc.available === false) return null;
+  const per = fc.per_pair || null;
+  if (per && Object.keys(per).length) {
+    const parts = Object.keys(per).map((k) => `${per[k].display || k} across ${per[k].n_in_family} bands`);
+    return `q: corrected within each pair: ${parts.join("; ")}`;
+  }
+  return fc.words ? `q: ${fc.words}` : null;
+}
+
+/** The band centres on a grid where the home record decides (the chronic marks on the TD map). */
+export function chronicMarkCentres(sw) {
+  return ((sw && sw.best_correlation_rows) || []).filter((r) => deciderOf(r) === "home")
+    .map((r) => Number(r.band_center_hz)).filter(Number.isFinite).sort((a, b) => a - b);
+}
+
+/** "Later 30% of ratings: after 2026-04-03 (rolling cut)", from the response's `recent_check_cut`. */
+export function cutDateWords(cut) {
+  if (!cut || !cut.choice_cut_date) return null;
+  return `Later 30% of ratings: after ${cut.choice_cut_date}${cut.rolling ? " (rolling cut)" : ""}`;
+}
+
+/** The warning a chosen non-default home-record match carries (C5: `settings_applied.chronic_match`
+ *  not the default), read off the first chronic block that carries one; null at the default. */
+export function chronicMatchWarning(result) {
+  const sa = (result && result.settings_applied) || {};
+  if (!sa.chronic_match || sa.chronic_match_is_default !== false) return null;
+  const sweeps = (result && result.band_time_sweep) || {};
+  const found = Object.keys(sweeps).map((ch) => {
+    const sw = sweeps[ch] || {};
+    const td = (sw.by_source_grid || {}).td || sw;
+    const row = (td.best_correlation_rows || []).find((r) => (r.chronic && r.chronic.warning) || r.chronic_match_warning);
+    return (sw.chronic_band_choice && sw.chronic_band_choice.warning)
+      || (row && ((row.chronic && row.chronic.warning) || row.chronic_match_warning)) || null;
+  }).find(Boolean);
+  return found || "Not the recommended default way of matching reports to the home record.";
 }

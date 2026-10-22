@@ -45,7 +45,7 @@ describe("bestCellReadout (B1)", () => {
   test("the column's best cell prints n, the interval and the corrected q", () => {
     const r = bestCellReadout(SW, "corr", 1, 9);   // 12.5 Hz, 300 s
     expect(r.isBest).toBe(true);
-    expect(r.text).toBe("117 ratings · q < 0.01 (fdr 22 bands) · interval −0.66 to −0.40");
+    expect(r.text).toBe("117 ratings · grid q < 0.01 (fdr 22 bands) · interval −0.66 to −0.40");
   });
   test("a cell that is not its column's best prints nothing (the PI, 2026-10-02: the sentence pointing at the circled square is gone)", () => {
     const r = bestCellReadout(SW, "corr", 1, 2);   // 12.5 Hz, 9 s; the column's best is at 300 s = 5m
@@ -55,16 +55,16 @@ describe("bestCellReadout (B1)", () => {
   test("the panel lines drop the ratings count, which the plain line beside them already carries", () => {
     // The PI, 2026-09-15: "no reason to say '96 ratings' again".
     expect(bestCellReadout(SW, "corr", 1, 9, { includeN: false }).text)
-      .toBe("q < 0.01 (fdr 22 bands) · interval −0.66 to −0.40");
+      .toBe("grid q < 0.01 (fdr 22 bands) · interval −0.66 to −0.40");
     expect(bestCellReadout(SW, "auc", 2, 3, { includeN: false }).text)
-      .toBe("q 0.03 (fdr 22 bands)");
+      .toBe("grid q 0.03 (fdr 22 bands)");
     // the hover keeps the count: nothing else on a hover carries it
     expect(bestCellReadout(SW, "corr", 1, 9).text).toMatch(/^117 ratings/);
   });
   test("the AUC grid reads its own best row", () => {
     const r = bestCellReadout(SW, "auc", 2, 3);    // 13.5 Hz, 15 s
     expect(r.isBest).toBe(true);
-    expect(r.text).toBe("174 ratings · q 0.03 (fdr 22 bands)");
+    expect(r.text).toBe("174 ratings · grid q 0.03 (fdr 22 bands)");
   });
   test("a column with no best row prints nothing (the older sentence about the allowance is gone)", () => {
     expect(bestCellReadout(SW, "auc", 0, 0).text).toBe("");
@@ -85,8 +85,8 @@ describe("hoverReadout -- the hover's third line (the PI, 2026-09-16)", () => {
     auc_n_low_grid: Array.from({ length: 10 }, () => [20, 30, 25]),
   };
   test("the column's best cell: its ratings count and its corrected q, nothing else", () => {
-    expect(hoverReadout(withN, "corr", 1, 9)).toBe("117 ratings · q < 0.01 (fdr 22 bands)");
-    expect(hoverReadout(withN, "auc", 2, 3)).toBe("174 ratings · q 0.03 (fdr 22 bands)");
+    expect(hoverReadout(withN, "corr", 1, 9)).toBe("117 ratings · grid q < 0.01 (fdr 22 bands)");
+    expect(hoverReadout(withN, "auc", 2, 3)).toBe("174 ratings · grid q 0.03 (fdr 22 bands)");
   });
   test("any other cell: its own count and its own uncorrected p, both read off the response", () => {
     // nothing is computed in the browser: `p_grid` (Pearson) and `auc_p_grid` (Mann-Whitney) come
@@ -107,7 +107,7 @@ describe("hoverReadout -- the hover's third line (the PI, 2026-09-16)", () => {
   });
   test("the cross-setting stability word is not on the hover (it is drawn as a symbol)", () => {
     const stab = { ...withN, best_correlation_rows: withN.best_correlation_rows.map((r) => ({ ...r, cross_setting_stability: { answer: "behaves differently" } })) };
-    expect(hoverReadout(stab, "corr", 1, 9)).toBe("117 ratings · q < 0.01 (fdr 22 bands)");
+    expect(hoverReadout(stab, "corr", 1, 9)).toBe("117 ratings · grid q < 0.01 (fdr 22 bands)");
   });
 });
 
@@ -117,7 +117,7 @@ describe("hoverCustomData (B1)", () => {
     const cd = hoverCustomData(withN, "corr");
     expect(cd.length).toBe(10);
     expect(cd[9].length).toBe(3);
-    expect(cd[9][1]).toBe("117 ratings · q < 0.01 (fdr 22 bands)");
+    expect(cd[9][1]).toBe("117 ratings · grid q < 0.01 (fdr 22 bands)");
     expect(cd[2][1]).toBe("96 ratings · p 0.05");
   });
 });
@@ -187,11 +187,11 @@ describe("cross-setting stability on the grid (B3, decision 185)", () => {
   });
   test("the best cell's panel line carries no verdict or across-settings answer: those are the Closed-Loop page's", () => {
     const r = bestCellReadout(withStability("behaves differently", "the interaction test rejects"), "corr", 1, 9);
-    expect(r.text).toBe("117 ratings · q < 0.01 (fdr 22 bands) · interval −0.66 to −0.40");
+    expect(r.text).toBe("117 ratings · grid q < 0.01 (fdr 22 bands) · interval −0.66 to −0.40");
     expect(r.text).not.toMatch(/across settings|established|cannot tell|not resolved/);
   });
   test("a row carrying no answer at all leaves the panel line as it was", () => {
-    expect(bestCellReadout(SW, "corr", 1, 9).text).toBe("117 ratings · q < 0.01 (fdr 22 bands) · interval −0.66 to −0.40");
+    expect(bestCellReadout(SW, "corr", 1, 9).text).toBe("117 ratings · grid q < 0.01 (fdr 22 bands) · interval −0.66 to −0.40");
   });
   // CHANGED ON PURPOSE (the redesign of 2026-09-26, SPEC.md section 3.2): the stability answer is
   // drawn by SHAPE in ink, never by green, red or amber, so colour alone carries no meaning.
@@ -247,15 +247,15 @@ describe("the effective count beside the raw count (panel A item 4, 2026-09-22)"
   withEff.p_grid = Array.from({ length: 10 }, () => [0.4, 0.0507, 0.2]);
 
   test("the hover on the best cell stays short: no independent-ratings detail (the PI, 2026-09-27: trim the hover)", () => {
-    expect(hoverReadout(withEff, "corr", 1, 9)).toBe("117 ratings · q < 0.01 (fdr 22 bands)");
+    expect(hoverReadout(withEff, "corr", 1, 9)).toBe("117 ratings · grid q < 0.01 (fdr 22 bands)");
   });
   test("the panel line names it too", () => {
-    expect(bestCellReadout(withEff, "corr", 1, 9).text).toMatch(/^117 ratings \(about 98 independent\) · q /);
+    expect(bestCellReadout(withEff, "corr", 1, 9).text).toMatch(/^117 ratings \(about 98 independent\) · grid q /);
   });
   test("a best row without the field, and any other cell, print exactly what they did", () => {
-    expect(hoverReadout(withEff, "auc", 2, 3)).toMatch(/^174 ratings · q .* \(fdr 22 bands\)$/);
+    expect(hoverReadout(withEff, "auc", 2, 3)).toMatch(/^174 ratings · grid q .* \(fdr 22 bands\)$/);
     expect(hoverReadout(withEff, "corr", 1, 2)).toBe("96 ratings · p 0.05");
-    expect(bestCellReadout(SW, "corr", 1, 9).text).toMatch(/^117 ratings · q /);
+    expect(bestCellReadout(SW, "corr", 1, 9).text).toMatch(/^117 ratings · grid q /);
   });
 });
 

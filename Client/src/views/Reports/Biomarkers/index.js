@@ -29,6 +29,7 @@ import BinarizationPreview from "./BinarizationPreview";
 import lastComputedLine from "./lastComputedLine";
 import MatchWindowBand, { ControlLabel } from "./MatchWindowBand";
 import Fold from "./Fold";
+import HomeRecordMatchControl from "./HomeRecordMatchControl";
 // BandTimeSweepPanel (the older, non-interactive tables-and-server-figures rendering of this
 // same grid) is superseded on this page by BiomarkerHeatmapGrids below -- kept as a file rather
 // than deleted (CLAUDE.md §6 warns against deleting something that still works), but
@@ -36,7 +37,7 @@ import Fold from "./Fold";
 import BiomarkerHeatmapGrids, { RefusalReason } from "./BiomarkerHeatmapGrids";
 import { reportCoverage, computeMatchedScanModel } from "./binarizationModel";
 import { saveControls, loadControls } from "./biomarkerStateStore";
-import { MATCHING_DEFAULTS as D } from "./matchingDefaults";
+import { MATCHING_DEFAULTS as D, chronicMatchParam } from "./matchingDefaults";
 
 // TWO PANELS RELOCATED FROM THE CLOSED-LOOP DEPLOYMENT PAGE (CLD_REDESIGN_PLAN.md item 11).
 // Both answer questions about the PSD-to-device-LSB calibration, and both are read by the analyst
@@ -181,6 +182,11 @@ function Biomarkers() {
   // ratings. OFF by default -- those scores were taken while current was being stepped on purpose.
   const [includeClinicSheetRatings, setIncludeClinicSheetRatings] = useState(
     P.includeClinicSheetRatings != null ? P.includeClinicSheetRatings : D.includeClinicSheetRatings);
+  // Wave 2, C5 (decision 493; the PI, 2026-10-19): how a pain report meets the home record (chronic
+  // log). "covering", the recommended default, takes the one 10-minute average covering the report;
+  // "window" uses the page's matching window and carries a warning wherever a home-record answer is
+  // shown. Sent as `ChronicMatch` only when not the default, so the default grid keeps its key.
+  const [chronicMatch, setChronicMatch] = useState(P.chronicMatch || D.chronicMatch);
   // Timeline color mode: "multimodal" colors the neural lanes by sensing center frequency (the data
   // view); "binarization" recolors every modality LIVE by its high/low/excluded pain label at the
   // current match window (matched-and-included = vermillion/blue, everything else dimmed light grey),
@@ -376,11 +382,11 @@ function Biomarkers() {
     saveControls(participant_uid, {
       metric, strategy, percentileLow, percentileHigh, matchTolerance,
       maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams,
-      matchExtentSec, allowWindowReuse, includeClinicSheetRatings, matchingRun,
+      matchExtentSec, allowWindowReuse, includeClinicSheetRatings, matchingRun, chronicMatch,
     });
   }, [participant_uid, metric, strategy, percentileLow, percentileHigh, matchTolerance,
     maxPerRating, refractoryMin, matchDirection, timelineColorMode, requestParams,
-    matchExtentSec, allowWindowReuse, includeClinicSheetRatings, matchingRun]);
+    matchExtentSec, allowWindowReuse, includeClinicSheetRatings, matchingRun, chronicMatch]);
 
   // Fetch raw pain-score reports ONCE per participant (no LFP, just the PRO surveys) so the
   // binarization preview card can show a live histogram with cuts before any heavy compute.
@@ -558,8 +564,9 @@ function Biomarkers() {
     AllowWindowReuse: allowWindowReuse,
     IncludeClinicSheetRatings: includeClinicSheetRatings,
     SlidingWindow: slidingWindow,
+    ...chronicMatchParam(chronicMatch),
   }), [source, metric, strategy, percentileLowD, percentileHighD, matchToleranceD, matchDirection,
-      allowWindowReuse, includeClinicSheetRatings]);
+      allowWindowReuse, includeClinicSheetRatings, chronicMatch]);
 
   // A heat-map grid built and shown as current is a run of these settings (see `matchingRun`).
   useEffect(() => {
@@ -617,6 +624,7 @@ function Biomarkers() {
   const moreOptions = (
     <MDBox sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
                  columnGap: 3, rowGap: 2 }}>
+      <HomeRecordMatchControl value={chronicMatch} onChange={setChronicMatch} />
       {/* The cap per rating, and the minimum gap between the samples it keeps. */}
       <MDBox>
         <ControlLabel note={`${maxPerRating > 1 ? "Rating value: median of its closest readings." : "One closest reading per pair."}`

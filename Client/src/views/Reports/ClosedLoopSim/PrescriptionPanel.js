@@ -322,6 +322,10 @@ export default function ParameterTable({ report, mode, onMode }) {
               </MDBox>
             </MDBox>
           </MDBox>
+          {/* Wave 2, C7 (decision 495): the home record's daily swing, in the open beside the
+              thresholds it qualifies (the rows' reasons under "Details" carry it too). A warning
+              only: the thresholds stay set from clinic recordings. */}
+          <HomeSwingLine data={st && st.data} />
           {readBackEnabled ? (
             <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body, mt: 0.6, fontWeight: 600,
               color: nTicked === fields.length ? PAL.passText : PAL.warnText }}>
@@ -336,7 +340,21 @@ export default function ParameterTable({ report, mode, onMode }) {
   );
 }
 
-/** One label and its sentence, for the details list. */
+/** The threshold placement's `home_swing` warning, one line; nothing when it does not warn. */
+export function HomeSwingLine({ data }) {
+  const hs = data && ((data.threshold_placement && data.threshold_placement.home_swing)
+    || (data.threshold && data.threshold.placement && data.threshold.placement.home_swing));
+  if (!hs || !hs.warning) return null;
+  return (
+    <MDTypography variant="caption" data-testid="home-swing-line"
+      sx={{ display: "block", fontSize: PAL.fs.body, color: PAL.warnText, mt: 0.6 }}>
+      <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>
+      {hs.warning}
+    </MDTypography>
+  );
+}
+
+/** One label and its sentence, for the details list.  */
 function Note({ children, ink = PAL.ink2, mt = 0.2 }) {
   // The caution ink always comes with its ▲ (SPEC 2.3; TASTE_AUDIT.md D12): added here unless the
   // note's own text already starts with it.

@@ -33,8 +33,9 @@ describe("both p-values for the chosen band", () => {
 
   it("the sign-off card shows the rotation p on the line after the model's own p", () => {
     const s = src("DeploySignoffCard.js");
-    const own = s.indexOf('k="p from the mixed-effects model (ratings grouped in time)"');
-    const rot = s.indexOf('k="p from shifting ratings in time"');
+    // the labels are template strings since wave 2 (the deciding p is marked, decision 482)
+    const own = s.indexOf('k={`p from the mixed-effects model (ratings grouped in time)');
+    const rot = s.indexOf('k={`p from shifting ratings in time');
     expect(own).toBeGreaterThan(0);
     expect(rot).toBeGreaterThan(own);
     expect(s.slice(rot, rot + 260)).toMatch(/ev\.p_rotation/);
