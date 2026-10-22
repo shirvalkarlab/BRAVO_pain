@@ -4,6 +4,8 @@ import {displayTarget,displayTargetText} from 'utils/participantTargets';
 import {settingValueLabel} from './settingDisplay';
 import {medicationTerm,medicationLabel} from './medicationDisplay';
 
+export const COMPARISON_HOVER_FONT_SIZE=15;
+
 const PALETTE=['#35669B','#99723A','#6F5599','#317C71','#A65364','#687842'];
 const finitePoints=condition=>condition.points.filter(point=>Number.isFinite(point.value)&&Number.isFinite(point.time));
 
@@ -255,7 +257,10 @@ export function stimulationPlot(metric,open,closed,reference=null,currentReferen
   });
   plot.fitWidth=true;
   plot.programs=slots.map(({condition,title,position})=>({condition,title,position,countLabel:surveyCount(condition),settings:stimulationSettingLines(condition,options.participant)}));
-  plot.layout.height=390;
+  // Plotly removes a hover label taller than the plot, even when its SVG can
+  // overflow. Reserve room for every wrapped line at the renderer's font size.
+  const hoverLines=Math.max(0,...plot.traces.filter(trace=>trace.type==='scatter').map(trace=>trace.hovertemplate.split('<br>').length));
+  plot.layout.height=Math.max(420,Math.ceil(hoverLines*COMPARISON_HOVER_FONT_SIZE*1.3+24));
   plot.layout.hovermode='closest';
   plot.layout.xaxis={...plot.layout.xaxis,range:[-0.65,options.mode?3.65:current?closedStart+3.65:closedStart+2.65],tickvals:slots.map(slot=>slot.position),tickfont:{size:13},tickangle:0,fixedrange:true,
     ticktext:slots.map(({title})=>`<b>${title.replace(' ','<br>')}</b>`)};

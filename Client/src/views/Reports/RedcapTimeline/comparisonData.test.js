@@ -1,4 +1,4 @@
-import {surveyCount,stimulationSettingLines,stimulationSummary,stimulationDetailRows,finalizedProgram,stimulationAxisSettings,comparisonCoverage,compactLabel,topPrograms,conditionSummary,conditionPlot,medicationTimeline,medicationDisplayScope,stimulationPlot,medicationConditionPlot,orderedMedicationConditions,programRankingLabel,programMetricCoverage,programSourceCoverage,reviewedReferenceTiming} from './comparisonData';
+import {COMPARISON_HOVER_FONT_SIZE,surveyCount,stimulationSettingLines,stimulationSummary,stimulationDetailRows,finalizedProgram,stimulationAxisSettings,comparisonCoverage,compactLabel,topPrograms,conditionSummary,conditionPlot,medicationTimeline,medicationDisplayScope,stimulationPlot,medicationConditionPlot,orderedMedicationConditions,programRankingLabel,programMetricCoverage,programSourceCoverage,reviewedReferenceTiming} from './comparisonData';
 const time=day=>Date.parse(`${day}T19:00:00Z`)/1000;
 const points=values=>values.map((value,i)=>({time:time('2026-08-01')+i*86400,value}));
 const condition=(id,median,count=5)=>({id,label:`Program ${id}`,mode:'open_loop',median,count,points:points(Array.from({length:count},()=>median))});
@@ -419,4 +419,27 @@ test('medication axes, trace names, regimen keys and tooltips translate codes wh
  expect(plot.traces[1].hovertemplate.replace(/<br>/g,' ')).toContain('PRN available; use not confirmed');
  expect(plot.traces[1].hovertemplate).not.toMatch(/opioid_analgesic|prn_available|\| bid/);
  expect(plot.traces[0].x).toEqual(source.points.map(point=>point.value));
+});
+
+
+test('complete CL hover fits the plot and longer wrapped source text receives proportional room',()=>{
+ const settings=sourceSettings([{label:'Left adaptive status',value:'RUNNING'},{label:'Right adaptive status',value:'RUNNING'},
+  {label:'Left adaptive mode',value:'DUAL_THRESHOLD_DIRECT'},{label:'Right adaptive mode',value:'DUAL_THRESHOLD_DIRECT'},
+  {label:'Left lower lfp threshold (LSB)',value:'125.0'},{label:'Left upper lfp threshold (LSB)',value:'175.0'},
+  {label:'Right lower lfp threshold (LSB)',value:'225.0'},{label:'Right upper lfp threshold (LSB)',value:'275.0'},
+  {label:'Right ganged to',value:'Left'}]);
+ const source={...condition('synthetic-long',6),mode:'closed_loop',settings},metric={label:'Synthetic pain',range:[0,10],conditions:[source]};
+ const original=JSON.stringify(metric),plot=stimulationPlot(metric,[],[source],null,null,{mode:'closed_loop',participant:'synthetic'});
+ expect(plot.layout.height).toBeGreaterThanOrEqual(420);
+ const template=plot.traces.find(trace=>trace.type==='scatter').hovertemplate;
+ expect(plot.layout.height).toBeGreaterThan(template.split('<br>').length*COMPARISON_HOVER_FONT_SIZE*1.3);
+ expect(template.replace(/<br>/g,' ')).toContain('lower 125.0 · upper 175.0 LSB');
+ expect(template.replace(/<br>/g,' ')).toContain('Ganged to: Left (sensing values above are recorded for R)');
+ expect(plot.traces.filter(trace=>trace.type==='box').map(trace=>trace.y)).toEqual([source.points.map(point=>point.value)]);
+ expect(plot.traces.find(trace=>trace.type==='scatter').customdata.map(point=>point[1])).toEqual(source.points.map(point=>point.value));
+ const long={...source,label:'A complete synthetic source label that needs several wrapped lines and must remain fully readable '.repeat(5)};
+ const longer=stimulationPlot(metric,[],[long],null,null,{mode:'closed_loop',participant:'synthetic'});
+ expect(longer.layout.height).toBeGreaterThan(plot.layout.height);
+ expect(longer.traces.find(trace=>trace.type==='scatter').hovertemplate.replace(/<br>/g,' ')).toContain(long.label.trim());
+ expect(JSON.stringify(metric)).toBe(original);
 });

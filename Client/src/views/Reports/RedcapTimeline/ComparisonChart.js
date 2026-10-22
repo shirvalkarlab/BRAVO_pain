@@ -1,6 +1,7 @@
 import {useEffect,useRef,useState} from 'react';
 import Plotly from 'plotly.js-dist';
 import {escapeText} from './data';
+import {COMPARISON_HOVER_FONT_SIZE} from './comparisonData';
 
 export default function ComparisonChart({plot,label}) {
   const ref=useRef(null),container=useRef(null);
@@ -35,7 +36,7 @@ export default function ComparisonChart({plot,label}) {
       if(narrow) layout.annotations=[];
     }
     Plotly.react(ref.current,plot.traces,{paper_bgcolor:'transparent',plot_bgcolor:'transparent',font:{family:'Roboto, sans-serif',size:16,color:'#344767'},
-      hoverlabel:{font:{size:15}},showlegend:false,...layout},{responsive:true,displaylogo:false,scrollZoom:false,modeBarButtonsToRemove:['lasso2d','select2d']});
+      hoverlabel:{font:{size:COMPARISON_HOVER_FONT_SIZE}},showlegend:false,...layout},{responsive:true,displaylogo:false,scrollZoom:false,modeBarButtonsToRemove:['lasso2d','select2d']});
   },[plot,visible,width]);
   useEffect(()=>{
     if(!visible||typeof ResizeObserver==='undefined') return;

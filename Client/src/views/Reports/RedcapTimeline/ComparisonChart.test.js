@@ -3,6 +3,7 @@ import {createRoot} from 'react-dom/client';
 import {act} from 'react-dom/test-utils';
 import Plotly from 'plotly.js-dist';
 import ComparisonChart from './ComparisonChart';
+import {COMPARISON_HOVER_FONT_SIZE} from './comparisonData';
 jest.mock('plotly.js-dist',()=>({react:jest.fn(),purge:jest.fn()}));
 const originalObserver=global.IntersectionObserver;
 beforeEach(()=>{global.IS_REACT_ACT_ENVIRONMENT=true;delete global.IntersectionObserver;Plotly.react.mockClear();Plotly.purge.mockClear();});
@@ -12,7 +13,7 @@ test('comparison renderer passes exact traces/layout, updates in place and clean
   const plot={traces:[{type:'box',y:[1,2,3]}],layout:{height:420,yaxis:{range:[0,10]}}};
   act(()=>root.render(<ComparisonChart plot={plot} label="Program comparison"/>));
   const node=element.querySelector('[role="img"]');expect(node.getAttribute('aria-label')).toBe('Program comparison');
-  expect(Plotly.react).toHaveBeenLastCalledWith(node,plot.traces,expect.objectContaining({height:420,font:{family:'Roboto, sans-serif',size:16,color:'#344767'},yaxis:{range:[0,10]}}),expect.objectContaining({responsive:true,displaylogo:false}));
+  expect(Plotly.react).toHaveBeenLastCalledWith(node,plot.traces,expect.objectContaining({height:420,font:{family:'Roboto, sans-serif',size:16,color:'#344767'},hoverlabel:{font:{size:COMPARISON_HOVER_FONT_SIZE}},yaxis:{range:[0,10]}}),expect.objectContaining({responsive:true,displaylogo:false}));
   const next={...plot,traces:[{type:'box',y:[4,5]}]};act(()=>root.render(<ComparisonChart plot={next} label="Program comparison"/>));expect(Plotly.react.mock.calls.at(-1)[1]).toEqual(next.traces);
   act(()=>root.unmount());expect(Plotly.purge).toHaveBeenCalledWith(node);
 });
