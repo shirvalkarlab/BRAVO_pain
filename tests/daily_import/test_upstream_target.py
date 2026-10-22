@@ -98,6 +98,43 @@ def test_unknown_device_withheld_and_retried(tmp_path):
     assert len(runtime.rows) == 1
 
 
+@pytest.mark.parametrize('decision', [True, False, 'error'])
+def test_opt_in_admission_is_needed_for_each_new_masked_source(tmp_path, decision):
+    cfg=config(tmp_path);cfg['target_institute_uid']=I
+    binding=dict(policy=u.masked_identity.POLICY_VERSION,scope=SCOPE,participant_uid=P,
+        institute_uid=I,device_uid='d'*32,seed_source_uid='e'*32,seed_raw_sha256='f'*64)
+    cfg['upstream']['masked_device_binding']=binding
+    runtime=Runtime();runtime.prepare_masked=Mock()
+    runtime.verify_masked_admission=Mock()
+    runtime.admit_masked=Mock(side_effect=ValueError('proof failed')) if decision=='error' else Mock(return_value=decision)
+    masked=json.loads(RAW);masked['DeviceInformation']['Final']['NeurostimulatorSerialNumber']='███'
+    raw=state.encoded(masked)
+    root,_=publish(Path(cfg['upstream']['batches']),[('id:new-masked',raw)])
+    receipts,new,dupe=u.apply([root],cfg,runtime,KEY,REV)
+    runtime.prepare_masked.assert_called_once_with(binding,{},KEY,[SERIAL])
+    runtime.admit_masked.assert_called_once()
+    assert new==int(decision is True) and dupe==0
+    assert bool(receipts[0][1]['withheld'])==(decision is not True)
+    assert runtime.calls==int(decision is True)
+
+
+def test_prospective_opt_in_cannot_override_changed_provider_object(tmp_path):
+    cfg=config(tmp_path);cfg['target_institute_uid']=I
+    cfg['upstream']['masked_device_binding']=dict(policy=u.masked_identity.POLICY_VERSION,
+        scope=SCOPE,participant_uid=P,institute_uid=I,device_uid='d'*32,
+        seed_source_uid='e'*32,seed_raw_sha256='f'*64)
+    old=NS(uid='d'*32,metadata={'UpstreamSource':u.merge_provenance(None,SCOPE,state.sha(RAW),[
+        {'provider_id':'id:changed','revision':None,'provider_modified_at':'2026-01-01T00:00:00Z','sha256':state.sha(RAW)}])})
+    runtime=Runtime();runtime.index[state.sha(RAW)]=old
+    runtime.prepare_masked=Mock();runtime.admit_masked=Mock(return_value=True)
+    changed=RAW.replace(SERIAL.encode(),'███'.encode())
+    root,_=publish(Path(cfg['upstream']['batches']),[('id:changed',changed)])
+    receipts,new,duplicate=u.apply([root],cfg,runtime,KEY,REV)
+    assert receipts[0][1]['withheld'][0]['reason']=='changed_source'
+    runtime.admit_masked.assert_not_called()
+    assert new==duplicate==runtime.calls==0
+
+
 def test_all_unknown_no_ingest(tmp_path):
     cfg = config(tmp_path)
     root, _ = publish(Path(cfg['upstream']['batches']), [('id:missing', b'{"SessionDate":"2026-01-01","DeviceInformation":{}}')])

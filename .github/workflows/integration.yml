@@ -23,11 +23,11 @@ jobs:
           uv run --frozen python -c 'import json; s=json.load(open("runtime-coverage.json"))["files"]["BRAVO/BRAVO/jetstream_settings.py"]["summary"]; assert s["num_branches"] > 0 and s["covered_branches"] / s["num_branches"] >= 0.95, s'
       - name: Daily import contracts and per-module branch coverage (synthetic, no service access)
         run: |
-          uv run --frozen pytest tests/daily_import -q --cov=state --cov=source_adapter --cov=target_adapter --cov=host --cov=clinic --cov=providers --cov=manual_sync --cov=upstream_target --cov=upstream_source --cov=upstream_dropbox --cov=upstream_clinic --cov-config=/dev/null --cov-branch --cov-report=json:daily-import-coverage.json
+          uv run --frozen pytest tests/daily_import tests/test_daily_import_native_continuity.py -q --cov=state --cov=source_adapter --cov=target_adapter --cov=host --cov=clinic --cov=providers --cov=manual_sync --cov=upstream_target --cov=upstream_source --cov=upstream_dropbox --cov=upstream_clinic --cov=masked_identity --cov=native_continuity --cov-config=/dev/null --cov-branch --cov-report=json:daily-import-coverage.json
           uv run --frozen python - <<'PY'
           import json
           files = json.load(open("daily-import-coverage.json"))["files"]
-          for name in ("state", "source_adapter", "target_adapter", "host", "clinic", "providers", "manual_sync", "upstream_target", "upstream_source", "upstream_dropbox", "upstream_clinic"):
+          for name in ("state", "source_adapter", "target_adapter", "host", "clinic", "providers", "manual_sync", "upstream_target", "upstream_source", "upstream_dropbox", "upstream_clinic", "masked_identity", "native_continuity"):
               summary = files[f"scripts/daily_import/{name}.py"]["summary"]
               assert summary["num_branches"] > 0, (name, summary)
               assert summary["covered_branches"] / summary["num_branches"] >= 0.95, (name, summary)

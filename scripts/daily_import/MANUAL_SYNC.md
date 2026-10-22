@@ -74,6 +74,40 @@ No outside-folder download follows a moved file.
 
 The target configuration adds `upstream` with the same `scope`, read-only
 `batches`, writable `receipts`, and the exact accepted `approved_device_serials`.
+
+An optional root-owned private `upstream.masked_device_binding` supports new
+serial-masked reports from one explicitly reviewed stream and existing implant.
+It contains exactly `policy` (`masked-native-continuity-v1`), `scope`,
+`participant_uid`, `institute_uid`, `device_uid`, `seed_source_uid` and
+`seed_raw_sha256`. The owner, institute and scope must equal the fixed target;
+the seed names an authenticated, previously accepted original report. It never
+adds a masked token to `approved_device_serials` or recovers a serial number.
+
+Every new report must have matching wholly block-masked Initial/Final serials,
+a unique native owner/type/exact-lead match to that existing device, an advancing
+session in the same native clock block, and complete bilateral chronic and
+spectral continuity with the latest trusted read. All overlapping measurements
+and explicit contact claims must agree. A changed or omitted contact claim
+relative to the reference cannot supply a witness. Identical contact-free
+spectra can establish numerical continuity without establishing contact identity.
+Canonical conversion must preserve every common native
+measurement timestamp. Unknown clocks, conflicting measurements, changed
+provider objects, ambiguous devices, absent meaningful overlap and new clock
+blocks remain withheld. Existing array/contact preservation rules still apply.
+
+`MaskedDeviceAdmission` records the exact source/reference raw identities,
+private binding digest, native proof and clock proof. Only descendants whose
+validated, domain-separated HMAC-signed receipts chain to the reviewed seed may become rolling references;
+an arbitrary later masked source cannot. This lets verified imports advance
+without creating permission for unrelated or unverifiable reports. The chart
+refreshes from committed verified imports and continues to report uncertainty.
+
+Hosted daily and manual runners embed installed sibling helper files into their
+isolated target process. Updating an application image alone does not update
+this policy: release `host.py`, `upstream_target.py`, `masked_identity.py` and
+`native_continuity.py` together with the exact reviewed private binding, under
+the existing maintenance/import lock and with a reversible hash-checked backup.
+Preserve all unchanged helper files, services and source jobs.
 It also sets `upstream_source_status` to the source status file through the
 private mount, and directs `clinic.snapshots` to the separate upstream clinic
 tree. Existing target identity, database, runtime revision, provider settings,

@@ -59,7 +59,7 @@ def bootstrap(request, target=False, clinic_source=False, manual=False, provider
     if target and 'providers' in request:
         names.append('providers')
     if target and 'upstream' in request:
-        names.extend(['upstream_target', 'upstream_source'])
+        names.extend(['native_continuity', 'masked_identity', 'upstream_target', 'upstream_source'])
     modules = {name: state.read_bounded(Path(__file__).resolve().parent / (name + '.py'), 256 * 1024).decode() for name in names}
     return ("import contextlib,os,resource,sys,types\n"
         "resource.setrlimit(resource.RLIMIT_AS,(24*1024**3,24*1024**3))\n"
