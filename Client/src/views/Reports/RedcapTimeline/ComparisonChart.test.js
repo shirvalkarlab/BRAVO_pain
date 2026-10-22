@@ -113,7 +113,7 @@ test.each(['stimulation','medication'])('responsive %s charts retain dimensions 
   Plotly.Plots={resize};
   Plotly.react.mockImplementation((node,traces,layout)=>{node.layout={...layout};node._fullLayout={...layout};});
   const rowLabels=['First complete regimen with a deliberately long unchanged name and dose that wraps to several desktop lines per row','Second complete unchanged regimen'];
-  const traces=[{type:'scatter',x:[0.1,0.2],y:[0,7],customdata:[['synthetic first',0],['synthetic second',7]],hovertemplate:'<b>Complete settings</b><br>55 Hz · 100 us · 1.4–4.0 mA<br>Full threshold and timing evidence'}];
+  const traces=[{type:'scatter',x:[0.1,0.2],y:[0,7],customdata:[['synthetic first',0],['synthetic second',7]],hovertemplate:'<b>Complete settings</b><br>17.5 Hz · 87 us · 0.7–2.2 mA<br>Full threshold and timing evidence'}];
   const plot={traces,layout:{height:kind==='stimulation'?420:350,margin:{l:55,r:15,t:25,b:65},yaxis:{range:[0,10]},xaxis:{type:'linear'}},...(kind==='medication'?{rowLabels}:{})};
   const unchanged=JSON.stringify(plot),element=document.createElement('div'),root=createRoot(element);
   try {
