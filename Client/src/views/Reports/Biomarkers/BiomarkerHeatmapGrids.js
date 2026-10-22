@@ -70,7 +70,8 @@ import { CHRONIC_MATCH_OPTIONS } from "./matchingDefaults";
 import { bestCellReadout, cellNP, fmtP, pEquals, hoverCustomData, tierBullets, deviceSpectrumBullets, needsMultiplePsds, stabilityMark, stabilityBullet, clinicSheetBullets, sourceSplitLine,
   gridSourceName, sourceGridTitle, cannotChooseWhy, chronicMarkCentres, cutDateWords, chronicMatchWarning,
   decidedByWords, decidingValues, rIntervalN, chronicCountsWords, currentOutWords,
-  dailySwingWords, recentWords, familyQWords, familyFootnote } from "./gridReadouts";
+  dailySwingWords, recentWords, familyQWords, familyFootnote,
+  familyQAucWords, familyAucFootnote } from "./gridReadouts";
 
 /** Participants whose likeliest Closed-Loop bands were asked for in this page load (decision 430). */
 const CL_PREFETCHED = new Set();
@@ -843,14 +844,17 @@ export function ChronicMatchWarningLine({ text }) {
 
 /** The TD-only and PSD-only correlation maps side by side (C4, decision 492): the TD map chooses the
  *  band, with a ▼ above each column the home record decides (C5); the PSD map is shown and cannot
- *  choose, with its reason. Hover cross-highlights the large maps; a click picks nothing here. */
-function SourceGrids({ sw, hoveredCell, pinnedCell, onHover, deviceRanges }) {
+ *  choose, with its reason. Hover cross-highlights the large maps; a click opens the clicked
+ *  square's scatter and violins from that map's own matched pairs (open item of 492), and marks the
+ *  square on that map only. */
+function SourceGrids({ sw, hoveredCell, pinnedCell, onHover, deviceRanges, onClick }) {
   const by = (sw && sw.by_source_grid) || null;
   if (!by || !by.td || !by.psd) return null;
   const subhead = { ...TYPE.body, fontWeight: 600, color: T.ink, display: "block", mb: 0, mt: 0 };
   const marks = chronicMarkCentres(by.td);
   const psdWhy = cannotChooseWhy(by.psd);
-  const noClick = () => {};
+  const pinOn = (src) => (pinnedCell && pinnedCell.source === src ? pinnedCell : null);
+  const clickOn = (src) => (r, c) => { if (onClick) onClick(src, r, c); };
   return (
     <MDBox data-testid="source-grids" mt={3}>
       <MDBox sx={{ display: "grid", columnGap: 3, rowGap: 1, alignItems: "start",
@@ -866,8 +870,8 @@ function SourceGrids({ sw, hoveredCell, pinnedCell, onHover, deviceRanges }) {
         </MDTypography>
         <MDBox sx={{ gridArea: "m1", minWidth: 0 }}>
           <PlotlyHeatmap divId="biomarker-heatmap-td" sw={by.td} kind="correlation" marks={marks}
-            deviceRanges={deviceRanges} hoveredCell={hoveredCell} pinnedCell={pinnedCell}
-            onHover={onHover} onClick={noClick} />
+            deviceRanges={deviceRanges} hoveredCell={hoveredCell} pinnedCell={pinOn("td")}
+            onHover={onHover} onClick={clickOn("td")} />
         </MDBox>
         <MDTypography component="h3" data-testid="source-grid-title-psd" sx={{ ...subhead, gridArea: "t2" }}>
           {`R with pain: ${sourceGridTitle(by.psd) || "PSD only"}`}
@@ -878,8 +882,8 @@ function SourceGrids({ sw, hoveredCell, pinnedCell, onHover, deviceRanges }) {
         </MDTypography>
         <MDBox sx={{ gridArea: "m2", minWidth: 0 }}>
           <PlotlyHeatmap divId="biomarker-heatmap-psd" sw={by.psd} kind="correlation" marks={[]}
-            deviceRanges={deviceRanges} hoveredCell={hoveredCell} pinnedCell={pinnedCell}
-            onHover={onHover} onClick={noClick} />
+            deviceRanges={deviceRanges} hoveredCell={hoveredCell} pinnedCell={pinOn("psd")}
+            onHover={onHover} onClick={clickOn("psd")} />
         </MDBox>
       </MDBox>
     </MDBox>
@@ -908,7 +912,7 @@ export function homeMatchEcho(result) {
 }
 
 const BAND_TABLE_HEADS = ["Hz", "Decided by", "Deciding r", "Home record reports", "Current out",
-  "Daily swing", "Later 30%", "q"];
+  "Daily swing", "Later 30%", "q", "AUC q"];
 
 /** The band table for one pair's TD-only grid (the grid that chooses): for every band, who decides
  *  (C5) and that answer's r, interval and n; the home record's report counts; the current-removed
@@ -922,14 +926,15 @@ export function BandChoiceTable({ sw, result }) {
   const head = { ...TYPE.caption, fontWeight: 600, color: T.ink3, backgroundColor: T.fillMuted,
     py: 0.5, pr: 1 };
   const fc = result && result.family_correction;
+  const aucByHz = new Map(((td && td.best_auc_rows) || []).map((a) => [Number(a.band_center_hz), a]));
   const cut = cutDateWords((sw && sw.recent_check_cut) || (result && result.recent_check_cut));
   const matchWarn = chronicMatchWarning(result);
   return (
     <MDBox data-testid="band-choice-table">
       <ChronicMatchWarningLine text={matchWarn} />
       <MDBox sx={{ overflowX: "auto" }}>
-        <MDBox sx={{ display: "grid", minWidth: 900,
-          gridTemplateColumns: "48px 150px 200px 210px 140px 210px 200px 110px" }}>
+        <MDBox sx={{ display: "grid", minWidth: 1000,
+          gridTemplateColumns: "48px 150px 200px 210px 140px 210px 200px 110px 120px" }}>
           {BAND_TABLE_HEADS.map((h) => (
             <MDTypography key={h} component="div" sx={head}>{h}</MDTypography>
           ))}
@@ -960,6 +965,10 @@ export function BandChoiceTable({ sw, result }) {
               <BandCell key={`${key}-q`} testId={`band-q-${hz}`} title={r.family_q_warning || undefined}>
                 {familyQWords(r) || ""}
               </BandCell>,
+              <BandCell key={`${key}-qa`} testId={`band-q-auc-${hz}`}
+                title={(aucByHz.get(hz) || {}).family_q_auc_warning || undefined}>
+                {familyQAucWords(aucByHz.get(hz)) || ""}
+              </BandCell>,
             ];
           })}
         </MDBox>
@@ -967,6 +976,7 @@ export function BandChoiceTable({ sw, result }) {
       <CaptionBullets items={[
         "Bands are chosen on the TD-only grid; the home record (chronic log) decides where it covers the band",
         familyFootnote(fc),
+        familyAucFootnote(fc),
         cut ? `${cut}; checks consistency over time, not an independent test` : null,
         "Current out, daily swing and later 30%: warnings only, never a refusal",
         homeMatchEcho(result),
@@ -982,10 +992,11 @@ function PanelTitle({ pinnedCell, channelLabel }) {
   // pinned cell). Font size doubled from the original 11.5 now that it is the one copy carrying
   // this information for both panels.
   return (
-    <MDTypography component="p"
+    <MDTypography component="p" id="biomarker-pinned-title" data-testid="pinned-title"
       sx={{ ...TYPE.title, color: T.ink, display: "block", mb: 0.5, mt: 0, textAlign: "center" }}>
       {`${channelLabel(pinnedCell.channel)} · ${pinnedCell.center} Hz · `}
       {`${secondsLabel(pinnedCell.secondsDisplay != null ? pinnedCell.secondsDisplay : pinnedCell.seconds)} of signal`}
+      {pinnedCell.source ? ` · ${CELL_SOURCE_LABEL[pinnedCell.source] || pinnedCell.source}` : ""}
     </MDTypography>
   );
 }
@@ -1302,14 +1313,19 @@ function joinWords(words) {
  *  so the scatter and violin pair the same reports with the same recordings as the r and q printed
  *  for that square, even when the controls have moved since (review of 2026-09-26, finding 1). */
 export function heatmapCellRequest({ participantUid, shownSettings, requestParams, metric,
-  channel, center, seconds }) {
+  channel, center, seconds, source }) {
   const base = { ...(shownSettings || requestParams || {}) };
   delete base.SweepMetric;
   return {
     ParticipantId: participantUid, ...base, SweepMetric: metric,
     BandTimeSweepCell: "1", Channel: channel, BandCenterHz: center, IntegrationSeconds: seconds,
+    // a TD-only or PSD-only map's cell (open item of decision 492); the mixed map sends none
+    ...(source ? { Source: source } : {}),
   };
 }
+
+/** The words a source grid's clicked cell is named by. */
+export const CELL_SOURCE_LABEL = { td: "TD only", psd: "PSD only" };
 
 /** The settings one pain score's grid is filed under (its slot's key). The page's own score is NOT
  *  part of another score's key: every score's grid carries its own `LabelMetric` and `SweepMetric`
@@ -1507,12 +1523,12 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
     return ch ? ch.replace(/_/g, " ") : ch;
   };
 
-  const fetchCell = (ch, center, seconds) => {
-    const key = cellKey(participantUid, metric, shownKey, ch, center, seconds);
+  const fetchCell = (ch, center, seconds, source) => {
+    const key = cellKey(participantUid, metric, shownKey, ch, center, seconds, source);
     const held = getCell(key);
     if (held !== undefined) return Promise.resolve(held);
     const body = heatmapCellRequest({ participantUid, shownSettings, requestParams, metric,
-      channel: ch, center, seconds });
+      channel: ch, center, seconds, source });
     return SessionController.query("/api/queryBiomarkerAnalysis", body).then((response) => {
       const d = (response && response.data) || {};
       const cell = d.band_time_sweep_cell || { points: [], message: d.message };
@@ -1528,7 +1544,9 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
     setHoveredCell(row == null || col == null ? null : { row, col });
   };
 
-  const handleClick = (sw, row, col) => {
+  // `source` ("td", "psd"): a click on the TD-only or PSD-only map (open item of decision 492)
+  // opens the same scatter and violins, from that grid's own matched pairs and its own statistics.
+  const handleClick = (sw, row, col, source) => {
     const center = sw.center_freqs_hz[col];
     // The REQUESTED length of signal is what `band_time_sweep_cell_for_participant` keys its own
     // internal lookup on (see bravo_service.py) -- it must be sent to the server exactly as is or
@@ -1536,9 +1554,14 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
     // so a reader never sees two different numbers for the one row they clicked.
     const seconds = (sw.integration_seconds_requested || sw.integration_seconds_delivered)[row];
     const secondsDisplay = (sw.integration_seconds_delivered || sw.integration_seconds_requested)[row];
-    setPinnedCell({ row, col, channel, center, seconds, secondsDisplay });
+    setPinnedCell({ row, col, channel, center, seconds, secondsDisplay, source: source || null });
     setPinnedCellData({ loading: true });
-    fetchCell(channel, center, seconds).then((cell) => setPinnedCellData(cell));
+    fetchCell(channel, center, seconds, source).then((cell) => setPinnedCellData(cell));
+    if (source) {
+      // the panels sit above the source maps: bring them into view (absent in the test DOM)
+      const el = typeof document !== "undefined" && document.getElementById("biomarker-pinned-title");
+      if (el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
+    }
   };
 
   // THERE IS NO EXPORT STEP, AND THIS BUTTON NO LONGER WAITS FOR ONE. When this section was first
@@ -1580,8 +1603,14 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
       title="AUC" />
   );
   const subhead = { ...TYPE.body, fontWeight: 600, color: T.ink, display: "block", mb: 0, mt: 0 };
-  const aucCellValue = (pinnedCell && aucSw && aucSw.auc_grid && aucSw.auc_grid[pinnedCell.row])
-    ? aucSw.auc_grid[pinnedCell.row][pinnedCell.col] : null;
+  // The clicked square's own grid: the mixed maps', or a source map's (open item of decision 492).
+  const pinnedSource = pinnedCell && pinnedCell.source;
+  const srcOf = (sw) => (pinnedSource && sw && sw.by_source_grid && sw.by_source_grid[pinnedSource]) || null;
+  const pinCorrSw = pinnedSource ? srcOf(corrSw) : corrSw;
+  const pinAucSw = pinnedSource ? (srcOf(aucSw) || srcOf(corrSw)) : aucSw;
+  const mixedPin = pinnedSource ? null : pinnedCell;
+  const aucCellValue = (pinnedCell && pinAucSw && pinAucSw.auc_grid && pinAucSw.auc_grid[pinnedCell.row])
+    ? pinAucSw.auc_grid[pinnedCell.row][pinnedCell.col] : null;
 
   // The shared section (taste audit C6, 2026-09-26): the question as its title, the rest as its
   // body. While a grid is being worked out there is no spinner (C2): with a grid already on screen
@@ -1657,7 +1686,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
               <MDBox sx={{ gridArea: "m1", minWidth: 0 }}>
                 <PlotlyHeatmap divId="biomarker-heatmap-correlation" sw={corrSw} kind="correlation"
                   deviceRanges={deviceRanges}
-                  hoveredCell={hoveredCell} pinnedCell={pinnedCell}
+                  hoveredCell={hoveredCell} pinnedCell={mixedPin}
                   onHover={handleHover} onClick={(r, c) => handleClick(corrSw, r, c)} />
               </MDBox>
               <MDTypography component="h3" sx={{ ...subhead, gridArea: "t2" }}>
@@ -1667,7 +1696,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
               <MDBox sx={{ gridArea: "m2", minWidth: 0 }}>
                 <PlotlyHeatmap divId="biomarker-heatmap-auc" sw={aucSw} kind="auc"
                   deviceRanges={deviceRanges}
-                  hoveredCell={hoveredCell} pinnedCell={pinnedCell} flashKey={aucFlashKey}
+                  hoveredCell={hoveredCell} pinnedCell={mixedPin} flashKey={aucFlashKey}
                   onHover={handleHover} onClick={(r, c) => handleClick(aucSw, r, c)} />
               </MDBox>
 
@@ -1677,7 +1706,7 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
                 <PanelTitle pinnedCell={pinnedCell} channelLabel={channelLabel} />
               </MDBox>
               <MDBox sx={{ gridArea: "s1" }}>
-                <ScatterStatsLine cell={pinnedCellData} pinnedCell={pinnedCell} sw={corrSw} side={panelHeight} />
+                <ScatterStatsLine cell={pinnedCellData} pinnedCell={pinnedCell} sw={pinCorrSw} side={panelHeight} />
               </MDBox>
               <MDBox sx={{ gridArea: "g1", minWidth: 0 }}>
                 <PlotlyScatter divId="biomarker-scatter-panel" cell={pinnedCellData}
@@ -1685,12 +1714,12 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
               </MDBox>
               <MDBox sx={{ gridArea: "s2" }}>
                 <ViolinPanel part="stats" cell={pinnedCellData} pinnedCell={pinnedCell}
-                  channelLabel={channelLabel} height={panelHeight} sw={aucSw}
+                  channelLabel={channelLabel} height={panelHeight} sw={pinAucSw}
                   aucValue={aucCellValue} />
               </MDBox>
               <MDBox sx={{ gridArea: "g2", minWidth: 0 }}>
                 <ViolinPanel part="plot" cell={pinnedCellData} pinnedCell={pinnedCell}
-                  channelLabel={channelLabel} height={panelHeight} sw={aucSw}
+                  channelLabel={channelLabel} height={panelHeight} sw={pinAucSw}
                   aucValue={aucCellValue} />
               </MDBox>
 
@@ -1706,7 +1735,8 @@ function BiomarkerHeatmapGrids({ participantUid, requestParams, availableMetrics
 
             {/* Wave 2, C4 (decision 492): the TD-only and PSD-only maps side by side. */}
             <SourceGrids sw={corrSw} hoveredCell={hoveredCell} pinnedCell={pinnedCell}
-              onHover={handleHover} deviceRanges={deviceRanges} />
+              onHover={handleHover} deviceRanges={deviceRanges}
+              onClick={(src, r, c) => handleClick(corrSw.by_source_grid[src], r, c, src)} />
 
             {/* Wave 2, C5-C9: each band of the grid that chooses, folded (warnings, not refusals). */}
             {corrSw.by_source_grid && corrSw.by_source_grid.td ? (

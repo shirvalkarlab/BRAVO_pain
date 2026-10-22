@@ -33,7 +33,7 @@ from modules.Biomarkers.routines import sweep_settings as SW            # noqa: 
 from modules.DecodeCommon import sensing_rule as SR                      # noqa: E402
 
 CENTRES = [8.5 + k for k in range(22)]
-NEW_ROW_FIELDS = set(FC.ROW_FIELDS)
+NEW_ROW_FIELDS = set(FC.ROW_FIELDS) | set(FC.AUC_ROW_FIELDS)
 
 
 def _row(ch, c, p, *, r=0.1, lo=-0.1, hi=0.3, answer="not_resolved", choice="TD", chronic=None):
@@ -331,3 +331,145 @@ def test_the_neutral_setting_skips_the_path_and_moves_no_grid_key():
         assert FC.attach(resp) is resp and resp == before
     finally:
         FC.ENABLED = prev
+
+
+# ---- the separate area-under-the-curve family (open item of decision 497) -------------------------
+def _with_auc_p(sweeps, seed0=10):
+    """Give every grid's area-under-the-curve rows a p of their own (the TD-only rows distinct per
+    pair; the mixed and PSD-only rows small, so a leak into the family would show)."""
+    for k, (ch, sw) in enumerate(sorted(sweeps.items())):
+        for r in sw.get("best_auc_rows") or []:
+            r["p_selection_aware"] = 0.0005
+        for name, g in (sw.get("by_source_grid") or {}).items():
+            ps = _ps(seed0 + k) if name == "td" else [0.0005] * 22
+            for r, p in zip(g.get("best_auc_rows") or [], ps):
+                r["p_selection_aware"] = p
+    return sweeps
+
+
+def _td_auc(resp, ch):
+    return resp["band_time_sweep"][ch]["by_source_grid"]["td"]["best_auc_rows"]
+
+
+def test_auc_q_matches_a_benjamini_hochberg_written_out_within_each_pair():
+    out = FC.attach(_resp(_with_auc_p(_three_pairs()), _rule({1, 2}, {1, 2})))
+    blk = out["family_correction"]
+    for ch in ("ZERO_THREE_LEFT", "ZERO_THREE_RIGHT"):
+        rows = _td_auc(out, ch)
+        p = [r["p_selection_aware"] for r in rows]
+        want = _bh_by_hand(p)                                 # this pair's 22 AUC rows only
+        assert [r["family_q_auc"] for r in rows] == want      # no tolerance
+        assert [r["family_p_auc"] for r in rows] == p
+        assert all(r["family_q_auc_status"] == FC.STATUS_AUC_IN and r["family_n_auc"] == 22
+                   and r["family_p_auc_source"] == "TD" for r in rows)
+        assert blk["per_pair_auc"][ch]["smallest_q"] == min(want)
+        assert blk["per_pair_auc"][ch]["n_in_family"] == 22
+        # the correlation q stays on the AUC rows as it was: not in that family
+        assert all(r["family_q"] is None and r["family_q_status"] == FC.STATUS_AUC for r in rows)
+    assert blk["auc_family"]["n_in_family"] == 44 and blk["auc_family"]["n_built"] == 66
+    assert blk["auc_family"]["words"].startswith(
+        "area under the curve, corrected within each pair separately: L 0⁻3⁺ across 22 bands; "
+        "R 0⁻3⁺ across 22 bands")
+    # outside the family: a pair the rule does not allow, and rows that never choose
+    for r in _td_auc(out, "ONE_THREE_LEFT"):
+        assert r["family_q_auc"] is None and r["family_q_auc_status"] == FC.STATUS_NOT_ALLOWED
+    for ch in out["band_time_sweep"]:
+        sw = out["band_time_sweep"][ch]
+        for r in sw["best_auc_rows"] + sw["by_source_grid"]["psd"]["best_auc_rows"]:
+            assert r["family_q_auc"] is None and r["family_q_auc_status"] == FC.STATUS_NEVER_CHOOSES
+        for g in [sw, sw["by_source_grid"]["td"], sw["by_source_grid"]["psd"]]:
+            for r in g["best_correlation_rows"]:              # correlation rows gain no AUC field
+                assert not set(FC.AUC_ROW_FIELDS) & set(r)
+
+
+def test_one_pairs_auc_p_values_never_move_the_other_pairs_auc_q():
+    a = FC.attach(_resp(_with_auc_p(_three_pairs()), _rule({1, 2}, {1, 2})))
+    sweeps = _with_auc_p(_three_pairs())
+    for r in sweeps["ZERO_THREE_RIGHT"]["by_source_grid"]["td"]["best_auc_rows"]:
+        r["p_selection_aware"] = 1e-4
+    b = FC.attach(_resp(sweeps, _rule({1, 2}, {1, 2})))
+    assert ([r["family_q_auc"] for r in _td_auc(a, "ZERO_THREE_LEFT")]
+            == [r["family_q_auc"] for r in _td_auc(b, "ZERO_THREE_LEFT")])
+    assert [r["family_q_auc"] for r in _td_auc(b, "ZERO_THREE_RIGHT")] == [1e-4] * 22
+
+
+def test_the_correlation_q_is_unchanged_by_the_auc_family():
+    """Every correlation field and the correlation block's own keys are the same whatever the AUC
+    rows hold: no AUC p, ordinary AUC p, or every AUC p tiny."""
+    def corr_view(out):
+        rows = {}
+        for ch, sw in out["band_time_sweep"].items():
+            for name, g in [("mixed", sw)] + list(sw["by_source_grid"].items()):
+                rows[(ch, name)] = [{k: r.get(k) for k in FC.ROW_FIELDS + ("why",)}
+                                    for r in g["best_correlation_rows"]]
+                rows[(ch, name, "auc")] = [{k: r.get(k) for k in FC.ROW_FIELDS}
+                                           for r in g["best_auc_rows"]]
+        blk = {k: v for k, v in out["family_correction"].items()
+               if k not in ("auc_family", "per_pair_auc")}
+        return rows, blk
+
+    base = _three_pairs()
+    base["ZERO_THREE_LEFT"]["by_source_grid"]["td"]["best_correlation_rows"][0].update(
+        answer="established", pearson_r=0.5, pearson_r_low=0.2)
+    none_ = FC.attach(_resp(copy.deepcopy(base), _rule({1, 2}, {1, 2})))
+    some = FC.attach(_resp(_with_auc_p(copy.deepcopy(base)), _rule({1, 2}, {1, 2})))
+    tiny = _with_auc_p(copy.deepcopy(base))
+    for sw in tiny.values():
+        for r in sw["by_source_grid"]["td"]["best_auc_rows"]:
+            r["p_selection_aware"] = 1e-6
+    tiny = FC.attach(_resp(tiny, _rule({1, 2}, {1, 2})))
+    assert corr_view(none_) == corr_view(some) == corr_view(tiny)
+    # and the correlation q is still a BH written out by hand over the correlation p
+    rows = _td_rows(some, "ZERO_THREE_LEFT")
+    assert [r["family_q"] for r in rows] == _bh_by_hand([r["p_selection_aware"] for r in rows])
+    # no AUC p anywhere: every allowed AUC row says so, none gets a q
+    for r in _td_auc(none_, "ZERO_THREE_LEFT"):
+        assert r["family_q_auc"] is None and r["family_q_auc_status"] == FC.STATUS_AUC_NO_P
+    assert none_["family_correction"]["auc_family"]["n_in_family"] == 0
+
+
+def test_the_auc_warning_goes_only_on_established_auc_rows_above_005():
+    sweeps = _with_auc_p(_three_pairs())
+    rows = sweeps["ZERO_THREE_LEFT"]["by_source_grid"]["td"]["best_auc_rows"]
+    rows[0].update(answer="established", p_selection_aware=0.04)
+    rows[1].update(answer="not_resolved", p_selection_aware=0.03)
+    out = FC.attach(_resp(sweeps, _rule({1, 2}, {1, 2})))
+    got = _td_auc(out, "ZERO_THREE_LEFT")
+    assert got[0]["family_q_auc"] > 0.05
+    w = got[0]["family_q_auc_warning"]
+    assert w == ("After correcting for the 22 area-under-the-curve bands tested on L 0⁻3⁺, this "
+                 "band's q is %.2f: it may be a chance finding" % got[0]["family_q_auc"])
+    assert got[0]["why"] == "auc why. " + w
+    assert got[1]["family_q_auc_warning"] is None and got[1]["why"] == "auc why"
+    assert out["family_correction"]["auc_family"]["n_warned"] == 1
+    assert out["family_correction"]["per_pair_auc"]["ZERO_THREE_LEFT"]["n_warned"] == 1
+    # an established AUC row whose q clears 0.05: no warning
+    sw2 = {"ZERO_THREE_LEFT": _sweep("ZERO_THREE_LEFT", _ps(1), "L 0⁻3⁺")}
+    for r in sw2["ZERO_THREE_LEFT"]["by_source_grid"]["td"]["best_auc_rows"]:
+        r.update(answer="established", p_selection_aware=1e-4)
+    out2 = FC.attach(_resp(sw2, _rule({1, 2}, set())))
+    assert all(r["family_q_auc"] <= 0.05 and r["family_q_auc_warning"] is None
+               and r["why"] == "auc why" for r in _td_auc(out2, "ZERO_THREE_LEFT"))
+
+
+def test_answers_status_and_p_are_identical_with_and_without_the_auc_q():
+    sweeps = _with_auc_p(_three_pairs())
+    sweeps["ZERO_THREE_LEFT"]["by_source_grid"]["td"]["best_auc_rows"][0].update(
+        answer="established", p_selection_aware=0.04)
+    resp = _resp(sweeps, _rule({1, 2}, {1, 2}))
+    before = copy.deepcopy(resp)
+    out = FC.attach(resp)
+    assert resp == before
+    assert _strip(out) == before                              # only the new fields and texts
+    assert _td_auc(out, "ZERO_THREE_LEFT")[0]["family_q_auc_warning"]
+
+
+def test_the_choosing_view_gives_the_same_auc_q_as_the_biomarkers_view():
+    resp = _resp(_with_auc_p(_three_pairs()), _rule({1, 2}, {1, 2}))
+    raw = FC.attach(resp)
+    got, blk = FC.correct(SW.choosing_grid(resp)["band_time_sweep"], resp["sensing_rule"],
+                          label_metric="nrs")
+    assert blk["per_pair_auc"] == raw["family_correction"]["per_pair_auc"]
+    for ch in ("ZERO_THREE_LEFT", "ZERO_THREE_RIGHT", "ONE_THREE_LEFT"):
+        assert ([r["family_q_auc"] for r in _td_auc(raw, ch)]
+                == [r["family_q_auc"] for r in got[ch]["best_auc_rows"]]), ch

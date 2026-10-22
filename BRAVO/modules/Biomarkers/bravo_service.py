@@ -9382,6 +9382,8 @@ def band_time_sweep_for_participant(request_data):
 #: The request key that asks for one cell's underlying (band power, pain score) pairs alone,
 #: added for the heat-map redesign's click-through drill-down (Track A, task A2).
 BAND_TIME_SWEEP_CELL_KEY = "BandTimeSweepCell"
+#: Which grid's cell (open item of decision 492): "td", "psd", or absent for the mixed grid.
+BAND_TIME_SWEEP_CELL_SOURCE_KEY = "Source"
 
 
 def _wants_band_time_sweep_cell(request_data):
@@ -9400,10 +9402,25 @@ def band_time_sweep_cell_for_participant(request_data):
     the grid response the browser holds from its own sweep request, and this endpoint exists only
     to supply the raw pairs a scatter and a pair of violin plots need, which the stored grid
     response never carried.
+
+    `Source` (open item of decision 492; the PI, 2026-10-22: "Go"): which grid's cell. Absent (or
+    "mixed") is the mixed grid, exactly as before, field for field. "td" is the TD-only grid's cell
+    and "psd" the PSD-only grid's, matched with the same matcher modes those grids are built with
+    (`availability.live_lsb_band_medians_by_length(sources=...)`, decision 492): TD alone with the
+    PSD fill off; every report with a PSD snapshot in its window, ignoring TD. Those two answers also
+    carry `grid_source`, the count read from a PSD snapshot, and each point's `from_device_spectrum`.
     """
     participant_uid = request_data["ParticipantId"]
     Participant = models.Participant.find(uid=participant_uid)
     blank = {"band_time_sweep_cell": None}
+    source_raw = str(request_data.get(BAND_TIME_SWEEP_CELL_SOURCE_KEY) or "").strip().lower()
+    if source_raw in ("", "mixed"):
+        grid_source = None
+    elif source_raw in (sweep_settings.GRID_SOURCE_TD, sweep_settings.GRID_SOURCE_PSD):
+        grid_source = source_raw
+    else:
+        return dict(blank, message=(f"Source must be \"td\", \"psd\" or left out for the mixed "
+                                    f"grid; got {source_raw!r}."))
     channel = request_data.get("Channel")
     center_raw = request_data.get("BandCenterHz")
     seconds_raw = request_data.get("IntegrationSeconds")
@@ -9482,7 +9499,9 @@ def band_time_sweep_cell_for_participant(request_data):
     power, _stats, centers, _col, chunk_excl, _from_device = _band_time_sweep_power_by_seconds(
         pro_times, raw_cache, center_hz, tol_s=tol_s, allow_window_reuse=allow_window_reuse,
         seconds=[seconds], match_direction=match_direction, channel=canon_channel,
-        participant_uid=participant_uid)
+        participant_uid=participant_uid,
+        # the mixed grid's matcher unless a source grid's cell is asked for (open item of 492)
+        **({"sources": grid_source} if grid_source is not None else {}))
     mat = power.get(float(seconds))
     if mat is None or mat.size == 0 or not centers.size:
         return dict(blank, message="No band-power measurements could be produced for this cell.")
@@ -9515,6 +9534,18 @@ def band_time_sweep_cell_for_participant(request_data):
         label = "high" if yb == 1 else ("low" if yb == 0 else "excluded")
         points.append({"pain": float(p), "power": float(v), "label": label,
                        "from_clinic_sheet": bool(from_clinic_sheet[i]) if i < from_clinic_sheet.size else False})
+        if grid_source is not None:
+            # which recording answered this report: True where the device's own PSD snapshot did
+            points[-1]["from_device_spectrum"] = (bool(_from_device[i])
+                                                  if i < len(_from_device) else False)
+
+    source_fields = {}
+    if grid_source is not None:
+        n_dev = sum(1 for pt in points if pt["from_device_spectrum"])
+        source_fields = {"grid_source": grid_source,
+                         "grid_source_label": {"td": "TD only", "psd": "PSD only"}[grid_source],
+                         "n_points_from_device_spectrum": n_dev,
+                         "n_points_from_td": len(points) - n_dev}
 
     return {
         "band_time_sweep_cell": {
@@ -9531,6 +9562,7 @@ def band_time_sweep_cell_for_participant(request_data):
             "low_cut": low_cut,
             "high_cut": high_cut,
             "split_why": split_why,
+            **source_fields,
         },
         "message": None,
     }

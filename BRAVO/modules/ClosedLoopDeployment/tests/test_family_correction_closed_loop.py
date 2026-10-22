@@ -69,7 +69,7 @@ def _rule(_uid):
 def _strip_rows(rows):
     out = []
     for r in rows:
-        r = {k: v for k, v in r.items() if k not in FC.ROW_FIELDS}
+        r = {k: v for k, v in r.items() if k not in FC.ROW_FIELDS + FC.AUC_ROW_FIELDS}
         if FC.WARNING_HEAD in str(r.get("why")):
             r["why"] = r["why"][:r["why"].index(". " + FC.WARNING_HEAD)]
         out.append(r)
@@ -96,6 +96,14 @@ def test_the_closed_loop_grid_carries_q_from_the_allowed_pairs(grid_sandbox, mon
     outside = got["band_time_sweep"]["ONE_THREE_LEFT"]["best_correlation_rows"]
     assert all(r["family_q"] is None and r["family_q_status"] == FC.STATUS_NOT_ALLOWED
                for r in outside)
+    # the separate area-under-the-curve family on the choosing view: its own q, its own block
+    lauc = got["band_time_sweep"]["ZERO_THREE_LEFT"]["best_auc_rows"]
+    assert all(r["family_q_auc_status"] == FC.STATUS_AUC_IN and r["family_n_auc"] == 22
+               and r["family_q"] is None for r in lauc)
+    assert {k: v["n_in_family"] for k, v in blk["per_pair_auc"].items()} == {
+        "ZERO_THREE_LEFT": 22, "ZERO_THREE_RIGHT": 22}
+    assert all(r["family_q_auc"] is None for r in
+               got["band_time_sweep"]["ONE_THREE_LEFT"]["best_auc_rows"])
     # with the switch off the rows are the same apart from the new fields and the warning
     monkeypatch.setattr(FC, "ENABLED", False)
     off = adapter.band_sweep_grid_for_closed_loop(UID)
@@ -103,7 +111,8 @@ def test_the_closed_loop_grid_carries_q_from_the_allowed_pairs(grid_sandbox, mon
     for ch in ("ZERO_THREE_LEFT", "ZERO_THREE_RIGHT", "ONE_THREE_LEFT"):
         for key in ("best_correlation_rows", "best_auc_rows"):
             assert _strip_rows(got["band_time_sweep"][ch][key]) == off["band_time_sweep"][ch][key]
-            assert not any(k in r for r in off["band_time_sweep"][ch][key] for k in FC.ROW_FIELDS)
+            assert not any(k in r for r in off["band_time_sweep"][ch][key]
+                           for k in FC.ROW_FIELDS + FC.AUC_ROW_FIELDS)
 
 
 def test_the_summary_reads_its_band_q_from_the_stored_grid_and_never_builds_one(monkeypatch):

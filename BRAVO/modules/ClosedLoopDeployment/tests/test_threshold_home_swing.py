@@ -177,6 +177,7 @@ def test_the_neutral_setting_returns_the_placement_untouched_field_for_field(mon
         raise AssertionError("the neutral setting must not read the home record")
     monkeypatch.setattr(AD, "_home_chronic_samples", _never)
     monkeypatch.setattr(TPL, "HOME_SWING", False)
+    monkeypatch.setattr(TPL, "BELOW_ZERO", False)      # the below-zero check's own neutral setting
     plan2, pl2 = AD._place_thresholds_from_record("uid", object(), [dict(CAND)], hemisphere="Right")
     assert plan2 is plan and pl2 is pl
     assert dataclasses.asdict(plan2) == dataclasses.asdict(plan)

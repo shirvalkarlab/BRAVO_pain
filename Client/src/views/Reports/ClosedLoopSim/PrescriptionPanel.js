@@ -269,6 +269,8 @@ export default function ParameterTable({ report, mode, onMode }) {
             <span aria-hidden="true" style={{ marginRight: 6 }}>{unevaluated ? "○" : "✕"}</span>
             {`${fields.length} values withheld${unevaluated ? " until the device rules are evaluated" : ""}.`}
           </MDTypography>
+          {/* the values stay withheld, so the sentence drops its value */}
+          <BelowZeroLine data={st && st.data} fields={fields} withValues={false} />
           <MDButton size="small" variant="text" color="secondary" onClick={() => setPlanningFor(activeMode)}
             sx={{ textTransform: "none", fontSize: PAL.fs.body, px: 0, mt: 0.2 }}>
             Show the values for planning (not for programming)
@@ -326,6 +328,9 @@ export default function ParameterTable({ report, mode, onMode }) {
               thresholds it qualifies (the rows' reasons under "Details" carry it too). A warning
               only: the thresholds stay set from clinic recordings. */}
           <HomeSwingLine data={st && st.data} />
+          {/* A threshold below zero (open item of decision 495): device band power cannot go below
+              zero, so that threshold can never be crossed. A warning only, in the open. */}
+          <BelowZeroLine data={st && st.data} fields={fields} />
           {readBackEnabled ? (
             <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body, mt: 0.6, fontWeight: 600,
               color: nTicked === fields.length ? PAL.passText : PAL.warnText }}>
@@ -351,6 +356,37 @@ export function HomeSwingLine({ data }) {
       <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>
       {hs.warning}
     </MDTypography>
+  );
+}
+
+/** The pair's `below_zero` warnings for the thresholds this mode's table holds (open item of
+ *  decision 495; a warning only): the Upper and Lower rows' in Dual, the Single row's in Single.
+ *  `withValues: false` drops the value from each sentence, for the card that withholds values. */
+export function belowZeroWarnings(data, fields, { withValues = true } = {}) {
+  const bz = data && ((data.threshold_placement && data.threshold_placement.below_zero)
+    || (data.threshold && data.threshold.placement && data.threshold.placement.below_zero));
+  if (!bz || !bz.warnings) return [];
+  const names = new Set((fields || []).map((f) => f && f.parameter));
+  const which = [["Upper LFP threshold", "upper"], ["Lower LFP threshold", "lower"],
+    ["Single LFP threshold", "single"]].filter(([n]) => names.has(n)).map(([, k]) => k);
+  return which.map((k) => bz.warnings[k]).filter(Boolean)
+    .map((w) => (withValues ? w : w.replace(/ \([^)]*\)/, "")));
+}
+
+/** A threshold below zero, one visible line per threshold (shown whether or not the values are). */
+export function BelowZeroLine({ data, fields, withValues = true }) {
+  const ws = belowZeroWarnings(data, fields, { withValues });
+  if (!ws.length) return null;
+  return (
+    <>
+      {ws.map((w) => (
+        <MDTypography key={w} variant="caption" data-testid="below-zero-line"
+          sx={{ display: "block", fontSize: PAL.fs.body, color: PAL.warnText, mt: 0.6 }}>
+          <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>
+          {w}
+        </MDTypography>
+      ))}
+    </>
   );
 }
 

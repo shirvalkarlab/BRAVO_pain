@@ -54,7 +54,7 @@ import PAL, { SIDE } from "./palette";
 import Fold from "./Fold";
 import { fmtHz, fmtNum } from "./deployFormat";
 import { recordChosenBand } from "./bandCandidateStore";
-import { deciderOf, currentOutWords, recentWords, familyFootnote, cutDateWords,
+import { deciderOf, currentOutWords, recentWords, familyFootnote, familyAucFootnote, cutDateWords,
   dailySwingWords, rIntervalN } from "views/Reports/Biomarkers/gridReadouts";
 
 /** One channel's rows, correlation and AUC merged by band centre so one row = one grid point. */
@@ -77,6 +77,11 @@ function mergedRows(sweepForChannel) {
     existing.auc_answer = r.answer;
     existing.family_wise_q_auc = r.family_wise_q_8_to_30hz;
     existing.family_wise_significant_auc = r.family_wise_significant_8_to_30hz;
+    // the separate area-under-the-curve q (its own family, within the pair; open item of 497)
+    existing.family_q_auc = r.family_q_auc;
+    existing.family_q_auc_status = r.family_q_auc_status;
+    existing.family_q_auc_warning = r.family_q_auc_warning;
+    existing.family_n_auc = r.family_n_auc;
     // The stability field is attached identically to both grids by
     // `Biomarkers.bravo_service._attach_grid_export_columns`, so either side's copy is the answer;
     // prefer whichever side actually carries it in case only one grid's row was ever built.
@@ -215,11 +220,29 @@ export function recentCell(row) {
   else if (rc.status === "too few recent reports") text = "few";
   return { text, title: rc.words || rc.note || recentWords(rc) || rc.status || "" };
 }
-export function qCell(row) {
+function corrQCell(row) {
   if (!row || !row.family_q_status) return { text: "", title: "" };
   if (row.family_q == null) return { text: "out", title: row.family_q_status };
   return { text: `${row.family_q_warning ? "▲" : ""}${fmtNum(row.family_q, 2)}`,
     title: row.family_q_warning || `q ${fmtNum(row.family_q, 2)}, corrected within this pair` };
+}
+function aucQCell(row) {
+  if (!row || !row.family_q_auc_status) return null;
+  if (row.family_q_auc == null) return { text: "out", title: `AUC q: ${row.family_q_auc_status}` };
+  return { text: `${row.family_q_auc_warning ? "▲" : ""}${fmtNum(row.family_q_auc, 2)}`,
+    title: row.family_q_auc_warning
+      || `AUC q ${fmtNum(row.family_q_auc, 2)}, its own family, corrected within this pair` };
+}
+/** The q column: the correlation q, then the AUC q (its own family) where the AUC row carries one,
+ *  "0.87 · 0.73"; ▲ first when either is warned. */
+export function qCell(row) {
+  const c = corrQCell(row);
+  const a = aucQCell(row);
+  if (!a) return c;
+  const strip = (t) => String(t || "").replace(/^▲/, "");
+  const warn = String(c.text || "").startsWith("▲") || String(a.text).startsWith("▲");
+  return { text: `${warn ? "▲" : ""}${strip(c.text) || "–"} · ${strip(a.text)}`,
+    title: [c.title, a.title].filter(Boolean).join("; ") };
 }
 function SmallCell({ cell, testId }) {
   const warn = String(cell.text || "").startsWith("▲");
@@ -493,7 +516,7 @@ function SideColumn({ side, channels, sweeps, refused, chosen, active, offNote, 
       ) : null}
       {channels.length ? (
         <MDBox sx={{ display: "grid",
-          gridTemplateColumns: "48px minmax(40px,1fr) minmax(40px,1fr) 34px 34px 44px 34px 34px 44px 32px",
+          gridTemplateColumns: "48px minmax(40px,1fr) minmax(40px,1fr) 34px 34px 44px 34px 34px 84px 32px",
           columnGap: "3px", rowGap: "2px", alignItems: "center", overflowX: "auto" }}>
           <MDTypography variant="caption" sx={{ ...HEAD, justifyContent: "flex-end" }}>Hz</MDTypography>
           <MDTypography variant="caption" title="correlation with pain, by the source that decides" sx={HEAD}>r</MDTypography>
@@ -503,7 +526,7 @@ function SideColumn({ side, channels, sweeps, refused, chosen, active, offNote, 
           <MDTypography variant="caption" title="which source decides the band: the home record (chronic log) or TD" sx={HEAD}>Source</MDTypography>
           <MDTypography variant="caption" title="the link with pain with the current taken out (a warning only)" sx={HEAD}>Current out</MDTypography>
           <MDTypography variant="caption" title="the link with pain on the later 30% of ratings (a warning only)" sx={HEAD}>Later 30%</MDTypography>
-          <MDTypography variant="caption" title="q corrected within this pair, by the deciding source's p" sx={HEAD}>q</MDTypography>
+          <MDTypography variant="caption" title="q corrected within this pair: r (by the deciding source's p) · AUC (its own family)" sx={HEAD}>q r · AUC</MDTypography>
           <MDTypography variant="caption" title="use this band" sx={HEAD}>Use</MDTypography>
           {rows.map((row) => {
             const on = isChosen(row);
@@ -664,6 +687,11 @@ function BandSweepGridPanel({ grid, participantUid, committed, committedBySide, 
       {familyFootnote(grid.family_correction) ? (
         <MDTypography data-testid="band-grid-family" sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>
           {`${familyFootnote(grid.family_correction)}, by the deciding source's p`}
+        </MDTypography>
+      ) : null}
+      {familyAucFootnote(grid.family_correction) ? (
+        <MDTypography data-testid="band-grid-family-auc" sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>
+          {`${familyAucFootnote(grid.family_correction)}, by each AUC row's own shuffle p`}
         </MDTypography>
       ) : null}
       {cutDateWords(recentCut(sweeps)) ? (

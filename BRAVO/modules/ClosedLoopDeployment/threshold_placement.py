@@ -37,6 +37,17 @@ threshold, separation, rate, timing or verdict; nothing that decides reads it. T
 C6's (`Biomarkers.routines.daily_swing.hourly_profile`), at the chronic frequency C5's mapping puts
 on the band (`chronic_band_choice.grid_centre_for`). Neutral `BRAVO_THRESHOLD_HOME_SWING=0`: the
 path is skipped and the pair, its rows and its notes are exactly as before.
+
+A THRESHOLD BELOW ZERO, A WARNING ONLY (open item of decision 495; the PI, 2026-10-22: "Go"). The
+record pair is the median minus and plus the design rule's half-separation, so where the median is
+smaller than that half-separation the LOWER threshold comes out below zero (RCS08 R 0-3 26.5 Hz:
+265.95 / -54.05). Device band power cannot go below zero, so the device would never cross it. The
+same check covers the upper threshold and the Single mode's threshold the device computes from the
+pair (0.75 x (upper - lower) + lower, D20), each below zero only when the pair is lower still. As
+C6-C8: nothing is refused and no number changes; `below_zero` (which thresholds, their values, one
+plain warning each) goes on the placement, the plan's copy and the report's design-rule summary,
+and the warnings are appended to the placement note and the Upper/Lower/Single rows' reasons.
+Neutral `BRAVO_THRESHOLD_BELOW_ZERO=0`: the path is skipped.
 """
 from __future__ import annotations
 
@@ -51,6 +62,13 @@ RULE_VERSION = "v1_record_pair_median_centre_design_rule_separation_tablet_clock
 
 #: The neutral setting (`BRAVO_THRESHOLD_HOME_SWING=0`): no home-swing block, no appended text.
 HOME_SWING = _os.environ.get("BRAVO_THRESHOLD_HOME_SWING", "1").strip() != "0"
+#: The neutral setting (`BRAVO_THRESHOLD_BELOW_ZERO=0`): no below-zero block, no appended text.
+BELOW_ZERO = _os.environ.get("BRAVO_THRESHOLD_BELOW_ZERO", "1").strip() != "0"
+#: The Single mode's threshold as the device computes it from the pair (D20).
+SINGLE_FRACTION = 0.75
+BELOW_ZERO_WHAT = ("whether any threshold this pair gives is below zero: device band power cannot go "
+                   "below zero, so a threshold below zero can never be crossed from above; a warning "
+                   "only, it changes no threshold, rate, timing or verdict")
 THRESHOLDS_FROM = "clinic recordings only"
 HOME_STATUS_UNREADABLE = "home record could not be read"
 HOME_SWING_WHAT = ("how many fold the home record's (chronic log's) hourly median band power swings "
@@ -155,6 +173,77 @@ def with_home_swing(plan, placement: Optional[Dict[str, Any]], block: Dict[str, 
         return plan, pl
     plan_pl = dict(getattr(plan, "placement", {}) or {})
     plan_pl["home_swing"] = dict(block)
+    note = _ds.append_warning(getattr(plan, "placement_note", "") or "", block.get("warning"))
+    return dataclasses.replace(plan, placement=plan_pl, placement_note=note), pl
+
+
+def _signed(v: float) -> str:
+    """A value as the warning prints it: two decimals, a true minus sign."""
+    return f"{float(v):.2f}".replace("-", "\u2212")
+
+
+def single_threshold(upper, lower) -> Optional[float]:
+    """The Single mode's threshold the device computes from the pair, 0.75 x (upper - lower) +
+    lower (D20; the same arithmetic `prescription.prescribe` prints); None without a pair."""
+    try:
+        up, lo = float(upper), float(lower)
+    except (TypeError, ValueError):
+        return None
+    if not (np.isfinite(up) and np.isfinite(lo)):
+        return None
+    return SINGLE_FRACTION * (up - lo) + lo
+
+
+def below_zero_warning(which: str, value: float) -> str:
+    """The plain warning for one threshold below zero. ``which``: "upper", "lower" or "single"."""
+    if which == "lower":
+        tail = "so the device would never cross it"
+    else:
+        tail = "so power would always sit above it and the device would never see it crossed from above"
+    return (f"The {which} threshold is below zero ({_signed(value)}); band power cannot go below "
+            f"zero, {tail}.")
+
+
+def below_zero_block(upper, lower) -> Dict[str, Any]:
+    """The `below_zero` block for a pair: each of the upper, lower and Single thresholds, its value
+    and, when it is below zero, its warning. ``warning`` joins the Dual pair's two (upper, lower)
+    for the placement note; the Single threshold's stays under ``warnings["single"]``."""
+    single = single_threshold(upper, lower)
+    vals = {"upper": upper, "lower": lower, "single": single}
+    warnings: Dict[str, Optional[str]] = {}
+    below = []
+    for k in ("upper", "lower", "single"):
+        v = vals[k]
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            f = float("nan")
+        if np.isfinite(f) and f < 0.0:
+            warnings[k] = below_zero_warning(k, f)
+            below.append(k)
+        else:
+            warnings[k] = None
+    pair_w = " ".join(w for w in (warnings["upper"], warnings["lower"]) if w) or None
+    return {"status": ("below zero" if below else "none below zero"),
+            "below_zero": below,
+            "upper": None if upper is None else float(upper),
+            "lower": None if lower is None else float(lower),
+            "single": single, "single_fraction": SINGLE_FRACTION,
+            "warnings": warnings, "warning": pair_w, "what": BELOW_ZERO_WHAT}
+
+
+def with_below_zero(plan, placement: Optional[Dict[str, Any]]):
+    """``(plan, placement)`` carrying `below_zero_block` of the plan's own pair as ``below_zero``
+    (on the placement dict and on the plan's copy of it), the pair's warning appended to the plan's
+    ``placement_note``. Touches no number."""
+    _ds = _daily_swing_module()
+    pl = dict(placement or {})
+    if plan is None:
+        return plan, pl
+    block = below_zero_block(getattr(plan, "upper", None), getattr(plan, "lower", None))
+    pl["below_zero"] = dict(block)
+    plan_pl = dict(getattr(plan, "placement", {}) or {})
+    plan_pl["below_zero"] = dict(block)
     note = _ds.append_warning(getattr(plan, "placement_note", "") or "", block.get("warning"))
     return dataclasses.replace(plan, placement=plan_pl, placement_note=note), pl
 

@@ -36,6 +36,17 @@ rule is attached) and the Closed-Loop reader (`ClosedLoopDeployment.adapter
 sign-off summary carries its band's q (`summary_block`). The band tables (`band_results_tables`) do
 not carry q: they are written with the grid and filed under its key, so a q in them would be stored.
 
+A SECOND, SEPARATE FAMILY FOR THE AREA-UNDER-THE-CURVE ROWS (the PI, 2026-10-22: "Go" on the open
+item from decision 497). The correlation family above is unchanged and never reads these rows.
+Within each allowed pair, the choosing grid's area-under-the-curve rows are corrected on their own:
+each band once, by the area-under-the-curve row's own `p_selection_aware` (its shuffle p, chosen as
+the best of the lengths of signal; `analytics._best_rows_auc`). The chronic log gives no area under
+the curve (decision 493), so the deciding source of every area-under-the-curve row is the TD-only
+grid (`choice_source: "TD"`); a row with no p is left out and counted. Its own fields on the
+area-under-the-curve rows only (`AUC_ROW_FIELDS`: `family_q_auc`, `family_p_auc`, ...), its own
+block (`auc_family`, with `per_pair_auc`). A warning is appended to `why` on an "established"
+area-under-the-curve row whose q is above `Q_WARN`. Same switch, same attachment on read.
+
 `BRAVO_FAMILY_CORRECTION=0` is the neutral setting: the path is skipped, the response is returned
 as it was given.
 
@@ -74,8 +85,18 @@ STATUS_NO_TD = "this pair has no TD-only grid, so none of its bands is in the fa
 #: The fields this puts on a row (the band tables leave them out; see the module note).
 ROW_FIELDS = ("family_q", "family_p", "family_p_source", "family_q_status", "family_q_warning",
               "family_n")
-#: The start of the warning, as it is appended to `why`.
+#: The fields the separate area-under-the-curve family puts on an area-under-the-curve row.
+AUC_ROW_FIELDS = ("family_q_auc", "family_p_auc", "family_p_auc_source", "family_q_auc_status",
+                  "family_q_auc_warning", "family_n_auc")
+#: The start of the warning, as it is appended to `why` (both families).
 WARNING_HEAD = "After correcting for the"
+STATUS_AUC_IN = "in the area-under-the-curve family"
+STATUS_AUC_NO_P = "no p on this area-under-the-curve row, so not in its family"
+WHAT_AUC = ("Benjamini-Hochberg q over the area-under-the-curve rows, corrected separately within "
+            "each sensing pair the device allows under today's contacts: that pair's band centres "
+            "built on the TD-only grid, each band once, by the area-under-the-curve row's own shuffle "
+            "p (the chronic log gives no area under the curve). Its own family, apart from the "
+            "correlation q. A label and warning only")
 
 NOT_STORED = ("attached when the grid is read, never part of its key or payload: the family follows "
               "the contacts in force, which change without the recordings or the ratings changing")
@@ -213,8 +234,85 @@ def _blank(row, status):
                family_q_warning=None, family_n=None)
 
 
+def _blank_auc(row, status):
+    row.update(family_q_auc=None, family_p_auc=None, family_p_auc_source=None,
+               family_q_auc_status=status, family_q_auc_warning=None, family_n_auc=None)
+
+
 def _label(sweep, ch):
     return (sweep or {}).get("display_short") or str(ch)
+
+
+def _correct_auc(new, allowed, rule_ok, pairs_txt):
+    """The separate area-under-the-curve family, in place on the copies in ``new``; returns its
+    block. Reads only the area-under-the-curve rows' own `p_selection_aware`; writes only
+    `AUC_ROW_FIELDS` and, on a warned row, the appended `why`."""
+    family, n_built = [], 0
+    for ch, sw in new.items():
+        choosing, grids, _why = _views(sw)
+        for g in grids:
+            if g is choosing:
+                continue
+            for r in g.get("best_auc_rows") or []:
+                if isinstance(r, dict):
+                    _blank_auc(r, STATUS_NEVER_CHOOSES)
+        if choosing is None:
+            continue
+        for r in choosing.get("best_auc_rows") or []:
+            if not isinstance(r, dict):
+                continue
+            p = _finite(r.get("p_selection_aware"))
+            if p is not None:
+                n_built += 1
+            if not rule_ok:
+                _blank_auc(r, STATUS_NO_RULE)
+            elif ch not in allowed:
+                _blank_auc(r, STATUS_NOT_ALLOWED)
+            elif p is None:
+                _blank_auc(r, STATUS_AUC_NO_P)
+                r["family_p_auc_source"] = "TD"
+            else:
+                family.append((r, p, ch))
+    n = len(family)
+    q = np.full(n, np.nan)
+    per_pair = {}
+    for ch in sorted({c for _r, _p, c in family}):
+        idx = [i for i, f in enumerate(family) if f[2] == ch]
+        q[idx] = bh_fdr(np.array([family[i][1] for i in idx], dtype=float))
+        per_pair[ch] = {"display": _label(new.get(ch), ch), "n_in_family": len(idx),
+                        "smallest_p": min(family[i][1] for i in idx),
+                        "smallest_q": float(np.min(q[idx])),
+                        "n_q_at_most_q_warn": int(np.sum(q[idx] <= Q_WARN)), "n_warned": 0}
+    n_warned = 0
+    for (r, p, ch), qi in zip(family, q):
+        qv = float(qi)
+        k = per_pair[ch]["n_in_family"]
+        r.update(family_q_auc=qv, family_p_auc=p, family_p_auc_source="TD",
+                 family_q_auc_status=STATUS_AUC_IN, family_q_auc_warning=None, family_n_auc=k)
+        if str(r.get("answer") or "") == "established" and qv > Q_WARN:
+            w = (f"{WARNING_HEAD} {k} area-under-the-curve bands tested on "
+                 f"{per_pair[ch]['display']}, this band's q is {qv:.2f}: it may be a chance finding")
+            r["family_q_auc_warning"] = w
+            r["why"] = _append(r.get("why"), w)
+            n_warned += 1
+            per_pair[ch]["n_warned"] += 1
+    ps = [p for _r, p, _c in family]
+    return {
+        "method": METHOD, "q_warn": Q_WARN,
+        "n_in_family": n, "n_built": int(n_built),
+        "smallest_p": (min(ps) if ps else None),
+        "smallest_q": (float(np.min(q)) if n else None),
+        "n_q_at_most_q_warn": int(np.sum(q <= Q_WARN)) if n else 0,
+        "n_warned": n_warned,
+        "words": ((f"area under the curve, corrected within each pair separately: "
+                   + "; ".join(f"{v['display']} across {v['n_in_family']} bands"
+                               for v in per_pair.values())
+                   + f" ({n_built} built; each band once, by its own shuffle p)")
+                  if per_pair else f"no allowed pair has area-under-the-curve bands to correct "
+                                   f"(allowed: {pairs_txt or 'none'})"
+                  if rule_ok else STATUS_NO_RULE),
+        "what": WHAT_AUC,
+    }, per_pair
 
 
 def correct(sweeps, rule_block, *, label_metric=None):
@@ -283,6 +381,7 @@ def correct(sweeps, rule_block, *, label_metric=None):
             n_warned += 1
             per_pair[ch]["n_warned"] = per_pair[ch].get("n_warned", 0) + 1
     ps = [p for _r, p, _s, _c in family]
+    auc_block, per_pair_auc = _correct_auc(new, allowed, rule_ok, pairs_txt)
     block = {
         "available": bool(rule_ok and allowed),
         "method": METHOD, "q_warn": Q_WARN, "pain_score": label_metric,
@@ -305,6 +404,8 @@ def correct(sweeps, rule_block, *, label_metric=None):
                   if rule_ok else STATUS_NO_RULE),
         "what": WHAT, "not_stored": NOT_STORED, "rule_decision": DECISION_RULE,
         "rule_reason": (None if rule_ok else (rule_block or {}).get("reason")),
+        # the separate area-under-the-curve family (its own q, never mixed with the above)
+        "auc_family": auc_block, "per_pair_auc": per_pair_auc,
     }
     return new, block
 

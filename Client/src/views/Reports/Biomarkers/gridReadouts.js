@@ -488,6 +488,24 @@ export function familyFootnote(fc) {
   return fc.words ? `q: ${fc.words}` : null;
 }
 
+/** The separate area-under-the-curve q (open item of decision 497): "AUC q 0.80", "▲ AUC q 0.87"
+ *  when an established AUC row is warned, or the row's status when it is outside that family. */
+export function familyQAucWords(aucRow) {
+  if (!aucRow || !aucRow.family_q_auc_status) return null;
+  if (aucRow.family_q_auc == null) return aucRow.family_q_auc_status;
+  return `${aucRow.family_q_auc_warning ? "▲ " : ""}AUC q ${fmtP(aucRow.family_q_auc)}`;
+}
+
+/** The footnote under the AUC q: "AUC q: its own family, corrected within each pair: L 0⁻3⁺ across 22
+ *  bands; ...", from the block's `per_pair_auc`. */
+export function familyAucFootnote(fc) {
+  if (!fc || fc.available === false) return null;
+  const per = fc.per_pair_auc || null;
+  if (!per || !Object.keys(per).length) return null;
+  const parts = Object.keys(per).map((k) => `${per[k].display || k} across ${per[k].n_in_family} bands`);
+  return `AUC q: its own family, corrected within each pair: ${parts.join("; ")}`;
+}
+
 /** The band centres on a grid where the home record decides (the chronic marks on the TD map). */
 export function chronicMarkCentres(sw) {
   return ((sw && sw.best_correlation_rows) || []).filter((r) => deciderOf(r) === "home")

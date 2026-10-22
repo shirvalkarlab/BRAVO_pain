@@ -3073,6 +3073,23 @@ def _place_thresholds_from_record(participant, rep, cands, *, hemisphere, loaded
     from . import threshold_placement as _tpl
     plan, placement = _place_thresholds_core(participant, rep, cands, hemisphere=hemisphere,
                                              loaded=loaded, epochs=epochs)
+    plan, placement = _with_home_swing_on_pair(participant, plan, placement, cands, loaded)
+    if _tpl.BELOW_ZERO and plan is not None and getattr(plan, "upper", None) is not None:
+        # A threshold below zero (a warning only; open item of decision 495): band power cannot
+        # go below zero. On the record pair and the capture pair alike; no number moves. Appended
+        # after the home swing, so each note is the old note plus this warning.
+        try:
+            plan, placement = _tpl.with_below_zero(plan, placement)
+        except Exception:                                # noqa: BLE001 - never moves the pair
+            _log.warning("closed-loop: the below-zero check could not be made for %s",
+                         getattr(participant, "uid", participant), exc_info=True)
+    return plan, placement
+
+
+def _with_home_swing_on_pair(participant, plan, placement, cands, loaded):
+    """Wave 2, C7 (a warning only): the home swing at the band on the pair (`threshold_placement.
+    home_swing_block`), or the pair as it was under `BRAVO_THRESHOLD_HOME_SWING=0`."""
+    from . import threshold_placement as _tpl
     if not _tpl.HOME_SWING or plan is None or getattr(plan, "upper", None) is None:
         return plan, placement
     c0 = (cands[0] or {}) if cands else {}
@@ -4282,6 +4299,11 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
         _hs_dr = (getattr(rep.threshold, "placement", None) or {}).get("home_swing")
         if _hs_dr is not None and isinstance(_dr_summary, dict):
             out["closed_loop_design_rule"] = dict(_dr_summary, home_swing=dict(_hs_dr))
+        # A threshold below zero (a warning only), beside it; absent under the neutral setting.
+        _bz_dr = (getattr(rep.threshold, "placement", None) or {}).get("below_zero")
+        if _bz_dr is not None and isinstance(out.get("closed_loop_design_rule"), dict):
+            out["closed_loop_design_rule"] = dict(out["closed_loop_design_rule"],
+                                                  below_zero=dict(_bz_dr))
         _dr_payload = design_rule_if_stored(participant, (cands[0] if cands else None),
                                             hemisphere=hemisphere)
         if _dr_payload is not None and out.get("prescriptions"):
