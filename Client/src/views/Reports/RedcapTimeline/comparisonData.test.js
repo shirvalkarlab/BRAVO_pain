@@ -89,7 +89,7 @@ test('compact labels remain bounded and escaped, while setting tooltips retain f
   expect(compactLabel('This very long descriptive regimen name continues well beyond the plotting margin')).toContain('…');
   const summary=conditionSummary({...condition('a',2),label:'<Group> "A"',settings:[{label:'L contacts',value:'C+2−'},{label:'L frequency',value:'55 Hz'},{label:'L lower threshold',value:'20 LSB'}]});
   expect(summary).toContain('&lt;Group&gt; &quot;A&quot;');expect(summary).toContain('L contacts: C+2−');expect(summary).toContain('L frequency: 55 Hz');
-  expect(summary).toContain('Stored L lower threshold (not controlling stimulation): 20 LSB');
+  expect(summary.replace(/<br>/g,' ')).toContain('Stored L lower threshold (not controlling stimulation): 20 LSB');
   expect(conditionSummary({label:'Medication',drug_class:'Opioid',status:'PRN available',dose:'5 mg',background:'Concurrent regimen'})).toContain('status: PRN available');
   expect(conditionSummary({label:'CL',mode:'closed_loop',settings:[{label:'Lower threshold',value:'20 LSB'}]})).not.toContain('not controlling');
 });
@@ -288,7 +288,7 @@ test('native home axis settings preserve unknowns, escape source text and never 
   const text=stimulationAxisSettings({home_settings:home});
   expect(text).toContain('Cycling On · on 30 s / off 60 s');expect(text).toContain('L &lt;test&gt; Contacts not recorded');
   expect(text).toContain('Frequency not recorded · 2 mA');expect(text).toContain('R Contacts not recorded');
-  expect(text).toContain('Amplitude not recorded');expect(text).toContain('Pulse width not recorded');
+  expect(text.replace(/<br>/g,' ')).toContain('Amplitude not recorded');expect(text.replace(/<br>/g,' ')).toContain('Pulse width not recorded');
 });
 
 test('survey-day counts use eligible points and Pacific dates across UTC midnight and daylight-saving transitions',()=>{
@@ -330,7 +330,7 @@ test('native CL settings use explicit mode and sensing source with units, includ
   const before=JSON.stringify(original),text=stimulationSummary(original,'SYNTHETIC_A1');
   expect(text).toContain('&lt;CL&gt;');expect(text).toContain('L GPi C+2−<br>55 Hz · 1 mA · 100 µs');
   expect(text).toContain('Mode: Dual threshold direct');expect(text).toContain('BrainSense R: 8–10 · 23.44 Hz');
-  expect(text).toContain('lower 0 LFP Power (LSB) · upper 167 LFP Power (LSB)');
+  expect(text.replace(/<br>/g,' ')).toContain('lower 0 LFP Power (LSB) · upper 167 LFP Power (LSB)');
   expect(text).toContain('Mode: not recorded');expect(text).toContain('frequency not recorded');expect(text).toContain('Adaptive state: Paused');
   expect(text).not.toContain('Continuous');expect(JSON.stringify(original)).toBe(before);
 });
@@ -416,7 +416,7 @@ test('medication axes, trace names, regimen keys and tooltips translate codes wh
  expect(plot.traces[0].name).toBe('Synthetic · 5 mg · Twice daily · Oral');
  expect(plot.layout.yaxis.ticktext[0].replace(/<br>/g,' ')).toContain('Twice daily');
  expect(plot.rowLabels[0]).toContain('opioid analgesic');
- expect(plot.traces[1].hovertemplate).toContain('PRN available; use not confirmed');
+ expect(plot.traces[1].hovertemplate.replace(/<br>/g,' ')).toContain('PRN available; use not confirmed');
  expect(plot.traces[1].hovertemplate).not.toMatch(/opioid_analgesic|prn_available|\| bid/);
  expect(plot.traces[0].x).toEqual(source.points.map(point=>point.value));
 });

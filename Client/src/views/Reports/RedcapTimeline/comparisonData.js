@@ -1,5 +1,5 @@
 import {trialPhaseBands} from './trialPhases';
-import {escapeText, localTime} from './data';
+import {escapeText, tooltipText, localTime} from './data';
 import {displayTarget,displayTargetText} from 'utils/participantTargets';
 import {settingValueLabel} from './settingDisplay';
 import {medicationTerm,medicationLabel} from './medicationDisplay';
@@ -96,8 +96,8 @@ export function conditionSummary(condition) {
   const medication=['drug_class','status','dose','frequency','route','timing','background'];
   const details=[...rows.map(row=>`${condition.mode==='open_loop'&&/threshold/i.test(row.label)?`Stored ${row.label} (not controlling stimulation)`:row.label}: ${settingValueLabel(row)}`),...medication.filter(key=>condition[key]).map(key=>`${key.replace('_',' ')}: ${medicationTerm(condition[key])}`)];
   const lines=[];
-  for(let i=0;i<details.length;i+=2) lines.push(details.slice(i,i+2).map(escapeText).join(' · '));
-  return [`<b>${escapeText(condition.drug_class ? medicationLabel(condition.label) : condition.label)}</b>`,...lines].join('<br>');
+  for(let i=0;i<details.length;i+=2) lines.push(tooltipText(details.slice(i,i+2).join(' · ')));
+  return [`<b>${tooltipText(condition.drug_class ? medicationLabel(condition.label) : condition.label)}</b>`,...lines].join('<br>');
 }
 
 export function conditionPlot(metric,conditions,horizontal=false) {
@@ -114,7 +114,7 @@ export function conditionPlot(metric,conditions,horizontal=false) {
     const dots=horizontal?{x:values,y:jitter}:{x:jitter,y:values};
     traces.push({type:'scatter',...dots,mode:'markers',name:label,marker:{color,size:6,opacity:0.68},showlegend:false,
       customdata:points.map(point=>[localTime(point.time),point.value]),
-      hovertemplate:`<b>${escapeText(metric.label)}: %{customdata[1]:.1f}</b><br>%{customdata[0]} Pacific<br>${summary}<extra></extra>`});
+      hovertemplate:`<b>${tooltipText(metric.label)}: %{customdata[1]:.1f}</b><br>%{customdata[0]} Pacific<br>${summary}<extra></extra>`});
   });
   const ticks=conditions.map((condition,index)=>`${index+1}. ${compactLabel(condition.drug_class?medicationLabel(condition.label):condition.label)}<br>n=${condition.count} · median ${condition.median}`);
   const category={tickmode:'array',tickvals:conditions.map((_,i)=>i),ticktext:ticks,automargin:true,range:[-0.65,conditions.length-0.35],zeroline:false};
@@ -218,7 +218,7 @@ export function stimulationSettingLines(condition,participant) {
 
 export function stimulationAxisSettings(condition,participant) {
   const lines=stimulationSettingLines(condition,participant);
-  return (lines.length?lines:['Settings not available']).map(escapeText).join('<br>');
+  return (lines.length?lines:['Settings not available']).map(tooltipText).join('<br>');
 }
 
 export function stimulationDetailRows(condition,participant) {
@@ -231,7 +231,7 @@ export function stimulationDetailRows(condition,participant) {
 }
 
 export function stimulationSummary(condition,participant) {
-  return [`<b>${escapeText(condition.label)}</b>`,surveyCount(condition),stimulationAxisSettings(condition,participant)].join('<br>');
+  return [`<b>${tooltipText(condition.label)}</b>`,surveyCount(condition),stimulationAxisSettings(condition,participant)].join('<br>');
 }
 
 export function stimulationPlot(metric,open,closed,reference=null,currentReference=null,options={}) {
@@ -251,7 +251,7 @@ export function stimulationPlot(metric,open,closed,reference=null,currentReferen
     // Plotly box hover produces several quartile labels. Only survey dots own a
     // hover target, yielding one detailed settings tooltip under closest mode.
     if(trace.type==='box') {delete moved.hovertemplate;return {...moved,hoverinfo:'skip'};}
-    return {...moved,hovertemplate:`<b>${escapeText(metric.label)}: %{customdata[1]:.1f}</b><br>%{customdata[0]} Pacific<br>${stimulationSummary(populated[Math.floor(i/2)].condition,options.participant)}<extra></extra>`};
+    return {...moved,hovertemplate:`<b>${tooltipText(metric.label)}: %{customdata[1]:.1f}</b><br>%{customdata[0]} Pacific<br>${stimulationSummary(populated[Math.floor(i/2)].condition,options.participant)}<extra></extra>`};
   });
   plot.fitWidth=true;
   plot.programs=slots.map(({condition,title,position})=>({condition,title,position,countLabel:surveyCount(condition),settings:stimulationSettingLines(condition,options.participant)}));
@@ -329,16 +329,16 @@ export function medicationTimeline(episodes,throughDay,periodStart,phases=[],per
     if((knownEnd&&Number.isFinite(periodStart)&&episode.end<periodStart)||(knownStart&&startText>endOfView)) return [];
     const complete=knownStart&&(knownEnd||episode.ongoing);
     const x=complete?[startText,end||endOfView]:[startText||end||(Number.isFinite(periodStart)?localTime(periodStart):endOfView)];
-    const details=[episode.drug_class,episode.dose,episode.frequency,episode.route,episode.timing,episode.note].filter(Boolean).map(value=>escapeText(medicationTerm(value))).join('<br>');
+    const details=[episode.drug_class,episode.dose,episode.frequency,episode.route,episode.timing,episode.note].filter(Boolean).map(value=>tooltipText(medicationTerm(value))).join('<br>');
     const availability=episode.prn?'PRN available; use is not confirmed':'Documented regimen; use is not confirmed';
     const startLabel=knownStart?`From ${localTime(episode.start)} Pacific`:'Start date not recorded; endpoint marker only';
     const endLabel=knownEnd?`Documented end ${localTime(episode.end)} Pacific`:episode.ongoing?(scope.bounded?'Recorded as ongoing in historical notes; later use is unverified':'Documented as ongoing; shown through current day'):'End date not recorded; start marker only';
-    const coverageLabel=scope.bounded?`<br>Display ends before ${localTime(scope.end)} Pacific; this is a coverage limit, not a medication stop date`:'';
+    const coverageLabel=scope.bounded?`<br>${tooltipText(`Display ends before ${localTime(scope.end)} Pacific; this is a coverage limit, not a medication stop date`)}`:'';
     const symbols=complete?[episode.pre_trial||start!==episode.start?'triangle-left':'circle',episode.ongoing||(scope.bounded&&knownEnd&&episode.end>=scope.end)?'triangle-right':'circle']:['diamond-open'];
     return [{type:'scatter',mode:complete?'lines+markers':'markers',x,y:x.map(()=>positions[index]),showlegend:false,
       line:{width:episode.supportive?5:10,color:PALETTE[classes.indexOf(episode.drug_class)%PALETTE.length],dash:episode.prn?'dot':'solid'},
       marker:{size:10,symbol:symbols},opacity:episode.supportive?0.6:1,
-      hovertemplate:`<b>${escapeText(episode.name)}</b><br>${details}<br>${availability}<br>${startLabel}<br>${endLabel}${coverageLabel}<extra></extra>`}];
+      hovertemplate:`<b>${tooltipText(episode.name)}</b><br>${details}<br>${tooltipText(availability)}<br>${tooltipText(startLabel)}<br>${tooltipText(endLabel)}${coverageLabel}<extra></extra>`}];
   });
   const boundaries=phases.filter(phase=>Number.isFinite(periodStart)&&phase.start>=periodStart&&(!scope.bounded||phase.start<scope.end)&&localTime(phase.start)<=endOfView);
   let headerHeight=0;

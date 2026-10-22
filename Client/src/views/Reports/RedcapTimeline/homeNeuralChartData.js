@@ -1,4 +1,4 @@
-import {escapeText, localTime} from './data';
+import {escapeText, tooltipText, localTime} from './data';
 import {displayTarget, displayTargetText} from 'utils/participantTargets';
 
 export const HOME_NEURAL_COLORS = {power:'#356E9B', amplitude:'#B86C2D', threshold:'#768299'};
@@ -108,8 +108,7 @@ export function neuralSettingsLines(segment, side, participant) {
   return lines;
 }
 
-export const neuralHoverLines = lines => lines.map(line => (String(line).match(/.{1,42}(?:\s|$)|.{1,42}/g) || [''])
-  .map(part=>escapeText(part.trim())).join('<br>')).join('<br>');
+export const neuralHoverLines = lines => lines.map(tooltipText).join('<br>');
 
 export function homeNeuralPlot(panel, period, participant, maxGapSeconds = MAX_GUIDE_GAP_SECONDS) {
   const start = neuralTime(period.start), end = neuralTime(period.end);
