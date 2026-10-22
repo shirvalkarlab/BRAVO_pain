@@ -24,6 +24,11 @@ export default function ComparisonChart({plot,label}) {
   useEffect(()=>{
     if(!visible) return;
     const layout={...plot.layout};
+    // Plotly's responsive resize clears both dimensions when either is absent.
+    // Keep the measured width with the computed height so autosizing cannot
+    // collapse this graph's absolutely positioned SVG contents.
+    const measuredWidth=container.current.getBoundingClientRect().width;
+    if(measuredWidth>0) layout.width=measuredWidth;
     if(plot.rowLabels?.length) {
       const labels=plot.rowLabels.map(label=>(label.match(/.{1,25}(?:\s|$)|.{1,25}/g)||['']).map(part=>escapeText(part.trim())).join('<br>'));
       const rowHeight=Math.max(55,...labels.map(label=>label.split('<br>').length*16+12));

@@ -94,3 +94,47 @@ test('medication charts fit 390px with numbered rows and complete wrapping label
   expect(plot.layout.margin.l).toBe(250);expect(plot.layout.yaxis.ticktext[0]).toBe('old truncated…');
   act(()=>root.unmount());geometry.mockRestore();Object.assign(global,{ResizeObserver:originals.resize,requestAnimationFrame:originals.request,cancelAnimationFrame:originals.cancel});
 });
+
+test.each(['stimulation','medication'])('responsive %s charts retain dimensions under the bundled Plotly resize rule',kind=>{
+  const originals={resize:global.ResizeObserver,request:global.requestAnimationFrame,cancel:global.cancelAnimationFrame,plots:Plotly.Plots};
+  let width=1200,notify,frame;
+  const geometry=jest.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockImplementation(()=>({width}));
+  const observer={observe:jest.fn(),disconnect:jest.fn()};
+  global.ResizeObserver=jest.fn(callback=>{notify=callback;return observer;});
+  global.requestAnimationFrame=jest.fn(callback=>{frame=callback;return 9;});global.cancelAnimationFrame=jest.fn();
+  // Installed Plotly plots.resize deletes both dimensions when either is
+  // missing. A no-op resize mock cannot reproduce the observed collapse.
+  const resize=jest.fn(gd=>{
+    if(!gd.layout||(gd.layout.width&&gd.layout.height)) return;
+    delete gd.layout.width;
+    delete gd.layout.height;
+  });
+  const unbound={layout:{height:420}};resize(unbound);expect(unbound.layout).toEqual({});resize.mockClear();
+  Plotly.Plots={resize};
+  Plotly.react.mockImplementation((node,traces,layout)=>{node.layout={...layout};node._fullLayout={...layout};});
+  const rowLabels=['First complete regimen with a deliberately long unchanged name and dose that wraps to several desktop lines per row','Second complete unchanged regimen'];
+  const traces=[{type:'scatter',x:[0.1,0.2],y:[0,7],customdata:[['synthetic first',0],['synthetic second',7]],hovertemplate:'<b>Complete settings</b><br>55 Hz · 100 us · 1.4–4.0 mA<br>Full threshold and timing evidence'}];
+  const plot={traces,layout:{height:kind==='stimulation'?420:350,margin:{l:55,r:15,t:25,b:65},yaxis:{range:[0,10]},xaxis:{type:'linear'}},...(kind==='medication'?{rowLabels}:{})};
+  const unchanged=JSON.stringify(plot),element=document.createElement('div'),root=createRoot(element);
+  try {
+    act(()=>root.render(<ComparisonChart plot={plot} label="Responsive source settings"/>));
+    const node=element.querySelector('[role="img"]'),desktopHeight=node.layout.height;
+    expect(node.layout.width).toBe(1200);
+    if(kind==='medication')expect(desktopHeight).toBeGreaterThan(350);else expect(desktopHeight).toBe(420);
+    for(const nextWidth of [390,1280]){
+      width=nextWidth;act(()=>{notify();frame();});
+      // A normal window resize independently uses this same Plotly entry point.
+      act(()=>Plotly.Plots.resize(node));
+      expect(node.layout.width).toBe(nextWidth);
+      expect(node.layout.height).toBe(kind==='medication'&&nextWidth<700?350:desktopHeight);
+      expect(Plotly.react.mock.calls.at(-1)[1]).toBe(traces);
+      expect(Plotly.react.mock.calls.at(-1)[1][0].hovertemplate).toBe(traces[0].hovertemplate);
+      expect(JSON.stringify(plot)).toBe(unchanged);
+      if(kind==='medication')expect(element.querySelector('li').textContent).toBe(rowLabels[0]);
+    }
+    expect(resize).toHaveBeenCalled();
+  } finally {
+    act(()=>root.unmount());geometry.mockRestore();Plotly.react.mockReset();
+    Object.assign(global,{ResizeObserver:originals.resize,requestAnimationFrame:originals.request,cancelAnimationFrame:originals.cancel});Plotly.Plots=originals.plots;
+  }
+});
