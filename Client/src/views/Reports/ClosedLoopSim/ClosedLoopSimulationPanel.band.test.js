@@ -12,10 +12,7 @@
  */
 import "@testing-library/jest-dom";
 import { render } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
+import { wrap } from "testUtils/render";
 
 jest.mock("plotly.js-dist", () => ({
   react: jest.fn(), purge: jest.fn(), restyle: jest.fn(), relayout: jest.fn(), newPlot: jest.fn(),
@@ -25,12 +22,6 @@ jest.mock("plotly.js-dist", () => ({
 import ClosedLoopSimulationPanel from "./ClosedLoopSimulationPanel";
 // eslint-disable-next-line import/first
 import { withheldIfOtherBand } from "./candidateRequestParams";
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 
 const model = { frac_time_at_upper: 0.3, frac_time_at_lower: 0.2, frac_time_above: 0.3,
   frac_time_between: 0.4, frac_time_below: 0.3, transitions_per_hour: 3, n_transitions_undone: 0,

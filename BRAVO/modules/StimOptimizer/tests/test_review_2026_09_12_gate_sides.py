@@ -15,37 +15,21 @@ from StimOptimizer import stage1_openloop as S1
 from StimOptimizer.routines import lfp_evidence as EV
 from StimOptimizer.routines import lfp_response as LR
 from StimOptimizer.routines import stage_gate as GATE
+from StimOptimizer.tests import _helpers as H
 
 
-def _setting(hemisphere, rate_hz=130.0, pw_us=60.0):
-    return S1.HemisphereSetting(
-        hemisphere=hemisphere, rate_hz=rate_hz, pw_us=pw_us, amp_star_mA=2.0,
-        amp_delivered_min_mA=1.0, amp_delivered_max_mA=3.0, n_epochs_fitted=20,
-        rate_resolved=True, pw_resolved=True, reasons=("fixture",))
+_setting = H.setting
 
 
 def _frozen(*sides):
-    return S1.FrozenConfiguration(
-        settings=tuple(_setting(h) for h in sides), primary_item="left_leg",
-        incumbent_epoch=1.0, incumbent_rate_hz=55.0, incumbent_pw_us=60.0,
-        data_horizon="test", washin_min=1.0, n_epochs_total=40)
+    return H.frozen(*(H.setting(h) for h in sides))
 
 
 def _responding_lfp(hemisphere=None, n=120, seed=0):
     """Magnitude suppressed by amplitude at 13-17 Hz: 19 of the gate's 35 default bands respond
     and carry a significant negative era-blocked slope (measured 2026-09-12), so the cell clears
     the screen's majority rule."""
-    rng = np.random.default_rng(seed)
-    amp = np.repeat([1.0, 3.0], n // 2)
-    freqs = np.arange(4.0, 40.0, 0.5)
-    mag = np.abs(rng.normal(1.0, 0.05, (n, freqs.size)))
-    sel = (freqs >= 13.0) & (freqs <= 17.0)
-    mag[:, sel] *= (np.exp(-0.9 * amp)[:, None] * 3.0)
-    ev = GATE.LfpEvidence(amplitude_mA=amp, magnitude=mag, freqs=freqs,
-                          era=np.tile(["a", "b"], n // 2), cluster=np.arange(n),
-                          hemisphere=hemisphere)
-    ev.channel = "FIXTURE"
-    return ev
+    return H.responding_lfp(n=n, seed=seed, hemisphere=hemisphere)
 
 
 COND = "adaptive_band_passes_lfp_response"

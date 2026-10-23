@@ -24,7 +24,12 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import create_engine, text
+try:
+    from sqlalchemy import create_engine, text
+except ImportError:          # only the snapshot reader needs it; the server container has none
+    def create_engine(*args, **kwargs):
+        raise ImportError("StimRL's snapshot reader needs SQLAlchemy (installed on the Mac host)")
+    text = create_engine
 
 from . import config as C
 

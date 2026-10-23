@@ -693,6 +693,13 @@ class TimeSeriesRecordingHandler(RestViews.APIView):
             
             if not "Time" in Data.keys():
                 Data["Time"] = np.arange(len(Data["Data"]))/Data["SamplingRate"]
+            # an empty place on the band-power grid holds NaN (no reading, decision 480 (e)); JSON
+            # carries it as null
+            for _k in ("Data", "ReadingTime"):
+                if _k in Data and np.issubdtype(np.asarray(Data[_k]).dtype, np.floating):
+                    _v = np.asarray(Data[_k], dtype=object)
+                    _v[~np.isfinite(np.asarray(Data[_k], dtype=float))] = None
+                    Data[_k] = _v.tolist()
 
             return Response(status=200, data=Data)
         return Response(status=400, data={"message": "Malformed Input"})

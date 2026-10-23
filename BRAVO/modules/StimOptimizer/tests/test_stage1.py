@@ -322,21 +322,24 @@ def test_resolution_delegates_to_the_one_shared_definition():
 # ---------------------------------------------------------------------------------------------
 # The design audit over rate x pulse-width PAIR
 # ---------------------------------------------------------------------------------------------
-def test_the_pair_audit_detects_aliasing_when_each_pair_has_its_own_rate():
-    d = _matrix(n_per_cell=11, pw_pairs=((100.0, 150.0), (140.0, 180.0)), rates=(55.0, 165.0),
-               aliased=True)
-    a = S1.pulse_width_pair_design_audit(d)
-    assert a["n_pairs_delivered"] == 2
-    assert a["fittable_pw_pairs"] and len(a["fittable_pw_pairs"]) == 2
+def _pair_audit(aliased):
+    return S1.pulse_width_pair_design_audit(
+        _matrix(n_per_cell=11, pw_pairs=((100.0, 150.0), (140.0, 180.0)), rates=(55.0, 165.0), aliased=aliased))
 
 
-def test_the_pair_audit_detects_a_crossed_design():
-    d = _matrix(n_per_cell=11, pw_pairs=((100.0, 150.0), (140.0, 180.0)), rates=(55.0, 165.0),
-               aliased=False)
-    a = S1.pulse_width_pair_design_audit(d)
-    assert a["n_pairs_delivered"] == 2
-    # crossed: every pair sees every rate, so each pair still has n_per_cell*2 rows -> fittable
-    assert a["n_pairs_fittable"] == 2
+def test_the_pair_audit_counts_two_delivered_fittable_pairs_aliased_or_crossed():
+    """Split 2026-10-05 from two tests named "detects aliasing" / "detects a crossed design": the audit
+    counts pairs; it has no field that detects either layout (CLAUDE.md section 6: split, never relabel)."""
+    for aliased in (True, False):
+        a = _pair_audit(aliased)
+        assert a["n_pairs_delivered"] == 2
+        assert a["n_pairs_fittable"] == 2 and len(a["fittable_pw_pairs"]) == 2
+
+
+def test_the_pair_audit_cannot_tell_an_aliased_design_from_a_crossed_one():
+    """The gap the old names hid: an aliased and a crossed layout give the same counts."""
+    keys = ("n_pairs_delivered", "n_pairs_fittable")
+    assert {k: _pair_audit(True)[k] for k in keys} == {k: _pair_audit(False)[k] for k in keys}
 
 
 # ---------------------------------------------------------------------------------------------

@@ -270,7 +270,7 @@ def test_the_blank_result_carries_the_fields_rather_than_omitting_them():
 
 
 # ---------------------------------------------------------------------------------------------
-# The two paths into the sweep, and the one field that must not travel with the flag.
+# The one path into the sweep, and the one field that must not travel with the flag.
 
 # The ceiling table is keyed on the participant first (review B3): a covered (participant, contact)
 # pair is one of RCS08's six real contacts under RCS08's own uid.
@@ -290,18 +290,15 @@ def _sweep_power(channel, participant_uid=COVERED_UID):
         channel=channel, participant_uid=participant_uid)
 
 
-def test_both_matching_paths_report_the_flag_and_agree_about_which_report_is_which():
-    """The sweep has TWO matchers -- the per-piece-ceiling path for a contact the ceiling table
-    covers, and the older path for one it does not. A caveat that appeared on only one of them
-    would be missing exactly where a reader has least reason to expect it, so both are asked, and
-    both must name the same report."""
-    covered = COVERED_CHANNEL                                # a real contact with a ceiling table
-    for channel in (covered, "A_CONTACT_WITH_NO_CEILING_TABLE"):
+def test_every_contact_reports_the_flag_for_the_same_report():
+    """Since 2026-10-03 (decision 410) every contact takes the one chunk-rule path; until then a
+    contact outside RCS08's ceiling table took a second matcher. A caveat that appeared on only some
+    contacts would be missing exactly where a reader has least reason to expect it, so a covered and
+    an uncovered contact name are both asked, and both must name the same report."""
+    for channel in (COVERED_CHANNEL, "A_CONTACT_WITH_NO_CEILING_TABLE"):
         *_rest, chunk_excl, flags = _sweep_power(channel)
         assert flags == [False, True], (channel, flags)
-        # And the two paths are genuinely different paths, which is what makes the check worth
-        # making: only the covered one runs the per-piece ceiling rule.
-        assert (chunk_excl is not None) == (channel == covered), channel
+        assert isinstance(chunk_excl, dict), channel
 
 
 def test_the_per_report_flag_does_not_ride_into_the_response_inside_the_exclusion_block():

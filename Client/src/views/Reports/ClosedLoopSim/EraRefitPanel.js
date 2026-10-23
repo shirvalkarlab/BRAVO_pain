@@ -2,7 +2,8 @@
  * Phase D panel: per-era refit of the deployment ROC (OFF / LOW / HIGH stim).
  *
  * Fetches /api/queryDeploymentRocByEra and renders the per-era AUC (with clustered bootstrap CI)
- * as a FOREST / dot-and-whisker plot against the pooled value, plus a portability verdict: a band
+ * as a FOREST / dot-and-whisker plot against the pooled value, plus the per-state check as supporting
+ * detail for the page's one stability answer (2026-10-02; `eraDetail`): a band
  * whose AUC or cut-point swings across stim eras is a fragile closed-loop anchor even with a strong
  * pooled AUC. Eras with too few high/low samples are drawn as "insufficient" rows rather than hidden.
  *
@@ -23,11 +24,50 @@ import { useCachedResult } from "database/useCachedResult";
 
 import { CL, recomputeSlots } from "views/Reports/moduleCacheKeys";
 import PanelStaleNote from "./PanelStaleNote";
+import { eraSettings } from "./candidateRequestParams";
 import PAL from "./palette";
 import { TYPE, WRAP, CARD, STATE } from "assets/theme/base/tokens";
-import { plotlyLayout, REF_LINE } from "views/Reports/figureStyle";
+import { plotlyLayout, REF_LINE, wrapLabel } from "views/Reports/figureStyle";
 
 const fmt = (v, d = 2) => (v == null || !Number.isFinite(Number(v)) ? "not reported" : Number(v).toFixed(d));
+
+/** The per-state check, as SUPPORTING DETAIL for the page's one stability answer (the PI,
+ *  2026-10-02): "Stability across stimulation states" above gives the answer; this card printed a
+ *  second one ("Holds", with a tick) beside it. Facts only; `caution` marks a fact that is a warning
+ *  (a confident reversal, or the interaction test finding a difference), drawn with its triangle.
+ *  The checks are the same as before (audit C3: decided on inference, not on raw spreads). */
+export function eraDetail(data) {
+  if (!data) return null;
+  const lrt = data.stim_lrt || {};
+  const spreadNote = (data.auc_spread != null)
+    ? ` The readings span ${fmt(data.auc_spread)}${data.cutpoint_spread != null ? ` and the switching points ${fmt(data.cutpoint_spread, 2)}` : ""} across states (described, not tested).`
+    : "";
+  const lrtNote = (lrt.available && lrt.lrt_p != null)
+    ? ` Test of whether the link differs between states: p ${fmt(lrt.lrt_p, 3)}.`
+    : " The test of whether the link differs between states did not converge.";
+  // A state whose POINT AUC dipped below 0.5 but whose CI still straddles chance is not a reversal.
+  const dipNote = (!data.any_reversed && data.any_below_half)
+    ? " One state fell below 0.5, but its 95% range includes 0.5." : "";
+  const where = " Supporting detail; the stability answer is the one in \"Stability across stimulation states\" above.";
+  let caution = false;
+  let text;
+  if (data.n_eras_estimable < 2) {
+    text = "Only one stimulation state has enough data for a reading within each state.";
+  } else if (data.any_reversed) {
+    caution = true;
+    text = `In at least one state the whole 95% range sits below 0.5, the opposite way to all states together: a device set on the all-states switching point would adjust the wrong way there.${lrtNote}`;
+  } else if (lrt.available && lrt.stim_stable === false) {
+    caution = true;
+    text = `The test finds the link differs between stimulation states (p ${fmt(lrt.lrt_p, 3)}).${spreadNote}`;
+  } else if (data.portable_by_ci === false) {
+    text = `Not every state's 95% range overlaps the reading for all states together.${lrtNote}${spreadNote}`;
+  } else if (data.portable_by_ci === true) {
+    text = `Every state's 95% range overlaps the reading for all states together, and no state clearly reverses.${lrtNote}${dipNote}${spreadNote}`;
+  } else {
+    text = `The states available do not allow this check.${lrtNote}${dipNote}${spreadNote}`;
+  }
+  return { caution, text: text + where };
+}
 
 // Forest-plot row order, top-to-bottom: stim eras low→high, then a separator, then Pooled at the
 // bottom as the reference series the per-era points are judged against.
@@ -41,17 +81,11 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
   const bc = bandCandidate || {};
   const channelRaw = bc.contact;
   const centerHz = bc.center_freq_hz;
-  const bandWidthHz = bc.bandwidth_hz || 5.0;
 
   // The request, minus the participant, is the cache key. See useDeploymentReport for why that
   // rule rather than a hand-kept list: the body is the complete statement of what changes the
   // answer, so a key derived from it cannot fall behind the request.
-  const settings = {
-    Channel: channelRaw,
-    CenterHz: centerHz == null ? null : Number(centerHz),
-    BandWidthHz: Number(bandWidthHz),
-    ...requestParams,
-  };
+  const settings = eraSettings(bc, requestParams);
 
   const cached = useCachedResult({
     moduleKey: CL.era,
@@ -80,38 +114,7 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
   // exposes whether each era's bootstrap CI overlaps the pooled CI (portable_by_ci) plus the formal
   // band×era LRT (stim_lrt). We decide on those, scope the wording to stim STATE (not time), and
   // keep the raw spreads only as a descriptive annotation.
-  let verdict = null;
-  if (data) {
-    const aucSpread = data.auc_spread;
-    const cutSpread = data.cutpoint_spread;
-    const estimable = data.n_eras_estimable;
-    const lrt = data.stim_lrt || {};
-    const spreadNote = (aucSpread != null)
-      ? ` (the readings span ${fmt(aucSpread)}${cutSpread != null ? ` and the switching points ${fmt(cutSpread, 2)}` : ""} across states; described, not tested)`
-      : "";
-    const lrtNote = (lrt.available && lrt.lrt_p != null)
-      ? ` Test of whether the link differs between states: p ${fmt(lrt.lrt_p, 3)}.` : " The test of whether the link differs between states did not converge.";
-    // An era whose POINT AUC dipped below 0.5 but whose CI still straddles chance is NOT a reversal
-    // (consistent with no stim-state effect) — surface it as a soft caveat, never the hard verdict.
-    const dipNote = (!data.any_reversed && data.any_below_half)
-      ? " (One state fell below 0.5, but its 95% range includes 0.5: noise, not a confirmed reversal.)"
-      : "";
-    if (estimable < 2) {
-      verdict = { state: "notChecked", text: "Only one stimulation state has enough data, so whether the band holds across states cannot be checked." };
-    } else if (data.any_reversed) {
-      // The worst closed-loop failure: the band's direction CONFIDENTLY flips under stim — an era's
-      // ENTIRE 95% CI sits below chance, not just its point estimate. Hard fragile.
-      verdict = { state: "caution", text: `The link reverses under stimulation: in at least one state the whole 95% range sits below 0.5, the opposite way to all states together. A device set on the all-states switching point would adjust the wrong way in that state, so this band should not drive closed-loop stimulation with a fixed direction.${lrtNote}` };
-    } else if (lrt.available && lrt.stim_stable === false) {
-      verdict = { state: "caution", text: `The link differs between stimulation states (p ${fmt(lrt.lrt_p, 3)}): how well the band predicts pain depends on the state, so the same switching point may not hold once stimulation changes.${spreadNote}` };
-    } else if (data.portable_by_ci === false) {
-      verdict = { state: "caution", text: `The 95% ranges for each state do not all overlap the reading for all states together, so whether the band holds across states is uncertain.${lrtNote}${spreadNote}` };
-    } else if (data.portable_by_ci === true) {
-      verdict = { state: "pass", text: `Holds across stimulation states: no state clearly reverses, and every state's 95% range overlaps the reading for all states together.${lrtNote}${dipNote}${spreadNote}` };
-    } else {
-      verdict = { state: "notChecked", text: `Whether the band holds across stimulation states cannot be told from the states available.${lrtNote}${dipNote}${spreadNote}` };
-    }
-  }
+  const verdict = eraDetail(data);
 
   // Draw the AUC forest plot once per dataset: one row per era (+ Pooled), point = AUC, whiskers =
   // 95% clustered-bootstrap CI, a dotted chance line at 0.5, and a shaded pooled-CI reference band
@@ -154,7 +157,8 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
         traces.push({ x: [xb, xb], y: [yLo, yHi], type: "scatter", mode: "lines",
           line: { color: PAL.graphic, dash: "dot", width: 1 }, hoverinfo: "skip", showlegend: false });
       });
-      annotations.push({ x: pooled.auc_hi, y: yHi, xref: "x", yref: "y", yanchor: "bottom",
+      // top left of the figure, clear of the toolbar at the top right (review 2026-10-02)
+      annotations.push({ x: 0, y: 1, xref: "paper", yref: "paper", yanchor: "bottom",
         xanchor: "left", text: "shaded: 95% range, all states together", showarrow: false,
         font: { size: PAL.fs.body, color: PAL.ink3 } });
     }
@@ -212,8 +216,8 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
       return `${STATE_WORDS[r.tag] || r.tag}${n}`;
     });
     const layout = plotlyLayout({
-      margin: { l: 96, r: 16, t: 24, b: 48 }, height: 240,
-      xaxis: { title: { text: "how well it tells high pain from low, with its 95% range (0.5 = coin toss)" },
+      margin: { l: 96, r: 16, t: 32, b: 64 }, height: 264,
+      xaxis: { title: { text: wrapLabel("how well it tells high pain from low, with its 95% range (0.5 = coin toss)", 52) },
         range: [xLeft, 1.02], dtick: 0.1 },
       yaxis: { tickmode: "array", tickvals: rows.map((_, i) => yOf(i)), ticktext: tickText,
         range: [yLo, yHi], showline: false, ticks: "" },
@@ -225,7 +229,6 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
   // Purge on unmount only (keep the node across refits).
   useEffect(() => () => { if (ref.current) Plotly.purge(ref.current); }, []);
 
-  const vs = verdict ? (STATE[verdict.state] || STATE.notChecked) : null;
   return (
     <Card sx={{ ...CARD, width: "100%" }}>
       <MDBox p={3}>
@@ -247,8 +250,8 @@ function EraRefitPanel({ participantUid, bandCandidate, requestParams }) {
         ) : null}
 
         {data && !loading && !err && verdict ? (
-          <MDTypography sx={{ ...TYPE.lead, color: vs.ink === PAL.ink ? PAL.ink : vs.ink, mb: 1, maxWidth: "68ch" }}>
-            <span aria-hidden="true" style={{ marginRight: 6 }}>{vs.glyph}</span>
+          <MDTypography sx={{ ...TYPE.body, color: verdict.caution ? PAL.warnText : PAL.ink2, mb: 1, maxWidth: "68ch" }}>
+            {verdict.caution ? <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.caution.glyph}</span> : null}
             {verdict.text}
           </MDTypography>
         ) : null}

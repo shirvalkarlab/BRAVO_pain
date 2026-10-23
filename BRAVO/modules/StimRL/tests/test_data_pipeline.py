@@ -1,6 +1,9 @@
-"""Host tests for the offline RL data pipeline. Run with the study's venv (not the container):
+"""Host tests for the offline RL data pipeline. All of them run with the study's venv on the Mac:
 
     cd BRAVO/modules && ~/.venvs/bravo-stim-rl/bin/python -m pytest StimRL/tests -q
+
+The routine run in the server container has no SQLAlchemy: there the tests that read the snapshot
+database are skipped by name (`needs_sqlalchemy`) and the rest run.
 """
 import json
 import os
@@ -14,6 +17,8 @@ from StimRL import config as C
 from StimRL import data_pipeline as D
 
 HERE = os.path.dirname(__file__)
+needs_sqlalchemy = pytest.mark.skipif(__import__("importlib").util.find_spec("sqlalchemy") is None,
+                                      reason="reads the snapshot database: needs SQLAlchemy (the study's venv on the Mac)")
 MODULES = os.path.abspath(os.path.join(HERE, "..", ".."))
 
 
@@ -86,6 +91,7 @@ def _steps(rows, file="v1", setting="clinic"):
     return pd.DataFrame([{**base, "row_index": i, **r} for i, r in enumerate(rows)])
 
 
+@needs_sqlalchemy
 def test_four_rated_steps_make_three_transitions_and_one_timeout():
     st = _steps([{"amp_mA_Left": a, "overall": p} for a, p in [(1, 7), (2, 6), (3, 5), (2.5, 6)]])
     tr = D.TrajectoryBuilder(D.RewardFunction("delta")).build(st)
@@ -96,6 +102,7 @@ def test_four_rated_steps_make_three_transitions_and_one_timeout():
     assert ds.transition_count == 3
 
 
+@needs_sqlalchemy
 def test_a_terminal_step_splits_the_visit_into_two_episodes():
     st = _steps([{"amp_mA_Left": a, "overall": p} for a, p in [(1, 7), (4.8, 6), (2, 5), (2.5, 6)]])
     tr = D.TrajectoryBuilder(D.RewardFunction("delta")).build(st)
@@ -110,6 +117,7 @@ def test_a_step_missing_rate_after_the_visit_fill_is_dropped():
     assert len(D._clean_settings(st)) == 0
 
 
+@needs_sqlalchemy
 def test_cross_validation_subset_keeps_only_the_named_visits():
     a = _steps([{"amp_mA_Left": x, "overall": 7 - x} for x in (1, 2, 3)], file="a")
     b = _steps([{"amp_mA_Left": x, "overall": 7 - x} for x in (1, 2)], file="b", setting="home")
@@ -143,12 +151,14 @@ def tiny_snapshot(tmp_path):
     return tmp_path
 
 
+@needs_sqlalchemy
 def test_database_rows_match_the_manifest_and_unrated_steps_are_never_returned(tiny_snapshot):
     db = D.RetrospectiveDB(str(tiny_snapshot))
     assert db.build_from_snapshot() == {"visit_steps": 3, "chronic_epochs": 2, "redcap_reports": 8}
     assert len(db.rated_steps()) == 2 and len(db.all_steps()) == 3
 
 
+@needs_sqlalchemy
 def test_database_refuses_a_snapshot_whose_row_count_disagrees(tiny_snapshot):
     json.dump({"visit_steps": {"rows": 4}, "chronic_epochs": {"rows": 2}, "redcap_reports": {"rows": 8}},
               open(tiny_snapshot / "manifest.json", "w"))
@@ -156,6 +166,7 @@ def test_database_refuses_a_snapshot_whose_row_count_disagrees(tiny_snapshot):
         D.RetrospectiveDB(str(tiny_snapshot)).build_from_snapshot()
 
 
+@needs_sqlalchemy
 def test_validation_skips_wash_in_and_visit_day_reports_and_needs_a_previous_period(tiny_snapshot):
     db = D.RetrospectiveDB(str(tiny_snapshot))
     db.build_from_snapshot()
@@ -168,6 +179,7 @@ def test_validation_skips_wash_in_and_visit_day_reports_and_needs_a_previous_per
     assert row.obs[10:15] == pytest.approx((D.normalize_action([55, 1, 1, 100, 150]) + 1) / 2)
 
 
+@needs_sqlalchemy
 def test_latest_state_uses_the_newest_periods_own_reports_and_setting(tiny_snapshot):
     """Regression (audit 2026-10-02): it used the reports of the period BEFORE the newest."""
     db = D.RetrospectiveDB(str(tiny_snapshot))
@@ -178,6 +190,7 @@ def test_latest_state_uses_the_newest_periods_own_reports_and_setting(tiny_snaps
     assert obs[15 + C.CONTACT_LEVELS.index("L C+1-")] == 1.0
 
 
+@needs_sqlalchemy
 def test_a_setting_written_on_an_unrated_row_carries_to_the_next_rated_row(tiny_snapshot):
     """Regression (audit 2026-10-02): the fill skipped unrated rows and used an older setting."""
     st = pd.read_csv(tiny_snapshot / "visit_steps.csv")
@@ -200,6 +213,7 @@ def test_a_sites_first_rating_mid_visit_is_not_read_as_a_change():
     assert tr.rewards[0] == pytest.approx(0.0)
 
 
+@needs_sqlalchemy
 def test_every_transition_matches_d3rlpys_own_transition_picker():
     st = pd.concat([_steps([{"amp_mA_Left": a, "overall": p} for a, p in [(1, 7), (2, 6), (3, 5)]], file="a"),
                     _steps([{"amp_mA_Left": a, "overall": p} for a, p in [(1, 4), (2, 3)]], file="b")])
@@ -248,6 +262,7 @@ def _load_in_child(path):
     return len(db.rated_steps())
 
 
+@needs_sqlalchemy
 def test_many_processes_loading_at_once_all_read_the_full_table(tiny_snapshot):
     """Regression (2026-10-02): three tournament processes rebuilt one SQLite file at once and two
     died with 'no such table'. Now the file is built once under a lock and swapped in whole."""
@@ -257,6 +272,7 @@ def test_many_processes_loading_at_once_all_read_the_full_table(tiny_snapshot):
     assert got == [2] * 12
 
 
+@needs_sqlalchemy
 def test_an_up_to_date_database_is_not_rebuilt(tiny_snapshot):
     db = D.RetrospectiveDB(str(tiny_snapshot))
     db.ensure_built()

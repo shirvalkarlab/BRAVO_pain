@@ -45,8 +45,14 @@ from .routines import stim_current
 from .routines import deployment_current
 from .routines import sheet_ratings
 from .routines import local_time
+from .routines import chronic_band_choice
+from .routines import time_split
+from .routines import family_correction
+#: the module under a name no function's local `sweep_settings` dict can hide (wave 2, C5)
+_SWEEP_SETTINGS_MODULE = sweep_settings
 from modules.DecodeCommon import data_start as _data_start
 from modules.DecodeCommon import parallel as _PAR
+from modules.DecodeCommon import representation as _repr
 from .routines import streaming_psd
 
 _log = logging.getLogger(__name__)
@@ -64,7 +70,10 @@ POWERDOMAIN_TYPES = ["MedtronicBrainSensePowerDomain"]
 # `metadata` carries, per hemisphere, the event DateTime + a full-band PSD (Frequency/FFTBinData).
 PATIENT_EVENT_TYPE = "PatientControllerEvent"
 AVAILABILITY_PSD_TYPES = ["MedtronicBrainSenseSurvey", "MedtronicBaselineMontages",
-                          "MedtronicStimulationMontages"]
+                          "MedtronicStimulationMontages", "MedtronicElectrodeSurvey"]
+# Device spectra with no voltage trace, read only as spectra (decision 446): a spectrum whose run
+# cannot be told, at the session start, and the in-session signal check, at the session start.
+SPECTRUM_ONLY_TYPES = ["MedtronicSurveyPSD", "MedtronicSignalCheckPSD"]
 
 # ── PSD-source taxonomy — single source of truth (verified on RCS08 JSONs, 2026-06-27) ────────────
 # Several products carry a frequency-domain PSD. They differ along TWO axes that the pipeline must not
@@ -512,45 +521,69 @@ def _load_recordings_uncached(participant_uid, types):
     Recordings = list(models.Recording.find_all(source__in=SourceFiles, type__in=types))
     if not Recordings:
         return []
+    loaded = _decoded_with_row_labels(participant_uid, Recordings)
+    loaded = _trim_chronic_before(loaded, _data_start.data_start_s(participant_uid))
+    return _merge_chronic_repeats(loaded)
 
-    # Decode the .bdat files concurrently — independent reads, so this scales with cores. Only
-    # the file pointer/hash (already-fetched attrs) are touched per task, so no ORM call runs in
-    # a worker thread. Each task returns the decoded payload (or None on failure).
-    def _decode(rec):
+
+def _merge_chronic_repeats(loaded):
+    """Every chronic (10-minute) reading once, and the averaged-in invalid code blanked (the PI,
+    2026-10-18, items 6a/6b; `DecodeCommon.representation.merge_chronic_repeats`). Each export
+    carries the device's whole chronic log, so before this every reader -- the sign-off threshold,
+    the stimulation series, the band-power timeline, the all-band scan's power source -- counted
+    one reading once per export that held it (RCS08: 97,941 samples for 52,129 readings). Other
+    recordings are returned as they are, in place."""
+    idx = [i for i, d in enumerate(loaded)
+           if isinstance(d, dict) and d.get("RecordingType") in CHRONIC_TYPES]
+    if not idx:
+        return loaded
+    merged, counts = _repr.merge_chronic_repeats([loaded[i] for i in idx])
+    out = list(loaded)
+    for i, d in zip(idx, merged):
+        out[i] = d
+    # readings moved to the lead their signal came from (decision 488), in recordings of their own
+    out.extend(merged[len(idx):])
+    if counts["conflicting_kept"] or counts["readings_under_two_labels"]:
+        _log.info("Biomarkers: chronic log merged: %s", counts)
+    return out
+
+
+#: ==========================================================================================
+#: DECODED RECORDINGS HELD ONCE FOR EVERY WORKER (the PI, 2026-10-04, decision 414).
+#: Each of the 16 web workers used to decode a participant's recordings into its own memory
+#: (`_RECORDING_CACHE`, up to `BRAVO_RECORDING_CACHE_MB` a worker, every caller handed a deep copy)
+#: and the memos below kept further private copies: about 6.7 GB a worker on RCS08. Now the first
+#: worker to need a set of recordings decodes it and saves it in the store's mapped format, filed
+#: under exactly those recordings (their ids and content hashes); every worker then reads the arrays
+#: from the same disk-cache pages, and each read is its own copy-on-write view, so a caller changing
+#: what it got changes nothing anyone else gets. What the database rows say about a recording (its
+#: centre frequency, schedules and type) is put on after every read, never saved, so a change to a
+#: row reaches the next load. A load in which any file failed to decode is not saved. Set False to
+#: decode privately as before.
+#: ==========================================================================================
+MAPPED_RECORDINGS = True
+DECODED_RECORDINGS_KIND = "decoded_recordings"
+DECODED_RECORDINGS_LOCK_TTL_S = 900.0
+DECODED_RECORDINGS_LOCK_WAIT_S = 300.0
+
+
+def _decoded_recordings_signature(recs):
+    """The label a saved set of decoded recordings is filed under: the decoder's version and every
+    recording's id and content hash, sorted. Nothing else changes what decoding produces."""
+    return ("decoded_recordings_v1",
+            tuple(sorted((str(r.uid), str(r.hashed)) for r in recs)))
+
+
+def _decode_files(recs, *, kept):
+    """``{recording id: decoded payload, or None where the file could not be decoded}``, decoded
+    concurrently (independent reads, so this scales with cores). ``kept`` goes through the
+    worker-private copies (`_load_source_file_kept`); otherwise each file is read once and nothing
+    is kept in this worker."""
+    def one(rec):
         try:
-            data = _load_source_file_kept(rec.pointer, rec.hashed)
-            # Carry the chronic-trend sensing CENTER FREQUENCY forward. It is stored on the
-            # Recording.metadata (stamped at decode time from the GROUP-level config) rather than in
-            # the .bdat payload, so merge it onto the loaded dict(s) here so the report can label the
-            # chronic trend with its sensing frequency.
-            chz = None
-            fsched = None
-            csched = None
-            md = getattr(rec, "metadata", None)
-            if isinstance(md, dict):
-                chz = md.get("CenterFrequencyHz")
-                fsched = md.get("FreqScheduleHz")
-                csched = md.get("ContactSchedule")
-            if chz is not None or fsched is not None or csched is not None:
-                for d in (data if isinstance(data, list) else [data]):
-                    if isinstance(d, dict):
-                        if chz is not None:
-                            d.setdefault("CenterFrequencyHz", chz)
-                        if fsched is not None:
-                            d.setdefault("FreqScheduleHz", fsched)
-                        if csched is not None:
-                            d.setdefault("ContactSchedule", csched)
-            # Stamp the AUTHORITATIVE DB recording type onto every decoded dict. The .bdat payload
-            # carries no type/Source field (BrainSenseTimeDomain and IndefiniteStream decode to the
-            # IDENTICAL key set), so the only reliable BrainSense-vs-Indefinite discriminator is the
-            # Recording.type from the query — without this, indefinite streams are indistinguishable
-            # from BrainSense streaming downstream and silently mislabel.
-            rtype = getattr(rec, "type", None)
-            if rtype is not None:
-                for d in (data if isinstance(data, list) else [data]):
-                    if isinstance(d, dict):
-                        d.setdefault("RecordingType", rtype)
-            return data
+            data = (_load_source_file_kept(rec.pointer, rec.hashed) if kept
+                    else Database.loadSourceFile(rec.pointer, rec.hashed))
+            return str(rec.uid), data
         except Exception:
             # Per-file resilience: one corrupt/undecodable recording must not sink the whole
             # threaded load. But log it (pointer only, never the payload) so a SYSTEMATIC decode
@@ -558,17 +591,103 @@ def _load_recordings_uncached(participant_uid, types):
             # identical to "no recordings".
             _log.warning("Biomarkers: failed to decode recording %r; skipping",
                          getattr(rec, "pointer", "?"), exc_info=True)
-            return None
-
-    workers = max(1, min(len(Recordings), _loader_threads()))
-    loaded = []
+            return str(rec.uid), None
+    workers = max(1, min(len(recs), _loader_threads()))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for data in pool.map(_decode, Recordings):
-            if isinstance(data, list):
-                loaded.extend([d for d in data if isinstance(d, dict)])
-            elif isinstance(data, dict):
-                loaded.append(data)
-    return _trim_chronic_before(loaded, _data_start.data_start_s(participant_uid))
+        return dict(pool.map(one, recs))
+
+
+def _decoded_payloads(participant_uid, recs):
+    """The decoded payload of every recording in ``recs``, keyed by recording id: read from the
+    saved mapped copy when one is filed under exactly these recordings, otherwise decoded (by one
+    worker at a time, under the store's build lock) and saved. See `MAPPED_RECORDINGS`."""
+    if not MAPPED_RECORDINGS or not recs:
+        return _decode_files(recs, kept=True)
+    sig = _decoded_recordings_signature(recs)
+    root = _SHARED_CACHE_DIR_OVERRIDE
+    got = _cache_store.load(DECODED_RECORDINGS_KIND, participant_uid, sig, root=root)
+    if got is not None:
+        return got
+    lock_name = "cachestore:build:%s:%s:%s" % (DECODED_RECORDINGS_KIND, participant_uid,
+                                                _cache_store.signature_key(sig))
+
+    def _ready():
+        return _cache_store.read_stamp(DECODED_RECORDINGS_KIND, participant_uid, sig,
+                                       root=root) is not None
+
+    with _locks.build_lock(lock_name, ttl_s=DECODED_RECORDINGS_LOCK_TTL_S,
+                           wait_s=DECODED_RECORDINGS_LOCK_WAIT_S, ready=_ready) as lk:
+        if lk.role == "served":
+            got = _cache_store.load(DECODED_RECORDINGS_KIND, participant_uid, sig, root=root)
+            if got is not None:
+                return got
+        decoded = _decode_files(recs, kept=False)
+        if any(v is None for v in decoded.values()):
+            return decoded                      # a failed file is never saved as part of a set
+        wrote = _cache_store.store(
+            DECODED_RECORDINGS_KIND, participant_uid, sig, decoded, fmt="mapped",
+            writer="biomarkers", provenance=[], trigger="recording_load",
+            n_recordings=len(recs), root=root,
+            extra={"keep_group": ",".join(sorted({str(getattr(r, "type", "")) for r in recs}))})
+    if wrote:
+        # Hand back the saved copy, so this worker too holds views of the shared pages rather than
+        # the private copy it just decoded.
+        got = _cache_store.load(DECODED_RECORDINGS_KIND, participant_uid, sig, root=root)
+        if got is not None:
+            return got
+    return decoded
+
+
+def _decoded_with_row_labels(participant_uid, recs):
+    """Every recording's decoded dicts, in ``recs`` order, with what its database row says put on
+    them (unchanged from the loader of 2026-10-02, now applied after every read)."""
+    decoded = _decoded_payloads(participant_uid, recs)
+    loaded = []
+    for rec in recs:
+        data = decoded.get(str(rec.uid))
+        if data is None:
+            continue
+        # Carry the chronic-trend sensing CENTER FREQUENCY forward. It is stored on the
+        # Recording.metadata (stamped at decode time from the GROUP-level config) rather than in
+        # the .bdat payload, so merge it onto the loaded dict(s) here so the report can label the
+        # chronic trend with its sensing frequency.
+        chz = None
+        fsched = None
+        csched = None
+        lsched = None
+        md = getattr(rec, "metadata", None)
+        if isinstance(md, dict):
+            chz = md.get("CenterFrequencyHz")
+            fsched = md.get("FreqScheduleHz")
+            csched = md.get("ContactSchedule")
+            # the lead each chronic reading's signal came from (decision 488; chronic_schedule.py)
+            lsched = md.get("SignalLeadSchedule")
+        if chz is not None or fsched is not None or csched is not None or lsched is not None:
+            for d in (data if isinstance(data, list) else [data]):
+                if isinstance(d, dict):
+                    if chz is not None:
+                        d.setdefault("CenterFrequencyHz", chz)
+                    if fsched is not None:
+                        d.setdefault("FreqScheduleHz", fsched)
+                    if csched is not None:
+                        d.setdefault("ContactSchedule", csched)
+                    if lsched is not None:
+                        d.setdefault("SignalLeadSchedule", lsched)
+        # Stamp the AUTHORITATIVE DB recording type onto every decoded dict. The .bdat payload
+        # carries no type/Source field (BrainSenseTimeDomain and IndefiniteStream decode to the
+        # IDENTICAL key set), so the only reliable BrainSense-vs-Indefinite discriminator is the
+        # Recording.type from the query — without this, indefinite streams are indistinguishable
+        # from BrainSense streaming downstream and silently mislabel.
+        rtype = getattr(rec, "type", None)
+        if rtype is not None:
+            for d in (data if isinstance(data, list) else [data]):
+                if isinstance(d, dict):
+                    d.setdefault("RecordingType", rtype)
+        if isinstance(data, list):
+            loaded.extend([d for d in data if isinstance(d, dict)])
+        elif isinstance(data, dict):
+            loaded.append(data)
+    return loaded
 
 
 def _load_patient_events(participant_uid):
@@ -794,6 +913,46 @@ def _event_psd_lsb_blocks(participant_uid, sensing_hz_by_channel=None, sensing_i
 _ENUM_TAIL_RE = re.compile(r"\.([A-Za-z_]+)$")
 
 
+def _psd_artifact_flagged(status):
+    """Whether the device flagged an artefact on this PSD (the PI, 2026-10-18, item 6c):
+    SQC_ARTIFACT_PRESENT (montage and electrode survey) or CT_ARTIFACT_PRESENT (signal check), with
+    or without the "ArtifactStatusDef." prefix. ARTIFACT_NOT_PRESENT, IMPEDANCE_FAILURE (not an
+    artefact flag, as in the Closed-Loop device rule D17, `D17_NON_ARTEFACT_STATUSES`) and a
+    missing status are not flags."""
+    tail = str(status or "").split(".")[-1].strip().upper()
+    return tail.endswith("_ARTIFACT_PRESENT")
+
+
+def _montage_psd_artifact_excluded(montage_recordings):
+    """{channel: n}: the montage, electrode-survey and signal-check PSDs `_montage_psd_lsb_blocks`
+    leaves out because the device flagged an artefact on them, per contact pair (item 6c)."""
+    out = {}
+    for r in (montage_recordings or []):
+        if not isinstance(r, dict):
+            continue
+        desc = r.get("Descriptor") or {}
+        check = desc.get("SignalCheck")
+        if isinstance(check, dict):
+            if _psd_artifact_flagged(check.get("ArtifactStatus")):
+                ch = _canon_channel(str(check.get("Channel") or "").split(".")[-1])
+                if ch:
+                    out[ch] = out.get(ch, 0) + 1
+            continue
+        keys = ("MedtronicPSD",) if r.get("RunUnknown") else ("MedtronicPSD", "SurveyPSD")
+        for k in keys:
+            for e in (desc.get(k) or []) if isinstance(desc.get(k), list) else []:
+                if not isinstance(e, dict) or not _psd_artifact_flagged(e.get("ArtifactStatus")):
+                    continue
+                mse = _ENUM_TAIL_RE.search(str(e.get("SensingElectrodes") or ""))
+                pair = _EVENT_SENSE_CONTACT.get(mse.group(1), mse.group(1)) if mse else ""
+                hemi = str(e.get("Hemisphere") or "")
+                h = "LEFT" if "Left" in hemi else ("RIGHT" if "Right" in hemi else "")
+                ch = _canon_channel(f"{pair}_{h}") if pair and h else None
+                if ch:
+                    out[ch] = out.get(ch, 0) + 1
+    return out
+
+
 def _montage_psd_lsb_blocks(participant_uid, montage_recordings=None):
     """Build PSD->LSB bridge input blocks from MONTAGE/SURVEY device-PSD snapshots.
 
@@ -812,27 +971,51 @@ def _montage_psd_lsb_blocks(participant_uid, montage_recordings=None):
     _EVENT_SENSE_CONTACT, segmented contacts fall to _canon_channel. The whole-recording
     StartTime is the window timestamp (the survey sweep is a near-instant snapshot).
 
+    A PSD the device flagged for an artefact (`_psd_artifact_flagged`) gives no block (the PI,
+    2026-10-18, item 6c): these blocks feed band choice only (the heat maps, the cells, the
+    Closed-Loop band answers); the PSD stays stored and drawn on the timeline with its flag, and
+    `_montage_psd_artifact_excluded` counts what was left out, per contact pair.
+
     Returns a list of {channel, t, freq, power, source} — the schema
     raw_lsb_spectrum_cache consumes for its PSD family. `source` is tagged
     MONTAGE_PSD_SOURCE so the cache/hover can distinguish montage from patient-event PSD.
     """
     if montage_recordings is None:
-        montage_recordings = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+        montage_recordings = (_load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
+                              + _load_recordings(participant_uid, SPECTRUM_ONLY_TYPES))
     blocks = []
     for r in (montage_recordings or []):
         if not isinstance(r, dict):
             continue
-        mp = (r.get("Descriptor") or {}).get("MedtronicPSD")
-        if not isinstance(mp, list):
-            continue
+        desc = r.get("Descriptor") or {}
         t0 = availability._to_epoch(r.get("StartTime"))
         if t0 is None:
             continue
-        for e in mp:
+        # THE IN-SESSION SIGNAL CHECK (decision 446): its own channel name, frequencies and values
+        check = desc.get("SignalCheck")
+        if isinstance(check, dict):
+            ch = _canon_channel(str(check.get("Channel") or "").split(".")[-1])
+            if _psd_artifact_flagged(check.get("ArtifactStatus")):
+                continue                     # the device flagged an artefact (item 6c)
+            if ch and check.get("SignalFrequencies") is not None and check.get("SignalPsdValues") is not None:
+                blocks.append({"channel": ch, "t": float(t0), "freq": check["SignalFrequencies"],
+                               "power": check["SignalPsdValues"], "source": MONTAGE_PSD_SOURCE,
+                               "origin": "signal check"})
+            continue
+        if r.get("RunUnknown"):
+            origin_of = {"MedtronicPSD": "run unknown"}
+        else:
+            origin_of = {"MedtronicPSD": "montage", "SurveyPSD": "electrode survey"}
+        entries = [(e, origin_of[k]) for k in origin_of for e in (desc.get(k) or [])
+                   if isinstance(desc.get(k), list)]
+        for e, origin in entries:
             if not isinstance(e, dict):
                 continue
-            freq = e.get("LFPFrequency")
-            power = e.get("LFPMagnitude")
+            if _psd_artifact_flagged(e.get("ArtifactStatus")):
+                continue                     # the device flagged an artefact (item 6c)
+            # the montage and the survey spell the same fields differently (decision 446)
+            freq = e.get("LFPFrequency") if e.get("LFPFrequency") is not None else e.get("LFPFrequencyinHertz")
+            power = e.get("LFPMagnitude") if e.get("LFPMagnitude") is not None else e.get("LFPMagnitudeinMicroVoltPeak")
             if freq is None or power is None:
                 continue
             # Canonical channel from the device sensing config + hemisphere.
@@ -848,7 +1031,7 @@ def _montage_psd_lsb_blocks(participant_uid, montage_recordings=None):
             if not ch:
                 continue
             blocks.append({"channel": ch, "t": float(t0),
-                           "freq": freq, "power": power, "source": MONTAGE_PSD_SOURCE})
+                           "freq": freq, "power": power, "source": MONTAGE_PSD_SOURCE, "origin": origin})
     return blocks
 
 
@@ -978,7 +1161,8 @@ def _recordings_setup_cached(participant_uid, td=None, recording_set=None):
     psd_list = _load_recordings(participant_uid, AVAILABILITY_PSD_TYPES)
     sensing_idx = _build_sensing_config_index(list(td or []))
     event_blocks = _event_psd_lsb_blocks(participant_uid, sensing_index=sensing_idx)
-    montage_blocks = _montage_psd_lsb_blocks(participant_uid, montage_recordings=psd_list)
+    montage_blocks = _montage_psd_lsb_blocks(
+        participant_uid, montage_recordings=list(psd_list or []) + _load_recordings(participant_uid, SPECTRUM_ONLY_TYPES))
     chan_order = _derive_chan_order(td)
     channels = list(dict.fromkeys(availability._canon_channel(c) for c in (chan_order or [])))
     result = (td, psd_list, event_blocks, montage_blocks, chan_order, channels)
@@ -1215,7 +1399,10 @@ _RAW_LSB_SHARED_KIND = "raw_lsb_tiles"
 # date -- the implant date is in the key beside this.
 # v3 (2026-09-26): a survey or montage recording's 3 s pieces are labelled "Montage" instead of the
 # fallback "time-domain"; every value is unchanged, the saved copy rebuilds to carry the label.
-_RAW_LSB_RULE_VERSION = "v3_montage_pieces_labelled_montage_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+# v4 (2026-10-18, item 6c): a montage, survey or signal-check PSD the device flagged for an
+# artefact gives no PSD-derived window (`_psd_artifact_flagged`); the rows do not show it, so the
+# rule is here.
+_RAW_LSB_RULE_VERSION = "v4_montage_pieces_labelled_montage_tablet_clock_flagged_psds_out"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 #: ===========================================================================================
 #: THE STORE ITSELF NOW LIVES IN ONE PLACE: `modules/CacheStore/store.py`.
@@ -1412,6 +1599,8 @@ def _raw_lsb_recording_identity_uncached(participant_uid):
         elif isinstance(md, dict):
             extra = "%r|%r|%r" % (md.get("CenterFrequencyHz"), md.get("FreqScheduleHz"),
                                   md.get("ContactSchedule"))
+            if md.get("SignalLeadSchedule") is not None:      # decision 488; absent: key as before
+                extra += "|%r" % (md.get("SignalLeadSchedule"),)
         else:
             extra = ""
         parts.append("%s~%s~%s~%s" % (getattr(r, "uid", ""), getattr(r, "hashed", "") or "",
@@ -2022,6 +2211,17 @@ def _td_missing_version_for(max_missing_frac):
 
 _TD_MISSING_VERSION = _td_missing_version_for(streaming_psd.WELCH_MAX_MISSING_FRAC)
 
+# Version of the saturation rule on the 30 s Welch windows (the PI, 2026-10-18, item 6d): a channel
+# whose window holds a sample at the rail (`streaming_psd.WELCH_SATURATION_UV`) gives no spectrum.
+# Built from the limit, like `_TD_MISSING_VERSION`, and carried in every per-recording spectrum
+# file's name and the assembled matrix's key beside it, so no spectrum Welch'd before the rule
+# (or under another limit) is served.
+_TD_SATURATION_VERSION = "sat%guv" % float(streaming_psd.WELCH_SATURATION_UV)
+
+#: The rule part of a per-recording spectrum file's name after the Welch-window token: the
+#: channel-name rule, the missing-sample rule and the saturation rule.
+_PSD_ROWS_BARE = f"{_CHANNEL_CANON_VERSION}_{_TD_MISSING_VERSION}_{_TD_SATURATION_VERSION}"
+
 # The scale the assembled matrix's spectra are stored on. Folded into the matrix signature so an
 # entry assembled under one rule is never served under another: until 2026-09-19 every spectrum was
 # stored as decibels (`logX`); the PI's rule of that day (decision 202: log power enters no
@@ -2156,6 +2356,8 @@ def _welch_rows_into(rows, recs, source_label, _sp, pro_times=None, counts=None)
                     for kk in range(psd_k.shape[0]):
                         tk = float(kept_times[kk]); dk = float(used_k[kk])
                         for j, n in enumerate(keep_names):
+                            if not np.isfinite(psd_k[kk, j, :]).any():
+                                continue       # this channel's window reached the rail (item 6d)
                             rows.append({"channel": _canon_channel(n), "source": source_label,
                                          "t": tk, "freq": _sp.F_SET, "power": psd_k[kk, j, :],
                                          "dur": dk})
@@ -2195,6 +2397,8 @@ def _welch_rows_into(rows, recs, source_label, _sp, pro_times=None, counts=None)
         # downstream as mean +/- SD so the clinician knows the TD epoch length feeding each PSD.
         used_dur = float(min(_sp.WELCH_MAX_SECONDS, nsamp / fs)) if fs > 0 else float("nan")
         for j, n in enumerate(keep_names):
+            if not np.isfinite(psd[0, j, :]).any():
+                continue                       # this channel's window reached the rail (item 6d)
             # Store the CANONICAL channel so ring-named survey rows pool with the short-named TD/Stim
             # rows for the same physical bipolar pair (e.g. ZERO_AND_THREE_LEFT_RING -> ZERO_THREE_LEFT).
             rows.append({"channel": _canon_channel(n), "source": source_label,
@@ -2532,7 +2736,7 @@ def _sweep_recording_psd_siblings(path):
     (no `_p` part) is not touched: it is a different product, still read by the ingest's warm and
     the calibration panel. Best-effort, like every cache write here."""
     d, base = os.path.split(path)
-    marker = f"_{_TD_MISSING_VERSION}_p"
+    marker = f"_{_TD_MISSING_VERSION}_{_TD_SATURATION_VERSION}_p"
     if marker not in base:
         return []
     stem = base.split(marker, 1)[0] + marker
@@ -2571,7 +2775,7 @@ def _recording_psd_cache_path(rec_uid, rec_hash, pro_sig=""):
     # the first-window path too, which serves montage/survey/event recordings (pro_sig=""), so every
     # entry must invalidate when the rejection rule changes.
     return os.path.join(_psd_rows_cache_dir(),
-                        f"{rec_uid}_{h}_w{w}_{_CHANNEL_CANON_VERSION}_{_TD_MISSING_VERSION}{p}.npz")
+                        f"{rec_uid}_{h}_w{w}_{_PSD_ROWS_BARE}{p}.npz")
 
 
 #: Matches everything in a per-recording PSD file's name after the Welch-window token
@@ -2620,7 +2824,7 @@ def psd_rows_cache_generation_report():
         return {"total_files": 0, "total_bytes": 0, "current_generation": None,
                 "other_generations": [], "unparsed": {"files": 0, "bytes": 0}}
 
-    current_bare = f"{_CHANNEL_CANON_VERSION}_{_TD_MISSING_VERSION}"
+    current_bare = _PSD_ROWS_BARE
 
     total_files = 0
     total_bytes = 0
@@ -3002,6 +3206,8 @@ def _psd_matrix_signature_orm(participant_uid, pro_times=None):
     # Missing-aware TD Welch rejection is part of the matrix CONTENT (it decides which windows yield a
     # spectrum), and it runs in the first-window path too, so fold it in unconditionally.
     parts.append(f"td_missing:{_TD_MISSING_VERSION}")
+    # The saturation rule on the same windows (item 6d) likewise decides which yield a spectrum.
+    parts.append(f"td_saturation:{_TD_SATURATION_VERSION}")
     # The power scale of the stored spectra is part of the matrix CONTENT (decision 204).
     parts.append(f"power_scale:{_MATRIX_POWER_SCALE_VERSION}")
     # Every recording and patient-event time on the tablet's clock (2026-09-26): an event row's
@@ -3020,8 +3226,11 @@ def _psd_matrix_signature_orm(participant_uid, pro_times=None):
     try:
         Participant = models.Participant.find(uid=participant_uid)
         SourceFiles = models.SourceFile.find_all(owner=Participant) if Participant else []
-        ev_parts = sorted(f"event:{getattr(r, 'uid', '')}:{str(getattr(r, 'hashed', '') or '')[:16]}"
-                          for r in _patient_event_rows(SourceFiles, participant_uid)) if SourceFiles else []
+        # Only the two columns the key reads (decision 429): loading whole event rows decoded each
+        # row's spectrum in its metadata, about 3,200 of them, to read two short strings.
+        ev_parts = sorted(f"event:{u}:{str(h or '')[:16]}"
+                          for u, h in _patient_event_rows(SourceFiles, participant_uid)
+                          .values_list("uid", "hashed")) if SourceFiles else []
         parts = parts + ev_parts
     except Exception as ex:
         _log.warning("Biomarkers: event signature component failed (%s); cache may miss new events", ex)
@@ -3250,7 +3459,51 @@ def _adaptive_is_active(status):
     return s not in ("NOT_CONFIGURED", "OFF", "DISABLED", "NONE", "")
 
 
+#: The saved programmed adaptive thresholds (decision 429).
+PROGRAMMED_THRESHOLDS_KIND = "programmed_adaptive_thresholds"
+_PROGRAMMED_THRESHOLDS_RULE = "v1"
+
+
+def _therapy_history_label(participant):
+    """What the programmed thresholds depend on, from the database rows alone (decision 429): every
+    source file's uid and content hash, and the therapy groups' count and highest id (a re-ingest
+    that rewrites the therapy rows moves the id)."""
+    import hashlib
+    from Server.models import SourceFile
+    from Server.models.Therapy import ElectricalTherapy
+    from django.db.models import Count, Max
+    rows = sorted((str(u), str(h)) for u, h in
+                  SourceFile.objects.filter(owner=participant).values_list("uid", "hashed"))
+    blob = "|".join("~".join(r) for r in rows).encode("utf8")
+    agg = ElectricalTherapy.objects.filter(therapy__source__owner=participant).aggregate(
+        n=Count("id"), last=Max("id"))
+    return (hashlib.blake2b(blob, digest_size=16).hexdigest(), int(agg["n"] or 0),
+            int(agg["last"] or 0))
+
+
 def _programmed_adaptive_thresholds(participant):
+    """`_programmed_adaptive_thresholds_build`, saved per participant under `_therapy_history_label`
+    (decision 429: it took about 2.3 s of every band-power request). An empty answer is not saved,
+    and a label that cannot be built works it out as before."""
+    if participant is None:
+        return {}
+    uid = str(getattr(participant, "uid", participant))
+    try:
+        sig = (PROGRAMMED_THRESHOLDS_KIND, _PROGRAMMED_THRESHOLDS_RULE, uid,
+               _therapy_history_label(participant))
+    except Exception:                                      # noqa: BLE001 - worked out as before
+        return _programmed_adaptive_thresholds_build(participant)
+    got = _cache_store.load(PROGRAMMED_THRESHOLDS_KIND, uid, sig, root=_SHARED_CACHE_DIR_OVERRIDE)
+    if got is not None:
+        return dict(got)
+    out = _programmed_adaptive_thresholds_build(participant)
+    if out:
+        _cache_store.store(PROGRAMMED_THRESHOLDS_KIND, uid, sig, dict(out), writer="biomarkers",
+                           provenance=[], trigger="band_power", root=_SHARED_CACHE_DIR_OVERRIDE)
+    return out
+
+
+def _programmed_adaptive_thresholds_build(participant):
     """Latest PROGRAMMED adaptive-DBS detection threshold per hemisphere — ONLY when closed loop is
     active on that hemisphere. Returns {hemi: {lower, upper, measured_lower, measured_upper, status,
     date}} for hemispheres whose most-recent therapy group has adaptive therapy configured & running.
@@ -3398,7 +3651,17 @@ def _region_map(participant, chan_order):
     except Exception:
         return {}
     hemi_region = {}
-    for e in Electrode.objects.filter(owner=participant):
+    # The newest implanted device's leads first (decision 467): RCS08 also owns older lead records
+    # (Left STN, Right STN), and "first match per side" otherwise depended on row order.
+    electrodes = []
+    try:
+        from Server.models.Device import DBSDevice
+        for d in sorted(DBSDevice.objects.filter(owner=participant),
+                        key=lambda d: -float(getattr(d, "implanted_date", 0) or 0)):
+            electrodes.extend(d.electrodes.all())
+    except Exception:                                    # noqa: BLE001 - fall back to every lead
+        electrodes = []
+    for e in electrodes + list(Electrode.objects.filter(owner=participant)):
         reg = (getattr(e, "custom_name", "") or getattr(e, "target", "") or "").strip()
         if not reg:
             continue
@@ -3570,9 +3833,41 @@ def _request_memo(key, compute):
         return compute()
     k = ("__request_memo__",) + tuple(key)
     if k not in cache:
-        cache[k] = compute()
+        cache[k] = _pass_memo(key, compute, cache)
     got = cache[k]
     return list(got) if isinstance(got, list) else got
+
+
+#: THE RECORDING READS SHARED BETWEEN REQUESTS IN THE REBUILD'S OWN PROCESSES (decision 476, the PI,
+#: 2026-10-16: "update the closed-loop report to use shared preparation"). A Closed-Loop report is
+#: about a band, but 4.5 s of each (of 11-28 s) went on reading the participant's recordings, the tile
+#: rows' digest and the recording signature again, the same for every band. In a process with
+#: BAND_SETUP_MEMO_ENV "1" (the rebuild's, never a web worker's) those three are kept between
+#: requests, filed under the recording set's identity read fresh once per request, so a hand upload
+#: during a pass is read anew. That identity covers every row's id, content hash and type, not the
+#: sensing fields written onto a row at decode time; a re-decode that changes only those reaches a
+#: rebuild process when it is replaced (every 20 replays), and the pages, which never keep this, at
+#: once. No pain report is kept. At most _PASS_MEMO_MAX kept.
+_PASS_MEMO_KEYS = ("recordings", "tile_rows", "cl_recording_set_signature")
+_PASS_MEMO = {}
+_PASS_MEMO_MAX = 8
+
+
+def _pass_memo(key, compute, cache):
+    if os.environ.get(BAND_SETUP_MEMO_ENV) != "1" or not key or key[0] not in _PASS_MEMO_KEYS:
+        return compute()
+    ik = ("__recording_identity__", str(key[1]))
+    try:
+        if ik not in cache:
+            cache[ik] = repr(_recording_set_identity(key[1]))
+    except Exception:                                          # noqa: BLE001 -- no label, no memo
+        return compute()
+    pk = (tuple(key), cache[ik])
+    if pk not in _PASS_MEMO:
+        if len(_PASS_MEMO) >= _PASS_MEMO_MAX:
+            _PASS_MEMO.clear()
+        _PASS_MEMO[pk] = compute()
+    return _PASS_MEMO[pk]
 
 
 def _pro_scoped(fn):
@@ -4182,10 +4477,14 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # exclusive consumer of the bridge.
         event_psd_blocks = _event_psd_lsb_blocks(participant_uid, sensing_hz_by_channel=sensing_hz,
                                                   sensing_index=_sensing_idx)
+        # INDEFINITE STREAMING (item P-11, 2026-10-06): one modelled point per recording per pair,
+        # at the band in force on that pair then (`availability._indefinite_modeled_points`). The
+        # timeline only; the Closed-Loop calls of `lsb_series` do not pass it.
         lsb = availability.lsb_series(chronic_list, powerdomain_list, region_map=region_map,
                                       montage_td_recordings=psd_list,
                                       sensing_hz_by_channel=sensing_hz,
-                                      event_psd_recordings=event_psd_blocks)
+                                      event_psd_recordings=event_psd_blocks,
+                                      indefinite_td_recordings=ind)
         # Compact the per-sample LSB into render-cheap geometry (chronic line + per-session blocks)
         # so the calendar-scale timeline stays responsive while zooming; the frontend draws this.
         lsb_overview = availability.lsb_overview(lsb)
@@ -4232,7 +4531,10 @@ def _build_availability(participant_uid, *, chronic_list, powerdomain_list, td_l
         # replicate the nearest-PRO match + binarization LIVE as the match-window slider moves.
         out = {"records": records, "stim": stim, "freq_bands": bands,
                "span": span, "samples": samples, "lsb_overview": lsb_overview,
-               "events": events, "montage_events": montage_events}
+               "events": events, "montage_events": montage_events,
+               # streaming runs left out for reading 0 throughout, per pair (decision 462)
+               "zero_runs_left_out": availability.zero_runs_by_pair(
+                   availability.zero_runs(powerdomain_list))}
         return out
     except Exception as e:
         _log.warning("Biomarkers: availability payload failed: %s", e, exc_info=True)
@@ -4266,7 +4568,9 @@ def _rating_centred_scan_index(participant_uid, td_all, psd_all, pain, sensing_i
 #: deterministic decode of the recordings with no other module's choices in it.
 _ACQ_TIMELINE_KIND = "acquisition_timeline"
 # v2 (decision 313): a chronic file spanning the implant date is dated from it, not from 2025-06-18.
-_ACQ_TIMELINE_RULE_VERSION = "v2_spanning_chronic_dated_from_implant_tablet_clock"  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+# v3 (item P-11, 2026-10-06): indefinite streaming adds modelled points at the band in force.
+# v4 (decision 461, 2026-10-06): each streaming run's own band; chronic samples under the pair in force.
+_ACQ_TIMELINE_RULE_VERSION = "v6_chronic_readings_once"   # v5: decision 462; v6: each chronic reading once, the averaged-in invalid code blanked (item 6a/6b, 2026-10-18)  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 
 def _acquisition_timeline_key(recording_set):
@@ -4356,6 +4660,12 @@ def psd_scan_index_for_participant(request_data):
     Participant = models.Participant.find(uid=participant_uid)
     pro_df = _load_pros(request_data, Participant)
     pro_df, label_metric, _ = _resolve_biomarker_metric(request_data, pro_df)
+    metric_label = next((m["label"] for m in BIOMARKER_METRICS if m["key"] == label_metric),
+                        str(label_metric))
+    # The clinic sheets' ratings as extra reports when the switch is on (decision 436), the rows
+    # the heat maps add (decision 186); they reach the key through the table's digest.
+    pro_df, sheet_block = _merge_clinic_sheet_ratings_into_pro_df(
+        participant_uid, label_metric, metric_label, pro_df, request_data)
     pro_digest = _pro_table_digest(pro_df) if pro_df is not None and len(pro_df) else "empty"
     recording_set = _recording_set_identity(participant_uid)
     key = ("scan_index_v1", recording_set, label_metric, pro_digest)
@@ -4381,7 +4691,8 @@ def psd_scan_index_for_participant(request_data):
     except Exception as e:                                # noqa: BLE001 -- the warm is an adjunct
         _log.warning("Biomarkers: PSD cache warm dispatch failed (%s)", e)
     out = json_compliant_handler({"psd_scan_index": idx, "label_metric": label_metric,
-                                  "n_reports": int(len(pro_df)) if pro_df is not None else 0})
+                                  "n_reports": int(len(pro_df)) if pro_df is not None else 0,
+                                  "n_clinic_sheet": int((sheet_block or {}).get("n_added") or 0)})
     with _SCAN_INDEX_MEMO_LOCK:
         if key not in _SCAN_INDEX_MEMO and len(_SCAN_INDEX_MEMO) >= _SCAN_INDEX_MEMO_MAX:
             _SCAN_INDEX_MEMO.pop(next(iter(_SCAN_INDEX_MEMO)))
@@ -4396,6 +4707,55 @@ def _chronic_list_for(participant_uid):
     if RUN_REUSES_RECORDING_MEMO:
         return _power_list_cached(participant_uid)[0]
     return _load_recordings(participant_uid, CHRONIC_TYPES)
+
+
+#: The saved table of modelled LSB at every standard band centre of one contact (decision 433).
+#: Recording-derived only: no pain rating in its label or contents.
+MODELED_LSB_TABLE_KIND = "modeled_lsb_by_centre"
+
+
+def _modeled_lsb_values(participant_uid, channel, center_hz, td_recordings, half_hz):
+    """`availability.modeled_lsb_at_center` for the deployment summary and the band-power panel,
+    read from the contact's saved table when the centre is one of the standard centres
+    (`_LSB_SPECTRUM_CENTERS`) and worked out directly otherwise (decision 433). The table is built
+    once per contact, recording set, band width and code version, and every value in it equals the
+    direct call's exactly. `td_recordings` is the voltage-trace list `_sign_off_recordings` gives
+    for this participant, which `_recording_set_identity` determines."""
+    def direct():
+        return availability.modeled_lsb_at_center(channel, center_hz, td_recordings=td_recordings,
+                                                  psd_recordings=None, half_hz=half_hz)
+    try:
+        cz = float(center_hz)
+    except (TypeError, ValueError):
+        return direct()
+    hit = [c for c in _LSB_SPECTRUM_CENTERS if abs(c - cz) < 1e-9]
+    if not td_recordings or not hit or not participant_uid:
+        return direct()
+    try:
+        inputs = {"channel": availability._canon_channel(channel), "half_hz": float(half_hz),
+                  "recording_set": str(_recording_set_identity(participant_uid)),
+                  "centres": [float(c) for c in _LSB_SPECTRUM_CENTERS]}
+    except Exception:                                      # noqa: BLE001 - worked out as before
+        return direct()
+
+    def build():
+        idx = availability.channel_index(td_recordings=td_recordings)
+        table = availability.modeled_lsb_by_centre(channel, _LSB_SPECTRUM_CENTERS, index=idx,
+                                                   half_hz=half_hz)
+        return {"available": True, "values": {repr(c): v for c, v in table.items()}}
+    try:
+        try:
+            from modules.CacheStore import saved_answers as _saved
+        except ImportError:                                # pragma: no cover - host spelling
+            from CacheStore import saved_answers as _saved
+        out = _saved.serve_or_build(MODELED_LSB_TABLE_KIND, participant_uid, inputs, build,
+                                    writer="biomarkers", root=_SHARED_CACHE_DIR_OVERRIDE)
+        got = (out or {}).get("values", {}).get(repr(float(hit[0])))
+    except Exception:                                      # noqa: BLE001 - worked out as before
+        _log.warning("Biomarkers: the modelled-LSB table for %s %s could not be read or built",
+                     participant_uid, channel, exc_info=True)
+        return direct()
+    return direct() if got is None else np.asarray(got, dtype=float)
 
 
 def _sign_off_recordings(participant_uid):
@@ -5036,13 +5396,25 @@ PAIN_METRICS = [
 ]
 
 
-def _band_decide_verdict(g, h):
-    """Badge text from the glmer + stim-stability results.
+#: Which p decides the band's verdict (decision 482; the PI, 2026-10-18: "do all", change 4).
+#: "rotation": the exact rotation test of the same mixed model (decision 477), which read <= 0.05
+#: for 4.95 % of unrelated made-up bands at RCS08's persistence where the model's own p read 8.3 %.
+#: "glmer" is the neutral setting: the model's own p, as before 482.
+VERDICT_P_SOURCE = "rotation"
 
-    Uses the RAW glmer p (a single-click validate is one test; the band x channel q lives on the
-    scan side). alpha=0.05 mirrors the scan FDR; bands that survived FDR on the scan arrive here
-    with q<0.05, so this is a per-band reaffirmation in the mixed-effects frame, with the
-    stim-stability flag deciding which validated label shows.
+
+def _band_decide_verdict(g, h):
+    """Badge text from the mixed-model fit, its rotation test and the stim-stability results.
+
+    The p that decides is the exact rotation test's (`g["rotation"]["p"]`, decision 482): the pain
+    ratings, with their weeks, slid along band power in time by every possible number of samples.
+    The model's own p reads too small on this record (decision 477) and is shown beside it, never
+    deciding. A rotation test that did not run gives "candidate (rotation test unavailable)" and
+    never a pass (decision 9: a check that cannot run abstains, it does not pass). The fit's own
+    failures (separation, singular, not converged, too few) still come first: the rotation test
+    scores the same model. alpha 0.05, one band, one test; the stim-stability answer decides which
+    validated label shows. `VERDICT_P_SOURCE = "glmer"` puts the model's p back (the neutral
+    setting).
     """
     if not g.get("available"):
         return "unavailable"
@@ -5050,9 +5422,22 @@ def _band_decide_verdict(g, h):
         return "failed (separation)"
     if g.get("singular"):
         return "failed (singular random effect)"
-    p = g.get("p")
-    if p is None or not isinstance(p, (int, float)) or p >= 0.05:
-        return "candidate (mixed-effects n.s.)"
+    if g.get("converged") is False:
+        return "failed (did not converge)"
+    if g.get("too_few_in_smaller_group"):
+        return f"failed (too few {g.get('smaller_group') or 'low'}-pain samples)"
+    if VERDICT_P_SOURCE == "glmer":
+        p = g.get("p")
+        if p is None or not isinstance(p, (int, float)) or p >= 0.05:
+            return "candidate (mixed-effects n.s.)"
+    else:
+        rot = g.get("rotation") or {}
+        p = rot.get("p") if rot.get("available") else None
+        if (p is None or isinstance(p, bool) or not isinstance(p, (int, float))
+                or not np.isfinite(p)):
+            return "candidate (rotation test unavailable)"
+        if p >= 0.05:
+            return "candidate (rotation test n.s.)"
     if h.get("available") and h.get("stim_stable") is False:
         return "VALIDATED (stim-dependent)"
     # THE THREE-WAY VERDICT DECIDES THE PARENTHETICAL, not the legacy boolean.
@@ -5150,7 +5535,53 @@ def _validation_tolerance_min(match_tol_min):
     return float(max(analytics.BAND_TIME_SWEEP_SECONDS)) / 60.0
 
 
+#: Set in the rebuild's worker processes only (`refresh_saved_answers._replay_process_init`).
+BAND_SETUP_MEMO_ENV = "BRAVO_BAND_SETUP_MEMO"
+#: The request fields that name the band, not the preparation: left out of the memo's label.
+_BAND_ONLY_FIELDS = ("Channel", "CenterHz", "BandCenterHz", "BandWidthHz", "Cutpoint")
+_BAND_SETUP_MEMO = {}
+_BAND_SETUP_MEMO_MAX = 2
+
+
+def _setup_data_identity(request_data):
+    """Every piece of data `_band_validation_setup_build` reads, by identity: the recording set,
+    the pain-report table (content hash) and the newest clinic sheets."""
+    uid = request_data.get("ParticipantId")
+    Participant = models.Participant.find(uid=uid)
+    if Participant is None:
+        return (str(uid), None)
+    pro = _load_pros(request_data, Participant)
+    sheets = _cache_store.newest_stamp(CLINIC_SHEET_STEPS_KIND, str(uid),
+                                       root=_SHARED_CACHE_DIR_OVERRIDE) or {}
+    return (repr(_recording_set_identity(uid)),
+            _pro_table_digest(pro) if pro is not None and len(pro) else "none",
+            sheets.get("signature_key"))
+
+
 def _band_validation_setup(request_data):
+    """`_band_validation_setup_build`, kept between requests in the rebuild's workers (decision 474,
+    the PI, 2026-10-14). The preparation is the same for every band of a participant under one set
+    of settings, and the rebuild asks for about 900 band answers a pass; each paid 1.3-3 s for it.
+    Filed under the whole request minus the band's own fields (an unknown field stays in, which can
+    only make sharing rarer) and the identity of every piece of data it reads, so a hand upload
+    during a pass cannot be answered from the old data. Every caller gets its own deep copy; at most two kept. Off
+    unless BAND_SETUP_MEMO_ENV is "1": the page's web workers never keep it."""
+    if os.environ.get(BAND_SETUP_MEMO_ENV) != "1":
+        return _band_validation_setup_build(request_data)
+    import copy
+    rest = {k: v for k, v in request_data.items() if k not in _BAND_ONLY_FIELDS}
+    try:
+        key = (json.dumps(rest, sort_keys=True, default=str), _setup_data_identity(request_data))
+    except Exception:                                          # noqa: BLE001 -- no label, no memo
+        return _band_validation_setup_build(request_data)
+    if key not in _BAND_SETUP_MEMO:
+        if len(_BAND_SETUP_MEMO) >= _BAND_SETUP_MEMO_MAX:
+            _BAND_SETUP_MEMO.clear()
+        _BAND_SETUP_MEMO[key] = _band_validation_setup_build(request_data)
+    return copy.deepcopy(_BAND_SETUP_MEMO[key])
+
+
+def _band_validation_setup_build(request_data):
     """Everything `_validate_band_core` needs that does NOT depend on which band is being asked
     about: the participant, the pain-report table, the assembled spectrum matrix, the pooled
     matched detail, and the chronic stimulation series.
@@ -5234,10 +5665,13 @@ def _band_validation_setup(request_data):
     chronic_list = _chronic_list_for(participant_uid)
     try:
         stim = availability.stim_series(chronic_list) if chronic_list else None
+        # each side's own series (decision 483): a band reads its own side's (`_stim_series_for`)
+        stim_by_side = ({s: availability.stim_series(chronic_list, hemisphere=s)
+                         for s in ("Left", "Right")} if chronic_list else None)
     except Exception:
         _log.warning("Biomarkers: the chronic stim series could not be built for %s; the "
                      "stability answer will say 'no stim series'", participant_uid, exc_info=True)
-        stim = None
+        stim = stim_by_side = None
 
     return {
         "available": True,
@@ -5255,8 +5689,28 @@ def _band_validation_setup(request_data):
         "pm": pm,
         "pooled": pooled,
         "stim_series": stim,
+        "stim_series_by_side": stim_by_side,
         "clinic_sheet_ratings": sheet_block,
     }
+
+
+#: Each band's stimulation-current series is its own side's (the PI, 2026-10-18: "don't pool both
+#: sides' currents into one ... keep them unilateral"; decision 483, CLAUDE.md rule 13). False is
+#: the neutral setting: the two sides' chronic currents in one series, as before 483. Read from the
+#: environment too (`BRAVO_STIM_SERIES_PER_SIDE=0`), so a process the Closed-Loop report starts
+#: fresh takes the same setting as the one that started it.
+STIM_SERIES_PER_SIDE = os.environ.get("BRAVO_STIM_SERIES_PER_SIDE", "1").strip() != "0"
+
+
+def _stim_series_for(setup, channel):
+    """The current series the stability answer for `channel` reads: its own side's under
+    `STIM_SERIES_PER_SIDE`, else the pooled series. A pair that names no side gets None (no
+    series, which the stability answer reports), never the other side's or both."""
+    if not STIM_SERIES_PER_SIDE:
+        return setup.get("stim_series")
+    side = stim_current.hemisphere_of_channel(channel)
+    by_side = setup.get("stim_series_by_side") or {}
+    return by_side.get(side) if side else None
 
 
 def _validate_band_core(request_data):
@@ -5290,13 +5744,18 @@ def _validate_band_core(request_data):
         return setup
 
     pooled = setup["pooled"]
-    stim = setup["stim_series"]
+    stim = _stim_series_for(setup, channel)
     label_strategy, low_pct, high_pct = setup["label_strategy"], setup["low_pct"], setup["high_pct"]
 
     # Mixed-effects logistic (definitive per-candidate inference).
     glmer = analytics.band_mixedmodel_inference(
         pooled, channel, center_hz, band_width_hz=band_width_hz,
-        strategy=label_strategy, low_pct=low_pct, high_pct=high_pct)
+        strategy=label_strategy, low_pct=low_pct, high_pct=high_pct,
+        # the same rotation test with the band's own side's current as a covariate, a warning
+        # only (decision 484); never read by the verdict or a gate
+        **({"current_removed": {"stream": stim_current.settings_stream_for(participant_uid),
+                                "hemisphere": stim_current.hemisphere_of_channel(channel)}}
+           if sweep_settings.CURRENT_REMOVED_CHECK else {}))
     # Stim-state heterogeneity (band x stim-era LRT), on the stim series the setup already built.
     hetero = analytics.band_stim_stability(
         pooled, channel, center_hz, stim_series=stim, band_width_hz=band_width_hz,
@@ -5408,7 +5867,7 @@ def _stability_batch_worker(point):
     channel, center_hz = point
     try:
         result = analytics.band_stim_stability(
-            ctx["pooled"], channel, center_hz, stim_series=ctx["stim_series"],
+            ctx["pooled"], channel, center_hz, stim_series=_stim_series_for(ctx, channel),
             band_width_hz=ctx["band_width_hz"], strategy=ctx["label_strategy"],
             low_pct=ctx["low_pct"], high_pct=ctx["high_pct"]) or {}
         return point, result, None
@@ -5497,6 +5956,7 @@ def stability_grid_for_participant(participant_uid, points, *, band_width_hz=5.0
         return {}
 
     ctx = {"pooled": setup["pooled"], "stim_series": setup["stim_series"],
+           "stim_series_by_side": setup.get("stim_series_by_side"),
            "band_width_hz": float(band_width_hz), "label_strategy": setup["label_strategy"],
            "low_pct": setup["low_pct"], "high_pct": setup["high_pct"]}
 
@@ -5594,7 +6054,7 @@ def _stability_batch_worker_serial(point, ctx):
     channel, center_hz = point
     try:
         result = analytics.band_stim_stability(
-            ctx["pooled"], channel, center_hz, stim_series=ctx["stim_series"],
+            ctx["pooled"], channel, center_hz, stim_series=_stim_series_for(ctx, channel),
             band_width_hz=ctx["band_width_hz"], strategy=ctx["label_strategy"],
             low_pct=ctx["low_pct"], high_pct=ctx["high_pct"]) or {}
         return point, result, None
@@ -6431,6 +6891,9 @@ def _suggested_percept_mode(polarity, adaptive_valid):
     if polarity == "positive":
         return "Dual", ("positive-direction biomarker maps onto Dual/Single adaptive directly "
                         "(stim ramps up as the biomarker rises)")
+    if polarity != "negative":
+        return None, ("direction not known (the mixed-effects fit gave no odds ratio), so no "
+                      "adaptive mode can be suggested")
     return None, ("negative-direction biomarker (higher power → lower pain) requires the inverse "
                   "control law; Percept adaptive supports inverse only as sensing-only 'Single "
                   "Threshold Inverse' — deploy via a custom/negated feature, not stock adaptive")
@@ -6598,7 +7061,7 @@ def _threshold_mode_block(request_data, center_hz, threshold_lsb):
     }
 
 
-def band_deployment_roc(request_data):
+def _band_deployment_roc_build(request_data):
     """Rating-clustered deployment ROC + cut-point table for ONE committed band (Phase B).
 
     Reuses `_validate_band_core` so the band feature + pooled detail are byte-identical to the
@@ -6683,9 +7146,122 @@ def psd_lsb_conversion_model(request_data):
     P = models.Participant.find(uid=participant)
     if P is not None:
         code = getattr(P, "code", None) or getattr(P, "name", None) or participant
-    return _cal.panel_payload(code, deployed_k=analytics.LSB_PER_UV2_TRANSFORM,
-                              deployed_bridge_ratio=analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO,
-                              deployed_bridge=analytics.LSB_PER_DEVICE_PSD)
+    out = _cal.panel_payload(code, deployed_k=analytics.LSB_PER_UV2_TRANSFORM,
+                             deployed_bridge_ratio=analytics.LSB_PER_UV2_DEVICE_PSD_TD_RATIO,
+                             deployed_bridge=analytics.LSB_PER_DEVICE_PSD)
+    # the threshold band-power streams against the PSD->LSB route (decision 447)
+    try:
+        out["threshold_check"] = _cal.threshold_check(_threshold_check_rows(P) if P is not None else [])
+    except Exception as exc:                               # noqa: BLE001 - the panel stands without it
+        _log.warning("Biomarkers: the threshold check could not be built", exc_info=True)
+        out["threshold_check"] = {"available": False, "reason": f"could not be built ({type(exc).__name__})"}
+    return out
+
+
+def electrode_identifier_check(request_data):
+    """The electrode identifier's own spectra and rankings, for the Biomarkers page's bottom fold
+    (the PI, 2026-10-06; `routines/electrode_identifier.py`). Device values at face value; read by
+    no other calculation. Request: ParticipantId (uid)."""
+    from .routines import electrode_identifier as _ei
+    uid = request_data.get("ParticipantId")
+    if not uid or models.Participant.find(uid=uid) is None:
+        return {"available": False, "reason": "no such participant"}
+    rows = _ei.runs(_load_recordings(uid, ["MedtronicElectrodeIdentifier"]),
+                    _load_recordings(uid, ["MedtronicSurveyPSD"]))
+    if not rows:
+        return {"available": False, "reason": "no electrode identifier runs"}
+    return {"available": True, "runs": rows, "summary": _ei.summary(rows),
+            "n_runs": len(rows), "n_days": len({int(r["t"] // 86400) for r in rows})}
+
+
+def timeline_detail(request_data):
+    """The timeline's detail panel for one clicked mark (item P-18, the PI's go-ahead 2026-10-06;
+    `routines/timeline_detail.py`): the voltage trace, the device's own PSD and the device's sensed
+    band power within 12 h, on the clicked contact pair only. Reads the recordings the timeline
+    itself reads; no pain report. Request: ParticipantId, Channel, Dtype, Product, TStart."""
+    from .routines import timeline_detail as _td
+    uid = request_data.get("ParticipantId")
+    if not uid or models.Participant.find(uid=uid) is None:
+        return {"available": False, "reason": "no such participant"}
+    td, chronic_list, powerdomain_list = _availability_recordings_cached(uid)
+    product = str(request_data.get("Product") or "")
+    dtype = str(request_data.get("Dtype") or "")
+    psd_list = (_load_recordings(uid, AVAILABILITY_PSD_TYPES)
+                if dtype in ("timedomain", "psd") and product not in ("patient_event",) else [])
+    # the same contact-pair rule the timeline's own event marks were placed by (`_event_psd_index`)
+    event_rows = (_event_psd_rows(uid, sensing_index=_build_sensing_config_index(
+                      list(td or []) + list(powerdomain_list or [])))
+                  if product == "patient_event" else [])
+    native = availability.channel_index(chronic_recordings=chronic_list,
+                                        powerdomain_recordings=powerdomain_list).native_lsb_by_channel
+    out = _td.build_detail(request_data, td_recs=td, psd_recs=psd_list, event_rows=event_rows,
+                           native_lsb=native)
+    out["available"] = True
+    return out
+
+
+THRESHOLD_POWER_TYPE = "MedtronicThresholdPowerDomain"
+
+
+def _threshold_check_rows(participant):
+    """One row per stored threshold band-power stream (decision 447): its side, contact pair and
+    sensing frequency (the export's own settings, kept on the stream at ingest), its measured LSB
+    (median of the side's readings), and the LSB the bridge predicts (`analytics.device_psd_to_lsb`)
+    from each device spectrum OF THE SAME EXPORT on the same contact pair: the signal check, the
+    montage or electrode survey on its run, a spectrum of unknown run. Device values only."""
+    from modules import Database
+    types = [THRESHOLD_POWER_TYPE] + list(AVAILABILITY_PSD_TYPES) + list(SPECTRUM_ONLY_TYPES)
+    recs = list(models.Recording.objects.filter(source__owner=participant, type__in=types)
+                .values_list("type", "source_id", "pointer", "hashed"))
+    by_source = {}
+    for typ, src, pointer, hashed in recs:
+        try:
+            by_source.setdefault(src, []).append((typ, Database.loadSourceFile(pointer, hashed)))
+        except Exception:                                  # noqa: BLE001 - an unreadable file is skipped
+            continue
+
+    def side_of(x):
+        t = str(x or "").upper()
+        return "LEFT" if "LEFT" in t else ("RIGHT" if "RIGHT" in t else None)
+
+    rows = []
+    for src, items in by_source.items():
+        for typ, th in items:
+            if typ != THRESHOLD_POWER_TYPE:
+                continue
+            setup = th.get("SensingSetup") or {}
+            side = side_of(th.get("Channel")) or side_of(setup.get("HemisphereLocation"))
+            pair = str(setup.get("Channel") or "").split(".")[-1]
+            fc = (setup.get("SensingSetup") or {}).get("FrequencyInHertz")
+            power = np.asarray(th.get("LeftPower" if side == "LEFT" else "RightPower"), dtype=float)
+            measured = float(np.nanmedian(power)) if np.isfinite(power).any() else float("nan")
+            short = f"{pair.replace('_AND_', '_')}_{side}" if pair and side else None
+            preds = {}
+            if fc and short:
+                for typ2, rec in items:
+                    desc = rec.get("Descriptor") or {}
+                    check = desc.get("SignalCheck")
+                    if isinstance(check, dict):
+                        if str(check.get("Channel") or "").split(".")[-1] == short:
+                            preds["signal check"] = float(analytics.device_psd_to_lsb(
+                                check["SignalFrequencies"], check["SignalPsdValues"], float(fc)))
+                        continue
+                    label = "run unknown" if rec.get("RunUnknown") else "montage"
+                    for e in list(desc.get("MedtronicPSD") or []) + list(desc.get("SurveyPSD") or []):
+                        if not isinstance(e, dict):
+                            continue
+                        if str(e.get("SensingElectrodes", "")).split(".")[-1] != pair or side_of(e.get("Hemisphere")) != side:
+                            continue
+                        f = e.get("LFPFrequency") if e.get("LFPFrequency") is not None else e.get("LFPFrequencyinHertz")
+                        m = e.get("LFPMagnitude") if e.get("LFPMagnitude") is not None else e.get("LFPMagnitudeinMicroVoltPeak")
+                        if f is not None and m is not None and label not in preds:
+                            preds[label] = float(analytics.device_psd_to_lsb(f, m, float(fc)))
+            rows.append({"time": availability._to_epoch(th.get("StartTime")), "side": side, "channel": short,
+                         "center_hz": fc, "measured_lsb": measured, "predicted_lsb": preds,
+                         "upper_threshold": setup.get("UpperLfpThreshold"),
+                         "lower_threshold": setup.get("LowerLfpThreshold")})
+    rows.sort(key=lambda r: (r["time"] or 0, r["side"] or ""))
+    return rows
 
 
 def _sensing_hz_for_pd(pd_rec, contact):
@@ -6802,7 +7378,7 @@ def _modeled_lsb_threshold_estimate(thr_lsb, modeled_thr, n_modeled, center_hz, 
     return thr_estimate
 
 
-def band_lsb_and_power(request_data):
+def _band_lsb_and_power_build(request_data):
     """Phase C: anchor a Phase-B cut-point to deployable device units and report power / sample-size.
 
     Three products, in order of how much weight the clinician should put on them:
@@ -6848,9 +7424,10 @@ def band_lsb_and_power(request_data):
     # sensed THIS band natively. Mirrors deployment_summary and the timeline caller so this panel
     # sees exactly the modeled points the clinician sees on the timeline.
     # ALL raw-uV TD for the modeled tier: BrainSense streaming TD + IndefiniteStream (TIMEDOMAIN_TYPES)
-    # AND the montage/survey sweeps (psd_list). The exploration timeline already pools every TD product
-    # into the modeled LSB; the deployment fallback must see the same superset so no modeled point is
-    # dropped just because the band was only ever streamed, never montage-swept. Power-domain records
+    # AND the montage/survey sweeps (psd_list), so no modeled point is dropped just because the band
+    # was only ever streamed, never montage-swept. (The timeline's own modelled points are made
+    # differently: one per montage and, since 2026-10-06, one per indefinite recording per pair at the
+    # band in force then; BrainSense streaming TD makes none there, its band power being sensed.) Power-domain records
     # (chronic/powerdomain) are NOT raw TD and are excluded by the helper's fs/name guards.
     # The four lists come from the two recording memos (review B7.3), not four fresh decodes.
     chronic_list, pd_list, streaming_td, psd_list = _sign_off_recordings(core["participant_uid"])
@@ -6881,14 +7458,15 @@ def band_lsb_and_power(request_data):
     # montage's configured sensing bands — and units-consistent (replaces the retired µV²-cut-point
     # estimate_lsb fallback, removed 2026-06-28). `td_for_modeled` is ALL raw-µV TD (streaming +
     # montage/survey); chronic/powerdomain are power-domain, not TD, and excluded by the helper guards.
-    # Used only if there's no native threshold.
-    mvals = availability.modeled_lsb_at_center(channel, center_hz,
-                                      td_recordings=td_for_modeled,
-                                      psd_recordings=None, half_hz=half)
-    n_modeled = int(mvals.size)
-    if mvals.size >= 8 and percentile is not None:
-        modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
-    if band_lsb_vals is not None and band_lsb_vals.size >= 20 and percentile is not None:
+    # Used only if there's no native threshold, so worked out only then (decision 434: on RCS08 the
+    # device sensed 46 of the 132 grid bands often enough, and their modelled values went unread).
+    native_ok = band_lsb_vals is not None and band_lsb_vals.size >= 20 and percentile is not None
+    if not native_ok:
+        mvals = _modeled_lsb_values(core["participant_uid"], channel, center_hz, td_for_modeled, half)
+        n_modeled = int(mvals.size)
+        if mvals.size >= 8 and percentile is not None:
+            modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
+    if native_ok:
         # MEASURED, native device-sensed threshold — the deployable number, always preferred.
         thr_lsb = float(np.percentile(band_lsb_vals, percentile))
         threshold_lsb = {
@@ -6951,6 +7529,14 @@ def band_lsb_and_power(request_data):
                          "there is neither a native nor a modeled LSB anchor here. Record a montage "
                          "sweep or stream this band to obtain a deployable threshold."),
             }
+
+    # Streaming runs reading 0 throughout were left out of `lsb` (decision 462): say how many.
+    if isinstance(threshold_lsb, dict):
+        threshold_lsb["zero_runs_left_out"] = availability.zero_runs_in_band(
+            availability.zero_runs(pd_list), channel, center_hz, half)
+        _zn = availability.zero_runs_note(threshold_lsb["zero_runs_left_out"])
+        if _zn:
+            threshold_lsb["note"] = (str(threshold_lsb.get("note") or "") + " " + _zn + ".").strip()
 
     # ---- 1b) recommended-vs-currently-programmed delta (audit C10) ----
     # The task here is tuning an EXISTING device setting, so a recommended LSB number alone forces the
@@ -7052,7 +7638,7 @@ def band_lsb_and_power(request_data):
     }
 
 
-def band_deployment_roc_by_era(request_data):
+def _band_deployment_roc_by_era_build(request_data):
     """Phase D: refit the deployment ROC + cut-point WITHIN each stim era (OFF/LOW/HIGH).
 
     Reuses _validate_band_core (same band feature + pooled detail + chronic stim trajectory as the
@@ -7116,7 +7702,184 @@ def _summary_auc_current_removed(core, roc, n_boot):
         return deployment_current._refused(f"the reading could not be made: it raised {exc!r}")
 
 
+def _summary_cutpoint(rd, roc):
+    """``(cut-point, where it came from)`` for the deployment summary (decision 416): the request's
+    ``Cutpoint`` when one is sent; otherwise the Youden point of the ROC the summary itself builds,
+    which is the point the ROC panel starts on, so the page need not send it and a summary computed
+    on choosing a band is not changed by the ROC answering later. ``None`` with the reason when
+    there is neither."""
+    sent = _float_param(rd, "Cutpoint", default=None)
+    if sent is not None:
+        return sent, "sent"
+    if not (roc or {}).get("available"):
+        return None, "none: the ROC is not available"
+    yp = ((roc or {}).get("operating_points") or {}).get("youden") or {}
+    thr = yp.get("threshold")
+    if thr is None or not np.isfinite(float(thr)):
+        return None, "none: the ROC has no Youden point"
+    return float(thr), "roc_default_youden"
+
+
+#: The saved deployment summary (decision 423).
+DEPLOYMENT_SUMMARY_KIND = "deployment_summary"
+
+
+def summary_input_fingerprints(participant_uid, request_data):
+    """Everything besides the code that can change a deployment summary (decision 423): the
+    request, the recordings, the stimulation-settings files, the pain reports (fetched fresh, and
+    shared with the summary inside the request), and the newest clinic sheets."""
+    try:
+        from modules.StimOptimizer import adapter as _so
+    except ImportError:                                   # pragma: no cover - host spelling
+        from StimOptimizer import adapter as _so
+    participant = models.Participant.find(uid=participant_uid)
+    if not participant:
+        # nothing is saved for a participant the database does not hold
+        raise LookupError(f"no participant {participant_uid!r}")
+    pro = _load_pros(request_data, participant)
+    sheets = _cache_store.newest_stamp(CLINIC_SHEET_STEPS_KIND, str(participant_uid),
+                                       root=_SHARED_CACHE_DIR_OVERRIDE) or {}
+    return {
+        "request": {k: v for k, v in sorted((request_data or {}).items()) if k != "ParticipantId"},
+        "recordings": repr(_recording_set_identity(participant_uid)),
+        "settings_files": repr(_so.source_file_signature(participant)) if participant else None,
+        "pain_reports": _pro_table_digest(pro) if pro is not None and len(pro) else "none",
+        "clinic_sheets": sheets.get("signature_key"),
+    }
+
+
+def _serve_saved_band_answer(kind, request_data, build):
+    """``build(request)`` saved on the server under `summary_input_fingerprints` plus the code
+    (decisions 423, 428): worked out once and served to every request with the same inputs. A
+    request with no participant, or whose label cannot be built (an unknown participant), is
+    built and not saved."""
+    rd = dict(request_data or {})
+    uid = rd.get("ParticipantId")
+    if not uid:
+        return build(rd)
+    try:
+        inputs = summary_input_fingerprints(uid, rd)
+    except Exception:                                      # noqa: BLE001 - the answer stands
+        _log.warning("Biomarkers: the saved-answer label for %s could not be built for %s", kind,
+                     uid, exc_info=True)
+        return build(rd)
+    try:
+        from modules.CacheStore import saved_answers as _saved, request_memory as _memory
+    except ImportError:                                    # pragma: no cover - host spelling
+        from CacheStore import saved_answers as _saved, request_memory as _memory
+    # remembered, so the server can work it out again when the data change (decision 435)
+    _memory.remember(kind, uid, rd)
+    return _saved.serve_or_build(kind, uid, inputs, lambda: build(rd), writer="biomarkers",
+                                 root=_SHARED_CACHE_DIR_OVERRIDE)
+
+
+@_pro_scoped
 def deployment_summary(request_data):
+    """The deployment summary, saved on the server (decision 423): worked out once
+    (`_deployment_summary_build`) and served to every request with the same inputs
+    (`summary_input_fingerprints` plus the code). Inside one request scope, so the pain reports
+    are fetched once."""
+    out = _serve_saved_band_answer(DEPLOYMENT_SUMMARY_KIND, request_data,
+                                   lambda rd: _deployment_summary_build(rd))
+    return _attach_summary_family_q(out, request_data)
+
+
+def _attach_summary_family_q(summary, request_data):
+    """The sign-off summary's band q (wave 2, C9; a label and warning only), put on AFTER the
+    saved answer is served or built, so it is never stored and no key changes: the stored grid under
+    the summary's pain score and settings, corrected with today's contacts
+    (`family_correction.summary_block`), under ``evidence.family_correction``; its warning, when the
+    band is established or supported on the grid with q above 0.05, listed with the caveats. No
+    gate, verdict or ready_to_program reads it. A copy; the switch off returns the summary as it
+    was. Never raises."""
+    if (not family_correction.ENABLED or not isinstance(summary, dict)
+            or not summary.get("available")):
+        return summary
+    try:
+        ident = summary.get("identity") or {}
+        fq = family_correction.summary_block((request_data or {}).get("ParticipantId"),
+                                             request_data, ident.get("contact"),
+                                             ident.get("center_freq_hz"))
+        out = dict(summary)
+        out["evidence"] = dict(out.get("evidence") or {}, family_correction=fq)
+        if fq.get("family_q_warning"):
+            out["caveats"] = list(out.get("caveats") or []) + [
+                "Correction across bands (warning only): " + str(fq["family_q_warning"])]
+        return out
+    except Exception:                                      # noqa: BLE001 - a label only
+        _log.warning("Biomarkers: the summary's band q could not be attached", exc_info=True)
+        return summary
+
+
+#: The Closed-Loop panels saved on the server (decision 428; measured 3.9, 4.2 and 11-13 s on every
+#: request before), by endpoint.
+PANEL_KINDS = {"band_deployment_roc": "deployment_roc",
+               "band_deployment_roc_by_era": "deployment_roc_by_era",
+               "band_lsb_and_power": "band_lsb_power"}
+
+
+@_pro_scoped
+def band_deployment_roc(request_data):
+    """The deployment ROC panel, saved on the server (decision 428); `_band_deployment_roc_build`."""
+    return _serve_saved_band_answer(PANEL_KINDS["band_deployment_roc"], request_data,
+                                    lambda rd: _band_deployment_roc_build(rd))
+
+
+@_pro_scoped
+def band_deployment_roc_by_era(request_data):
+    """The month-by-month panel, saved on the server (decision 428)."""
+    return _serve_saved_band_answer(PANEL_KINDS["band_deployment_roc_by_era"], request_data,
+                                    lambda rd: _band_deployment_roc_by_era_build(rd))
+
+
+@_pro_scoped
+def band_lsb_and_power(request_data):
+    """The band-power / device-unit panel, saved on the server (decision 428)."""
+    return _serve_saved_band_answer(PANEL_KINDS["band_lsb_and_power"], request_data,
+                                    lambda rd: _band_lsb_and_power_build(rd))
+
+
+#: What the sign-off's recent-reports check reads, in words (wave 2, C8).
+SUMMARY_RECENT_FEATURE = ("the sign-off's own matched band power (the mean over the band of each "
+                          "matched PSD, as its mixed model reads it), the median per pain report, "
+                          "against that report's pain score")
+
+
+def _summary_recent_check(core, n_boot):
+    """The recent-reports check on the sign-off's own matched reports (wave 2, C8; a warning only):
+    one value per pain report (the median of its matched samples' band power), r on all of them and
+    `time_split.recent_check` on those after the cut, the cut from `_recent_cut` on the series the
+    sign-off was built from (the pain reports after the clinic-sheet merge, `core["pm"]`), the same
+    cut the heat-map grid prints. Its own generator. Never raises."""
+    try:
+        t_all = np.asarray(core["pm"][0], dtype=float)
+        y_all = np.asarray(core["pm"][1], dtype=float)
+        cut = _recent_cut(t_all, y_all)
+        feat = analytics._band_feature_from_detail(core["pooled"], core["channel"], core["center_hz"],
+                                                   core["band_width_hz"])
+        if feat is None:
+            return {"available": False, "choice_cut_date": cut.get("choice_cut_date"),
+                    "status": None, "reason": "this band is not in the sign-off's matched data"}
+        bp = np.asarray(feat[0], dtype=float)
+        rg = np.asarray(feat[2]).astype(int)
+        ok = np.isfinite(bp) & (rg >= 0) & (rg < t_all.size)
+        groups = np.unique(rg[ok])
+        x = np.asarray([float(np.median(bp[ok & (rg == g)])) for g in groups], dtype=float)
+        y, t = y_all[groups], t_all[groups]
+        m = np.isfinite(x) & np.isfinite(y)
+        r_all = (float(np.corrcoef(x[m], y[m])[0, 1])
+                 if int(m.sum()) >= 3 and np.ptp(x[m]) > 0 and np.ptp(y[m]) > 0 else None)
+        rc = time_split.recent_check(x, y, t, cut, r_all=r_all, n_boot=int(n_boot),
+                                     rng=np.random.default_rng([0, 8, 1]))
+        rc.update(available=True, n_reports=int(m.sum()), feature=SUMMARY_RECENT_FEATURE,
+                  cut=dict(cut))
+        return rc
+    except Exception as exc:                                    # noqa: BLE001 - a warning only
+        _log.warning("Biomarkers: the sign-off's recent-reports check failed", exc_info=True)
+        return {"available": False, "status": None, "reason": f"the check raised {exc!r}"}
+
+
+def _deployment_summary_build(request_data):
     """Phase E: one authoritative Deploy-to-Percept review payload for a committed band.
 
     Calls _validate_band_core ONCE and runs every deployment analytic on the shared pooled detail
@@ -7168,7 +7931,8 @@ def deployment_summary(request_data):
         strategy=core["label_strategy"], low_pct=core["low_pct"], high_pct=core["high_pct"])
 
     # Cut-point -> percentile -> device-LSB threshold (Phase C logic, inline on the shared detail).
-    cutpoint = _float_param(rd, "Cutpoint", default=None)
+    # The one sent, else this summary's own ROC's Youden point (decision 416).
+    cutpoint, cutpoint_source = _summary_cutpoint(rd, roc)
     feat = analytics._band_feature_from_detail(pooled, channel, center_hz, band_width_hz)
     percentile = None
     if feat is not None and cutpoint is not None:
@@ -7205,18 +7969,23 @@ def deployment_summary(request_data):
         vals = y[native_m]; n_tl = int(vals.size)
         if vals.size >= 20 and percentile is not None:
             thr_lsb = round(float(np.percentile(vals, percentile)), 1)
+    # Streaming runs reading 0 throughout were left out of `lsb` (decision 462); counted here so the
+    # gate and the threshold say so.
+    zero_left_out = availability.zero_runs_in_band(availability.zero_runs(pd_list), channel,
+                                                   center_hz, half)
     # MODELED points in-band: model the LSB line off the RAW µV TD the ROC was built from, AT THE ROC's
     # own band center (the transform route over the montage/survey TD; the bridge for PSD-only events),
     # then anchor by percentile like native. Universal across any band the ROC can score and units-
     # consistent (replaces the retired µV²-cut-point estimate_lsb fallback, removed 2026-06-28).
     # `td_for_modeled` is ALL raw-µV TD (streaming + montage/survey); chronic/powerdomain are
     # power-domain, not TD. Gathered regardless; used only if there's no native threshold (below).
-    mvals = availability.modeled_lsb_at_center(channel, center_hz,
-                                      td_recordings=td_for_modeled,
-                                      psd_recordings=None, half_hz=half)
-    n_modeled = int(mvals.size)
-    if mvals.size >= 8 and percentile is not None:
-        modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
+    # Read only when there is no measured threshold (`_modeled_lsb_threshold_estimate`), so worked
+    # out only then (decision 434).
+    if thr_lsb is None:
+        mvals = _modeled_lsb_values(core["participant_uid"], channel, center_hz, td_for_modeled, half)
+        n_modeled = int(mvals.size)
+        if mvals.size >= 8 and percentile is not None:
+            modeled_thr = round(float(np.percentile(mvals, percentile)), 1)
 
     # Fallback (audit: deployment_fallback): the device never sensed THIS (channel, band) long
     # enough to read a threshold straight off its own LSB Timeline (thr_lsb is None) -- but we still
@@ -7276,7 +8045,8 @@ def deployment_summary(request_data):
                 "short_label": DEPLOYMENT_GATE_SHORT_LABELS[key], "evaluated": bool(evaluated)}
 
     gates = []
-    gates.append(_gate("validated", "Band validated (mixed-effects)",
+    gates.append(_gate("validated", ("Band validated (mixed-effects)" if VERDICT_P_SOURCE == "glmer"
+                                     else "Band validated (rotation test)"),
                        "pass" if (verdict and "VALIDATED" in str(verdict)) else "fail",
                        verdict, necessary=True))
     # The gate checks the band EDGES against the device's adaptive range, not merely the centre --
@@ -7313,6 +8083,8 @@ def deployment_summary(request_data):
                             "streaming calibration at this center frequency")
     else:
         _thr_state, _thr_detail = "fail", f"device sensed this band {n_tl} times"
+    if availability.zero_runs_note(zero_left_out):
+        _thr_detail += "; " + availability.zero_runs_note(zero_left_out)
     gates.append(_gate("deployable_threshold", "Deployable LSB threshold available",
                        _thr_state, _thr_detail, necessary=True))
     gates.append(_gate("credible_ci", "Credible effect-size CI",
@@ -7519,6 +8291,18 @@ def deployment_summary(request_data):
             f"({thr_estimate['note']}). Sense this band "
             "on the device to confirm before committing it as an adaptive threshold.")
 
+    # THE CURRENT-REMOVED CHECK, A WARNING ONLY (decision 484; the PI, 2026-10-18: "warning
+    # only"): listed with the caveats when it warns; no gate, verdict or ready_to_program reads it.
+    _crc = g.get("rotation_current_removed") if sweep_settings.CURRENT_REMOVED_CHECK else None
+    if _crc is not None and _crc.get("warning"):
+        caveats.append("Current-removed check (warning only): " + str(_crc.get("words")))
+    # THE RECENT-REPORTS CHECK (wave 2, C8; the PI, 2026-10-21: "Recent-reports check, warn"), a
+    # warning only: the band's link with pain on the sign-off's own matched reports after the one
+    # cut, its text listed with the caveats; no gate, verdict or ready_to_program reads it.
+    _rc = _summary_recent_check(core, n_boot) if sweep_settings.RECENT_CHECK else None
+    if _rc is not None and time_split.appended_text(_rc):
+        caveats.append("Recent-reports check (warning only): " + time_split.appended_text(_rc))
+
     def _ff(x):
         try:
             return float(x) if x is not None and np.isfinite(x) else None
@@ -7532,7 +8316,10 @@ def deployment_summary(request_data):
             # is not JSON-serializable and made /queryDeploymentSummary 500 on every real fetch.
             "participant": core.get("participant_uid"), "hemisphere": analytics.format_channel(channel)["hemisphere"],
             "contact": channel, "contact_label": analytics.format_channel(channel)["label"],
-            "region": analytics.format_channel(channel)["region"],
+            # The lead's stored name (decision 467); before, no region was passed and the demo map's
+            # "Sensory Thalamus (VPL)" / "Ant. Cingulate (ACC)" reached the sign-off card.
+            "region": analytics.format_channel(
+                channel, region=_region_map(core.get("Participant"), [channel]).get(channel) or "")["region"],
             "center_freq_hz": _ff(center_hz), "bandwidth_hz": _ff(band_width_hz),
             "band_lo_hz": _ff(center_hz - half), "band_hi_hz": _ff(center_hz + half),
             "snapped_center_freq_hz": _ff(snapped),
@@ -7558,7 +8345,9 @@ def deployment_summary(request_data):
         "threshold": {
             "available": thr_lsb is not None, "upper_lsb": thr_lsb,
             "percentile": round(percentile, 1) if percentile is not None else None,
-            "cutpoint_feature": _ff(cutpoint), "n_timeline_samples": n_tl,
+            "cutpoint_feature": _ff(cutpoint), "cutpoint_source": cutpoint_source,
+            "n_timeline_samples": n_tl,
+            "zero_runs_left_out": zero_left_out,
             "method": "percentile-anchored on device Timeline LSB",
             # When the device never sensed this band, an ESTIMATED threshold from the frozen
             # PSD->LSB conversion model (flagged, with its fallback tier). Never overwrites a
@@ -7579,10 +8368,17 @@ def deployment_summary(request_data):
             "odds_ratio": _ff(or_val), "or_ci_low": _ff(g.get("or_lo")),
             "or_ci_high": _ff(g.get("or_hi")), "credible_ci": bool(credible),
             "p_glmer": _ff(g.get("p")), "n_matched_samples": g.get("n"),
+            # the same model's exact rotation test, shown beside it (decision 477)
+            "p_rotation": _ff((g.get("rotation") or {}).get("p")),
+            "rotation_n_orders": (g.get("rotation") or {}).get("n_orders"),
             "n_clusters": roc.get("n_clusters") if roc.get("available") else None,
             "operating_point": roc.get("operating_point") if roc.get("available") else None,
             # the area under the curve above, read again with the current taken out (answer 6)
             "auc_current_removed": auc_current_removed,
+            # the rotation test with the current as a covariate, a warning only (decision 484)
+            **({"current_removed_check": _crc} if sweep_settings.CURRENT_REMOVED_CHECK else {}),
+            # the recent-reports check, a warning only (wave 2, C8)
+            **({"recent_check": _rc} if _rc is not None else {}),
         },
         "power": power,
         # Forward / out-of-sample validation (audit C2): the held-out AUC + CI shown beside the
@@ -7677,6 +8473,14 @@ def pain_scores_for_participant(request_data):
     # Canonical UTC instant (prefers the ingestion-normalized _pro_time_utc column; DST-aware
     # CA-local -> UTC), so the pain trace shares the device's UTC time axis.
     t = _pro_times_utc_series(pro)
+    _sheet_points, _sheet_added = {}, {}
+    if _include_clinic_sheet_ratings_param(request_data):
+        _steps, _why = load_clinic_sheet_steps(participant_uid)
+        if _steps is not None:
+            for key in sheet_ratings.SHEET_COLUMN_FOR_METRIC:
+                st, sv, _setting = sheet_ratings.sheet_ratings_for_metric(_steps, key)
+                if st.size:
+                    _sheet_points[key] = list(zip(st.tolist(), sv.tolist()))
     metrics = []
     for key, label, rng_ in PAIN_METRICS:
         if key not in pro.columns:
@@ -7690,6 +8494,14 @@ def pain_scores_for_participant(request_data):
         # which would re-apply a local tz). Clients should match/plot on t_epoch. (FIXHANDOUT tz.)
         pts = [{"t": str(tt), "t_epoch": _f(tt.value / 1e9), "v": _f(v)}
                for tt, v in zip(t, vals) if pd.notna(tt) and pd.notna(v)]
+        # WITH THE CLINIC-SHEET SWITCH ON, this score's sheet ratings too (decision 436), on the
+        # page's scale and flagged `sheet`, so the pain row, the coverage sentence and the
+        # binarization card count what the heat maps count (decision 186).
+        for st, sv in _sheet_points.get(key, ()):
+            pts.append({"t": str(pd.Timestamp(st, unit="s")), "t_epoch": _f(st), "v": _f(sv),
+                        "sheet": True})
+        if _sheet_points.get(key):
+            _sheet_added[key] = len(_sheet_points[key])
         if pts:
             pts.sort(key=lambda p: p["t_epoch"])
             metrics.append({"key": key, "label": label, "range": rng_, "points": pts})
@@ -7710,7 +8522,8 @@ def pain_scores_for_participant(request_data):
     stages = request_data.get("Stages") or []
 
     return {"metrics": metrics, "n_reports": int(t.notna().sum()), "correlation": correlation,
-            "stages": stages,
+            "stages": stages, "clinic_sheets": {"included": bool(_include_clinic_sheet_ratings_param(
+                request_data)), "n_added": _sheet_added},
             "message": ""}
 
 
@@ -7755,41 +8568,37 @@ def _wants_band_time_sweep(request_data):
 def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
                                       allow_window_reuse, seconds=None,
                                       match_direction="pro_first", channel=None,
-                                      participant_uid=None):
+                                      participant_uid=None, with_recording_times=False,
+                                      sources="both"):
     """One band-power matrix per length of signal, each with one row per pain report and one column
     per band centre.
 
-    THE MATCHING IS THE MODULE'S OWN, CALLED ONCE PER LENGTH OF SIGNAL, NOT REIMPLEMENTED.
-    `availability.live_lsb_spectrum_match` is the function the page's full-spectrum scan already
-    uses to decide which pieces of recording serve which pain report; it takes the length of signal
-    as `td_quantity_s`, so sweeping that argument is exactly what this section needs and no new
-    matching rule is introduced. Calling it once per length is cheap because the expensive work --
-    slicing the recording history into 3 s pieces and computing a spectrum for each -- happened when
-    the cache was built and is not repeated.
+    `sources` (wave 2, C4) picks which recordings answer a report (`availability.
+    live_lsb_band_medians_by_length`): "both", the mixed rule (TD, PSD where no TD); "td", TD alone
+    (the PSD fill off); "psd", every report with a PSD snapshot in its window, ignoring TD.
 
-    THERE IS NO LOOP OVER BANDS ANYWHERE. Each call returns every band centre in the cache for every
-    pain report, so the band axis arrives as columns of a matrix and every statistic downstream is a
-    matrix operation across all bands at once.
+    THERE IS NO LOOP OVER BANDS ANYWHERE. Every band centre arrives as a column of one matrix, so
+    every statistic downstream is a matrix operation across all bands at once.
 
-    A (`participant_uid`, `channel`) that `analytics.BAND_SWEEP_LSB_CEILINGS` covers takes a
-    different route entirely (the table is keyed on the participant first, review B3 -- the six
-    contact names are every participant's, the numbers are one participant's):
-    `availability.live_lsb_band_medians_by_length` drops each contaminated 3 s piece BEFORE any of
-    them are averaged and backfills with the next closest clean one, so no outlier rule is left to
-    apply to the finished cell (PI, 2026-09-09). Every other channel keeps the original path
-    unchanged, which is what gates this to the sweep's own real contacts and leaves every other
-    panel that calls `live_lsb_spectrum_match` reading exactly what it read before.
+    EVERY CONTACT OF EVERY PARTICIPANT TAKES ONE ROUTE (the PI, 2026-10-03, decision 410).
+    `availability.live_lsb_band_medians_by_length` drops a single 3 s chunk's value at a band when
+    it sits more than `analytics.CHUNK_N_MAD` (7) median absolute deviations ABOVE this contact's
+    own median at that band (`analytics.chunk_upper_bounds`), BEFORE any chunks are averaged, and
+    takes the next-nearest clean chunk in its place (PI, 2026-09-09). Nothing is dropped for being
+    low. Until 2026-10-03 only the contacts in RCS08's historical 99.5% ceiling table took this
+    route, and every other contact took `live_lsb_spectrum_match` with 5 MAD applied to the
+    finished cells; that second route is gone from the sweep. Which pieces of recording serve which
+    pain report is decided by the same helpers on both, so only the dropped chunks differ.
+    `participant_uid` and `channel` no longer select anything here; they are kept for the callers.
 
     Returns `(power_by_seconds, stats_by_seconds, centers_used_hz, column_index, chunk_exclusion,
-    from_device_spectrum)`. `chunk_exclusion` is `None` on the original path.
+    from_device_spectrum)`. `chunk_exclusion` is always a dict now; its presence tells
+    `analytics.band_time_sweep_from_power` that the chunks were already cleaned, so no cell-level
+    outlier rule runs on top.
 
     `from_device_spectrum` is one flag per pain report, True where that report's band power came
     from the device's OWN spectrum rather than from the voltage trace. It is returned as its own
-    value rather than folded into `chunk_exclusion` because that argument is a switch as well as a
-    payload -- `analytics.band_time_sweep_from_power` reads its mere presence as "the per-piece
-    ceiling rule already ran, do not apply the median-absolute-deviation rule on top" -- so putting
-    this flag there would silently turn that second rule off for every contact the ceiling table
-    does not cover.
+    value rather than folded into `chunk_exclusion`, which is copied into the served response whole.
     """
     secs = list(analytics.BAND_TIME_SWEEP_SECONDS if seconds is None else seconds)
     cache_centers = np.asarray(raw_cache.get("centers_hz") or [], dtype=float)
@@ -7802,50 +8611,27 @@ def _band_time_sweep_power_by_seconds(pro_times, raw_cache, center_hz, *, tol_s,
     col = np.asarray([int(np.argmin(np.abs(cache_centers - c))) for c in centers], dtype=int)
     pt = np.asarray(pro_times, dtype=float)
 
-    ceiling_table = analytics.band_sweep_ceiling_table(participant_uid, channel)
-    if ceiling_table:
-        # A centre the table does not name gets no ceiling (np.inf excludes nothing), which is
-        # what `analytics.band_sweep_lsb_ceiling` means by returning None for that centre.
-        ceilings = [ceiling_table.get(round(float(c), 1), np.inf) for c in centers]
-        power, excl, stats = availability.live_lsb_band_medians_by_length(
-            pt, raw_cache, tol_s=tol_s, lengths_s=secs, centers_hz=centers,
-            band_ceilings=ceilings, allow_window_reuse=allow_window_reuse,
-            match_direction=match_direction)
-        # LIFTED OUT of the exclusion block rather than left in it. `chunk_exclusion` is copied
-        # into the served response whole, so leaving the per-report list there would ship one
-        # boolean per pain report per contact pair -- 4,584 of them on RCS08 today, growing with
-        # every report filed -- for a fact the grids already carry summarised per cell. It is also
-        # not an exclusion, and a field is easiest to misread when it sits under the wrong name.
-        return (power, stats, centers, col,
-                {k: v for k, v in excl.items() if k != "from_device_spectrum"},
-                list(excl.get("from_device_spectrum") or []))
-
-    power, stats = {}, {}
-    from_device = []
-    for s in secs:
-        recs, st = availability.live_lsb_spectrum_match(
-            pt, raw_cache, tol_s=tol_s, td_quantity_s=float(s),
-            allow_window_reuse=allow_window_reuse, match_direction=match_direction)
-        # WHICH TIER A RATING LANDS ON DOES NOT DEPEND ON THE LENGTH OF SIGNAL, on either path: the
-        # voltage trace wins whenever any of it is eligible, and eligibility is decided by the
-        # match-tolerance setting alone. The length only ever caps how many already-eligible pieces
-        # are averaged. So this is read once and is the same on every pass of this loop.
-        if not from_device:
-            from_device = [bool(r.get("tier") == availability.PRO_LSB_TIER_BRIDGE)
-                           for r in (recs or [])]
-        mat = np.full((pt.size, centers.size), np.nan, dtype=float)
-        for i, rec in enumerate(recs or []):
-            if i >= pt.size:
-                break
-            vec = rec.get("lsb")
-            if not vec:
-                continue
-            v = np.asarray([np.nan if x is None else float(x) for x in vec], dtype=float)
-            take = col[col < v.size]
-            mat[i, : take.size] = v[take]
-        power[float(s)] = mat
-        stats[float(s)] = st
-    return power, stats, centers, col, None, from_device
+    # THE 7-MAD-ABOVE CHUNK RULE: one upper bound per band, from this contact's own chunks.
+    # The device PSD snapshots that answer a rating with no voltage trace get their own bound, from
+    # their own values (decision 411).
+    ceilings = analytics.chunk_upper_bounds(raw_cache, centers)
+    psd_ceilings = analytics.chunk_upper_bounds(raw_cache, centers, family="psd")
+    power, excl, stats = availability.live_lsb_band_medians_by_length(
+        pt, raw_cache, tol_s=tol_s, lengths_s=secs, centers_hz=centers,
+        band_ceilings=list(ceilings), psd_band_ceilings=list(psd_ceilings),
+        allow_window_reuse=allow_window_reuse, match_direction=match_direction, sources=sources)
+    # LIFTED OUT of the exclusion block rather than left in it. `chunk_exclusion` is copied into the
+    # served response whole, so leaving the per-report list there would ship one boolean per pain
+    # report per contact pair -- 4,584 of them on RCS08 on 2026-09-15, growing with every report
+    # filed -- for a fact the grids already carry summarised per cell.
+    # The times of each report's own pieces (decision 483) are lifted out for the same reason.
+    # `with_recording_times=True` hands them back as a seventh value, for the current covariate.
+    out = (power, stats, centers, col,
+           {k: v for k, v in excl.items() if k not in ("from_device_spectrum", "recording_times_s")},
+           list(excl.get("from_device_spectrum") or []))
+    if with_recording_times:
+        return out + (list(excl.get("recording_times_s") or []),)
+    return out
 
 
 def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_reuse,
@@ -7853,7 +8639,7 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                               outlier_n_mad, outlier_scale, metric_key, metric_label,
                               n_perm=None, n_boot=None, seed=0, match_direction="pro_first",
                               region_map=None, participant_uid=None, from_clinic_sheet=None,
-                              adjust_for_stim_current=False):
+                              adjust_for_stim_current=False, recent_cut=None):
     """Run the sweep for every sensing contact pair that has a cache, one entry per pair.
 
     `participant_uid` selects WHOSE outlier ceilings apply (review B3): the ceiling table is keyed
@@ -7882,20 +8668,23 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
         """Matching and the covariate for one pair: what the statistics are called with."""
         t0 = _time.perf_counter()
         try:
-            power, stats, centers, _, chunk_excl, from_device = _band_time_sweep_power_by_seconds(
+            (power, stats, centers, _, chunk_excl, from_device,
+             recording_times) = _band_time_sweep_power_by_seconds(
                 pro_times, raw_cache, None, tol_s=tol_s,
                 allow_window_reuse=allow_window_reuse, match_direction=match_direction,
-                channel=raw_ch, participant_uid=participant_uid)
+                channel=raw_ch, participant_uid=participant_uid, with_recording_times=True)
             match_s = _time.perf_counter() - t0
             # The switch (decision 233, the PI's ruling of 2026-09-22). When it is on, every cell of
             # THIS pair's grid also gets its correlation with the stimulation current in force on
             # THIS pair's own side taken out of it -- the covariate is one current per pain report,
-            # read from the dated settings the device's own files carry (`stim_current`). The plain
-            # grid is unchanged and still selects every band; the adjusted value is descriptive.
+            # read from the dated settings the device's own files carry (`stim_current`), at the
+            # report's own pieces of recording since decision 483 (the median of the current in
+            # force at each; `stim_current.CURRENT_READ_AT = "report"` reads it at the rating, as
+            # before). The plain grid is unchanged and still selects every band.
             cov_values, cov_block = (None, None)
             if adjust_for_stim_current:
-                cov_values, cov_block = stim_current.current_in_force_for_reports(
-                    participant_uid, pro_times, channel=raw_ch)
+                cov_values, cov_block = stim_current.covariate_for_reports(
+                    participant_uid, pro_times, recording_times, channel=raw_ch)
             kw = dict(
                 center_freqs_hz=centers,
                 tile_seconds=analytics.sweep_tile_seconds(),
@@ -7908,14 +8697,111 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                 from_clinic_sheet=from_clinic_sheet,
                 covariate=cov_values,
                 covariate_label=(stim_current.CURRENT_LABEL if cov_values is not None else None),
+                # the current-removed check on every band row, a warning only (decision 484)
+                **({"current_removed_check": True} if sweep_settings.CURRENT_REMOVED_CHECK else {}),
+                # the hours of day of each best row's own reports (wave 2, C6, a warning only)
+                **({"report_times_s": np.asarray(pro_times, dtype=float)}
+                   if _SWEEP_SETTINGS_MODULE.DAILY_SWING else {}),
+                # the recent-reports check on each best correlation row, against the request's one
+                # cut (wave 2, C8, a warning only); the source grids inherit it with `kw`
+                **({"recent_check": {"cut": recent_cut,
+                                     "report_times_s": np.asarray(pro_times, dtype=float)}}
+                   if recent_cut is not None else {}),
                 power_feature=("band power in the device's own least-significant-bit units, "
                                "reached from the 250 samples-per-second voltage trace by the "
                                "validated transform, or from the device's own spectrum where no "
                                "voltage trace was in range"))
-            return {"t0": t0, "match_s": match_s, "power": power, "stats": stats,
-                    "kw": kw, "cov_values": cov_values, "cov_block": cov_block}
+            ctx = {"t0": t0, "match_s": match_s, "power": power, "stats": stats,
+                   "kw": kw, "cov_values": cov_values, "cov_block": cov_block}
+            if sweep_settings.SOURCE_GRIDS:
+                ctx["sources"] = _prepare_source_grids(raw_ch, raw_cache, kw)
+            ctx["match_s"] = _time.perf_counter() - t0
+            return ctx
         except Exception as e:
             return {"blank": _blank(raw_ch, e)}
+
+    def _prepare_source_grids(raw_ch, raw_cache, kw):
+        """TD AND PSD KEPT APART (wave 2, C4; the PI, 2026-10-18). The same pair matched twice more:
+        on TD alone (the PSD fill off) and on PSD alone (every report with a snapshot in its window,
+        ignoring TD). Each takes its own current at its own pieces of recording, and its own
+        statistics (`kw` with its own matrices), so each grid has its own shuffles and best rows.
+        Also the per-cell count that ties the three grids together: the PSD-only grid's count over
+        the reports that own no TD piece (`sweep_settings.SOURCE_COUNTING_RULE`)."""
+        out = {}
+        for src in (sweep_settings.GRID_SOURCE_TD, sweep_settings.GRID_SOURCE_PSD):
+            (p_src, st_src, _c, _col, ex_src, dev_src,
+             rec_src) = _band_time_sweep_power_by_seconds(
+                pro_times, raw_cache, None, tol_s=tol_s, allow_window_reuse=allow_window_reuse,
+                match_direction=match_direction, channel=raw_ch, participant_uid=participant_uid,
+                with_recording_times=True, sources=src)
+            cv, cb = (None, None)
+            if adjust_for_stim_current:
+                cv, cb = stim_current.covariate_for_reports(
+                    participant_uid, pro_times, rec_src, channel=raw_ch)
+            out[src] = {"power": p_src, "stats": st_src, "cov_block": cb, "rec": rec_src,
+                        "kw": dict(kw, chunk_exclusion=ex_src, from_device_spectrum=dev_src,
+                                   covariate=cv,
+                                   covariate_label=(stim_current.CURRENT_LABEL if cv is not None
+                                                    else None),
+                                   by_recording_source=False)}
+        no_td = np.asarray([len(r or []) == 0 for r in out[sweep_settings.GRID_SOURCE_TD]["rec"]],
+                           dtype=bool)
+        y_ok = np.isfinite(np.asarray(pain_values, dtype=float))
+        p_psd = out[sweep_settings.GRID_SOURCE_PSD]["power"]
+        lengths = [float(x) for x in analytics.BAND_TIME_SWEEP_SECONDS if float(x) in p_psd]
+        out["psd_without_td_n"] = [
+            [int(v) for v in (np.isfinite(np.asarray(p_psd[x], dtype=float))
+                              & (no_td & y_ok)[:, None]).sum(axis=0)] for x in lengths]
+        out["lengths"] = lengths
+        return out
+
+    def _match_stats(stats):
+        return {str(k): {kk: v[kk] for kk in ("n_pro", "n_pro_td", "n_pro_psd",
+                                              "n_pro_unmatched", "td_n_epochs_cap",
+                                              "n_td_assigned", "n_td_used")
+                         if kk in (v or {})}
+                for k, v in (stats or {}).items()}
+
+    def _label_rows(sw, name, why):
+        for key in ("best_correlation_rows", "best_auc_rows"):
+            for r in (sw or {}).get(key) or []:
+                if isinstance(r, dict):
+                    r["grid_source"] = name
+                    r["can_choose_band"] = why is None
+                    if why is not None:
+                        r["cannot_choose_why"] = why
+
+    def _attach_source_grids(sweep, ctx):
+        """The TD-only and PSD-only grids on the pair's sweep (`by_source_grid`), every best row
+        labelled with its grid and whether it may choose a band, and the count that ties the three
+        grids together, checked cell by cell."""
+        src = ctx["sources"]
+        grids = {}
+        for name in (sweep_settings.GRID_SOURCE_TD, sweep_settings.GRID_SOURCE_PSD):
+            g = ctx["source_sweeps"][name]
+            if src[name]["cov_block"] is not None:
+                g["stim_current_covariate"] = dict(src[name]["cov_block"])
+            g["match_stats_by_seconds"] = _match_stats(src[name]["stats"])
+            _label_rows(g, name, None if name == sweep_settings.GRID_SOURCE_TD
+                        else sweep_settings.CANNOT_CHOOSE_PSD)
+            grids[name] = g
+        _label_rows(sweep, sweep_settings.GRID_SOURCE_MIXED, sweep_settings.CANNOT_CHOOSE_MIXED)
+        n_mixed = sweep.get("n_grid") or []
+        n_td = grids[sweep_settings.GRID_SOURCE_TD].get("n_grid") or []
+        n_psd0 = src["psd_without_td_n"]
+        cells = adding = 0
+        for t in range(len(n_mixed)):
+            for c in range(len(n_mixed[t])):
+                cells += 1
+                try:
+                    adding += int(n_mixed[t][c] == n_td[t][c] + n_psd0[t][c])
+                except (IndexError, TypeError):
+                    pass
+        grids["counting"] = {"rule": sweep_settings.SOURCE_COUNTING_RULE,
+                             "psd_reports_without_td_n_grid": n_psd0,
+                             "n_cells": int(cells), "n_cells_adding_up": int(adding)}
+        sweep["by_source_grid"] = grids
+        sweep["grid_source"] = sweep_settings.GRID_SOURCE_MIXED
 
     def _finish(raw_ch, ctx, sweep):
         """The labels and timings that go on one pair's answer, once its statistics are in."""
@@ -7939,12 +8825,9 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                 else "prospective")
             sweep["matched_seconds"] = float(match_s)
             sweep["total_seconds"] = float(_time.perf_counter() - t0)
-            sweep["match_stats_by_seconds"] = {
-                str(k): {kk: v[kk] for kk in ("n_pro", "n_pro_td", "n_pro_psd",
-                                              "n_pro_unmatched", "td_n_epochs_cap",
-                                              "n_td_assigned", "n_td_used")
-                         if kk in (v or {})}
-                for k, v in (stats or {}).items()}
+            sweep["match_stats_by_seconds"] = _match_stats(stats)
+            if "source_sweeps" in ctx:
+                _attach_source_grids(sweep, ctx)
             # No `figures` entry: the server-drawn heat-map descriptions were built into every
             # response and stored, and drawn by nothing (the page draws its own heat maps from
             # the grids, BiomarkerHeatmapGrids.js). Deleted on the PI's decision of 2026-09-12
@@ -7989,8 +8872,27 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
         prepared = [_prepare(ch, c) for ch, c in todo]
 
     live = [(ch, ctx) for (ch, _c), ctx in zip(todo, prepared) if "blank" not in ctx]
-    results = _sweep_statistics(
-        [(ctx["power"], pain_values, ctx["kw"]) for _ch, ctx in live])
+    # One job per grid: the mixed grid, then (wave 2, C4) the TD-only and PSD-only grids of the same
+    # pair, all in one list so the pool spreads them; each draws from its own generator.
+    jobs, owner = [], []
+    for i, (_ch, ctx) in enumerate(live):
+        jobs.append((ctx["power"], pain_values, ctx["kw"]))
+        owner.append((i, None))
+        for name in (sweep_settings.GRID_SOURCE_TD, sweep_settings.GRID_SOURCE_PSD):
+            if name in (ctx.get("sources") or {}):
+                jobs.append((ctx["sources"][name]["power"], pain_values,
+                             ctx["sources"][name]["kw"]))
+                owner.append((i, name))
+    flat = _sweep_statistics(jobs)
+    results = [None] * len(live)
+    for (i, name), (status, value) in zip(owner, flat):
+        if name is None:
+            results[i] = (status, value)
+        else:
+            live[i][1].setdefault("source_sweeps", {})[name] = (
+                value if status == "ok" else analytics._sweep_blank(
+                    f"the {name.upper()}-only grid could not be completed for contact pair "
+                    f"{live[i][0]}: {value}"))
     answers = {}
     for (ch, ctx), (status, value) in zip(live, results):
         answers[ch] = (_finish(ch, ctx, value) if status == "ok"
@@ -8283,6 +9185,11 @@ def band_time_sweep_for_participant(request_data):
     # a list exactly when the sheets were read and carry this score, as before the helper existed
     from_clinic_sheet = ([bool(v) for v in _flags]
                          if include_sheets and clinic_sheet_block["reason"] is None else None)
+    # THE REQUEST'S ONE CUT for the recent-reports check (wave 2, C8; the PI, 2026-10-21), on the
+    # series the grid is built from, after the merge: every pair, every source grid and every chronic
+    # answer read this one. The sign-off builds it the same way (`_recent_cut`).
+    recent_cut = (_recent_cut(pro_times, pain_values) if _SWEEP_SETTINGS_MODULE.RECENT_CHECK
+                  else None)
 
     # TRACK A STEP 6: THE RESULTS ARE WRITTEN BACK, AND THE KEY DECIDES WHETHER TO RECOMPUTE.
     # The key names the tile entry, the pain-report snapshot, the pain score, and every setting
@@ -8304,6 +9211,11 @@ def band_time_sweep_for_participant(request_data):
         # so those entries stay valid and are still served; a request with the switch on cannot be
         # answered from one of them, because this makes its key a different key.
         "adjust_for_stim_current": bool(adjust_current)}
+    # How a pain report meets the chronic log (wave 2, C5; the PI, 2026-10-19): in the KEY, so the
+    # recommended default and the page's override never share a saved answer.
+    chronic_match = _SWEEP_SETTINGS_MODULE.chronic_match_param(request_data)
+    if _SWEEP_SETTINGS_MODULE.CHRONIC_CHOICE:
+        sweep_settings["chronic_match"] = chronic_match
     sweep_sig, sweep_prov, tiles_sig = _band_sweep_signature(participant_uid, pro_df,
                                                              label_metric, sweep_settings)
     if sweep_sig is not None:
@@ -8334,8 +9246,10 @@ def band_time_sweep_for_participant(request_data):
             # The stability answer for THIS grid, read at request time (decision 185): it lands in
             # the store after the grid does, so it is never part of the stored response. The
             # device's sensing rule with TODAY's contacts likewise (2026-09-26).
-            return attach_sensing_rule(attach_stored_stability_answers(stored, participant_uid),
-                                       participant_uid)
+            # the correction across the band choices (wave 2, C9), with today's contacts: after
+            # the sensing rule, which names the family's pairs; never stored (decision 185's way)
+            return family_correction.attach(attach_sensing_rule(
+                attach_stored_stability_answers(stored, participant_uid), participant_uid))
 
     # Through the SAME memo the cell drill-down reads, so a grid that actually builds also leaves
     # this worker ready for the first hover on it. Deliberately placed AFTER the stored-response
@@ -8364,7 +9278,19 @@ def band_time_sweep_for_participant(request_data):
         high_pct=high_pct, outlier_n_mad=outlier_n_mad, outlier_scale=outlier_scale,
         metric_key=label_metric, metric_label=metric_label, match_direction=match_direction,
         region_map=_region_map(Participant, chan_order), participant_uid=participant_uid,
-        from_clinic_sheet=from_clinic_sheet, adjust_for_stim_current=adjust_current)
+        from_clinic_sheet=from_clinic_sheet, adjust_for_stim_current=adjust_current,
+        recent_cut=recent_cut)
+    # THE CHRONIC LOG AS THE MAIN SOURCE (wave 2, C5): its own answer per pair and chronic
+    # frequency, on the same pain series as the grid (`pro_times`, `pain_values`, after the
+    # clinic-sheet merge), and on every best row which source decides the band.
+    chronic_s = None
+    if _SWEEP_SETTINGS_MODULE.CHRONIC_CHOICE:
+        chronic_s = _attach_chronic_choice(
+            participant_uid, sweeps, pro_times, pain_values, tol_s=tol_s,
+            match_direction=match_direction, allow_window_reuse=allow_window_reuse,
+            chronic_match=chronic_match, recent_cut=recent_cut)
+    if recent_cut is not None:
+        _finish_recent_check(sweeps, recent_cut)
     # The switch's own block on every contact pair's sweep too, because the heat maps' caption is
     # drawn from the pair it shows (the same reason `display_short` sits on each pair).
     for _sw in (sweeps or {}).values():
@@ -8405,15 +9331,20 @@ def band_time_sweep_for_participant(request_data):
             "match_direction": match_direction,
             "include_clinic_sheet_ratings": bool(include_sheets),
             "adjust_for_stim_current": bool(adjust_current),
+            **({"chronic_match": chronic_match,
+                "chronic_match_is_default": chronic_match == chronic_band_choice.CHRONIC_MATCH_DEFAULT}
+               if _SWEEP_SETTINGS_MODULE.CHRONIC_CHOICE else {}),
             "match_extent_sec_ignored": ("the top-of-page slider for how much recording goes into "
                                          "one measurement is not read here, because that quantity "
                                          "is the axis this section sweeps"),
         },
         "wall_seconds": wall,
+        **({"chronic_seconds": chronic_s} if chronic_s is not None else {}),
         "message": None,
         "served_from_store": False,
         "store_keys": None,
         "clinic_sheet_ratings": clinic_sheet_block,
+        **({"recent_check_cut": dict(recent_cut)} if recent_cut is not None else {}),
     }
     # Carried BEFORE the write, so the stored copy holds it too: anything derived from this grid
     # names the entry it came from by the sweep's own key, never by a key re-derived from the
@@ -8442,13 +9373,17 @@ def band_time_sweep_for_participant(request_data):
         participant_uid, request_data,
         sweep_key=(out["sweep_key"] or {}).get("signature_key"),
         done_metric=label_metric)
-    # after the write above: today's contacts are never part of the stored grid (2026-09-26)
-    return attach_sensing_rule(attach_stored_stability_answers(out, participant_uid), participant_uid)
+    # after the write above: today's contacts are never part of the stored grid (2026-09-26), nor
+    # the correction across the band choices that follows them (wave 2, C9)
+    return family_correction.attach(attach_sensing_rule(
+        attach_stored_stability_answers(out, participant_uid), participant_uid))
 
 
 #: The request key that asks for one cell's underlying (band power, pain score) pairs alone,
 #: added for the heat-map redesign's click-through drill-down (Track A, task A2).
 BAND_TIME_SWEEP_CELL_KEY = "BandTimeSweepCell"
+#: Which grid's cell (open item of decision 492): "td", "psd", or absent for the mixed grid.
+BAND_TIME_SWEEP_CELL_SOURCE_KEY = "Source"
 
 
 def _wants_band_time_sweep_cell(request_data):
@@ -8467,10 +9402,25 @@ def band_time_sweep_cell_for_participant(request_data):
     the grid response the browser holds from its own sweep request, and this endpoint exists only
     to supply the raw pairs a scatter and a pair of violin plots need, which the stored grid
     response never carried.
+
+    `Source` (open item of decision 492; the PI, 2026-10-22: "Go"): which grid's cell. Absent (or
+    "mixed") is the mixed grid, exactly as before, field for field. "td" is the TD-only grid's cell
+    and "psd" the PSD-only grid's, matched with the same matcher modes those grids are built with
+    (`availability.live_lsb_band_medians_by_length(sources=...)`, decision 492): TD alone with the
+    PSD fill off; every report with a PSD snapshot in its window, ignoring TD. Those two answers also
+    carry `grid_source`, the count read from a PSD snapshot, and each point's `from_device_spectrum`.
     """
     participant_uid = request_data["ParticipantId"]
     Participant = models.Participant.find(uid=participant_uid)
     blank = {"band_time_sweep_cell": None}
+    source_raw = str(request_data.get(BAND_TIME_SWEEP_CELL_SOURCE_KEY) or "").strip().lower()
+    if source_raw in ("", "mixed"):
+        grid_source = None
+    elif source_raw in (sweep_settings.GRID_SOURCE_TD, sweep_settings.GRID_SOURCE_PSD):
+        grid_source = source_raw
+    else:
+        return dict(blank, message=(f"Source must be \"td\", \"psd\" or left out for the mixed "
+                                    f"grid; got {source_raw!r}."))
     channel = request_data.get("Channel")
     center_raw = request_data.get("BandCenterHz")
     seconds_raw = request_data.get("IntegrationSeconds")
@@ -8549,7 +9499,9 @@ def band_time_sweep_cell_for_participant(request_data):
     power, _stats, centers, _col, chunk_excl, _from_device = _band_time_sweep_power_by_seconds(
         pro_times, raw_cache, center_hz, tol_s=tol_s, allow_window_reuse=allow_window_reuse,
         seconds=[seconds], match_direction=match_direction, channel=canon_channel,
-        participant_uid=participant_uid)
+        participant_uid=participant_uid,
+        # the mixed grid's matcher unless a source grid's cell is asked for (open item of 492)
+        **({"sources": grid_source} if grid_source is not None else {}))
     mat = power.get(float(seconds))
     if mat is None or mat.size == 0 or not centers.size:
         return dict(blank, message="No band-power measurements could be produced for this cell.")
@@ -8582,6 +9534,18 @@ def band_time_sweep_cell_for_participant(request_data):
         label = "high" if yb == 1 else ("low" if yb == 0 else "excluded")
         points.append({"pain": float(p), "power": float(v), "label": label,
                        "from_clinic_sheet": bool(from_clinic_sheet[i]) if i < from_clinic_sheet.size else False})
+        if grid_source is not None:
+            # which recording answered this report: True where the device's own PSD snapshot did
+            points[-1]["from_device_spectrum"] = (bool(_from_device[i])
+                                                  if i < len(_from_device) else False)
+
+    source_fields = {}
+    if grid_source is not None:
+        n_dev = sum(1 for pt in points if pt["from_device_spectrum"])
+        source_fields = {"grid_source": grid_source,
+                         "grid_source_label": {"td": "TD only", "psd": "PSD only"}[grid_source],
+                         "n_points_from_device_spectrum": n_dev,
+                         "n_points_from_td": len(points) - n_dev}
 
     return {
         "band_time_sweep_cell": {
@@ -8598,6 +9562,7 @@ def band_time_sweep_cell_for_participant(request_data):
             "low_cut": low_cut,
             "high_cut": high_cut,
             "split_why": split_why,
+            **source_fields,
         },
         "message": None,
     }
@@ -8633,6 +9598,116 @@ _BAND_SWEEP_RULE_VERSION = sweep_settings.GRID_RULE_VERSION
 BAND_SWEEP_TIMING_FIELDS = ("wall_seconds", "matched_seconds", "total_seconds")
 
 
+#: What a chronic recording's database row says about where each reading is filed (put on the
+#: decoded recording by `_decoded_with_row_labels`): part of the chronic log's identity, because a
+#: restamp of the one schedule (decisions 487-489) changes these and not the file.
+_CHRONIC_ROW_LABELS = ("CenterFrequencyHz", "FreqScheduleHz", "ContactSchedule", "SignalLeadSchedule")
+
+
+def _chronic_recording_identity(participant_uid):
+    """A digest of everything the chronic log's answer is read from (wave 2, C5), from the database
+    rows alone: every chronic recording's (uid, content hash, the row labels that file its
+    readings), every streaming band-power recording's (uid, content hash) (they name the fallback
+    contact pair, `representation.native_lsb_by_channel`), the implant date and the filing rule's
+    version. None when the participant is unknown."""
+    import hashlib
+    Participant = models.Participant.find(uid=participant_uid)
+    if not Participant:
+        return None
+    SourceFiles = models.SourceFile.find_all(owner=Participant)
+    ident = []
+    for u, h, t, md in models.Recording.find_all(source__in=SourceFiles, type__in=CHRONIC_TYPES) \
+            .values_list("uid", "hashed", "type", "metadata"):
+        md = md if isinstance(md, dict) else {}
+        ident.append((str(u), str(h), str(t),
+                      json.dumps({k: md.get(k) for k in _CHRONIC_ROW_LABELS}, sort_keys=True,
+                                 default=str)))
+    for u, h, t in models.Recording.find_all(source__in=SourceFiles, type__in=POWERDOMAIN_TYPES) \
+            .values_list("uid", "hashed", "type"):
+        ident.append((str(u), str(h), str(t), ""))
+    ident.sort()
+    blob = (repr(ident) + "|start=%r|index=%r" % (
+        float(_data_start.data_start_s(participant_uid) or 0.0), _repr.CHANNEL_INDEX_VERSION))
+    return "%d:%s" % (len(ident), hashlib.blake2b(blob.encode("utf8"), digest_size=16).hexdigest())
+
+
+def _attach_chronic_choice(participant_uid, sweeps, pro_times, pain_values, *, tol_s,
+                           match_direction, allow_window_reuse, chronic_match="covering",
+                           recent_cut=None):
+    """The chronic log's answer on every pair's sweep and every best row (wave 2, C5; the PI,
+    2026-10-18: "the chronic log may choose"), in place. Returns the seconds it took.
+
+    The chronic recordings are the loader's (`_load_recordings`: repeats merged, each reading filed
+    under the lead its signal came from, zeros and the invalid code blanked; decisions 480, 487,
+    488), read through `chronic_band_choice` with each reading's own contact pair, band and lead
+    current. On each pair's sweep: `chronic_band_choice` (one entry per chronic frequency). On every
+    best row of the mixed, TD-only and PSD-only grids: `chronic` (the answer at the row's band, or
+    "no home record at this band") and `choice_source` ("chronic" or "TD" on TD-only correlation
+    rows, "TD" on TD-only area-under-the-curve rows, "none" on rows that never choose)."""
+    t0 = _time.perf_counter()
+    pairs = [ch for ch, sw in (sweeps or {}).items()
+             if isinstance(sw, dict) and isinstance(sw.get("by_source_grid"), dict)]
+    if not pairs:
+        return float(_time.perf_counter() - t0)
+    try:
+        chronic = _load_recordings(participant_uid, CHRONIC_TYPES)
+        pdl = _load_recordings(participant_uid, POWERDOMAIN_TYPES)
+        samples = chronic_band_choice.chronic_samples_by_pair(chronic, pdl)
+        currents = chronic_band_choice.lead_currents(chronic)
+    except Exception as exc:                                   # noqa: BLE001 - said on each pair
+        _log.warning("Biomarkers: the chronic log could not be read for %s", participant_uid,
+                     exc_info=True)
+        samples, currents = None, None
+        why = f"the chronic log could not be read: {exc!r}"
+    for ch in pairs:
+        sw = sweeps[ch]
+        if samples is None:
+            blk = {"pair": ch, "frequencies": [], "by_centre": {}, "why": why}
+        else:
+            blk = chronic_band_choice.chronic_band_choice(
+                samples, currents, pro_times, pain_values,
+                centres=sw.get("center_freqs_hz") or [], tol_s=float(tol_s),
+                match_direction=match_direction, allow_window_reuse=bool(allow_window_reuse),
+                seed=0, pairs=[ch], chronic_match=chronic_match,
+                **({"daily_swing": True} if sweep_settings.DAILY_SWING else {}),
+                **({"recent_cut": recent_cut} if recent_cut is not None else {}))[
+                    availability._canon_channel(ch)]
+        sw["chronic_band_choice"] = {k: v for k, v in blk.items() if k != "by_centre"}
+        grids = [(sweep_settings.GRID_SOURCE_MIXED, sw)] + [
+            (name, g) for name, g in (sw.get("by_source_grid") or {}).items()
+            if name in (sweep_settings.GRID_SOURCE_TD, sweep_settings.GRID_SOURCE_PSD)
+            and isinstance(g, dict)]
+        for name, g in grids:
+            chronic_band_choice.label_rows(g.get("best_correlation_rows"), blk, name)
+            chronic_band_choice.label_rows(g.get("best_auc_rows"), blk, name, correlation=False)
+            if sweep_settings.DAILY_SWING:
+                # wave 2, C6: the daily swing at each band, a warning only (the PI, 2026-10-19)
+                chronic_band_choice.attach_daily_swing(g.get("best_correlation_rows"), blk)
+    return float(_time.perf_counter() - t0)
+
+
+def _recent_cut(pro_times, pain_values):
+    """The one cut of the recent-reports check (wave 2, C8): `time_split.cut_block` on the pain series
+    a page builds (times and scores after the clinic-sheet merge). The heat-map grid and the
+    Closed-Loop sign-off both call this on the series they build, so they print one cut date."""
+    return time_split.cut_block(pro_times, pain_values)
+
+
+def _finish_recent_check(sweeps, recent_cut):
+    """After the chronic answers and the daily swing are on: each best correlation row's recent-check
+    text appended to its `why` (mixed, TD-only and PSD-only grids), and the cut on each pair's sweep,
+    where the heat maps' caption reads it. In place (wave 2, C8, a warning only)."""
+    for sw in (sweeps or {}).values():
+        if not isinstance(sw, dict):
+            continue
+        sw["recent_check_cut"] = dict(recent_cut)
+        grids = [sw] + [g for name, g in (sw.get("by_source_grid") or {}).items()
+                        if name in (sweep_settings.GRID_SOURCE_TD, sweep_settings.GRID_SOURCE_PSD)
+                        and isinstance(g, dict)]
+        for g in grids:
+            time_split.append_to_rows(g.get("best_correlation_rows"))
+
+
 def _band_sweep_signature(participant_uid, pro_df, label_metric, settings):
     """`(signature, provenance, tile_signature)` for the sweep's three products, or three Nones
     when an input cannot be named: no tile entry key (no recordings identity) or no pain-report
@@ -8649,6 +9724,10 @@ def _band_sweep_signature(participant_uid, pro_df, label_metric, settings):
     if tiles_sig is None or not report_key:
         return None, None, tiles_sig
     tiles_key = _cache_store.product_key(_RAW_LSB_SHARED_KIND, participant_uid, tiles_sig)
+    if sweep_settings.CHRONIC_CHOICE:
+        # The chronic log decides bands (wave 2, C5), so its recordings are an input: their rows,
+        # content and the schedules that file each reading (`_chronic_recording_identity`).
+        settings = dict(settings, chronic_recordings=_chronic_recording_identity(participant_uid))
     # The key's one assembly (decision 317): the other pages' readers rebuild it through the same
     # function to recognise a grid whose sidecar was written before sidecars named their rule.
     sig = sweep_settings.grid_signature(participant_uid, tiles_key, report_key, label_metric,
@@ -8713,7 +9792,8 @@ def _store_sweep_results(participant_uid, sig, prov, response, *, n_recordings=N
             match_direction=sa.get("match_direction"), allow_window_reuse=sa.get("allow_window_reuse"),
             label_strategy=sa.get("label_strategy"), percentile_low=sa.get("percentile_low"),
             percentile_high=sa.get("percentile_high"),
-            include_clinic_sheet_ratings=bool(sa.get("include_clinic_sheet_ratings", False)))
+            include_clinic_sheet_ratings=bool(sa.get("include_clinic_sheet_ratings", False)),
+            chronic_match=sa.get("chronic_match"))
     except (TypeError, ValueError):                             # a response without the block
         tag = None
     common = dict(writer="biomarkers", trigger="band_time_sweep", provenance=prov,
@@ -8729,6 +9809,10 @@ def _store_sweep_results(participant_uid, sig, prov, response, *, n_recordings=N
                          # the Stim Optimizer's readiness table finds the adjusted one by this flag
                          # (panel C item 6). Descriptive only: no reader selects a band by it.
                          "adjust_for_stim_current": bool(sa.get("adjust_for_stim_current", False)),
+                         # The chronic recordings' identity the key was built with (wave 2, C5), so
+                         # a reader can rebuild the key from this sidecar
+                         # (`sweep_settings._key_settings_from_sidecar`).
+                         **sweep_settings.chronic_identity_of_signature(sig),
                          # A grid at the daily default settings names a keep group, so the store
                          # keeps its newest one however many grids other settings write (the PI,
                          # 2026-09-26; decision 317 found it evicted and rebuilt on every request).

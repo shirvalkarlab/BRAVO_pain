@@ -1092,7 +1092,7 @@ def extractPerceptJSON(JSON):
     # extractStreamingData
     FunctionsToProcess = [extractPatientInformation, extractTherapySettings, extractTimeDomainStreamingData, extractPowerDomainStreamingData, 
                           extractIndefiniteStreaming, extractBrainSenseSurvey, extractSignalCalibration,
-                          extractChronicLFP]
+                          extractChronicLFP, extractThresholdStreams]
     
     Data = dict()
     for func in FunctionsToProcess:
@@ -1546,12 +1546,8 @@ def extractTimeDomainStreamingData(JSON, sourceData=dict()):
                     Stream["Ticks"] = Stream["Ticks"][1:]
                     Stream["Data"] = Stream["Data"][int(Stream["PacketSizes"][0]):]
     
-        i = 0
-        while i < len(Data["StreamingTD"]):
-            if len(Data["StreamingTD"][i]["Sequences"]) == 1:
-                del(Data["StreamingTD"][i])
-            else:
-                i += 1
+        # One-packet streams are KEPT (decision 440): 18 RCS08 fragments of 0.3-0.5 s were deleted
+        # here. With one packet there is no spacing to measure and nothing is marked missing.
         
 
         for nStream in range(len(Data["StreamingTD"])):
@@ -1648,6 +1644,7 @@ def extractPowerDomainStreamingData(JSON, sourceData=dict()):
     if "BrainSenseLfp" in JSON.keys():
         key = "BrainSenseLfp"
         Data["StreamingPower"] = _shallowCopyStreamList(JSON[key])
+        _repeats_aside = []
         for Stream in Data["StreamingPower"]:
             Stream["Power"] = np.ndarray((len(Stream["LfpData"]), 2))
             Stream["Stimulation"] = np.ndarray((len(Stream["LfpData"]), 2))
@@ -1666,8 +1663,24 @@ def extractPowerDomainStreamingData(JSON, sourceData=dict()):
                 Stream["Ticks"][PackageID] = Stream["LfpData"][PackageID]["TicksInMs"]
             
             if len(Stream["Sequences"]) > 4:
-                while True:
-                    if np.all(Stream["Sequences"][:2] == Stream["Sequences"][2:4]):
+                # The first two readings are dropped as repeats only when their sequence numbers AND
+                # ticks repeat the next two (CLAUDE.md section 11; decision 491): sequence numbers alone
+                # used to decide, which would drop real readings after a counter restart. When the
+                # values differ too, the pair is still dropped (kept, its ticks would run backwards and
+                # the whole stream would be set aside below), but its values are recorded on the
+                # export's row in `StreamingPowerSetAside`, so nothing is lost without a record.
+                while len(Stream["Sequences"]) >= 4:
+                    if (np.array_equal(Stream["Sequences"][:2], Stream["Sequences"][2:4])
+                            and np.array_equal(Stream["Ticks"][:2], Stream["Ticks"][2:4])):
+                        if not (np.array_equal(Stream["Power"][:2], Stream["Power"][2:4])
+                                and np.array_equal(Stream["Stimulation"][:2], Stream["Stimulation"][2:4])):
+                            _repeats_aside.append({
+                                "FirstPacketDateTime": Stream["FirstPacketDateTime"], "Channel": Stream.get("Channel"),
+                                "reason": "first two readings repeat the next two's sequence numbers and ticks "
+                                          "with other values; dropped",
+                                "Ticks": Stream["Ticks"][:2].flatten().tolist(),
+                                "Power": Stream["Power"][:2].tolist(),
+                                "Stimulation": Stream["Stimulation"][:2].tolist()})
                         Stream["Power"] = Stream["Power"][2:,:]
                         Stream["Stimulation"] = Stream["Stimulation"][2:,:]
                         Stream["Sequences"] = Stream["Sequences"][2:]
@@ -1700,37 +1713,58 @@ def extractPowerDomainStreamingData(JSON, sourceData=dict()):
             del(Stream["LfpData"])
             del(Stream["SampleRateInHz"])
 
-        for nStream in range(len(Data["StreamingPower"])):
-            ChangesInMs = np.around(np.diff(Data["StreamingPower"][nStream]["Time"]),3)
-            if len(np.where(ChangesInMs < 0)[0]) > 0:
+        # ONE RECORDING NEVER STOPS THE OTHERS (decision 440): a recording with one reading has no
+        # spacing to measure and is kept as it is; one whose ticks run backwards is set aside and
+        # named in `StreamingPowerSetAside`. Until 2026-10-05 either raised for the whole section,
+        # which (with the time-domain rule in Session.py) lost a whole export's streaming.
+        _kept, _aside = [], []
+        for _stream in Data["StreamingPower"]:
+            if len(_stream["Time"]) > 1 and np.any(np.around(np.diff(_stream["Time"]), 3) < 0):
                 print("TicksInMs Reversed")
-                raise Exception("Bad Format in TicksInMs for Power Channel")
-            
-            TimePerPacket = np.percentile(ChangesInMs,5)
-            MissingPacket = np.where(ChangesInMs > TimePerPacket)[0] + 1
-
-            Data["StreamingPower"][nStream]["Missing"] = np.zeros(Data["StreamingPower"][nStream]["Power"].shape)
-            if len(MissingPacket) > 0:
-                newTimestamp = np.arange(Data["StreamingPower"][nStream]["Time"][0], Data["StreamingPower"][nStream]["Time"][-1]+TimePerPacket*len(MissingPacket), TimePerPacket)
-                
-                processedPower = np.zeros((len(newTimestamp),2))
-                processedStimulation = np.zeros((len(newTimestamp),2))
-                for i in range(2):
-                    processedPower[:,i] = np.interp(newTimestamp, Data["StreamingPower"][nStream]["Time"], Data["StreamingPower"][nStream]["Power"][:,i])
-                    processedStimulation[:,i] = np.interp(newTimestamp, Data["StreamingPower"][nStream]["Time"], Data["StreamingPower"][nStream]["Stimulation"][:,i])
-                
-                Data["StreamingPower"][nStream]["Missing"] = np.zeros(processedPower.shape)
-                for t in range(len(newTimestamp)):
-                    if np.min(np.abs(newTimestamp[t] - Data["StreamingPower"][nStream]["Time"])) > TimePerPacket:
-                        Data["StreamingPower"][nStream]["Missing"][t,:] = 1
-                        
-                Data["StreamingPower"][nStream]["Power"] = processedPower
-                Data["StreamingPower"][nStream]["Stimulation"] = processedStimulation
-                Data["StreamingPower"][nStream]["Time"] = newTimestamp
+                _aside.append({"FirstPacketDateTime": _stream["FirstPacketDateTime"],
+                               "Channel": _stream.get("Channel"), "reason": "ticks run backwards"})
+            else:
+                _kept.append(_stream)
+        Data["StreamingPower"] = _kept
+        Data["StreamingPowerSetAside"] = _aside + _repeats_aside
+        # ONLY THE DEVICE'S OWN READINGS ARE STORED (the PI, 2026-10-18; decision 480 (e)). Until
+        # then a block with a gap was rebuilt on an even grid by straight-line interpolation of the
+        # power AND the current, and a grid point within one spacing of a real reading was marked
+        # present: on RCS08, 849 readings the device never made were stored as real, and 18,541
+        # real readings after a late packet were stored at a moved time with an interpolated value.
+        # Now each real reading goes to the place on the stated-rate grid nearest its own time
+        # (readers count times as row / SamplingRate, so the grid stays), carrying its own power
+        # and current; a place with no reading holds NaN and is marked missing; nothing is stored
+        # past the last reading. `Time` keeps each row's own time from the first reading (NaN for an
+        # empty place); the grid place is at most half a spacing from it (on RCS08 at most 100 ms
+        # at 2 readings a second). Readings closer together than one spacing cannot each have a
+        # place; such a block is kept as recorded, back to back (`SlotLayout`), none dropped.
+        for nStream in range(len(Data["StreamingPower"])):
+            S = Data["StreamingPower"][nStream]
+            S["Missing"] = np.zeros(S["Power"].shape)
+            if len(S["Time"]) < 2 or not S.get("SamplingRate"):
+                continue
+            rate = float(S["SamplingRate"])
+            slot = np.floor(S["Time"] * rate + 0.5 + 1e-9).astype(int)
+            if np.any(np.diff(slot) < 1):
+                S["SlotLayout"] = "as recorded"
+                continue
+            if slot[-1] == len(slot) - 1:
+                continue                                   # no gap: one reading per place already
+            n = int(slot[-1]) + 1
+            power = np.full((n, 2), np.nan)
+            stimulation = np.full((n, 2), np.nan)
+            missing = np.ones((n, 2))
+            times = np.full(n, np.nan)
+            power[slot] = S["Power"]
+            stimulation[slot] = S["Stimulation"]
+            missing[slot] = 0
+            times[slot] = S["Time"]
+            S["Power"], S["Stimulation"], S["Missing"], S["Time"] = power, stimulation, missing, times
 
         # Every power block starts at its own `FirstPacketDateTime`, as the time-domain blocks above
         # (the PI, 2026-09-26). The ticks give the readings' times WITHIN the block (`Time`, from 0)
-        # and the interpolation over missing readings; they set no block's start.
+        # and each reading's place on the grid; they set no block's start.
 
     for key in Data.keys():
         sourceData[key] = Data[key]
@@ -1988,13 +2022,55 @@ def extractIndefiniteStreaming(JSON, sourceData=dict()):
         sourceData[key] = Data[key]
     return Data
 
-def extractBrainSenseSurvey(JSON, sourceData=dict()):
-    """ Extract BrainSense Survey.
+def _side_of(text):
+    t = str(text or "").upper()
+    return "LEFT" if "LEFT" in t else ("RIGHT" if "RIGHT" in t else None)
 
-    BrainSense Survey are short 20-30 seconds recording of all 6 channels (Unilateral 0-1, 0-2, 1-2, 1-3, 2-3, 0-3) TimeDomain data. 
-    Segmented recording is also part of BrainSense Survey. 
-    
-    Minimum modification will be made during extraction. Missing packages will NOT be handled as of now. 
+
+def _pair_of(psd):
+    return str(psd.get("SensingElectrodes", "")).split(".")[-1]
+
+
+def _channel_has_pair(channel, pair):
+    ch = str(channel or "")
+    return bool(pair) and (ch == pair or ch.startswith(pair + "_"))
+
+
+def _attachSpectra(psds, streams, source, unknown, key="PSD"):
+    """Give each device spectrum to the one run on its side that carries its contact pair; when no
+    run or several runs could hold it, keep it with its candidate runs in `unknown` (decision 443:
+    nothing guessed, nothing dropped). Spectra have no time of their own in the export."""
+    for p in psds:
+        side = _side_of(p.get("Hemisphere"))
+        pair = _pair_of(p)
+        cands = [st for st in streams
+                 if _side_of(st.get("Hemisphere") or st.get("Channel")) == side and _channel_has_pair(st.get("Channel"), pair)]
+        runs = sorted({st["FirstPacketDateTime"] for st in cands})
+        if len(runs) == 1:
+            if key in cands[0]:
+                print(f"{source}: a second spectrum for one stream")
+            cands[0][key] = p
+        else:
+            unknown.append({"source": source, "PSD": p, "candidate_runs": runs})
+
+
+def _spectrum_values(p):
+    for k in ("LFPMagnitude", "LFPMagnitudeinMicroVoltPeak", "SignalPsdValues", "FFTBinData"):
+        if p.get(k) is not None:
+            return list(p.get(k))
+    return None
+
+
+def extractBrainSenseSurvey(JSON, sourceData=dict()):
+    """ Extract every montage and survey section: time-domain streams and device spectra.
+
+    Decision 443 (the PI, 2026-10-05): every section is read, every mode, on the device's own values
+    compared bit for bit. A survey stream or spectrum is dropped ONLY when it is identical to the
+    montage one already read (the same recording written twice); a spectrum goes to its run only
+    when exactly one run on its side carries its contact pair, else it is kept with its run unknown
+    (`SurveyPSDRunUnknown`, stamped later with the session start). The 6 contact pairs of one side
+    are recorded together (identical packet sequence numbers on RCS08, 271 of 271 runs); the sides
+    one after the other.
 
     Args:
       JSON: The raw exported Percept JSON object.
@@ -2005,39 +2081,99 @@ def extractBrainSenseSurvey(JSON, sourceData=dict()):
     """
 
     Data = dict()
-    if "LFPMontage" in JSON.keys():
-        key = "LFPMontage"
-        Data["MontagesPSD"] = copy.deepcopy(JSON[key])
-    
+    Data["SurveyPSDRunUnknown"] = []
+    montage_psd = copy.deepcopy(JSON.get("LFPMontage") or [])
+    raw_montage = list(JSON.get("LfpMontageTimeDomain") or [])
+
     if "LfpMontageTimeDomain" in JSON.keys():
-        key = "LfpMontageTimeDomain"
-        Data["MontagesTD"] = _shallowCopyStreamList(JSON[key])
+        Data["MontagesTD"] = _shallowCopyStreamList(JSON["LfpMontageTimeDomain"])
         for Stream in Data["MontagesTD"]:
             Stream = processTimeDomainStreamFormatting(Stream)
-            
-        if "MontagesPSD" in Data.keys():
-            for i in range(len(Data["MontagesPSD"])):
-                for j in range(len(Data["MontagesTD"])):
-                    if Data["MontagesPSD"][i]["SensingElectrodes"].replace("SensingElectrodeConfigDef.","") in Data["MontagesTD"][j]["Channel"]:
-                        if Data["MontagesPSD"][i]["Hemisphere"].replace("HemisphereLocationDef.","").upper() in Data["MontagesTD"][j]["Channel"]:
-                            if "PSD" in Data["MontagesTD"][j].keys():
-                                print("MontageTD Duplicate")
-                            Data["MontagesTD"][j]["PSD"] = Data["MontagesPSD"][i]
+    _attachSpectra(montage_psd, Data.get("MontagesTD") or [], "LFPMontage", Data["SurveyPSDRunUnknown"])
 
-    if "BrainSenseSurveysTimeDomain" in JSON.keys():
-        key = "BrainSenseSurveysTimeDomain"
-        Data["ElectrodeIdentifierTD"] = []
-        for i in range(len(JSON[key])):
-            if "ElectrodeIdentifier" in JSON[key][i].keys():
-                for Stream in JSON[key][i]["ElectrodeIdentifier"]:
-                    if not Stream["FirstPacketDateTime"] == "":
-                        Data["ElectrodeIdentifierTD"].append(processTimeDomainElectrodeIdentifierFormatting(Stream))
-                        
+    # the montage's own values, for the bit-for-bit duplicate checks below
+    montage_raw = {(m.get("FirstPacketDateTime"), m.get("Channel")): list(m.get("TimeDomainData") or [])
+                   for m in raw_montage}
+    montage_spectra = [(_pair_of(p), _side_of(p.get("Hemisphere")), _spectrum_values(p)) for p in montage_psd]
+
+    Data["ElectrodeIdentifierTD"] = []
+    Data["ElectrodeSurveyTD"] = []
+    for block in (JSON.get("BrainSenseSurveysTimeDomain") or []):
+        for Stream in (block.get("ElectrodeIdentifier") or []):
+            if not Stream["FirstPacketDateTime"] == "":
+                Data["ElectrodeIdentifierTD"].append(processTimeDomainElectrodeIdentifierFormatting(copy.copy(Stream)))
+        for Stream in (block.get("ElectrodeSurvey") or []):
+            if Stream.get("FirstPacketDateTime", "") == "":
+                continue
+            same = montage_raw.get((Stream.get("FirstPacketDateTime"), Stream.get("Channel")))
+            if same is not None and same == list(Stream.get("TimeDomainDatainMicroVolts") or []):
+                continue                                     # the montage stream, written twice
+            Data["ElectrodeSurveyTD"].append(processTimeDomainElectrodeIdentifierFormatting(copy.copy(Stream)))
+
+    for block in (JSON.get("BrainSenseSurveys") or []):
+        es = []
+        for p in (block.get("ElectrodeSurvey") or []):
+            key = (_pair_of(p), _side_of(p.get("Hemisphere")), _spectrum_values(p))
+            if key in montage_spectra:
+                continue                                     # the montage spectrum, written twice
+            es.append(p)
+        _attachSpectra(es, Data["ElectrodeSurveyTD"] + list(Data.get("MontagesTD") or []),
+                       "BrainSenseSurveys/ElectrodeSurvey", Data["SurveyPSDRunUnknown"], key="SurveyPSD")
+        _attachSpectra(list(block.get("ElectrodeIdentifier") or []), Data["ElectrodeIdentifierTD"],
+                       "BrainSenseSurveys/ElectrodeIdentifier", Data["SurveyPSDRunUnknown"])
+
+    # THE IN-SESSION SIGNAL CHECK: kept unless bit-identical to another spectrum of this export
+    others = [v for v in (_spectrum_values(p) for p in montage_psd) if v is not None]
+    for block in (JSON.get("BrainSenseSurveys") or []):
+        for mode in ("ElectrodeSurvey", "ElectrodeIdentifier"):
+            others += [v for v in (_spectrum_values(p) for p in (block.get(mode) or [])) if v is not None]
+    for ev in ((JSON.get("DiagnosticData") or {}).get("LfpFrequencySnapshotEvents") or []):
+        for side in (ev.get("LfpFrequencySnapshotEvents") or {}).values():
+            if isinstance(side, dict) and side.get("FFTBinData") is not None:
+                others.append(list(side["FFTBinData"]))
+    Data["SignalCheckPSD"] = [copy.deepcopy(c) for c in (JSON.get("MostRecentInSessionSignalCheck") or [])
+                              if list(c.get("SignalPsdValues") or []) not in others]
+
     for key in Data.keys():
         sourceData[key] = Data[key]
 
     return Data
-    
+
+
+def extractThresholdStreams(JSON, sourceData=dict()):
+    """ The band-power streams recorded while adaptive thresholds were set (`Thresholds`), kept
+    whole: start time (already on the tablet clock), rate, and every reading's sequence number,
+    power and current per side, as the device wrote them (decision 443).
+    """
+    Data = {"ThresholdPower": []}
+    # each side's sensing settings in the export's active group, as written (contact pair, sensing
+    # frequency, thresholds, measured levels): a threshold stream names only its side
+    setup_by_side = {}
+    for g in ((JSON.get("Groups") or {}).get("Final") or []):
+        if not g.get("ActiveGroup"):
+            continue
+        for sc in ((g.get("ProgramSettings") or {}).get("SensingChannel") or []):
+            side = _side_of(sc.get("HemisphereLocation"))
+            if side and side not in setup_by_side:
+                setup_by_side[side] = {k: copy.deepcopy(v) for k, v in sc.items() if k != "ElectrodeState"}
+    for Stream in (JSON.get("Thresholds") or []):
+        lfp = list(Stream.get("LfpData") or [])
+        def col(side, k):
+            return np.array([(pk.get(side) or {}).get(k, np.nan) for pk in lfp], dtype=float)
+        Data["ThresholdPower"].append({
+            "Channel": Stream.get("Channel"),
+            "FirstPacketDateTime": getTimestamp(Stream["FirstPacketDateTime"]),
+            "SamplingRate": text2num(Stream.get("SampleRateInHz")),
+            "Sequences": np.array([pk.get("Seq", np.nan) for pk in lfp], dtype=float),
+            "LeftPower": col("Left", "LFP"), "LeftCurrent": col("Left", "mA"),
+            "RightPower": col("Right", "LFP"), "RightCurrent": col("Right", "mA"),
+            "SensingSetup": setup_by_side.get(_side_of(Stream.get("Channel"))),
+        })
+    for key in Data.keys():
+        sourceData[key] = Data[key]
+    return Data
+
+
 def extractSignalCalibration(JSON, sourceData=dict()):
     """ Extract BrainSense Calibration.
 

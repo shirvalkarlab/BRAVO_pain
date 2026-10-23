@@ -70,10 +70,13 @@ import numpy as np
 # code is a miss rather than a wrong answer. This is not the canonicalisation rule's own
 # version -- that is `_CHANNEL_CANON_VERSION` in bravo_service, and a change there must also
 # bump this.
-CHANNEL_INDEX_VERSION = 3      # 2: traces carry `seq` (recording order) and `product`
+CHANNEL_INDEX_VERSION = 5      # 2: traces carry `seq` (recording order) and `product`
                                 # 3: native_lsb_by_channel added (Power-Domain + Chronic Timeline,
                                 #    values unconverted -- the "one decoding step" for every
                                 #    stream `availability.lsb_series` reads, per its own tiers)
+                                # 4: each streaming run's own band; chronic samples filed under the
+                                #    contact pair in force (decision 461, `run_band_hz`, `chronic_pair_keys`)
+                                # 5: a streaming run reading 0 throughout left out (decision 462)
 
 
 def canon_channel(name):
@@ -217,8 +220,473 @@ def power_center_freqs(powerdomain_list):
     return freqs
 
 
+#: Contact numbers within one lead, as the chronic record's contact schedule writes them ("0-3").
+_PAIR_WORDS = ("ZERO", "ONE", "TWO", "THREE")
+
+
+def run_band_hz(rec, contact, pd_center):
+    """The band ONE BrainSense streaming run sensed on `contact`: that run's own sensing setup for
+    the contact's side (decision 461), else the pair-level value `pd_center` holds (the last run's,
+    `power_center_freqs`) when the run carries none. Not snapped."""
+    desc = rec.get("Descriptor") if isinstance(rec, dict) else None
+    therapy = desc.get("Therapy") if isinstance(desc, dict) else None
+    cu = str(contact).upper()
+    side = "Left" if "LEFT" in cu else ("Right" if "RIGHT" in cu else None)
+    if isinstance(therapy, dict) and side:
+        hz = sensing_center_hz(therapy.get(side))
+        if hz is not None:
+            return hz
+    return pd_center.get(contact)
+
+
+def is_zero_run(kept):
+    """A BrainSense streaming run's band-power column that reads exactly 0 in every kept sample:
+    not a reading (the PI, 2026-10-06, decision 462). RCS08 has 43 such runs, up to 12,466 samples
+    long, the device apparently not sensing that pair; counted as 0 LSB they set a 0.0 LSB threshold
+    on the sign-off. The run stays stored; it is left out of every band-power series and counted
+    by `zero_runs`. A run with only some zeros is kept whole."""
+    kept = np.asarray(kept, dtype=float)
+    return kept.size > 0 and not np.any(kept != 0.0)
+
+
+def zero_runs(powerdomain_recordings):
+    """Every streaming run column `is_zero_run` leaves out: [{pair, t0, n, center_hz}], in recording
+    order, the pair canonical and the band the run's own (`run_band_hz`, snapped)."""
+    pd_center = power_center_freqs(powerdomain_recordings)
+    out = []
+    for r in powerdomain_recordings or []:
+        if not isinstance(r, dict) or "Data" not in r:
+            continue
+        data = np.asarray(r.get("Data"), dtype=float)
+        start = to_epoch(r.get("StartTime"))
+        if data.ndim != 2 or data.shape[0] == 0 or start is None:
+            continue
+        missing = np.asarray(r.get("Missing", np.zeros_like(data)), dtype=float)
+        if missing.shape != data.shape:
+            missing = np.zeros_like(data)
+        for pi, nm in enumerate(list(r.get("ChannelNames", []) or [])):
+            if pi >= data.shape[1] or "POWER" not in str(nm).upper():
+                continue
+            contact = str(nm).rsplit(" ", 1)[0] if " " in str(nm) else str(nm)
+            col = data[:, pi]
+            bad = (missing[:, pi] > 0) | (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
+            if is_zero_run(col[~bad]):
+                out.append({"pair": canon_channel(contact), "t0": float(start), "n": int((~bad).sum()),
+                            "center_hz": snap_freq(run_band_hz(r, contact, pd_center))})
+    return out
+
+
+def chronic_pair_keys(rec, times, hemi, fallback_key):
+    """The contact pair each chronic sample was recorded on (decision 461): the chronic record's
+    own contact schedule entry in force at the sample's time (the last at or before it, else the
+    first), named as the streaming pairs are ("ONE_THREE_LEFT"). Every sample gets `fallback_key`
+    (the old filing: the first streaming pair on that side) when the record has no usable schedule
+    or the side is unknown. Returns a list, one key per time."""
+    times = np.asarray(times, dtype=float)
+    sched = []
+    for item in (rec.get("ContactSchedule") or []) if isinstance(rec, dict) else []:
+        try:
+            ts = float(item[0])
+            a, b = sorted(int(x) for x in str(item[1]).split("-"))
+        except (TypeError, ValueError, IndexError):
+            continue
+        if 0 <= a < b <= 3:
+            sched.append((ts, f"{_PAIR_WORDS[a]}_{_PAIR_WORDS[b]}_{hemi}"))
+    if not sched or hemi not in ("LEFT", "RIGHT"):
+        return [fallback_key] * times.size
+    sched.sort(key=lambda p: p[0])
+    starts = np.asarray([t for t, _ in sched], dtype=float)
+    idx = np.searchsorted(starts, times, side="right") - 1
+    idx[idx < 0] = 0
+    return [sched[i][1] for i in idx.tolist()]
+
+
+#: A chronic (10-minute) band-power reading at or above this is not a reading (the PI, 2026-10-18,
+#: item 6b). The device writes 4,294,967,295 (2**32 - 1) for an invalid power value
+#: (DEVICE_percept_rc.md, parsing trap 3); in the chronic log that code arrives AVERAGED into the
+#: 10-minute reading, so it reads about 71.6 million, which the 2**31 - 1 cut never caught. On
+#: RCS08 the 15 such readings run from 71,582,891 to 71,587,026, each 103 to 4,238 above
+#: (2**32 - 1) / 60 = 71,582,788.25 -- the code over 60 plus the rest of the average (the "60" is
+#: read off these values, not from a Medtronic document); the largest real reading is 36,718.
+CHRONIC_INVALID_LSB = (2 ** 32 - 1) / 60.0
+
+
+def chronic_band_tags(rec, times, hemi):
+    """The band (snapped Hz, or None) each chronic sample was sensed in: the recording's own
+    frequency schedule (the last change at or before the sample, else the first), else its stamped
+    `CenterFrequencyHz`, else the therapy snapshot's sensing band for the side -- the rule
+    `native_lsb_by_channel` files chronic samples by."""
+    times = np.asarray(times, dtype=float)
+    sched = []
+    sched_raw = rec.get("FreqScheduleHz")
+    if isinstance(sched_raw, (list, tuple)):
+        for item in sched_raw:
+            try:
+                ts, shz = float(item[0]), snap_freq(item[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if shz is not None:
+                sched.append((ts, shz))
+        sched.sort(key=lambda p: p[0])
+    if sched:
+        starts = np.asarray([c for c, _ in sched], dtype=float)
+        idx = np.searchsorted(starts, times, side="right") - 1
+        idx[idx < 0] = 0
+        return [sched[i][1] for i in idx.tolist()]
+    hz = snap_freq(rec.get("CenterFrequencyHz"))
+    if hz is None and hemi:
+        desc = rec.get("Descriptor")
+        therapy = desc.get("Therapy") if isinstance(desc, dict) else None
+        if isinstance(therapy, dict):
+            hz = snap_freq(sensing_center_hz(therapy.get("Left" if hemi == "LEFT" else "Right")))
+    return [hz] * times.size
+
+
+def _chronic_order_key(rec):
+    """Where a chronic recording sits when repeats are merged: by its content alone (first and last
+    sample time, sample count, side, then a digest of its samples and settings), never by the order
+    the exports arrived or the database returned them."""
+    import hashlib
+    t = np.asarray(rec.get("Time", []), dtype=float)
+    d = np.ascontiguousarray(np.asarray(rec.get("Data"), dtype=float))
+    h = hashlib.blake2b(digest_size=16)
+    h.update(np.ascontiguousarray(t).tobytes())
+    h.update(d.tobytes())
+    h.update(repr((rec.get("ChannelNames"), rec.get("FreqScheduleHz"), rec.get("ContactSchedule"),
+                   rec.get("CenterFrequencyHz"))).encode("utf8"))
+    if rec.get("SignalLeadSchedule") is not None:
+        h.update(repr(rec.get("SignalLeadSchedule")).encode("utf8"))
+    return (float(t[0]) if t.size else float("inf"), float(t[-1]) if t.size else float("inf"),
+            int(t.size), str((rec.get("ChannelNames") or [""])[0]), h.hexdigest())
+
+
+def chronic_signal_leads(rec, times, hemi):
+    """The lead ("LEFT"/"RIGHT") each chronic sample's signal came from (decision 488): the
+    recording's `SignalLeadSchedule` entry in force at the sample's time (the last at or before it,
+    else the first), written by the one schedule from the device settings
+    (`MedtronicPercept/chronic_schedule.py`); `hemi`, the lead whose log holds the sample, when the
+    recording has none."""
+    times = np.asarray(times, dtype=float)
+    sched = []
+    for item in (rec.get("SignalLeadSchedule") or []) if isinstance(rec, dict) else []:
+        try:
+            ts, lead = float(item[0]), str(item[1]).upper()
+        except (TypeError, ValueError, IndexError):
+            continue
+        if lead in ("LEFT", "RIGHT"):
+            sched.append((ts, lead))
+    if not sched or hemi not in ("LEFT", "RIGHT"):
+        return [hemi] * times.size
+    sched.sort(key=lambda p: p[0])
+    starts = np.asarray([t for t, _ in sched], dtype=float)
+    idx = np.searchsorted(starts, times, side="right") - 1
+    idx[idx < 0] = 0
+    return [sched[i][1] for i in idx.tolist()]
+
+
+def _pair_on_lead(pair_key, lead):
+    """A contact-pair key ("ONE_THREE_RIGHT", or "SIDE_RIGHT") named on another lead."""
+    return pair_key.rsplit("_", 1)[0] + "_" + lead
+
+
+def _same_power(a, b):
+    return a == b or (a != a and b != b)
+
+
+def _chronic_rows(r, keep, counts):
+    """One chronic recording with only the rows in `keep`, the invalid code and exact zeros blanked
+    (band power NaN, current kept) and counted. `r` itself when nothing changes."""
+    d = np.asarray(r.get("Data"), dtype=float)
+    n = keep.shape[0]
+    invalid = keep & (d[:, 0] >= CHRONIC_INVALID_LSB) if n else np.zeros(0, dtype=bool)
+    counts["invalid_code_values"] += int(invalid.sum())
+    zero = keep & (d[:, 0] == 0) if n else np.zeros(0, dtype=bool)
+    counts["zero_values"] += int(zero.sum())
+    invalid = invalid | zero
+    if keep.all() and not invalid.any():
+        return r
+    c = dict(r)
+    for k_, v in r.items():
+        if k_ == "ChannelNames" or not isinstance(v, (list, np.ndarray)) or len(v) != n:
+            continue
+        arr = np.asarray(v)
+        c[k_] = arr[keep] if isinstance(v, np.ndarray) else list(arr[keep])
+    if invalid.any():
+        nd = np.array(d[keep], dtype=float)
+        nd[invalid[keep], 0] = np.nan
+        c["Data"] = nd
+    return c
+
+
+def merge_chronic_repeats(chronic_recordings):
+    """The chronic (10-minute) log with every reading once (the PI, 2026-10-18, items 6a and 6b).
+
+    Each export carries the device's whole chronic log, so one reading is stored in every export
+    made while it was in the log (RCS08: 97,941 samples for 52,129 distinct side-and-time
+    readings; copies never differed in value). A reading is identified by its side, the contact
+    pair and band its own recording files it under (`chronic_pair_keys`, `chronic_band_tags`), and
+    its time; copies with identical values (band power and current) collapse to one. Copies that
+    differ in value are BOTH kept and counted (CLAUDE.md section 11: merged, never first copy
+    wins). Recordings are walked in an order set by their content (`_chronic_order_key`), so the
+    result -- which samples, and which recording holds each -- does not depend on the order the
+    exports arrived. Every recording is kept, emptied if all its readings were repeats, so the
+    settings it carries (its band and contact schedules) still reach their readers.
+
+    A band-power value at or above `CHRONIC_INVALID_LSB` is the device's invalid code averaged into
+    the reading: set to NaN, which every reader already leaves out; the current at that time is
+    kept. A band-power value of exactly 0 is not a reading either (the PI, 2026-10-18: "Don't
+    count the 50 chronic log readings of exactly zero"; decision 462 extended to this log): NaN as
+    well, current kept, counted in ``zero_values``. Both stay stored.
+
+    Never changes its input: a recording that changes is a shallow copy with new arrays. Returns
+    ``(recordings, counts)``; ``counts`` holds ``repeats_removed``, ``conflicting_kept`` (copies
+    kept because their values differ), ``readings_under_two_labels`` (side-and-time readings still
+    filed under more than one contact pair or band, because two exports' own settings history
+    disagree), ``invalid_code_values`` and ``zero_values``.
+
+    THE LEAD THE SIGNAL CAME FROM (the PI, 2026-10-19; decision 488). A reading whose recording's
+    `SignalLeadSchedule` names the other lead (`chronic_signal_leads`: the device settings had both
+    leads' entries sense that lead) is a copy of that lead's reading, filed under the wrong lead.
+    It is filed under the lead it came from (same contact pair and band) and, when its band power
+    equals that lead's reading at that time, merged into it: counted once, that lead's current
+    kept, the copy's current recorded beside it in ``OtherLeadCurrentMilliAmps`` (NaN elsewhere).
+    Equal power alone never moves a reading. Counted: ``other_lead_copies_merged``,
+    ``other_lead_current_differs`` (merged copies whose current differs), ``other_lead_power_differs``
+    (kept beside that lead's reading under its lead) and ``other_lead_moved_alone`` (no reading of
+    that lead at that time: kept under it). Copies kept are handed on in recordings APPENDED after
+    the input's, named on the lead they came from (``MovedFromLead`` says which log held them);
+    the first ``len(input)`` outputs stay aligned with the input.
+    """
+    recs = [r for r in (chronic_recordings or [])]
+    counts = {"repeats_removed": 0, "conflicting_kept": 0, "readings_under_two_labels": 0,
+              "invalid_code_values": 0, "zero_values": 0, "other_lead_copies_merged": 0,
+              "other_lead_current_differs": 0, "other_lead_power_differs": 0,
+              "other_lead_moved_alone": 0}
+    usable = []
+    for i, r in enumerate(recs):
+        if not isinstance(r, dict) or "Time" not in r or "Data" not in r:
+            continue
+        t = np.asarray(r.get("Time"), dtype=float)
+        d = np.asarray(r.get("Data"), dtype=float)
+        if d.ndim != 2 or d.shape[0] != t.shape[0]:
+            continue
+        usable.append(i)
+    order = sorted(usable, key=lambda i: _chronic_order_key(recs[i]))
+    seen = {}                 # (hemi, pair, band, t) -> {value row: (recording, row) holding it}
+    labels = {}               # (hemi, t) -> set of (pair, band) it is filed under
+    keeps, moved = {}, []     # recording -> rows kept in it; copies of the other lead's signal
+    for pos, i in enumerate(order):
+        r = recs[i]
+        t = np.asarray(r.get("Time"), dtype=float)
+        d = np.asarray(r.get("Data"), dtype=float)
+        n = t.shape[0]
+        names = list(r.get("ChannelNames", []) or [])
+        cu = str(names[0]).upper() if names else ""
+        hemi = "LEFT" if "LEFT" in cu else ("RIGHT" if "RIGHT" in cu else "")
+        pairs = chronic_pair_keys(r, t, hemi, "SIDE_" + (hemi or "UNKNOWN"))
+        bands = chronic_band_tags(r, t, hemi)
+        sigs = chronic_signal_leads(r, t, hemi)
+        keep = np.ones(n, dtype=bool)
+        for k in range(n):
+            val = tuple(d[k].tolist())
+            if sigs[k] != hemi:
+                # the other lead's signal filed under this lead (decision 488): handled below
+                keep[k] = False
+                key = (sigs[k], _pair_on_lead(pairs[k], sigs[k]), bands[k], float(t[k]))
+                moved.append((key, val, pos, k, i))
+                continue
+            key = (hemi, pairs[k], bands[k], float(t[k]))
+            got = seen.get(key)
+            if got is None:
+                seen[key] = {val: (i, k)}
+            elif val in got:
+                keep[k] = False
+                counts["repeats_removed"] += 1
+            else:
+                got[val] = (i, k)
+                counts["conflicting_kept"] += 1
+            labels.setdefault((hemi, float(t[k])), set()).add((pairs[k], bands[k]))
+        keeps[i] = keep
+    # Copies of the other lead's signal, in an order set by content. A copy whose band power equals
+    # a reading of the lead it came from is that reading: merged into it, that lead's current kept,
+    # the copy's current recorded beside it (`OtherLeadCurrentMilliAmps`) and counted when the two
+    # differ. A copy with other band power is kept under its lead and counted; so is a copy with
+    # no reading of its lead at that time.
+    other_cur = {}            # recording -> {row: the other lead's current}
+    extra = {}                # recording -> rows moved to the lead the signal came from
+    moved_seen = {}
+    for key, val, pos, k, i in sorted(moved, key=lambda m: (m[0], m[1], m[2], m[3])):
+        mk = moved_seen.setdefault(key, set())
+        if val in mk:
+            counts["repeats_removed"] += 1
+            continue
+        mk.add(val)
+        own = seen.get(key) or {}
+        same_power = [v for v in own if _same_power(v[0], val[0])]
+        if same_power:
+            counts["other_lead_copies_merged"] += 1
+            if not any(v[1:] == val[1:] for v in same_power):
+                counts["other_lead_current_differs"] += 1
+            holder = own[min(same_power)]
+            if holder is not None and len(val) > 1:
+                other_cur.setdefault(holder[0], {}).setdefault(holder[1], val[1])
+            continue
+        if own:
+            counts["other_lead_power_differs"] += 1
+        else:
+            counts["other_lead_moved_alone"] += 1
+        own_key = seen.setdefault(key, {})
+        if val not in own_key:
+            own_key[val] = None
+        extra.setdefault(i, []).append(k)
+        labels.setdefault((key[0], key[3]), set()).add((key[1], key[2]))
+    out = list(recs)
+    for i in order:
+        r = recs[i]
+        keep = keeps[i]
+        n = keep.shape[0]
+        d = np.asarray(r.get("Data"), dtype=float)
+        oc = sorted((other_cur.get(i) or {}).items())
+        c = _chronic_rows(r, keep, counts)
+        if oc:
+            col = np.full(n, np.nan)
+            for k, v in oc:
+                col[k] = v
+            c = dict(c) if c is r else c
+            c["OtherLeadCurrentMilliAmps"] = col[keep]
+        if c is not r:
+            out[i] = c
+        if extra.get(i):
+            rows = np.zeros(n, dtype=bool)
+            rows[sorted(extra[i])] = True
+            mv = _chronic_rows(r, rows, counts)
+            mv = dict(mv) if mv is r else mv
+            names = list(r.get("ChannelNames", []) or [])
+            cu = str(names[0]).upper() if names else ""
+            frm, to = ("Left", "Right") if "LEFT" in cu else ("Right", "Left")
+            mv["ChannelNames"] = [str(x).replace(frm + "Hemisphere", to + "Hemisphere") for x in names]
+            mv["SignalLeadSchedule"] = []
+            mv["MovedFromLead"] = frm.upper()
+            out.append(mv)
+    counts["readings_under_two_labels"] = sum(1 for v in labels.values() if len(v) > 1)
+    return out, counts
+
+
 def native_lsb_by_channel(chronic_recordings, powerdomain_recordings):
     """The device's OWN sensed band-power series (Power-Domain streaming + Chronic Timeline),
+    grouped by canonical channel, values UNCONVERTED -- `_native_lsb_by_channel_loop`'s answer,
+    field for field and in the same order, a column at a time (decision 429: the per-sample loop
+    took about 4.7 s of the band-power panel, 421,000 samples on RCS08). Within one Power-Domain
+    column the band centre is fixed, so it is snapped once; within one Chronic recording it is a
+    step function of time (the frequency schedule), so it is looked up for all samples at once and
+    each distinct value snapped once. See the reference for the full contract.
+    """
+    out = {}
+
+    def _extend(ch, t, y, hz_list, src):
+        if not hz_list:
+            return                                 # the loop makes no entry for a column with no sample
+        d = out.setdefault(ch, {"t": [], "y": [], "center_hz": [], "source": []})
+        d["t"].extend(np.asarray(t, dtype=float).tolist())
+        d["y"].extend(np.asarray(y, dtype=float).tolist())
+        d["center_hz"].extend(hz_list)
+        d["source"].extend([src] * len(hz_list))
+
+    pd_center = power_center_freqs(powerdomain_recordings)
+    for r in powerdomain_recordings or []:
+        if not isinstance(r, dict) or "Data" not in r:
+            continue
+        names = list(r.get("ChannelNames", []) or [])
+        data = np.asarray(r.get("Data"), dtype=float)
+        if data.ndim != 2 or data.shape[0] == 0:
+            continue
+        n, ncols = data.shape
+        fs = float(r.get("SamplingRate") or 2.0) or 2.0
+        start = to_epoch(r.get("StartTime"))
+        if start is None:
+            continue
+        times = start + np.arange(n) / fs
+        missing = np.asarray(r.get("Missing", np.zeros_like(data)), dtype=float)
+        if missing.shape != data.shape:
+            missing = np.zeros_like(data)
+        for pi, nm in enumerate(names):
+            if pi >= ncols or "POWER" not in str(nm).upper():
+                continue
+            contact = str(nm).rsplit(" ", 1)[0] if " " in str(nm) else str(nm)
+            hz = snap_freq(run_band_hz(r, contact, pd_center))
+            col = data[:, pi]
+            bad = (missing[:, pi] > 0) | (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
+            keep = np.where(~bad)[0]
+            if is_zero_run(col[keep]):
+                continue                           # not a reading (decision 462)
+            _extend(contact, times[keep], col[keep], [hz] * keep.size, "streaming")
+
+    hemi_contact = {}
+    for contact in pd_center.keys():
+        cu = str(contact).upper()
+        side = "LEFT" if "LEFT" in cu else ("RIGHT" if "RIGHT" in cu else "")
+        if side and side not in hemi_contact:
+            hemi_contact[side] = contact
+    for r in chronic_recordings or []:
+        if not isinstance(r, dict) or "Data" not in r:
+            continue
+        names = list(r.get("ChannelNames", []) or [])
+        data = np.asarray(r.get("Data"), dtype=float)
+        tarr = np.asarray(r.get("Time", []), dtype=float)
+        if data.ndim != 2 or data.shape[0] == 0 or len(tarr) != data.shape[0]:
+            continue
+        desc = r.get("Descriptor")
+        therapy = desc.get("Therapy") if isinstance(desc, dict) else None
+        hemi_hz = {}
+        if isinstance(therapy, dict):
+            hemi_hz = {"LEFT": sensing_center_hz(therapy.get("Left")),
+                       "RIGHT": sensing_center_hz(therapy.get("Right"))}
+        chan = names[0] if names else "LFP"
+        cu = str(chan).upper()
+        hemi = "LEFT" if "LEFT" in cu else ("RIGHT" if "RIGHT" in cu else "")
+        key = hemi_contact.get(hemi, chan)
+
+        sched_raw = r.get("FreqScheduleHz")
+        sched = []
+        if isinstance(sched_raw, (list, tuple)):
+            for item in sched_raw:
+                try:
+                    ts, shz = float(item[0]), snap_freq(item[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if shz is not None:
+                    sched.append((ts, shz))
+            sched.sort(key=lambda p: p[0])
+        scalar_hz = snap_freq(r.get("CenterFrequencyHz"))
+        fallback_hz = scalar_hz if scalar_hz is not None else (hemi_hz.get(hemi) if hemi else None)
+
+        col = data[:, 0]
+        bad = (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
+        keep = np.where(~bad)[0]
+        tk = tarr[keep]
+        if sched:
+            # the loop's `_hz_at`: the last change at or before the sample, else the first change
+            starts = np.asarray([c for c, _ in sched], dtype=float)
+            idx = np.searchsorted(starts, tk, side="right") - 1
+            idx[idx < 0] = 0
+            snapped = [snap_freq(h) for _, h in sched]
+            hz_list = [snapped[i] for i in idx.tolist()]
+        else:
+            hz_list = [snap_freq(fallback_hz)] * keep.size
+        keys = chronic_pair_keys(r, tk, hemi, key)
+        yk = col[keep]
+        for k_ in dict.fromkeys(keys):          # first-seen order, as the loop meets them
+            sel = [i for i, kk in enumerate(keys) if kk == k_]
+            _extend(k_, tk[sel], yk[sel], [hz_list[i] for i in sel], "chronic")
+
+    return out
+
+
+def _native_lsb_by_channel_loop(chronic_recordings, powerdomain_recordings):
+    """THE REFERENCE, one sample at a time: `native_lsb_by_channel` before decision 429, kept so
+    the column-at-a-time version is tested against it (DecodeCommon/tests/test_native_lsb_vectorised.py).
+
+    The device's OWN sensed band-power series (Power-Domain streaming + Chronic Timeline),
     grouped by canonical channel, values UNCONVERTED.
 
     THIS IS THE "ADDED AS-IS" TIER. Unlike the montage/event-PSD modeled tiers in
@@ -272,9 +740,11 @@ def native_lsb_by_channel(chronic_recordings, powerdomain_recordings):
             if pi >= ncols or "POWER" not in str(nm).upper():
                 continue
             contact = str(nm).rsplit(" ", 1)[0] if " " in str(nm) else str(nm)
-            hz = pd_center.get(contact)
+            hz = run_band_hz(r, contact, pd_center)
             col = data[:, pi]
             bad = (missing[:, pi] > 0) | (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
+            if is_zero_run(col[~bad]):
+                continue                           # not a reading (decision 462)
             for i in np.where(~bad)[0]:
                 _push(contact, times[i], col[i], hz, "streaming")
 
@@ -334,7 +804,8 @@ def native_lsb_by_channel(chronic_recordings, powerdomain_recordings):
         col = data[:, 0]
         bad = (col >= _POWER_SENTINEL) | (col < 0) | ~np.isfinite(col)
         for i in np.where(~bad)[0]:
-            _push(key, float(tarr[i]), col[i], _hz_at(float(tarr[i])), "chronic")
+            pair = chronic_pair_keys(r, [float(tarr[i])], hemi, key)[0]
+            _push(pair, float(tarr[i]), col[i], _hz_at(float(tarr[i])), "chronic")
 
     return out
 

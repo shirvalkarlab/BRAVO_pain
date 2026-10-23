@@ -13,40 +13,28 @@ p. 36 sends such a lead to contralateral sensing). The readiness screen judged e
 evidence alone and so offered L 0-2+ while the left stimulates on contact 2. Now the screen is told
 which rings each lead stimulates on (the cathode in force) and a cell whose sensing pair is not the
 flanking pair is refused with a plain reason. A lead with no stimulation in force applies no rule.
+
+Merged here 2026-10-05: test_sensing_rule_first.py, test_sensing_rule_one_home.py (each under its own heading below).
 """
 import numpy as np
 import pytest
 
 from StimOptimizer.routines import lfp_evidence as EV
-from StimOptimizer.routines import lfp_response as LR
 from StimOptimizer import bravo_service as BS
+from StimOptimizer.tests import _helpers as H
+from DecodeCommon import sensing_rule as SR
+from StimOptimizer import titration_plan as TP
 
-CENTRES = [float(c) for c in range(10, 28)]
-
-
-def _Res(responds, slope_p, sep_d, slope):
-    return LR.ResponseResult(responds=responds, reason="fixture", direction_ok=responds,
-                             separation_d=sep_d, slope_per_mA=slope, slope_p=slope_p)
+CENTRES = H.CENTRES
 
 
-class _Ev:
-    def __init__(self, amps=(1.6, 4.0)):
-        self.amplitude_mA = np.array(amps, float)
-        self.era = np.array(["a", "b"])[:len(amps)]
-        self.cluster = np.arange(len(amps))
-        self.band_power = {(c, 5.0): np.full(len(amps), c) for c in CENTRES}
-
-    def power_for(self, c, w):
-        return self.band_power[(float(c), float(w))]
+_Res = H.stub_result
 
 
-def _fn_negative_at(centres_negative):
-    neg = {float(c) for c in centres_negative}
+_Ev = H.BandStubEvidence
 
-    def fn(power, amp, era=None, cluster=None):
-        c = float(np.asarray(power).ravel()[0])
-        return _Res(True, 0.001, 1.2, -0.2 if c in neg else +0.2)
-    return fn
+
+_fn_negative_at = H.fn_negative_at
 
 
 @pytest.mark.parametrize("pair,rings,ok", [
@@ -127,3 +115,95 @@ def test_the_stimulating_rings_are_read_from_the_cathode_in_force():
     assert BS.stim_rings(None) == set() and BS.stim_rings("none") == set()
     assert BS.stim_rings_by_side({"Left": {"contacts_raw": "2a-2b-2c"}, "Right": {"contacts_raw": "1a-1b-1c-2a-2b-2c"}}) \
         == {"Left": {2}, "Right": {1, 2}}
+
+
+# ================================================================================================
+# From test_sensing_rule_first.py (merged here 2026-10-05).
+# The readiness card's first sentence says which sensing pair the device allows today, and why a
+# count that may have read differently before now reads what it does (panel C item 5; report C §5.3).
+#
+# WHY. Decision 217 applies the device's sensing rule: while a lead stimulates on a contact, the
+# only sensing pair it allows is the two contacts immediately flanking it. On RCS08 (left C+2-,
+# right C+1-2-) that leaves L 1-3+ and R 0-3+, and neither has a band that rises with pain, so the
+# screen reads 0 of 50. The reason applied to every row at once and was printed only row by row,
+# under "why not". It now travels once, on the screen, with the count it explains.
+#
+# Pinned on the values.
+# ================================================================================================
+
+
+def _cell(ch, hemi, rate, deployable):
+    return {"channel": ch, "hemisphere": hemi, "rate_hz": rate, "deployable": deployable}
+
+
+def test_the_allowed_pair_per_lead_is_named_from_the_rings_in_force():
+    blk = BS.sensing_rule_block({"Left": {2}, "Right": {1, 2}}, cells=[], n_screened=50,
+                                 n_usable=0)
+    assert blk["by_side"]["Left"]["allowed_pair"] == [1, 3]
+    assert blk["by_side"]["Right"]["allowed_pair"] == [0, 3]
+    assert blk["by_side"]["Left"]["allowed_channel"] == "ONE_THREE_LEFT"
+    assert blk["by_side"]["Right"]["allowed_channel"] == "ZERO_THREE_RIGHT"
+
+
+def test_the_sentence_names_both_pairs_and_the_count_it_explains():
+    cells = [_cell("ONE_THREE_LEFT", "Left", 55.0, False),
+             _cell("ZERO_THREE_RIGHT", "Right", 55.0, False),
+             _cell("ZERO_THREE_LEFT", "Left", 125.0, False)]
+    blk = BS.sensing_rule_block({"Left": {2}, "Right": {1, 2}}, cells=cells, n_screened=50,
+                                 n_usable=0)
+    s = blk["sentence"]
+    assert "one sensing pair per lead" in s
+    assert "0 of 50" in s
+    assert "neither" in s.lower()
+    assert blk["by_side"]["Left"]["n_usable_on_allowed_pair"] == 0
+
+
+def test_a_lead_on_an_end_contact_allows_no_pair_and_says_so():
+    blk = BS.sensing_rule_block({"Left": {0}, "Right": {1, 2}}, cells=[], n_screened=50,
+                                 n_usable=0)
+    assert blk["by_side"]["Left"]["allowed_pair"] is None
+    assert "nothing flanks" in blk["by_side"]["Left"]["why"]
+
+
+def test_a_lead_with_no_setting_in_force_applies_no_rule_and_says_so():
+    blk = BS.sensing_rule_block({"Left": set(), "Right": {2}}, cells=[], n_screened=10,
+                                 n_usable=0)
+    assert blk["by_side"]["Left"]["allowed_pair"] is None
+    assert blk["by_side"]["Left"]["rule_applied"] is False
+
+
+def test_a_usable_allowed_pair_is_counted():
+    cells = [_cell("ONE_THREE_LEFT", "Left", 55.0, True),
+             _cell("ONE_THREE_LEFT", "Left", 110.0, True)]
+    blk = BS.sensing_rule_block({"Left": {2}, "Right": {1, 2}}, cells=cells, n_screened=50,
+                                 n_usable=2)
+    assert blk["by_side"]["Left"]["n_usable_on_allowed_pair"] == 2
+    assert "2 of 50" in blk["sentence"]
+
+
+# ================================================================================================
+# From test_sensing_rule_one_home.py (merged here 2026-10-05).
+# The Stim Optimizer's names for the device's sensing rule are delegations to its one home,
+# `DecodeCommon.sensing_rule` (moved there 2026-09-26 so the Biomarkers heat maps, which may not
+# import the Stim Optimizer, state the same rule). Every existing caller keeps its import; the
+# answer is the DecodeCommon function's, the same object where the signature is unchanged.
+# ================================================================================================
+
+
+def test_the_old_names_are_the_one_homes_functions():
+    assert BS.stim_rings is SR.stim_rings
+    assert EV.flanking_pair is SR.flanking_pair
+    assert EV.pair_flanks_stimulation is SR.pair_flanks_stimulation
+    assert EV.sensing_pair_rings is SR.sensing_pair_rings
+    assert TP.stim_rings_for_sensing_pair is SR.stim_rings_for_sensing_pair
+
+
+def test_the_readiness_block_is_the_one_homes_block_with_the_pages_labels():
+    cells = [{"channel": "ONE_THREE_LEFT", "deployable": True}]
+    got = BS.sensing_rule_block({"Left": {2}, "Right": {1, 2}}, cells=cells, n_screened=50,
+                                n_usable=1)
+    want = SR.sensing_rule_block({"Left": {2}, "Right": {1, 2}}, cells=cells, n_screened=50,
+                                 n_usable=1,
+                                 display_of=lambda ch: BS.sensing_display(ch).get("display_short"))
+    assert got == want
+    assert got["by_side"]["Left"]["allowed_display"] == "L 1⁻3⁺"

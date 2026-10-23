@@ -63,6 +63,14 @@ def test_suggested_mode_out_of_band():
     assert mode is None and "adaptive sensing range" in reason
 
 
+def test_suggested_mode_unknown_direction_is_not_called_negative():
+    # 2026-10-02: a mixed-effects fit that did not converge leaves the direction unknown; the
+    # advice must say that, not describe a negative-direction band
+    mode, reason = bs._suggested_percept_mode("unknown", True)
+    assert mode is None
+    assert "negative-direction" not in reason and "not known" in reason
+
+
 def test_decide_verdict_branches():
     # unavailable glmer
     assert bs._band_decide_verdict({"available": False}, {}) == "unavailable"
@@ -70,12 +78,23 @@ def test_decide_verdict_branches():
     assert bs._band_decide_verdict({"available": True, "separation": True}, {}) == "failed (separation)"
     assert bs._band_decide_verdict(
         {"available": True, "separation": False, "singular": True}, {}) == "failed (singular random effect)"
-    # n.s. p
+    # a fit lme4 says did not converge never validates, whatever p it left behind (2026-10-02:
+    # R 0-3+ 24.5 Hz NRS read p 3e-104 on a fit that had stopped short)
     assert bs._band_decide_verdict(
-        {"available": True, "separation": False, "singular": False, "p": 0.2}, {}
-    ) == "candidate (mixed-effects n.s.)"
+        {"available": True, "separation": False, "singular": False, "converged": False, "p": 0.0},
+        {}) == "failed (did not converge)"
+    # too few in the smaller pain group (2026-10-03): named, never a number
+    assert bs._band_decide_verdict(
+        {"available": True, "separation": False, "singular": False, "too_few_in_smaller_group": True,
+         "smaller_group": "low", "p": 0.15}, {}) == "failed (too few low-pain samples)"
+    # n.s. p: the rotation test's p decides since decision 482
+    assert bs._band_decide_verdict(
+        {"available": True, "separation": False, "singular": False, "p": 0.2,
+         "rotation": {"available": True, "p": 0.2}}, {}
+    ) == "candidate (rotation test n.s.)"
     # validated stim-stable vs stim-dependent
-    g = {"available": True, "separation": False, "singular": False, "p": 0.001}
+    g = {"available": True, "separation": False, "singular": False, "p": 0.001,
+         "rotation": {"available": True, "p": 0.001}}
     assert bs._band_decide_verdict(g, {"available": True, "stim_stable": True}) == "VALIDATED (stim-stable)"
     assert bs._band_decide_verdict(g, {"available": True, "stim_stable": False}) == "VALIDATED (stim-dependent)"
 

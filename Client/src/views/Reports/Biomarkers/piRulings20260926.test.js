@@ -11,13 +11,11 @@ import fs from "fs";
 import path from "path";
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
 
 import "@testing-library/jest-dom";
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 import MatchWindowBand from "./MatchWindowBand";
 import { fmtP, hoverReadout } from "./gridReadouts";
+import { wrap } from "testUtils/render";
 
 jest.mock("plotly.js-dist", () => {
   const noop = () => {};
@@ -25,11 +23,6 @@ jest.mock("plotly.js-dist", () => {
 });
 
 const read = (f) => fs.readFileSync(path.join(__dirname, f), "utf8");
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 
 describe("the matching panel", () => {
   const props = {

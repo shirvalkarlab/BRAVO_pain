@@ -103,7 +103,7 @@ class Command(BaseCommand):
         self.stdout.write(f"found {len(files)} JSON files under {folder}")
 
         # --- classify BEFORE writing anything, so --dry-run is genuinely read-only -------------
-        new_files, dupes, unreadable = [], [], []
+        hashed, unreadable = [], []
         for f in files:
             try:
                 with open(f, "rb") as fh:
@@ -111,11 +111,17 @@ class Command(BaseCommand):
             except Exception as e:
                 unreadable.append((f, str(e)))
                 continue
-            uh = hmac.new(HASH_KEY.encode("utf8"), raw, hashlib.sha256).hexdigest()
-            if models.SourceFile.objects.filter(unique_hashed=uh, institute=str(institute.pk)).exists():
-                dupes.append(f)
-            else:
-                new_files.append((f, uh))
+            hashed.append((f, hmac.new(HASH_KEY.encode("utf8"), raw, hashlib.sha256).hexdigest()))
+        # a copy repeated within this folder counts as held too, not only one already stored
+        from modules.MedtronicPercept.ingest_batch import split_new_and_held
+        new_files, dupes = split_new_and_held(hashed, lambda uh: models.SourceFile.objects.filter(
+            unique_hashed=uh, institute=str(institute.pk)).exists())
+
+        # One export at a time, oldest session first by its own SessionDate (CLAUDE.md section 11);
+        # file-name order need not follow the session.
+        from modules.MedtronicPercept.session_order import in_session_order
+        hashes = dict(new_files)
+        new_files = [(f, hashes[f]) for f in in_session_order(list(hashes))]
 
         self.stdout.write(f"  already in BRAVO : {len(dupes)}")
         self.stdout.write(f"  NEW to ingest    : {len(new_files)}")

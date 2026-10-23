@@ -8,26 +8,17 @@
 import React from "react";
 import "@testing-library/jest-dom";
 import { render as rtlRender } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 
 import DeploySignoffCard from "./DeploySignoffCard";
 import { headline } from "./ClosedLoopSimulationPanel";
 import payload from "./__fixtures__/rcs08_deployment_payload_2026-09-15.json";
+import { wrap } from "testUtils/render";
 
 jest.mock("plotly.js-dist", () => ({
   react: jest.fn(), purge: jest.fn(), restyle: jest.fn(), relayout: jest.fn(), newPlot: jest.fn(),
   toImage: jest.fn(),
 }));
 jest.mock("database/session-control", () => ({ SessionController: { query: jest.fn() } }));
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 
 describe("C3: the simulation headline names the timing values the record cannot decide", () => {
   const run = {

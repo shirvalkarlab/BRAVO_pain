@@ -28,15 +28,16 @@ so that the check keeps working if the inputs change.
     from the same sum written another way.
 
 Run inside the container:
-    docker exec -w /usr/src/BRAVO bravo_pain-bravo-server-1 python3 -W ignore \
-        modules/Biomarkers/tests/test_sweep_statistics_exact.py
+    docker exec -w /usr/src/BRAVO bravo_pain-bravo-server-1 python3 -W ignore         modules/Biomarkers/tests/test_sweep_statistics_exact.py
+
+Merged here 2026-10-05: test_sweep_cell_p_values.py, test_sweep_effective_count.py, test_sweep_interval_block_bootstrap.py, test_sweep_null_family_reconciled.py.
+
+Merged here 2026-10-05: test_whole_matrix_median_speedup.py.
 """
 import os
 import struct
 import sys
-
 import numpy as np
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from Biomarkers.routines import analytics as A          # noqa: E402
 
@@ -73,10 +74,6 @@ def _dense_weight_matrix(picks, n_rows):
     np.add.at(W, (np.arange(picks.shape[0])[:, None], picks), 1.0)
     return W
 
-
-# ---------------------------------------------------------------------------------------------
-# the resampled high-pain-against-low-pain value
-# ---------------------------------------------------------------------------------------------
 
 def _auc_cases():
     """Every awkward shape the resampled area under the curve has to survive, each as
@@ -176,10 +173,6 @@ def test_rows_the_split_left_out_contribute_nothing():
           f"counting route agrees with the weight-matrix route on all {want.size} resamples")
 
 
-# ---------------------------------------------------------------------------------------------
-# the resampled correlation
-# ---------------------------------------------------------------------------------------------
-
 def _plain_bootstrap_correlations(x, y, picks):
     """The resampled correlation written the plain way: five separate arrays, mean then difference
     then three row sums. This is what the sweep did before the buffers were reused."""
@@ -238,10 +231,6 @@ def test_resampled_correlation_with_reused_buffers_is_identical():
     print(f"OK the resampled correlation is identical with the buffers reused on {checked} "
           f"resamples across {len(cases)} constructed cases")
 
-
-# ---------------------------------------------------------------------------------------------
-# the grids, against a plain loop over lengths of signal and band centres
-# ---------------------------------------------------------------------------------------------
 
 def _plain_pearson(x, y):
     """An ordinary Pearson correlation over the reports where both quantities are present,
@@ -387,11 +376,6 @@ def test_the_ten_lengths_are_each_their_own_length_and_not_one_repeated():
           f"rises across them from {per_row[0]:.3f} to {per_row[-1]:.3f}")
 
 
-# ---------------------------------------------------------------------------------------------
-# the one place exactness rests on the linear-algebra library rather than on arithmetic that
-# cannot round
-# ---------------------------------------------------------------------------------------------
-
 def test_a_wide_matrix_product_gives_the_same_numbers_as_narrow_ones():
     """THE GUARD ON THE 1000 SHUFFLES. The shuffled reference takes all ten lengths of signal's
     matrix products in two products instead of thirty, by standing their right-hand sides side by
@@ -449,12 +433,376 @@ def test_a_wide_matrix_product_gives_the_same_numbers_as_narrow_ones():
           f"replaces, across the four shapes the shuffled reference uses")
 
 
-if __name__ == "__main__":
-    test_a_wide_matrix_product_gives_the_same_numbers_as_narrow_ones()
-    test_resampled_auc_counts_match_the_weight_matrix_route_bit_for_bit()
-    test_a_band_that_never_changes_gives_exactly_no_discrimination()
-    test_rows_the_split_left_out_contribute_nothing()
-    test_resampled_correlation_with_reused_buffers_is_identical()
-    test_grids_match_a_plain_loop_over_lengths_and_band_centres()
-    test_the_ten_lengths_are_each_their_own_length_and_not_one_repeated()
-    print("All sweep-statistics exactness tests passed.")
+from scipy import stats
+try:
+    from modules.Biomarkers.routines import analytics as A
+except ImportError:                                        # pragma: no cover - host spelling
+    from Biomarkers.routines import analytics as A
+
+
+def _grid(seed=5, n=120):
+    rng = np.random.default_rng(seed)
+    pain = np.clip(np.round(rng.normal(6, 2, n)), 0, 10)
+    x1 = 100 - 6 * pain + rng.normal(0, 15, n)             # a real relationship
+    x2 = rng.normal(100, 15, n)                            # none
+    power = {1.0: np.column_stack([x1, x2]), 5.0: np.column_stack([x2, x1])}
+    return power, pain, [12.5, 20.5]
+
+
+def test_every_cell_carries_pearsons_p_computed_from_its_own_r_and_n():
+    power, pain, centers = _grid()
+    sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=20, n_boot=50)
+    assert "p_grid" in sw and np.shape(sw["p_grid"]) == np.shape(sw["correlation_grid"])
+    for t in range(2):
+        for c in range(2):
+            r, n, p = sw["correlation_grid"][t][c], sw["n_grid"][t][c], sw["p_grid"][t][c]
+            tstat = r * np.sqrt((n - 2) / (1 - r * r))
+            want = 2 * stats.t.sf(abs(tstat), n - 2)
+            assert abs(p - want) < 1e-12, (t, c, p, want)
+    # the cell with the planted relationship is far below 0.05, the one without is not tiny
+    assert sw["p_grid"][0][0] < 1e-4 and sw["p_grid"][0][1] > 1e-3
+
+
+def test_every_auc_cell_carries_scipys_asymptotic_mann_whitney_p():
+    power, pain, centers = _grid()
+    sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=20, n_boot=50)
+    assert "auc_p_grid" in sw and np.shape(sw["auc_p_grid"]) == np.shape(sw["auc_grid"])
+    for t in range(2):
+        for c in range(2):
+            assert 0 < sw["auc_p_grid"][t][c] <= 1
+    assert sw["auc_p_grid"][0][0] < 1e-3 and sw["auc_p_grid"][0][1] > 1e-3
+
+
+def test_the_column_helper_is_scipys_own_result_per_column_with_missing_values_left_out():
+    rng = np.random.default_rng(11)
+    X = rng.normal(100, 15, (75, 3)); X[:40, 0] += 10; X[3, 1] = np.nan; X[50, 2] = np.nan
+    y = np.r_[np.ones(40), np.zeros(35)]
+    got = A.mann_whitney_p_columns(X, y)
+    for c in range(3):
+        hi, lo = X[:40, c], X[40:, c]
+        want = stats.mannwhitneyu(hi[np.isfinite(hi)], lo[np.isfinite(lo)],
+                                  alternative="two-sided", method="asymptotic").pvalue
+        assert abs(got[c] - want) < 1e-12, (c, got[c], want)
+    assert got[0] < 0.01
+
+
+def test_an_empty_cell_carries_no_p():
+    X = np.array([[1.0, np.nan], [2.0, np.nan], [3.0, 5.0], [4.0, 6.0]])
+    p = A.mann_whitney_p_columns(X, np.array([1, 1, 0, 0]))
+    assert np.isfinite(p[0]) and np.isnan(p[1])
+    p = A.pearson_p_from_r(np.array([0.3, np.nan, 0.99999]), np.array([2, 30, 30]))
+    assert np.isnan(p[0]) and np.isnan(p[1]) and np.isfinite(p[2])
+
+
+def test_the_blank_response_carries_the_two_grids_empty_rather_than_absent():
+    sw = A.band_time_sweep_from_power({}, np.array([]), center_freqs_hz=[12.5], n_perm=5, n_boot=5)
+    assert sw["p_grid"] == [] and sw["auc_p_grid"] == []
+
+
+try:
+    from modules.Biomarkers.routines import analytics as A
+    from modules.Biomarkers.routines import stats_utils as SU
+except ImportError:                                        # pragma: no cover - host spelling
+    from Biomarkers.routines import analytics as A
+    from Biomarkers.routines import stats_utils as SU
+
+
+def _grid_persistent(rho, n=160, seed=3):
+    """One band at one length: band power and pain share a slow AR(1) drift of persistence `rho`."""
+    rng = np.random.default_rng(seed)
+    z = np.zeros(n)
+    for i in range(1, n):
+        z[i] = rho * z[i - 1] + rng.normal(0, np.sqrt(1 - rho * rho))
+    pain = np.clip(np.round(5 + 2 * z + rng.normal(0, 0.8, n)), 0, 10)
+    x = 100 + 20 * z + rng.normal(0, 8, n)
+    return {5.0: x[:, None]}, pain, [12.5], x, pain
+
+
+def test_the_row_carries_exactly_the_effective_count_of_the_pairs_it_correlated():
+    power, pain, centers, x, y = _grid_persistent(rho=0.9)
+    sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=20, n_boot=50)
+    row = sw["best_correlation_rows"][0]
+    m = np.isfinite(x) & np.isfinite(y)
+    want = SU.effective_n(x[m], y[m])
+    assert "n_pain_reports_effective" in row, sorted(row)
+    assert abs(row["n_pain_reports_effective"] - round(want, 1)) < 1e-9, (row["n_pain_reports_effective"], want)
+    assert row["n_pain_reports_effective"] <= row["n_pain_reports"]
+    print(f"OK {row['n_pain_reports']} reports, effective {row['n_pain_reports_effective']}")
+
+
+def test_persistence_in_both_series_lowers_the_effective_count_well_below_the_raw_count():
+    power, pain, centers, _x, _y = _grid_persistent(rho=0.9)
+    row = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=20,
+                                       n_boot=50)["best_correlation_rows"][0]
+    assert row["n_pain_reports_effective"] < 0.5 * row["n_pain_reports"], row
+
+
+def test_no_persistence_leaves_the_effective_count_close_to_the_raw_count():
+    power, pain, centers, _x, _y = _grid_persistent(rho=0.0, seed=11)
+    row = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=20,
+                                       n_boot=50)["best_correlation_rows"][0]
+    assert row["n_pain_reports_effective"] > 0.85 * row["n_pain_reports"], row
+
+
+def _ar1_grid(rho, n=160, seed=3):
+    """One band, two lengths: band power and pain share a slow AR(1) drift, so consecutive reports
+    are near-duplicates when `rho` is high and independent when `rho` is 0."""
+    rng = np.random.default_rng(seed)
+    z = np.zeros(n)
+    for i in range(1, n):
+        z[i] = rho * z[i - 1] + rng.normal(0, np.sqrt(1 - rho * rho))
+    pain = np.clip(np.round(5 + 2 * z + rng.normal(0, 0.8, n)), 0, 10)
+    x = 100 + 20 * z + rng.normal(0, 8, n)
+    x2 = 100 + 20 * z + rng.normal(0, 8, n)
+    power = {1.0: x[:, None], 5.0: x2[:, None]}
+    return power, pain, [12.5]
+
+
+def _widths(sw):
+    r = sw["best_correlation_rows"][0]
+    a = sw["best_auc_rows"][0]
+    return (r["pearson_r_high"] - r["pearson_r_low"], a["auc_high"] - a["auc_low"],
+            r["interval_block_length"], a["interval_block_length"])
+
+
+def test_block_bootstrap_picks_are_the_plain_draw_at_block_one_and_whole_blocks_above():
+    rng1, rng2 = np.random.default_rng(7), np.random.default_rng(7)
+    plain = rng1.integers(0, 50, size=(4, 50))
+    picks = SU.block_bootstrap_picks(50, 1, 4, rng2)
+    assert np.array_equal(plain, picks), "block 1 must be the identical i.i.d. draw"
+    picks = SU.block_bootstrap_picks(50, 5, 4, np.random.default_rng(1))
+    assert picks.shape == (4, 50)
+    # every run of five is consecutive modulo n
+    for row in picks:
+        for b in range(0, 50, 5):
+            seg = row[b:b + 5]
+            assert np.all((seg[1:] - seg[:-1]) % 50 == 1), seg
+
+
+def test_the_interval_widens_under_strong_autocorrelation_and_reports_its_block_length():
+    power, pain, centers = _ar1_grid(rho=0.92)
+    sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=50, n_boot=400)
+    w_r, w_a, b_r, b_a = _widths(sw)
+    assert b_r > 1 and b_a > 1, (b_r, b_a)
+    # the plain i.i.d. interval, for the comparison only
+    A.BAND_SWEEP_INTERVAL_BLOCK_BOOTSTRAP = False
+    try:
+        sw0 = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=50, n_boot=400)
+    finally:
+        A.BAND_SWEEP_INTERVAL_BLOCK_BOOTSTRAP = True
+    w_r0, w_a0, b_r0, b_a0 = _widths(sw0)
+    assert b_r0 == 1 and b_a0 == 1
+    assert w_r > w_r0 * 1.15, (w_r, w_r0)
+    assert w_a > w_a0 * 1.15, (w_a, w_a0)
+    print(f"OK block interval r {w_r:.3f} vs iid {w_r0:.3f} (block {b_r}); "
+          f"auc {w_a:.3f} vs {w_a0:.3f} (block {b_a})")
+
+
+def test_with_no_autocorrelation_the_interval_is_the_draw_it_always_was():
+    power, pain, centers = _ar1_grid(rho=0.0, seed=11)
+    sw = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=50, n_boot=300)
+    A.BAND_SWEEP_INTERVAL_BLOCK_BOOTSTRAP = False
+    try:
+        sw0 = A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=50, n_boot=300)
+    finally:
+        A.BAND_SWEEP_INTERVAL_BLOCK_BOOTSTRAP = True
+    for key in ("best_correlation_rows", "best_auc_rows"):
+        for r1, r0 in zip(sw[key], sw0[key]):
+            assert r1["interval_block_length"] == 1
+            for f in ("pearson_r_low", "pearson_r_high", "auc_low", "auc_high"):
+                if f in r1:
+                    assert r1[f] == r0[f], (f, r1[f], r0[f])
+    print("OK block length 1 reproduces the i.i.d. interval bit for bit")
+
+
+def _grid_with_holes(n=120, seed=5, holes=True):
+    """Three bands, three lengths; some band power missing, as a real record has."""
+    rng = np.random.default_rng(seed)
+    pain = np.clip(np.round(5 + rng.normal(0, 2, n)), 0, 10)
+    power = {}
+    for L in (1.0, 5.0, 30.0):
+        x = 100 + 5 * pain[:, None] + rng.normal(0, 15, (n, 3))
+        if holes:
+            x[rng.random((n, 3)) < 0.1] = np.nan
+        power[L] = x
+    return power, pain, [12.5, 20.5, 24.5]
+
+
+def _sweep(**kw):
+    power, pain, centers = _grid_with_holes(**kw)
+    return A.band_time_sweep_from_power(power, pain, center_freqs_hz=centers, n_perm=50, n_boot=40)
+
+
+def test_the_sweep_publishes_the_check_and_it_holds_on_its_own_grid():
+    sw = _sweep()
+    rec = sw.get("null_family_reconciliation")
+    assert rec is not None, sorted(sw)
+    for kind in ("correlation", "auc"):
+        r = rec[kind]
+        assert r["perm_family_reconciled"] is True, (kind, r)
+        assert r["perm_family_max_abs_dev_from_corr"] <= 1e-9, (kind, r)
+        assert r["perm_family_cells_in_selection_only"] == 0, (kind, r)
+        assert r["perm_family_cells_compared"] == 9, (kind, r)
+    print("OK both families reconciled: max deviation "
+          f"{rec['correlation']['perm_family_max_abs_dev_from_corr']:.1e} (r), "
+          f"{rec['auc']['perm_family_max_abs_dev_from_corr']:.1e} (AUC)")
+
+
+def test_a_grid_that_disagrees_by_one_cell_reads_false_with_the_size_of_the_disagreement():
+    null = {"observed_abs_by_length": np.array([[0.2, 0.3], [0.1, 0.4]]),
+            "in_family": np.ones((2, 2), dtype=bool)}
+    grid = np.array([[0.2, -0.3], [0.1, 0.45]])            # one cell off by 0.05
+    r = A._null_family_reconciliation(np.abs(grid), null)
+    assert r["perm_family_reconciled"] is False
+    assert abs(r["perm_family_max_abs_dev_from_corr"] - 0.05) < 1e-12
+    assert r["perm_family_cells_compared"] == 4
+
+
+def test_a_selectable_cell_the_null_never_admitted_is_counted_and_breaks_the_check():
+    null = {"observed_abs_by_length": np.array([[0.2, 0.0]]),
+            "in_family": np.array([[True, False]])}          # the second cell fell under the floor
+    grid = np.array([[0.2, 0.61]])
+    r = A._null_family_reconciliation(np.abs(grid), null)
+    assert r["perm_family_cells_in_selection_only"] == 1
+    assert abs(r["perm_family_cells_in_selection_only_max_abs_r"] - 0.61) < 1e-12
+    assert r["perm_family_reconciled"] is False
+
+
+def test_the_null_itself_is_unchanged_by_the_check():
+    """The same seed gives the same shuffled bests, bit for bit, as it did before the check existed:
+    the check reads the family, it does not alter it."""
+    power, pain, centers = _grid_with_holes()
+    X = np.stack([power[L] for L in (1.0, 5.0, 30.0)], axis=0)
+    a = A._best_of_windows_null_correlation(X, pain, n_perm=40, rng=np.random.default_rng(1))
+    b = A._best_of_windows_null_correlation(X, pain, n_perm=40, rng=np.random.default_rng(1))
+    assert np.array_equal(a["best_by_shuffle"], b["best_by_shuffle"])
+    fam = a["observed_abs_by_length"]
+    assert fam.shape == (3, 3)
+
+
+# --------------------------------------------------------------------------------------------------
+# merged from test_whole_matrix_median_speedup.py
+# Proposal 3 (2026-09-25): the heat-map grid's per-row `np.nanmedian` as one whole-matrix sort.
+#
+# `np.nanmedian(arr, axis=1)` on a 2D array is not the single vectorised call it looks like: numpy's
+# own implementation falls through to `np.apply_along_axis`, running its inner reduction once per row
+# in Python. Measured live on RCS08's heat-map grid, that cost 7.4 of the grid's about 13.8 seconds
+# across 923,076 rows and 1,284,219 discarded `RuntimeWarning`s (one per all-NaN or short row).
+#
+# `availability._whole_matrix_nanmedian(values, keep)` replaces
+# `np.nanmedian(np.where(keep, values, np.nan), axis=1)` with a full `np.sort` of each row plus a
+# finite-count and an index lookup -- one vectorised call, no per-row Python loop. A median is an
+# order statistic, so the two must agree value for value, including the edge cases a whole-matrix
+# reduction could get wrong that a straightforward per-row call could not: an infinite reading (a
+# real, comparable value, not a value `nanmedian` throws away the way it throws away NaN), a row with
+# no finite value at all, an even count whose two middle values straddle `+inf` and `-inf` (numpy's
+# own `(inf + -inf) / 2 = nan`), and a `cap` wider than the pieces on offer.
+
+
+from ..routines import availability as av
+
+
+def _reference(values, keep):
+    """The exact call this function replaces, kept here as the ground truth to compare against."""
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return np.nanmedian(np.where(keep, values, np.nan), axis=1)
+
+
+def _assert_matches(values, keep, msg=""):
+    want = _reference(values, keep)
+    got = av._whole_matrix_nanmedian(values, keep)
+    assert got.shape == want.shape, msg
+    np.testing.assert_array_equal(got, want, err_msg=msg)
+
+
+def test_matches_nanmedian_on_random_matrices_odd_and_even_counts():
+    rng = np.random.default_rng(20260925)
+    for trial in range(50):
+        nR, width = rng.integers(1, 12), rng.integers(1, 15)
+        values = rng.uniform(-500.0, 500.0, size=(nR, width))
+        keep = rng.random((nR, width)) > 0.3      # some columns dropped per row -> mixed counts
+        _assert_matches(values, keep, f"trial {trial}, shape {(nR, width)}")
+
+
+def test_a_row_with_no_kept_value_is_nan_like_nanmedian():
+    values = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    keep = np.array([[False, False, False], [True, True, False]])
+    got = av._whole_matrix_nanmedian(values, keep)
+    assert np.isnan(got[0])
+    assert np.isclose(got[1], 4.5)                 # median(4, 5)
+
+
+def test_an_infinite_reading_is_a_real_value_not_dropped_like_nan():
+    """`nanmedian` strips NaN only; +inf is a legitimate, comparable value and can win a median."""
+    values = np.array([[1.0, 2.0, np.inf]])
+    keep = np.array([[True, True, True]])
+    _assert_matches(values, keep, "median(1, 2, inf) must equal the reference")
+    # median of an odd count of 3, sorted [1, 2, inf] -> middle value is 2, not inf and not nan
+    assert av._whole_matrix_nanmedian(values, keep)[0] == 2.0
+
+
+def test_even_count_averaging_matches_including_the_inf_minus_inf_case():
+    # sorted [-inf, -inf, inf, inf]: two middle values are -inf and inf -> (-inf + inf) / 2 = nan
+    values = np.array([[np.inf, -np.inf, -np.inf, np.inf]])
+    keep = np.array([[True, True, True, True]])
+    _assert_matches(values, keep, "the straddling +inf/-inf case must equal the reference")
+    got = av._whole_matrix_nanmedian(values, keep)[0]
+    ref = _reference(values, keep)[0]
+    assert np.isnan(got) and np.isnan(ref), (got, ref)
+
+    # sorted [1, 2, inf, inf]: two middle values are 2 and inf -> ordinary finite/infinite average
+    values2 = np.array([[np.inf, 2.0, 1.0, np.inf]])
+    keep2 = np.array([[True, True, True, True]])
+    _assert_matches(values2, keep2)
+    assert np.isinf(av._whole_matrix_nanmedian(values2, keep2)[0])
+
+
+def test_a_cap_wider_than_the_pieces_on_offer_still_matches():
+    """`keep` marks fewer True entries than the row's width -- the short-row case a real grid cell
+    hits whenever a rating's own eligible pieces run out before the requested length's cap."""
+    values = np.array([[10.0, 20.0, 30.0, 40.0, 50.0]])
+    keep = np.array([[True, True, False, False, False]])   # only 2 of 5 columns eligible
+    _assert_matches(values, keep)
+    assert np.isclose(av._whole_matrix_nanmedian(values, keep)[0], 15.0)
+
+
+def test_empty_matrix_is_safe():
+    values = np.zeros((0, 4))
+    keep = np.zeros((0, 4), dtype=bool)
+    got = av._whole_matrix_nanmedian(values, keep)
+    assert got.shape == (0,)
+
+    values2 = np.zeros((3, 0))
+    keep2 = np.zeros((3, 0), dtype=bool)
+    got2 = av._whole_matrix_nanmedian(values2, keep2)
+    assert got2.shape == (3,)
+    assert np.all(np.isnan(got2))
+
+
+def test_live_lsb_band_medians_by_length_unchanged_with_infinite_and_all_excluded_readings():
+    """The two call sites inside `live_lsb_band_medians_by_length` (voltage-trace and
+    device-spectrum branches) must still agree with a hand-built reference that calls the OLD
+    `nanmedian` reduction directly on the same intermediate arrays, on a case built to exercise the
+    edge conditions above: an infinite reading and a rating whose nearest piece is excluded.
+    """
+    CENTERS = [8.5, 12.5]
+    T0 = 1_700_000_000.0
+    cache = {
+        "channel": "TEST", "centers_hz": CENTERS, "window_s": 3.0, "band_half_hz": 2.5,
+        "td": {"t": [T0, T0 + 3.0, T0 + 6.0], "ok": [True, True, True],
+               "lsb": [[10.0, np.inf], [1000.0, 20.0], [30.0, 40.0]],
+               "saturated": [False, False, False], "source": ["c"] * 3,
+               "n_finite_s": [3.0, 3.0, 3.0]},
+        "psd": {"t": [], "lsb": [], "calibrated": [], "source": []},
+        "n_td_windows": 3, "n_psd_windows": 0,
+    }
+    got, info, _stats = av.live_lsb_band_medians_by_length(
+        [T0], cache, tol_s=1800.0, lengths_s=[6.0], centers_hz=CENTERS,
+        band_ceilings=[500.0, np.inf], allow_window_reuse=False)
+    # Band 0: nearest two clean pieces after excluding 1000 are 10 and 30 -> median 20.
+    assert np.isclose(got[6.0][0, 0], 20.0), got[6.0][0, 0]
+    # Band 1 has no ceiling: nearest two are inf and 20 -> median(inf, 20) = (inf + 20) / 2 = inf.
+    assert np.isinf(got[6.0][0, 1]), got[6.0][0, 1]
+    assert info["n_chunk_band_values_excluded"] == 1

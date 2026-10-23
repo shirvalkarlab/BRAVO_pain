@@ -9,17 +9,9 @@
  */
 import "@testing-library/jest-dom";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 import { HomeScheduleSection } from "./CurrentMapScheduleCard";
 import response from "./__fixtures__/rcs08_stim_optimizer_2026-09-25.json";
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
+import { wrap } from "testUtils/render";
 
 const ABOVE = {
   amp_left_mA: 3.0, amp_right_mA: 4.8, above_ceiling: true, sides_above_ceiling: ["Right"],

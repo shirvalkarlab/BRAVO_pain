@@ -48,6 +48,7 @@ import { contactSortKey } from "views/Reports/Biomarkers/contactOrder";
 
 import { num, fmtHz, fmtMa, contactLabel, EMPTY } from "./stimFormat";
 import { T, TYPE, HEAD, SMALL, MONO as MONO_BASE, SUBHEAD, WEIGHT, WRAP, HAIRLINE, Mark, SizedFold } from "./typeScale";
+import { fmtDateTime } from "views/Reports/dates";
 
 const MONO = { ...MONO_BASE, fontSize: TYPE.body };
 
@@ -344,7 +345,7 @@ function SensingEvidenceTable({ closedLoop }) {
 
       {pr && pr.available && (
         <MDTypography variant="caption" component="div" sx={{ fontSize: TYPE.body, color: T.ink2, mt: 1 }}>
-          {`Rises with pain: read off the Biomarkers grid for the ${pr.score_label || pr.score || "pain"} score${pr.stored_utc ? `, built ${new Date(pr.stored_utc).toLocaleString()}` : ""}.`}
+          {`Rises with pain: read off the Biomarkers grid for the ${pr.score_label || pr.score || "pain"} score${pr.stored_utc ? `, built ${fmtDateTime(pr.stored_utc)}` : ""}.`}
         </MDTypography>
       )}
       {pr && pr.available && (

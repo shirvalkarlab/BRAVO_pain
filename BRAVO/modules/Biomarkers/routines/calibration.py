@@ -344,3 +344,28 @@ def panel_payload(participant, *, deployed_k, deployed_bridge_ratio, deployed_br
             "deployed": {"k": deployed_k, "bridge_ratio": deployed_bridge_ratio,
                          "bridge_lsb_per_device_uv2": deployed_bridge},
             "transform": transform, "bridge": bridge}
+
+
+def threshold_check(rows):
+    """The threshold band-power streams against the PSD->LSB route (decision 447): for each stream,
+    its measured LSB (median of the readings as the device wrote them) beside the LSB the bridge
+    predicts from each device spectrum of the same export on the same contact pair at the stream's
+    sensing frequency. Per source: n, the median of measured / predicted and its 10th-90th
+    percentiles. Nothing is fitted. ``rows``: dicts with ``measured_lsb`` and ``predicted_lsb``
+    ({source: lsb}), passed through for the figure."""
+    rows = list(rows or [])
+    if not rows:
+        return {"available": False, "reason": "no threshold band-power streams are stored for this participant"}
+    sources = sorted({s for r in rows for s in (r.get("predicted_lsb") or {})})
+    by_source = {}
+    for s in sources:
+        ratios = np.asarray([r["measured_lsb"] / r["predicted_lsb"][s] for r in rows
+                             if s in (r.get("predicted_lsb") or {})
+                             and np.isfinite(r.get("measured_lsb", np.nan))
+                             and np.isfinite(r["predicted_lsb"][s]) and r["predicted_lsb"][s] > 0], dtype=float)
+        by_source[s] = {"n": int(ratios.size),
+                        "median_ratio": _finite(float(np.median(ratios))) if ratios.size else None,
+                        "ratio_p10_p90": ([_finite(float(v)) for v in np.percentile(ratios, [10, 90])]
+                                          if ratios.size else None)}
+    return {"available": True, "n_streams": len(rows), "by_source": by_source,
+            "rows": [{k: (_finite(v) if isinstance(v, float) else v) for k, v in r.items()} for r in rows]}

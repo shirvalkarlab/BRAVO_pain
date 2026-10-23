@@ -36,6 +36,16 @@ else
   echo "[stability-precompute] stability_precompute_loop.sh not found at $BRIDGE — skipping"
 fi
 
+# --- saved band answers worked out again when the data change (DEV ONLY, decision 435) ---
+# Every 10 minutes: for each participant whose recordings, pain reports, clinic sheets, settings
+# files or code changed, replay the band requests the pages sent so their answers are saved before
+# anyone asks. Best effort, like the two above. Turn it off with SAVED_ANSWERS_REFRESH=0.
+if [ -f "$BRIDGE/saved_answers_refresh_loop.sh" ]; then
+  nohup bash "$BRIDGE/saved_answers_refresh_loop.sh" \
+      >> "$BRIDGE/logs/saved_answers_refresh.boot.log" 2>&1 &
+  echo "[saved-answers-refresh] loop launched (pid $!)"
+fi
+
 # --- normal bravo-server startup (mirrors docker-compose.yml base command) ---
 env >> /etc/environment
 service nginx start

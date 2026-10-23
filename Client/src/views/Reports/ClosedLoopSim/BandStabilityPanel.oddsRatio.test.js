@@ -7,7 +7,11 @@
  *     chosen on the grid, says where the numbers are instead.
  * (b) The card says how many pain reports had samples on both sides of a change of current, and
  *     that each is now counted once, in the state of its first sample.
+ *
+ * Merged here 2026-10-05: BandStabilityPanel.measuredWhen.test.js. Each merged file's tests sit in
+ * a describe block named after it, with its reason above it.
  */
+
 import fs from "fs";
 import path from "path";
 import React from "react";
@@ -15,7 +19,6 @@ import { render as rtlRender } from "@testing-library/react";
 import { ThemeProvider } from "@mui/material/styles";
 import theme from "assets/theme";
 import { PlatformContextProvider } from "context";
-
 import BandStabilityPanel from "./BandStabilityPanel";
 import { fmtOddsRatioWithInterval } from "./deployFormat";
 
@@ -84,5 +87,39 @@ describe("the band identity card's per-state row", () => {
     expect(src).toMatch(/fmtOddsRatioWithInterval\(ev\.or_by_era\[t\]/);
     expect(src).toMatch(/this band's own, with intervals, are on the "\s*\+ "stability card above"/);
     expect(src).not.toMatch(/label="Odds ratio per era"/);
+  });
+});
+
+/* From BandStabilityPanel.measuredWhen.test.js.
+ * P-03 (June audit): the stability result did not say when it was measured. The panel now prints the
+ * date its recordings, settings and pain reports were assembled, read from the report's own freshness
+ * line, and only when the test actually ran: a "not tested" answer has nothing to date.
+ */
+describe("from BandStabilityPanel.measuredWhen", () => {
+  const text = (ui) => rtlRender(
+    <ThemeProvider theme={theme}>
+      <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
+    </ThemeProvider>,
+  ).container.textContent;
+
+  const RAN = { answer: "cannot tell", test_ran: true, center_hz: 24.5, electrode: "L 1-3+" };
+  const STATUS = { last_built_utc: "2026-09-25T20:15:00Z" };
+
+  describe("the stability panel says when its answer was measured", () => {
+    it("prints the assembly date when the test ran", () => {
+      expect(text(<BandStabilityPanel stability={RAN} cacheStatus={STATUS} />))
+        // "Based on" became "Measured on" in the redesign of 2026-09-26 (SPEC section 5.2 item 6).
+        .toMatch(/Measured on the recordings, settings and pain reports assembled .*2026/);
+    });
+
+    it("prints no date when the test did not run", () => {
+      expect(text(<BandStabilityPanel stability={{ ...RAN, test_ran: false, answer: "not tested" }} cacheStatus={STATUS} />))
+        .not.toMatch(/assembled/);
+    });
+
+    it("prints no date when the report carries no build time", () => {
+      expect(text(<BandStabilityPanel stability={RAN} cacheStatus={{}} />)).not.toMatch(/assembled/);
+      expect(text(<BandStabilityPanel stability={RAN} />)).not.toMatch(/assembled/);
+    });
   });
 });
