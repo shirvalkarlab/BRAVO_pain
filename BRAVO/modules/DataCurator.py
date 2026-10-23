@@ -125,13 +125,18 @@ def clock_anchor_tables(owner):
     return out
 
 
-def loadPerceptJSON(source_file, table=None, table_from=None):
+def loadPerceptJSON(source_file, table=None, table_from=None, settings_only=False):
     """A stored Percept export with EVERY time on the tablet's clock (the PI, 2026-09-26: no time
     from the implanted device's clock). THE ONE WAY a Percept export is read: every device-clock
     field is converted by `TabletClock.convert_export` against the device's anchor table, and the
     file on disk is never changed. A caller reading many exports of one device builds the table
     once (`clock_anchor_table`) and passes it; the ingest passes `table_from`, which builds the
-    table from the export itself; otherwise it is read here."""
+    table from the export itself; otherwise it is read here. ``settings_only``
+    retains the programmer boundaries, device clock anchor and groups/stimulation
+    before conversion, avoiding a walk through unrelated sample arrays. Retained
+    fields still use this same canonical clock conversion and field paths."""
+    if type(settings_only) is not bool:
+        raise ValueError("settings_only must be a boolean")
     JSON = json.loads(loadCacheFile(source_file))
     if isinstance(JSON, dict) and "SessionDate" in JSON and "DeviceInformation" in JSON:
         if table is None and table_from is not None:
@@ -139,7 +144,11 @@ def loadPerceptJSON(source_file, table=None, table_from=None):
         if table is None:
             dev = getattr(source_file, "device", "") or None
             table = clock_anchor_table(device_uid=dev, owner=None if dev else getattr(source_file, "owner", None))
+        if settings_only:
+            JSON = {key: JSON[key] for key in ("SessionDate", "SessionEndDate", "DeviceInformation", "Groups", "Stimulation") if key in JSON}
         TabletClock.convert_export(JSON, table)
+    elif settings_only:
+        raise ValueError("Settings projection requires a Percept session export")
     return JSON
 
 

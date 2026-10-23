@@ -1,4 +1,4 @@
-import {escapeText, eventTimeLabel, homeTiming, localTime, settingsSummary} from './data';
+import {escapeText, tooltipText, eventTimeLabel, homeTiming, localTime, settingsSummary} from './data';
 import {displayTarget} from 'utils/participantTargets';
 import {contactConfiguration} from './contactSchematic';
 import {groupState,compareGroupStates} from './neuralGroupState';
@@ -82,7 +82,7 @@ export function neuralPlot(events, metric, range, participant, unknownIntervals 
       states.set(state.label,state); categoryValue=state.label;
     }
     const programs=metric.categorical?[{id:'group',label:metric.label,side:'group',rows:{}}]:sidePrograms;
-    const tooltip = `${escapeText(eventTimeLabel(event))}<br>${escapeText(event.label)}<br>${settingsSummary(event.settings,participant)}<br>${homeTiming(event).replace('survey may precede change','observation time does not establish activation')}<br>Click for recorded settings`;
+    const tooltip = `${tooltipText(eventTimeLabel(event))}<br>${tooltipText(event.label)}<br>${settingsSummary(event.settings,participant)}<br>${homeTiming(event, undefined, 'observation time does not establish activation')}<br>Click for recorded settings`;
     for (const program of programs) {
       const result = metric.categorical?{category:categoryValue}:parameterValue(metric,program);
       const category = result.category || null;

@@ -1,26 +1,32 @@
 import {Alert,Box,Card,Stack} from '@mui/material';
 import MDTypography from 'components/MDTypography';
 import ComparisonChart from './ComparisonChart';
-import {comparisonCoverage,finalizedProgram,stimulationPlot,stimulationDetailRows,topPrograms} from './comparisonData';
+import {finalizedProgram,stimulationPlot,stimulationDetailRows,topPrograms,programRankingLabel,programMetricCoverage,programSourceCoverage,reviewedReferenceTiming} from './comparisonData';
 
 export default function StimulationPrograms({comparison,metrics,participant}) {
-  if(!comparison?.available) return <Alert severity="info">{comparison?.message || 'Stimulation-program comparisons are not available for this participant.'}</Alert>;
+  if(!comparison?.available||comparison.provenance?.calendar_verified===false) return <Alert severity="info">{comparison?.message || (comparison?.provenance?.calendar_verified===false?'A verified stored testing calendar is required before program rankings can be shown.':'Stimulation-program comparisons are not available for this participant.')}</Alert>;
   const reference=comparison.finalized_open_loop,currentReference=comparison.current_closed_loop;
   return <Stack spacing={3}>
-    <Alert severity="info">Stage 1 onward · Up to three open-loop and three closed-loop programs per metric, each with at least five nonmissing surveys, ordered by lowest observed median. These are descriptive comparisons; differences do not establish a treatment effect.</Alert>
-    {reference?.available&&<MDTypography variant="body2">Finalized OL is always shown in the fourth open-loop position, including when it is also among the top three or has fewer than five surveys. Reference: {reference.source?.url?<a href={reference.source.url} target="_blank" rel="noreferrer">{reference.source.title}</a>:'reviewed home-program settings'}{reference.source?.range?` · ${reference.source.range}`:''}.</MDTypography>}
-    {currentReference?.available&&<MDTypography variant="body2">Current CL is always shown in the fourth closed-loop position, including when it has fewer than five surveys. Reference: {currentReference.source?.url?<a href={currentReference.source.url} target="_blank" rel="noreferrer">{currentReference.source.title}</a>:'reviewed current home-program settings'}{currentReference.source?.range?` · ${currentReference.source.range}`:''}.</MDTypography>}
-    <MDTypography variant="body2">{comparisonCoverage(comparison.provenance)}</MDTypography>
+    <Alert severity="info">Stage 1 onward · Up to three open-loop and three closed-loop programs per metric, each with at least five eligible nonmissing surveys. Ranking follows the metric’s favorable direction: lower pain scores or higher relief scores. These are descriptive comparisons; differences do not establish a treatment effect.</Alert>
+    <MDTypography variant="body2">Eligible surveys have a recorded finite value and valid time outside documented testing days and within the reviewed comparison period. Eligible surveys without a verified program are counted but do not enter program comparisons.</MDTypography>
+    {comparison.message&&<MDTypography variant="body2">{comparison.message}</MDTypography>}
+    {reference?.available&&<MDTypography variant="body2">Finalized OL is always shown in the fourth open-loop position, including when it is also among the top three or has fewer than five surveys. Reference: {reference.source?.url?<a href={reference.source.url} target="_blank" rel="noreferrer">{reference.source.title}</a>:'reviewed home-program settings'}{reference.source?.range?` · ${reference.source.range}`:''}. {reviewedReferenceTiming(reference)}</MDTypography>}
+    {currentReference?.available&&<MDTypography variant="body2">Reviewed CL reference is shown in the fourth closed-loop position, including when it has fewer than five surveys. Reference: {currentReference.source?.url?<a href={currentReference.source.url} target="_blank" rel="noreferrer">{currentReference.source.title}</a>:'reviewed home-program settings'}{currentReference.source?.range?` · ${currentReference.source.range}`:''}. {reviewedReferenceTiming(currentReference)}</MDTypography>}
+    <Stack spacing={1} sx={{minWidth:0,overflowWrap:'anywhere'}} aria-label="Program comparison source coverage">{programSourceCoverage(comparison.provenance).map((line,index)=><MDTypography key={index} variant="body2">{line}</MDTypography>)}</Stack>
     {!metrics.length && <Alert severity="info">Select a clinical metric above to compare its stimulation programs.</Alert>}
     {metrics.map(selected=>{
       const metric=comparison.metrics.find(item=>item.key===selected.key);
       const open=metric?topPrograms(metric,'open_loop'):[],closed=metric?topPrograms(metric,'closed_loop'):[];
       const finalized=metric?finalizedProgram(metric,reference):null;
-      const current=metric?finalizedProgram(metric,currentReference,'closed_loop','Current CL'):null;
+      const current=metric?finalizedProgram(metric,currentReference,'closed_loop','Reviewed CL reference'):null;
       const plots=metric?['open_loop','closed_loop'].map(mode=>({mode,label:mode==='open_loop'?'Open loop':'Closed loop',plot:stimulationPlot(metric,open,closed,reference,currentReference,{mode,participant})})).filter(item=>item.plot.programs.length):[];
       const offReference=plots[0]?.plot.offReference;
       return <Card key={selected.key} sx={{p:{xs:1.5,sm:3},minWidth:0}}><MDTypography variant="h4">{selected.label}</MDTypography>
         {!metric?<Alert severity="info">No eligible comparison data for this metric.</Alert>:<>
+          <MDTypography variant="body2">{programRankingLabel(metric)}. Equal medians retain the source ranking order.</MDTypography>
+          <Box component="section" aria-label={`${selected.label} eligibility and exclusions`} sx={{mt:1,mb:2,minWidth:0,overflowWrap:'anywhere'}}>
+            <ul style={{margin:0,paddingLeft:20,fontSize:14}}>{programMetricCoverage(metric).map((line,index)=><li key={index}>{line}</li>)}</ul>
+          </Box>
           {!open.length&&<Alert severity="info" sx={{mt:2}}>No open loop program has five eligible surveys for this metric.</Alert>}
           {!closed.length&&<Alert severity="info" sx={{mt:2}}>No closed loop program has five eligible surveys for this metric.</Alert>}
           {(open.length+closed.length>0||finalized||current)&&<>

@@ -847,3 +847,17 @@ def test_tomorrow_session_excludes_tonight_margin_without_advancing_home_anchor(
     _, excluded, anchors, _ = p.automatic_observations(context, rows, calendar, now)
     assert excluded == ['2026-01-07', '2026-01-22']
     assert anchors == ['2026-01-07']
+
+
+def test_reviewed_program_mode_evidence_is_private_input_only_and_copy_isolated(monkeypatch,tmp_path):
+    path=tmp_path/'context.json';monkeypatch.setenv('BRAVO_ADITYA_PRESENTATION_METADATA',str(path))
+    annotation={'reviewed':True,'source_id':'synthetic-source','source_hash':'h'*64,
+                'raw_sha256':'a'*64,'pdf_sha256':'b'*64,'phase':'Initial','side':'left','mode':'SENSING_ONLY'}
+    path.write_text(json.dumps({'schema_version':1,'participants':{'p':{'reviewed':True,'revision':'v1',
+        'program_mode_evidence':[annotation],'secret':'not-allowed'}}}))
+    context=p.read_context('p')
+    assert context['program_mode_evidence']==[annotation] and 'secret'not in context
+    context['program_mode_evidence'][0]['mode']='mutated'
+    assert p.read_context('p')['program_mode_evidence'][0]['mode']=='SENSING_ONLY'
+    response=p.pain_timeline({},p.read_context('p'))
+    assert 'program_mode_evidence'not in response and 'pdf_sha256'not in json.dumps(response)

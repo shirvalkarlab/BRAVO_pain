@@ -369,7 +369,7 @@ def status_for_page(kind, participant_uid, signature, *, what_it_means, root=Non
             "writer": stamp.get("writer"), "what_it_means": what_it_means, "note": None}
 
 
-def load_newest(kind, participant_uid, *, consumer=None, root=None, match=None):
+def load_newest(kind, participant_uid, *, consumer=None, root=None, match=None, discard_invalid=True):
     """`(payload, stamp)` for the newest entry of this kind and participant, or `(None, None)`.
 
     FOR A READER THAT CANNOT REBUILD THE WRITER'S KEY. The amplitude-effect table is keyed by the
@@ -377,7 +377,9 @@ def load_newest(kind, participant_uid, *, consumer=None, root=None, match=None):
     that module (the dependency runs one way). So it asks for the newest entry by name and gets
     the sidecar back with it, so it can say WHICH inputs the table describes and whether they are
     the current ones. The sidecar names the payload file and its format; the consumer refusal
-    applies exactly as in `load`. An entry whose payload is missing or unreadable is discarded and
+    applies exactly as in `load`. With ``discard_invalid=False`` an unavailable or
+    unreadable payload is reported without removing the entry, for read-only views.
+    By default an entry whose payload is missing or unreadable is discarded and
     returned as `(None, stamp)`, so the caller can say that an entry existed and could not be
     read, which is not the same as no entry having been written.
     """
@@ -395,7 +397,8 @@ def load_newest(kind, participant_uid, *, consumer=None, root=None, match=None):
     path = stem + _EXT_FOR_FORMAT[fmt]
     if not os.path.exists(path):
         _bump("unreadable")
-        _discard_entry(stem, "its sidecar names a payload file that does not exist")
+        if discard_invalid:
+            _discard_entry(stem, "its sidecar names a payload file that does not exist")
         return None, stamp
     if consumer is not None:
         from . import provenance
@@ -415,7 +418,8 @@ def load_newest(kind, participant_uid, *, consumer=None, root=None, match=None):
         return None, stamp
     except Exception as exc:                                    # noqa: BLE001
         _bump("unreadable")
-        _discard_entry(stem, repr(exc))
+        if discard_invalid:
+            _discard_entry(stem, repr(exc))
         return None, stamp
     _bump("hits")
     return payload, stamp

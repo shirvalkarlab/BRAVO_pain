@@ -45,7 +45,7 @@ test('observed and median traces retain units, escaped labels, gap breaks and pr
   expect(median).toMatchObject({mode:'lines',connectgaps:false,y:[10,null,10],name:'5-point rolling median'});
   expect(observed.marker.color).toEqual(['#bbb','#ccc','#ccc']);
   expect(observed.customdata[0]).toContain('Stage 1'); expect(observed.customdata[0]).toContain('Daily summary');
-  expect(median.customdata[0]).toContain('five observed daily values');
+  expect(median.customdata[0].replace(/<br>/g,' ')).toContain('five observed daily values');
   expect(observed.hovertemplate).toContain('HRV &lt;sleep&gt;');expect(observed.hovertemplate).toContain('ms &amp; units');
   expect(median.hovertemplate).toContain('Rolling median');
   const simple=ouraTraces(metric,range,[],false,false);
@@ -72,10 +72,10 @@ test('HR and HRV retain every timed reading, exact units and source labels; the 
   const raw=ouraTraces(metric,range,phases,false,true),withDailyMedian=ouraTraces(metric,range,phases,true,true);
   expect(withDailyMedian).toHaveLength(2);expect(withDailyMedian[0]).toEqual(raw[0]);expect(withDailyMedian[1].y).toEqual([67.5,null,67.5]);expect(raw).toHaveLength(1);
   expect(raw[0]).toMatchObject({type:'scattergl',mode:'markers',connectgaps:false,x:['2026-08-02 11:00:00','2026-08-02 11:05:00','2026-08-02 11:10:00'],y:[60,null,75]});
-  expect(raw[0].customdata).toEqual([['','Awake &lt;source&gt;',NO_VERIFIED_HOME_ASSIGNMENT],['','Recorded',''],['Stage &lt;2&gt;','Sleep &amp; source',NO_VERIFIED_HOME_ASSIGNMENT]]);
+  expect(raw[0].customdata.map(row=>row.map(text=>text.replace(/<br>/g,' ')))).toEqual([['','Awake &lt;source&gt;',NO_VERIFIED_HOME_ASSIGNMENT],['','Recorded',''],['Stage &lt;2&gt;','Sleep &amp; source',NO_VERIFIED_HOME_ASSIGNMENT]]);
   expect(raw[0].hovertemplate).toContain('bpm');expect(raw[0].hovertemplate).toContain('Heart rate &lt;all&gt;');expect(raw[0].hovertemplate).toContain('Pacific');
   const hrv=sampleTraces({...metric,key:'hrv',label:'HRV',unit:'ms',points:[{time:points[0].time,value:50},{time:points[2].time+900,value:80}]},range,[],false);
-  expect(hrv[0].mode).toBe('markers');expect(hrv[0].y).toEqual([50,null,80]);expect(hrv[0].customdata).toEqual([['','',NO_VERIFIED_HOME_ASSIGNMENT],['','',''],['','',NO_VERIFIED_HOME_ASSIGNMENT]]);expect(hrv[0].hovertemplate).toContain('ms');
+  expect(hrv[0].mode).toBe('markers');expect(hrv[0].y).toEqual([50,null,80]);expect(hrv[0].customdata.map(row=>row.map(text=>text.replace(/<br>/g,' ')))).toEqual([['','',NO_VERIFIED_HOME_ASSIGNMENT],['','',''],['','',NO_VERIFIED_HOME_ASSIGNMENT]]);expect(hrv[0].hovertemplate).toContain('ms');
 });
 
  test('timed settings respect prior records, unknown intervals, and day-precision uncertainty without altering values',()=>{
@@ -85,8 +85,8 @@ test('HR and HRV retain every timed reading, exact units and source labels; the 
   const unknown=[{start:time+600,end:null,reason:'Reviewed <gap>'}];
   const traces=ouraTraces(metric,{start:'2026-08-02',end:'2026-08-02'},[],false,true,homes,unknown);
   expect(traces[0].y).toEqual([55,60,65]);
-  expect(traces[0].customdata[0][2]).toBe(NO_VERIFIED_HOME_ASSIGNMENT);
-  expect(traces[0].customdata[1][2]).toContain('reading may precede change');
+  expect(traces[0].customdata[0][2].replace(/<br>/g,' ')).toBe(NO_VERIFIED_HOME_ASSIGNMENT);
+  expect(traces[0].customdata[1][2].replace(/<br>/g,' ')).toContain('reading may precede change');
   expect(traces[0].customdata[2][2]).toContain('Reviewed &lt;gap&gt;');
 });
 

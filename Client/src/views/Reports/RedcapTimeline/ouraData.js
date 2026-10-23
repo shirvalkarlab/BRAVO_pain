@@ -1,4 +1,4 @@
-import {escapeText, homeTiming, localTime, rollingMedian, settingsSummary} from './data';
+import {tooltipText, homeTiming, localTime, rollingMedian, settingsSummary} from './data';
 import {NO_VERIFIED_HOME_ASSIGNMENT} from './settingDisplay';
 
 export const OURA_DEFAULTS = ['steps', 'heart_rate', 'hrv', 'total_calories', 'sleep_duration', 'sleep_total'];
@@ -45,8 +45,8 @@ export function ouraTraces(metric, range, phases, smooth, markers, homes = [], u
     name: trend ? '5-point rolling median' : metric.label, x: series.map(p => p.day), y: series.map(p => p.value),
     connectgaps: false, line: {color: trend ? '#A84747' : '#356E9B', width: trend ? 2.5 : 1.5},
     marker: {size: 6, color: series.map(p => phaseFor(p.day)?.color || '#356E9B')},
-    customdata: series.map(p => `${escapeText(phaseFor(p.day)?.label || '')}${trend ? '<br>Centered median of up to five observed daily values' : ''}<br>Daily summary; stimulation may change within this Oura day. Recorded program snapshots are in the Stim Program Settings tab; daily totals are not assigned to an active program.`),
-    hovertemplate: `<b>${escapeText(trend ? 'Rolling median' : metric.label)}: %{y:.2f} ${escapeText(metric.unit)}</b><br>%{x} · Oura day<br>%{customdata}<extra></extra>`});
+    customdata: series.map(p => `${tooltipText(phaseFor(p.day)?.label || '')}${trend ? `<br>${tooltipText('Centered median of up to five observed daily values')}` : ''}<br>${tooltipText('Daily summary; stimulation may change within this Oura day. Recorded program snapshots are in the Stim Program Settings tab; daily totals are not assigned to an active program.')}`),
+    hovertemplate: `<b>${tooltipText(trend ? 'Rolling median' : metric.label)}: %{y:.2f} ${tooltipText(metric.unit)}</b><br>%{x} · Oura day<br>%{customdata}<extra></extra>`});
   const traces = [makeTrace(dailySeries(ouraPoints(eligible, range)), false)];
   if (smooth) traces.push(makeTrace(dailySeries(ouraPoints(fivePointMedian(eligible), range)), true));
   return traces;
@@ -75,14 +75,14 @@ export function sampleHomeContext(homes, unknownIntervals) {
   return point => {
     if (!Number.isFinite(point.value)) return '';
     const unknown = unknownIntervals.find(interval => point.time >= interval.start && (interval.end === null || point.time < interval.end));
-    if (unknown) return `${NO_VERIFIED_HOME_ASSIGNMENT}<br>${escapeText(unknown.reason)}`;
+    if (unknown) return `${tooltipText(NO_VERIFIED_HOME_ASSIGNMENT)}<br>${tooltipText(unknown.reason)}`;
     let lo = 0, hi = sorted.length;
     while (lo < hi) {const mid = (lo + hi) >> 1; if (sorted[mid].time <= point.time) lo = mid + 1; else hi = mid;}
-    if (!lo) return NO_VERIFIED_HOME_ASSIGNMENT;
+    if (!lo) return tooltipText(NO_VERIFIED_HOME_ASSIGNMENT);
     const home = sorted[lo-1];
     const day = home.time_precision === 'day' ? point.day || localTime(point.time).slice(0,10) : '';
     const key = `${lo}:${day}`;
-    if (!cache.has(key)) cache.set(key, `Home program context<br>${summaries[lo-1]}<br>${homeTiming(home, point).replace('survey may precede change', 'reading may precede change')}`);
+    if (!cache.has(key)) cache.set(key, `Home program context<br>${summaries[lo-1]}<br>${homeTiming(home, point, 'reading may precede change')}`);
     return cache.get(key);
   };
 }
@@ -95,8 +95,8 @@ export function sampleTraces(metric, range, phases, markers, smooth = false, hom
   const makeTrace = (series, trend) => ({type: 'scattergl', mode: trend ? 'lines' : 'markers', name: trend ? '5-point rolling median' : metric.label,
     x: series.map(p => localTime(p.time)), y: series.map(p => p.value), connectgaps: false,
     line: {color: trend ? '#A84747' : '#356E9B', width: trend ? 2 : 1}, marker: {size: 3, color: '#356E9B'},
-    customdata: series.map(p => [escapeText(phaseFor(p.time)?.label || ''), escapeText(p.source || ''), homeContext(p)]),
-    hovertemplate: `<b>${escapeText(trend ? '5-point rolling median' : metric.label)}: %{y:.2f} ${escapeText(metric.unit)}</b><br>%{x} Pacific<br>%{customdata[0]}<br>%{customdata[1]}<br>%{customdata[2]}${trend ? '<br>Centered median of up to five recorded readings; settings describe the center timestamp.' : ''}<extra></extra>`});
+    customdata: series.map(p => [tooltipText(phaseFor(p.time)?.label || ''), tooltipText(p.source || ''), homeContext(p)]),
+    hovertemplate: `<b>${tooltipText(trend ? '5-point rolling median' : metric.label)}: %{y:.2f} ${tooltipText(metric.unit)}</b><br>%{x} Pacific<br>%{customdata[0]}<br>%{customdata[1]}<br>%{customdata[2]}${trend ? `<br>${tooltipText('Centered median of up to five recorded readings; settings describe the center timestamp.')}` : ''}<extra></extra>`});
   const traces = [makeTrace(series, false)];
   if (smooth) {
     const medians = new Map(fivePointMedian(metric.points.filter(p => Number.isFinite(p.time))).map(p => [p.time,p.value]));

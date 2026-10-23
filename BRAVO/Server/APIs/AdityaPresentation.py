@@ -4,6 +4,9 @@ import hashlib
 import json
 import os
 import math
+from collections import OrderedDict
+from copy import deepcopy
+from threading import RLock
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -20,6 +23,9 @@ from modules import AdityaPresentation as presentation
 from modules import AdityaNeuralSettings as neural_settings
 
 _log = logging.getLogger(__name__)
+_PROGRAM_FACTS = OrderedDict()
+_PROGRAM_FACTS_LOCK = RLock()
+_PROGRAM_FACTS_LIMIT = 1024
 
 
 def _pain(participant_uid, context):
@@ -43,7 +49,8 @@ def _pain(participant_uid, context):
         result = presentation.pain_timeline({}, context, observations)
         result["message"] = "Participant-specific REDCap mapping is unavailable; no surveys were requested. " + result["message"]
         return result
-    reports = _processed_redcap(_stored_redcap(participant))
+    snapshot = _stored_redcap(participant)
+    reports = _processed_redcap(snapshot)
     if not reports:
         result = presentation.pain_timeline({}, context, observations)
         result["message"] = "Stored REDCap surveys are unavailable; sync is required to import them. " + result["message"]
@@ -52,9 +59,11 @@ def _pain(participant_uid, context):
     # pain_timeline excludes them from REDCap points; scientific analysis defaults stay unchanged.
     reports, mpq_provenance = StandardMPQ.derive(reports, binding)
     canonical = bravo_service.pain_scores_for_participant({"ParticipantId": participant_uid,
-        "RedcapRecordId": record_id, "IncludeClinicSheetRatings": True, "ProcessedPRO": reports})
+        "RedcapRecordId": record_id, "IncludeClinicSheetRatings": True, "ProcessedPRO": reports},
+        discard_invalid_clinic=False)
     canonical = StandardMPQ.display_metrics(canonical, mpq_provenance)
     result = presentation.pain_timeline(canonical, context, observations)
+    result["comparisons"]["stimulation"] = _program_comparisons(participant, snapshot, reports, canonical, context)
     result["provenance"]["standard_mpq"] = mpq_provenance
     result["message"] = "Stored REDCap surveys from completed imports; upstream freshness is not verified by this display. " + result["message"]
     return result
@@ -113,11 +122,149 @@ def _bound_record(binding):
     return str(values[0]) if len({str(value) for value in values}) == 1 else None
 
 
+def _program_inputs(participant):
+    """Database and clock identity only; no report decoding or provider/cache writes."""
+    from Server import models
+    from modules import DataCurator
+    from modules.DecodeCommon import private_clinical_config
+    sources = [source for source in models.SourceFile.find_all(owner=participant)
+               if source.type in ("MedtronicJSON", "DefaultType")]
+    tables = DataCurator.clock_anchor_tables(participant)
+    rows = sorted((_source_identity(source) for source in sources), key=lambda row: row[0])
+    clocks = sorted((str(device), table.digest()) for device, table in tables.items())
+    return sources, tables, [rows, clocks, private_clinical_config.config_digest()]
+
+
+def _source_identity(source):
+    return [str(source.uid), str(source.hashed), str(source.type), str(source.pointer),
+            str(source.device or ""), json.dumps(source.metadata, sort_keys=True, default=str, allow_nan=False)]
+
+
+def _prepared_program_sources(participant, sources, tables, identity, mode_evidence=()):
+    """Bounded process memory of compact facts, never decrypted reports or arrays."""
+    from modules import DataCurator, AdityaProgramComparisons as programs
+    result = []
+    clock_identity = identity[1:]
+    for source in sources:
+        metadata = source.metadata if isinstance(source.metadata, dict) else {}
+        upstream = metadata.get("UpstreamSource")
+        raw_hash = upstream.get("raw_sha256") if isinstance(upstream, dict) else None
+        evidence = [item for item in mode_evidence if isinstance(item, dict)
+                    and item.get("reviewed") is True and item.get("source_id") == str(source.uid)
+                    and item.get("source_hash") == str(source.hashed) and item.get("raw_sha256") == raw_hash]
+        key = hashlib.sha256(json.dumps([str(participant.uid), programs.POLICY_VERSION,
+            _source_identity(source), clock_identity, evidence], sort_keys=True, allow_nan=False).encode()).hexdigest()
+        with _PROGRAM_FACTS_LOCK:
+            cached = _PROGRAM_FACTS.get(key)
+            if cached is not None:
+                _PROGRAM_FACTS.move_to_end(key)
+                result.append(deepcopy(cached))
+                continue
+        # A failed source is not remembered as an empty report. The caller withholds
+        # rankings, and a later read retries the authenticated original bytes.
+        report = DataCurator.loadPerceptJSON(source, table=tables.get(source.device or ""), settings_only=True)
+        fact = programs.prepare_source({"id": str(source.uid), "hash": str(source.hashed), "report": report,
+                                        "raw_sha256": raw_hash, "mode_evidence": evidence})
+        with _PROGRAM_FACTS_LOCK:
+            _PROGRAM_FACTS[key] = deepcopy(fact)
+            while len(_PROGRAM_FACTS) > _PROGRAM_FACTS_LIMIT:
+                _PROGRAM_FACTS.popitem(last=False)
+        result.append(fact)
+    return result
+
+
+def _source_may_match(source, eligible_days):
+    """Skip only proven same-day-ineligible programmer boundaries; unknowns stay in.
+
+    Canonical ingest's SessionEndDate-Final anchor records the unchanged tablet
+    SessionDate and SessionEndDate=anchor_s+final_offset_s. Other/fallback rules
+    cannot prove both boundaries and deliberately receive no date prefilter.
+    """
+    if not eligible_days:
+        return False
+    metadata = source.metadata if isinstance(source.metadata, dict) else {}
+    anchor = metadata.get("ClockAnchor")
+    if not isinstance(anchor, dict):
+        return True
+    if anchor.get("rule") != "SessionEndDate-Final":
+        return True
+    start = presentation.finite(anchor.get("session_date_s"))
+    base = presentation.finite(anchor.get("anchor_s"))
+    offset = presentation.finite(anchor.get("final_offset_s"))
+    if start is None or base is None or offset is None:
+        return True
+    end = base + offset
+    if not math.isfinite(end) or not 0 <= end - start < 8 * 3600:
+        return True
+    try:
+        days = {datetime.fromtimestamp(value, presentation.PACIFIC).date().isoformat() for value in (start, end)}
+    except (OverflowError, OSError, ValueError):
+        return True
+    return bool(days & eligible_days)
+
+
+def _program_comparisons(participant, snapshot, reports, canonical, context):
+    from modules import AdityaProgramComparisons as programs
+    calendar, _ = _clinic_snapshot(participant.uid)
+    metrics = [{**{key: metric[key] for key in ("key", "label", "range")},
+                "direction": "higher" if metric["key"] == "relief" else "lower"}
+               for metric in canonical.get("metrics", [])]
+    surveys = []
+    if snapshot is not None:
+        if len(snapshot["rows"]) != len(reports):
+            raise ValueError("Stored survey row correspondence differs")
+        for (uid, timestamp, _), report in zip(snapshot["rows"], reports):
+            surveys.append({"id": str(uid), "time": timestamp,
+                            "values": {metric["key"]: report.get(metric["key"]) for metric in metrics}})
+    verified = calendar.get("status") == "stored_snapshot"
+    period_start = _program_period_start(participant)
+    facts = []
+    if verified:
+        try:
+            sources, tables, identity = _program_inputs(participant)
+            excluded = set(calendar.get("days", [])) | set(context.get("visit_days", []))
+            eligible_days = {datetime.fromtimestamp(row["time"], presentation.PACIFIC).date().isoformat()
+                for row in surveys if (period_start is None or row["time"] >= period_start)
+                and any(presentation.finite(value) is not None for value in row["values"].values())}
+            selected = [source for source in sources if _source_may_match(source, eligible_days - excluded)]
+            facts = _prepared_program_sources(participant, selected, tables, identity,
+                                            context.get("program_mode_evidence", []))
+        except Exception:
+            # Incomplete source evidence withholds rankings, not unrelated pain data.
+            _log.warning("Program comparison source validation failed")
+            return {"available": False, "metrics": [],
+                    "message": "Original report sources are unavailable; program comparisons are withheld.",
+                    "provenance": {"policy_version": programs.POLICY_VERSION,
+                                   "calendar_verified": True, "source_validation_failed": True}}
+    result = programs.build_comparisons(surveys, metrics, facts, calendar.get("days", []),
+        calendar_verified=verified, preserved_testing_days=context.get("visit_days", []),
+        period_start=period_start)
+    if verified:
+        result["provenance"].update(source_inventory_count=len(sources), source_candidates_count=len(selected))
+    for metric in result.get("metrics", []):
+        metric["key"] = presentation.ALIASES.get(metric["key"], metric["key"])
+    return result
+
+
+def _program_period_start(participant):
+    from modules.DecodeCommon import data_start
+    start = presentation.finite(data_start.data_start_s(participant))
+    return start if start is not None and start > 0 else None
+
+
+def _program_revision(participant):
+    from modules import AdityaProgramComparisons as programs
+    from modules.SurveyForms import StandardMPQ
+    _, _, source_identity = _program_inputs(participant)
+    calendar, identity = _clinic_snapshot(participant.uid)
+    return [programs.POLICY_VERSION, StandardMPQ.RULE, source_identity, calendar, identity]
+
+
 def _clinic_snapshot(participant_uid):
     """Read one committed native clinic product and its completed target receipt."""
     try:
         from modules.StimOptimizer import clinic_pain as clinic
-        payload, stamp = clinic._cache_store.load_newest(clinic.CLINIC_PAIN_KIND, participant_uid)
+        payload, stamp = clinic._cache_store.load_newest(clinic.CLINIC_PAIN_KIND, participant_uid, discard_invalid=False)
         if payload is None:
             return {"status": "unavailable"}, None
         root = Path(os.environ["DATASERVER_PATH"]) / "daily-clinic-receipts"
@@ -230,7 +377,8 @@ def _timeline_revision(kind, participant_uid, context):
         # Database iteration order is not provenance. Encode first so JSON-valued
         # fields need no ordering relation of their own.
         therapy = sorted(json.dumps(row, sort_keys=True, default=str, allow_nan=False) for row in therapy)
-        identity.extend([binding, field_map, stamps, therapy, surveys, data_start.data_start_s(participant)])
+        identity.extend([binding, field_map, stamps, therapy, surveys, data_start.data_start_s(participant),
+                         _program_revision(participant)])
     return hashlib.sha256(json.dumps(identity, sort_keys=True, default=str, allow_nan=False).encode()).hexdigest()
 
 
@@ -274,6 +422,8 @@ class _PresentationView(APIView):
                 if data.get("RequestType") == "Revision":
                     return Response({"revision": revision}, status=200)
                 result = _oura(participant_uid) if self.kind == "oura" else _pain(participant_uid, context)
+                if self.kind == "pain" and _timeline_revision(self.kind, participant_uid, context) != revision:
+                    raise ValueError("Stored comparison inputs changed during read")
                 result["revision"] = revision
         except Exception:
             _log.exception("Aditya presentation source unavailable")

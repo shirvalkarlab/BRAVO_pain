@@ -214,6 +214,44 @@ def test_bootstrap_embeds_modules_no_paths_or_writes():
         assert (b"sys.modules['target_adapter'].execute(request)" in code) == target
 
 
+@pytest.mark.parametrize('manual', [False, True])
+def test_upstream_bootstrap_executes_new_identity_helpers_before_adapter(tmp_path, monkeypatch, manual):
+    original = host.state.read_bounded
+    def code(path, limit):
+        if path.name == 'upstream_target.py':
+            return (b'import native_continuity,masked_identity\n'
+                    b'def execute(request):\n'
+                    b' assert request["upstream"]["masked_device_binding"]["policy"]==masked_identity.POLICY_VERSION\n'
+                    b' return {"withheld_files":0,"helper_policy":masked_identity.POLICY_VERSION}\n')
+        if path.name == 'upstream_source.py':
+            return b'def availability(request): return {"neural":True,"clinic":True}\n'
+        if path.name == 'clinic.py':
+            return b'def refresh_target(request):return {}\n'
+        if path.name == 'providers.py':
+            return b'def refresh_target(request):return {name:{"status":"success"} for name in ("redcap","oura")}\n'
+        return original(path, limit)
+    monkeypatch.setattr(host.state, 'read_bounded', code)
+    config=target_config(tmp_path,monkeypatch)
+    config['target_config'].update(upstream={'masked_device_binding':{'policy':'masked-native-continuity-v1'}},
+                                  upstream_source_status={},clinic={},providers={})
+    docker,calls=docker_fake()
+    def run(command,**kwargs):
+        if 'run' not in command:
+            return docker(command,**kwargs)
+        payload=kwargs['payload']
+        assert payload.index(b"'native_continuity':") < payload.index(b"'masked_identity':") < payload.index(b"'upstream_target':")
+        # Resource-limit construction is covered separately; Darwin cannot
+        # install Linux's 24-GiB address-space cap. Execute exact module/dispatch.
+        prefix=b'import resource\nresource.setrlimit=lambda *args:None\n'
+        child_env={key:value for key,value in os.environ.items() if not key.startswith('COV_CORE')}
+        output=subprocess.run([sys.executable,'-'],input=prefix+payload,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=child_env)
+        assert output.returncode == 0, output.stderr.decode()
+        return output.stdout
+    result=host.target_run(config,run,manual=manual)
+    assert result['streams']=={'neural':{'status':'success'},'clinic':{'status':'success'}}
+    assert result['providers']=={name:{'status':'success'} for name in ('redcap','oura')}
+
+
 def test_checked_success_and_error():
     assert host.checked([sys.executable, '-c', 'print("ok")']) == b'ok\n'
     with pytest.raises(subprocess.CalledProcessError):

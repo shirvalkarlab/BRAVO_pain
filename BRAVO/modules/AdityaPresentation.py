@@ -48,7 +48,8 @@ def read_context(participant_uid):
         return {}
     # Explicit allowlist prevents returning arbitrary private metadata to browsers.
     allowed = ("revision", "phases", "visit_days", "home_intervals", "comparisons",
-               "home_transitions", "home_unknown_intervals", "neural_scope", "neural_observation_scope", "home_continuity")
+               "home_transitions", "home_unknown_intervals", "neural_scope", "neural_observation_scope", "home_continuity",
+               "program_mode_evidence")
     context = {key: deepcopy(entry[key]) for key in allowed if key in entry}
     neural_scope(context)
     neural_observation_scope(context)

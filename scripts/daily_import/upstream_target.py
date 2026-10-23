@@ -4,19 +4,25 @@ Host wrappers own fetch credentials, shared data lock, maintenance checks and
 immutable publication. Incoming JSON never chooses a participant or device.
 """
 import contextlib
+from copy import deepcopy
+from collections import Counter
 from datetime import datetime
 import hashlib
 import hmac
 import json
+import math
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 
 try:
-    from . import state, target_adapter
+    from . import state, target_adapter, masked_identity, native_continuity
 except ImportError:
     import state
     import target_adapter
+    import masked_identity
+    import native_continuity
 
 KIND = 'bravo-upstream-percept'
 
@@ -87,6 +93,140 @@ def merge_provenance(previous, scope, digest, entries):
 
 
 class Runtime(target_adapter.TargetRuntime):
+    def prepare_masked(self, scope, index, key, approved):
+        """Read only: resolve the explicit implant and rooted reference inventory."""
+        from modules import DataCurator
+        from modules.DecodeCommon.private_clinical_config import config_digest
+        masked_identity.validate_key(key)
+        self._masked_admissions = {}
+        self._masked_scope, self._masked_key = scope, key
+        self._masked_raw_cache = {}
+        self._masked_configuration_digest = config_digest()
+        state.digest(self._masked_configuration_digest)
+        if str(self.person.institute_id) != scope['institute_uid']:
+            raise ValueError('masked institute differs')
+        group = set(DataCurator.implant_device_uids(scope['device_uid'], owner_only=self.person.uid))
+        devices = list(self.models.DBSDevice.objects.filter(uid__in=group))
+        if (scope['device_uid'] not in group or not devices
+                or any(str(device.owner_id) != self.person.uid for device in devices)
+                or not any(device.serial_number in approved for device in devices)):
+            raise ValueError('masked implant lacks approved device binding')
+        fixed = [device for device in devices if str(device.uid) == scope['device_uid']]
+        if len(fixed) != 1:
+            raise ValueError('masked native device inventory ambiguous')
+        self._masked_leads = Counter((lead.type, lead.target, lead.channel_count, tuple(lead.channel_names))
+                                     for lead in fixed[0].electrodes.all())
+        if not self._masked_leads:
+            raise ValueError('masked native lead inventory unavailable')
+        rows = []
+        self._masked_rows = {}
+        for raw_sha, row in index.items():
+            if (str(row.device) != scope['device_uid'] or str(row.owner_id) != self.person.uid
+                    or str(row.institute) != scope['institute_uid']):
+                continue
+            identity = (str(row.uid), raw_sha)
+            self._masked_rows[identity] = row
+            rows.append({'source_uid': identity[0], 'raw_sha256': raw_sha,
+                         'admission': (row.metadata or {}).get('MaskedDeviceAdmission'),
+                         'anchor': (row.metadata or {}).get('ClockAnchor')})
+        references = masked_identity.trusted_references(scope, rows, key)
+        # Validate the exact seed now, even when a newer proven descendant exists.
+        seed = self._masked_reference(scope['seed_source_uid'], scope['seed_raw_sha256'])
+        block = seed['DeviceInformation']['Final']['DeviceDateTimeBlockId']
+        ordered = []
+        for item in references:
+            anchor = item['anchor']
+            if (not isinstance(anchor, dict) or anchor.get('block') != block
+                    or type(anchor.get('final_offset_s')) not in (int, float)
+                    or not math.isfinite(anchor['final_offset_s'])
+                    or type(anchor.get('session_date_s')) not in (int, float)
+                    or not math.isfinite(anchor['session_date_s'])):
+                raise ValueError('masked trusted reference clock invalid')
+            ordered.append((anchor['session_date_s'], item))
+        latest = max(value[0] for value in ordered)
+        selected = [item for offset, item in ordered if offset == latest]
+        if len(selected) != 1:
+            raise ValueError('masked latest reference ambiguous')
+        self._masked_reference_item = selected[0]
+
+    def _masked_reference(self, uid, raw_sha):
+        identity = (uid, raw_sha)
+        if identity not in self._masked_raw_cache:
+            row = self._masked_rows[identity]
+            expected = self.raw_root / self.person.uid / (str(row.uid) + '.json')
+            if (row.type != 'MedtronicJSON' or Path(row.pointer) != expected
+                    or (row.metadata or {}).get('Device') != self._masked_scope['device_uid']):
+                raise ValueError('masked reference raw path invalid')
+            state.file_identity(expected)
+            raw = target_adapter.bounded_load(row, self.loader)
+            state.verified_raw(raw, {'sha256': raw_sha, 'bytes': len(raw)})
+            if self.existing(hmac.new(self._masked_key, raw, hashlib.sha256).hexdigest()) != row:
+                raise ValueError('masked reference HMAC binding invalid')
+            self.verify(row, {'sha256': raw_sha, 'bytes': len(raw)})
+            report = strict_report(raw)
+            from modules.MedtronicPercept import TabletClock
+            own = TabletClock.export_anchor(report)
+            stored = (row.metadata or {}).get('ClockAnchor')
+            if own is None or not isinstance(stored, dict) or any(stored.get(key) != value for key, value in own.items()):
+                raise ValueError('masked reference clock provenance differs')
+            self._masked_raw_cache[identity] = report
+        return self._masked_raw_cache[identity]
+
+    def admit_masked(self, raw, entry):
+        """Authenticate this prospective report before the normal decoder may run."""
+        from modules import DataCurator
+        from modules.DecodeCommon.private_clinical_config import config_digest
+        from modules.MedtronicPercept import TabletClock, Session
+        scope = self._masked_scope
+        report = strict_report(raw)
+        serial = masked_identity.masked_serial(report)
+        # The normal folder command uses automatic_deidentification=False.
+        # Match both native phases independently, using precisely that decoder path.
+        for phase in ('Initial', 'Final'):
+            phased = dict(report)
+            phased['DeviceInformation'] = {'Initial': report['DeviceInformation'][phase],
+                                          'Final': report['DeviceInformation'][phase]}
+            phased['LeadConfiguration'] = {'Final': report['LeadConfiguration'][phase]}
+            if DataCurator._masked_ingest_device_uid(phased, self.person.uid, serial) != scope['device_uid']:
+                raise ValueError('masked report has no unique bound native device')
+            descriptor = Session.extractPatientInformation(phased)['Device']
+            leads = descriptor['ConnectedLeads']
+            if Counter((lead['type'], lead['name'], lead['channel_count'], tuple(lead['channel_names'])) for lead in leads) != self._masked_leads:
+                raise ValueError('masked canonical lead descriptors differ')
+            # Match the normal decoder's institute-scoped find_or_create query,
+            # too. Its first-match behavior must not select another owner's row.
+            candidates = [device for device in self.models.DBSDevice.objects.filter(
+                serial_number=serial, type=descriptor['Type'], owner__institute__pk=scope['institute_uid'])
+                if self.models.matchDevice(device, leads)]
+            if (len(candidates) != 1 or str(candidates[0].uid) != scope['device_uid']
+                    or str(candidates[0].owner_id) != self.person.uid):
+                raise ValueError('masked normal decoder device selection ambiguous')
+        stub = SimpleNamespace(metadata={'automatic_deidentification': False}, owner_id=self.person.uid)
+        anchor, table = DataCurator._ingest_clock_table(report, stub, owner_uid=self.person.uid)
+        if anchor is None:
+            raise ValueError('masked report clock anchor unavailable')
+        converted = deepcopy(report)
+        counts = TabletClock.convert_export(converted, table)
+        if counts['left_out'] or counts['left_unconverted']:
+            raise ValueError('masked report has unresolved native clocks')
+        # Use only the newest rooted read. Never search older reads to evade a
+        # conflict or missing overlap with the latest accepted source. At most
+        # the seed and this one report are retained in this invocation's memory.
+        item = self._masked_reference_item
+        reference = self._masked_reference(item['source_uid'], item['raw_sha256'])
+        masked_identity.advancing_session(report, reference)
+        proof = native_continuity.prove_continuity(report, reference)
+        prior = deepcopy(reference)
+        prior_counts = TabletClock.convert_export(prior, table)
+        if prior_counts['left_out'] or prior_counts['left_unconverted']:
+            raise ValueError('masked reference has unresolved native clocks')
+        clock = {'agreement': native_continuity.verify_clock_agreement(converted, prior),
+                 'table_digest': table.digest(), 'configuration_digest': config_digest()}
+        if clock['configuration_digest'] != self._masked_configuration_digest:
+            raise ValueError('masked implant configuration changed during verification')
+        self._masked_admissions[entry['sha256']] = (item, proof, clock)
+        return True
+
     def device_binding(self, approved):
         found = set()
         for device in self.models.DBSDevice.objects.filter(serial_number__in=approved):
@@ -120,7 +260,38 @@ class Runtime(target_adapter.TargetRuntime):
         with self.atomic():
             for row, provenance in updates:
                 row.metadata = {**(row.metadata or {}), 'UpstreamSource': provenance}
+                admission = getattr(self, '_masked_admissions', {}).get(provenance.get('raw_sha256'))
+                if admission:
+                    from modules.DecodeCommon.private_clinical_config import config_digest
+                    if config_digest() != self._masked_configuration_digest:
+                        raise ValueError('masked implant configuration changed before provenance save')
+                    self._verify_masked_row_binding(row)
+                    reference, proof, clock = admission
+                    row.metadata['MaskedDeviceAdmission'] = masked_identity.record(
+                        self._masked_scope, str(row.uid), provenance['raw_sha256'],
+                        reference['source_uid'], reference['raw_sha256'], proof, clock, self._masked_key)
                 row.save(update_fields=['metadata'])
+
+    def _verify_masked_row_binding(self, row):
+        if (str(row.device) != self._masked_scope['device_uid']
+                or (row.metadata or {}).get('Device') != self._masked_scope['device_uid']
+                or str(row.owner_id) != self._masked_scope['participant_uid']
+                or str(row.institute) != self._masked_scope['institute_uid']):
+            raise ValueError('decoded masked implant binding differs')
+
+    def verify_masked_admission(self, row, raw_sha):
+        """Require exact persisted signed proof before a successful batch receipt."""
+        admission = self._masked_admissions.get(raw_sha)
+        if admission:
+            self._verify_masked_row_binding(row)
+            reference, proof, clock = admission
+            expected = masked_identity.record(self._masked_scope, str(row.uid), raw_sha,
+                reference['source_uid'], reference['raw_sha256'], proof, clock, self._masked_key)
+            saved = row.metadata.get('MaskedDeviceAdmission')
+            if (not isinstance(saved, dict) or not isinstance(saved.get('admission_hmac_sha256'), str)
+                    or not hmac.compare_digest(saved['admission_hmac_sha256'], expected['admission_hmac_sha256'])
+                    or saved != expected):
+                raise ValueError('masked admission certificate readback differs')
 
 
 def receipt(manifest, target, revision, accepted, withheld, restorations=None):
@@ -237,6 +408,9 @@ def apply(roots, config, runtime, key, revision):
     target, approved = validate_runtime(config, runtime, revision)
     upstream = config['upstream']
     index = runtime.source_index()
+    masked_scope = masked_identity.binding(config)
+    if masked_scope is not None:
+        runtime.prepare_masked(masked_scope, index, key, approved)
     approvals = restoration_approvals(upstream)
     groups, batches, imported, duplicate = {}, [], 0, 0
     validated = [(Path(root), validate_batch(root, upstream['scope'])) for root in roots]
@@ -270,8 +444,13 @@ def apply(roots, config, runtime, key, revision):
             # Previously accepted, authenticated target bytes need no new device
             # assignment. Unknown NEW bytes still require explicit device approval.
             if (not isinstance(serial, str) or serial not in approved) and by_sha is None:
-                withheld.append({'provider_id': entry['provider_id'], 'sha256': entry['sha256'], 'reason': 'unknown_device'})
-                continue
+                try:
+                    admitted = masked_scope is not None and runtime.admit_masked(raw, entry)
+                except (ValueError, KeyError, TypeError, IndexError):
+                    admitted = False
+                if not admitted:
+                    withheld.append({'provider_id': entry['provider_id'], 'sha256': entry['sha256'], 'reason': 'unknown_device'})
+                    continue
             group = groups.setdefault(digest, {'hashed': hashed, 'root': root, 'entries': []})
             if group['hashed'] != hashed:
                 raise ValueError('upstream raw identity collision')
@@ -303,8 +482,11 @@ def apply(roots, config, runtime, key, revision):
     if updates:
         runtime.save_upstream(updates)
     for digest, group in groups.items():
-        if runtime.existing(group['hashed']).metadata.get('UpstreamSource') != expected[digest]:
+        row = runtime.existing(group['hashed'])
+        if row.metadata.get('UpstreamSource') != expected[digest]:
             raise ValueError('upstream provenance readback mismatch')
+        if masked_scope is not None:
+            runtime.verify_masked_admission(row, digest)
     if isinstance(runtime, target_adapter.TargetRuntime):
         runtime.verify_final_schedules()
     receipts = [(root, receipt(manifest, target, revision, accepted, withheld, restored)) for root, manifest, accepted, withheld, restored in batches]

@@ -1,6 +1,7 @@
 import {useEffect,useRef,useState} from 'react';
 import Plotly from 'plotly.js-dist';
 import {escapeText} from './data';
+import {COMPARISON_HOVER_FONT_SIZE} from './comparisonData';
 
 export default function ComparisonChart({plot,label}) {
   const ref=useRef(null),container=useRef(null);
@@ -23,6 +24,11 @@ export default function ComparisonChart({plot,label}) {
   useEffect(()=>{
     if(!visible) return;
     const layout={...plot.layout};
+    // Plotly's responsive resize clears both dimensions when either is absent.
+    // Keep the measured width with the computed height so autosizing cannot
+    // collapse this graph's absolutely positioned SVG contents.
+    const measuredWidth=container.current.getBoundingClientRect().width;
+    if(measuredWidth>0) layout.width=measuredWidth;
     if(plot.rowLabels?.length) {
       const labels=plot.rowLabels.map(label=>(label.match(/.{1,25}(?:\s|$)|.{1,25}/g)||['']).map(part=>escapeText(part.trim())).join('<br>'));
       const rowHeight=Math.max(55,...labels.map(label=>label.split('<br>').length*16+12));
@@ -35,7 +41,7 @@ export default function ComparisonChart({plot,label}) {
       if(narrow) layout.annotations=[];
     }
     Plotly.react(ref.current,plot.traces,{paper_bgcolor:'transparent',plot_bgcolor:'transparent',font:{family:'Roboto, sans-serif',size:16,color:'#344767'},
-      hoverlabel:{font:{size:15}},showlegend:false,...layout},{responsive:true,displaylogo:false,scrollZoom:false,modeBarButtonsToRemove:['lasso2d','select2d']});
+      hoverlabel:{font:{size:COMPARISON_HOVER_FONT_SIZE}},showlegend:false,...layout},{responsive:true,displaylogo:false,scrollZoom:false,modeBarButtonsToRemove:['lasso2d','select2d']});
   },[plot,visible,width]);
   useEffect(()=>{
     if(!visible||typeof ResizeObserver==='undefined') return;

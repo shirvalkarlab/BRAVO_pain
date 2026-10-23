@@ -1,8 +1,10 @@
 import {trialPhaseBands} from './trialPhases';
-import {escapeText, localTime} from './data';
+import {escapeText, tooltipText, localTime} from './data';
 import {displayTarget,displayTargetText} from 'utils/participantTargets';
 import {settingValueLabel} from './settingDisplay';
 import {medicationTerm,medicationLabel} from './medicationDisplay';
+
+export const COMPARISON_HOVER_FONT_SIZE=15;
 
 const PALETTE=['#35669B','#99723A','#6F5599','#317C71','#A65364','#687842'];
 const finitePoints=condition=>condition.points.filter(point=>Number.isFinite(point.value)&&Number.isFinite(point.time));
@@ -32,8 +34,63 @@ export function compactLabel(label) {
 
 export function topPrograms(metric,mode) {
   const ids=metric.top?.[mode] || [];
-  return metric.conditions.filter(condition=>ids.includes(condition.id)&&condition.count>=5&&finitePoints(condition).length>=5)
-    .sort((a,b)=>a.median-b.median).slice(0,3);
+  const direction=metric.direction==='higher'?-1:1;
+  return metric.conditions.filter(condition=>ids.includes(condition.id)&&condition.count>=5&&Number.isFinite(condition.median)&&finitePoints(condition).length>=5)
+    .sort((a,b)=>direction*(a.median-b.median)||ids.indexOf(a.id)-ids.indexOf(b.id)).slice(0,3);
+}
+
+export const programRankingLabel = metric => metric.direction==='higher'
+  ? 'Higher observed medians first' : 'Lower observed medians first';
+
+const countLabel=(value,label)=>Number.isFinite(value)?`${value.toLocaleString('en-US')} ${label}`:null;
+const coverageCounts=provenance=>[
+  ['total_surveys','total surveys'],['eligible','eligible non-testing surveys'],
+  ['assigned','program-assigned surveys'],['unassigned','eligible surveys without a verified program'],
+  ['excluded_testing','excluded on documented testing days'],['excluded_period','excluded before the reviewed comparison period'],['missing_value','with missing metric values'],
+  ['invalid','invalid surveys'],['open_loop','open-loop surveys'],['closed_loop','closed-loop surveys'],['off','stimulation-OFF surveys'],
+].map(([key,label])=>countLabel(provenance[key],label)).filter(Boolean);
+
+const assignmentReasonLabels={
+  testing_day:'Documented Pacific testing day',invalid_survey_time:'Invalid survey time',
+  duplicate_survey_id:'Duplicate survey identity',no_same_day_source:'No settings source on the same Pacific day',
+  missing_required_boundary:'Required settings boundary missing',changed_during_session:'Settings changed during the source session',
+  unknown_source_state:'Source state not established',conflicting_equidistant_sources:'Equally close source configurations disagree',
+  unverified_historical:'Historical assignment not verified',calendar_unverified:'Stored testing calendar not verified',
+  before_period:'Before the reviewed comparison period',
+};
+
+export function programMetricCoverage(metric) {
+  const source=metric.provenance;
+  if(!source) return ['Eligibility and exclusion counts are not supplied for this metric.'];
+  const lines=coverageCounts(source);
+  if(Number.isFinite(source.latest_survey)) lines.push(`Latest stored survey evaluated for this metric: ${localTime(source.latest_survey)} Pacific.`);
+  if(Number.isFinite(source.latest_assigned)) lines.push(`Latest eligible program-assigned survey: ${localTime(source.latest_assigned)} Pacific.`);
+  const reasons=Object.entries(source.reasons || {}).filter(([,value])=>Number.isFinite(value)&&value>0).sort(([a],[b])=>a.localeCompare(b));
+  for(const [reason,count] of reasons) lines.push(`${assignmentReasonLabels[reason] || reason.replace(/_/g,' ')}: ${count.toLocaleString('en-US')}.`);
+  return lines.length?lines:['Eligibility and exclusion counts are not supplied for this metric.'];
+}
+
+export function programSourceCoverage(provenance) {
+  const source=provenance || {},lines=[];
+  if(source.policy_version) lines.push('Calculated automatically from currently stored surveys, original device settings and the stored testing calendar. This does not verify the latest upstream import or continuous stimulation delivery.');
+  if(Number.isFinite(source.period_start)) lines.push(`Reviewed comparison period begins: ${localTime(source.period_start)} Pacific.`);
+  if(Number.isFinite(source.source_min)&&Number.isFinite(source.source_max)) lines.push(`Stored device-report observation bounds: ${localTime(source.source_min)} → ${localTime(source.source_max)} Pacific.`);
+  if(Number.isFinite(source.source_min_survey)&&Number.isFinite(source.source_max_survey)) lines.push(`Stored survey bounds: ${localTime(source.source_min_survey)} → ${localTime(source.source_max_survey)} Pacific.`);
+  if(Number.isFinite(source.latest_assigned)) lines.push(`Latest eligible program-assigned survey across metrics: ${localTime(source.latest_assigned)} Pacific.`);
+  const calendar=source.calendar;
+  if(source.calendar_verified===true){
+    const days=calendar?.testing_days || source.testing_days;
+    lines.push(`Stored testing calendar validated${Array.isArray(days)?` · ${days.length.toLocaleString('en-US')} documented testing days`:''}. Entire Pacific testing days are excluded, whether testing occurred in clinic or at home. Upstream calendar completeness is not independently verified.`);
+    if(calendar?.first_day&&calendar?.last_day) lines.push(`Documented testing-calendar date bounds: ${calendar.first_day} → ${calendar.last_day}.`);
+  }else if(source.calendar_verified===false) lines.push('The stored testing calendar is not verified; program rankings are withheld.');
+  return lines.length?lines:[comparisonCoverage(provenance)];
+}
+
+export function reviewedReferenceTiming(reference) {
+  const value=reference.source?.as_of;
+  const date=Number.isFinite(value)?`${localTime(value)} Pacific`:typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)?value:null;
+  return date?`Reviewed source as of ${date}; later settings and continuous delivery are not established by this reference.`
+    : 'Reviewed source date is not supplied; this historical reference may be stale and does not establish current or continuous delivery.';
 }
 
 export function conditionSummary(condition) {
@@ -41,8 +98,8 @@ export function conditionSummary(condition) {
   const medication=['drug_class','status','dose','frequency','route','timing','background'];
   const details=[...rows.map(row=>`${condition.mode==='open_loop'&&/threshold/i.test(row.label)?`Stored ${row.label} (not controlling stimulation)`:row.label}: ${settingValueLabel(row)}`),...medication.filter(key=>condition[key]).map(key=>`${key.replace('_',' ')}: ${medicationTerm(condition[key])}`)];
   const lines=[];
-  for(let i=0;i<details.length;i+=2) lines.push(details.slice(i,i+2).map(escapeText).join(' · '));
-  return [`<b>${escapeText(condition.drug_class ? medicationLabel(condition.label) : condition.label)}</b>`,...lines].join('<br>');
+  for(let i=0;i<details.length;i+=2) lines.push(tooltipText(details.slice(i,i+2).join(' · ')));
+  return [`<b>${tooltipText(condition.drug_class ? medicationLabel(condition.label) : condition.label)}</b>`,...lines].join('<br>');
 }
 
 export function conditionPlot(metric,conditions,horizontal=false) {
@@ -59,7 +116,7 @@ export function conditionPlot(metric,conditions,horizontal=false) {
     const dots=horizontal?{x:values,y:jitter}:{x:jitter,y:values};
     traces.push({type:'scatter',...dots,mode:'markers',name:label,marker:{color,size:6,opacity:0.68},showlegend:false,
       customdata:points.map(point=>[localTime(point.time),point.value]),
-      hovertemplate:`<b>${escapeText(metric.label)}: %{customdata[1]:.1f}</b><br>%{customdata[0]} Pacific<br>${summary}<extra></extra>`});
+      hovertemplate:`<b>${tooltipText(metric.label)}: %{customdata[1]:.1f}</b><br>%{customdata[0]} Pacific<br>${summary}<extra></extra>`});
   });
   const ticks=conditions.map((condition,index)=>`${index+1}. ${compactLabel(condition.drug_class?medicationLabel(condition.label):condition.label)}<br>n=${condition.count} · median ${condition.median}`);
   const category={tickmode:'array',tickvals:conditions.map((_,i)=>i),ticktext:ticks,automargin:true,range:[-0.65,conditions.length-0.35],zeroline:false};
@@ -134,25 +191,28 @@ export function stimulationSettingLines(condition,participant) {
   if(cycle==='On') lines.push(`${duration('cycle on sec')} ON / ${duration('cycle off sec')} OFF`);
   else if(cycle==='Off'&&condition.mode!=='closed_loop') lines.push('Continuous stimulation');
   for(const side of ['Left','Right']) {
-    const contacts=value(`${side} contacts`);
-    if(!contacts) continue;
-    const target=targetName(participant,side.toLowerCase(),value(`${side} target`));
-    lines.push(`${target} ${compactContacts(contacts)}`);
-    const frequency=number(`${side} rate hz`),width=number(`${side} pulse width us`),amplitude=number(`${side} amplitude mA`);
-    const lower=number(`${side} lower limit mA`),upper=number(`${side} upper limit mA`);
-    const adaptive=condition.mode==='closed_loop'&&value(`${side} adaptive status`)?.toUpperCase()==='RUNNING';
-    const current=adaptive?(lower!==null&&upper!==null&&upper>=lower?`${lower}–${upper}`:null):amplitude;
-    lines.push(`${frequency===null?'?':frequency} Hz · ${current===null?'?':current} mA · ${width===null?'?':width} µs`);
-    if(condition.mode==='closed_loop') {
-      lines.push(thresholdMode(value(`${side} adaptive mode`)));
-      // These legacy fields are the recorded per-channel values. Keep their scope
-      // explicit when a ganged controller is reported; never borrow other values.
-      const sensing=value(`${side} sensing channel`),frequency=number(`${side} sensing frequency hz`);
-      lines.push(`BrainSense ${target}: ${sensingContacts(sensing,side)} · ${frequency===null?'frequency not recorded':`${frequency} Hz`}`);
-      lines.push(`LFP thresholds: lower ${value(`${side} lower lfp threshold (LSB)`) || 'not recorded'} · upper ${value(`${side} upper lfp threshold (LSB)`) || 'not recorded'} LSB`);
-      const ganged=value(`${side} ganged to`);
-      if(ganged&&!/none|not.ganged/i.test(ganged)) lines.push(`Ganged to: ${targetName(participant,sourceSide(ganged,side.toLowerCase()),ganged)} (sensing values above are recorded for ${target})`);
-      if(value(`${side} adaptive status`)) lines.push(`Adaptive state: ${settingValueLabel({label:'Adaptive status',value:value(`${side} adaptive status`)})}`);
+    const prefixes=[...(value(`${side} contacts`)?[side]:[]),...[...settings.keys()].filter(key=>new RegExp(`^${side} program \\d+ contacts$`).test(key)).map(key=>key.replace(/ contacts$/,''))];
+    for(const prefix of prefixes){
+      const contacts=value(`${prefix} contacts`);
+      const program=prefix.match(/ program (\d+)$/)?.[1];
+      const target=`${targetName(participant,side.toLowerCase(),value(`${prefix} target`) || value(`${side} target`))}${program?` · Program ${program}`:''}`;
+      lines.push(`${target} ${compactContacts(contacts)}`);
+      const frequency=number(`${prefix} rate hz`),width=number(`${prefix} pulse width us`),amplitude=number(`${prefix} amplitude mA`);
+      const lower=number(`${side} lower limit mA`),upper=number(`${side} upper limit mA`);
+      const adaptive=condition.mode==='closed_loop'&&value(`${side} adaptive status`)?.toUpperCase()==='RUNNING';
+      const current=adaptive?(lower!==null&&upper!==null&&upper>=lower?`${lower}–${upper}`:null):amplitude;
+      lines.push(`${frequency===null?'?':frequency} Hz · ${current===null?'?':current} mA · ${width===null?'?':width} µs`);
+      if(condition.mode==='closed_loop') {
+        lines.push(thresholdMode(value(`${side} adaptive mode`)));
+        // These legacy fields are the recorded per-channel values. Keep their scope
+        // explicit when a ganged controller is reported; never borrow other values.
+        const sensing=value(`${side} sensing channel`),frequency=number(`${side} sensing frequency hz`);
+        lines.push(`BrainSense ${target}: ${sensingContacts(sensing,side)} · ${frequency===null?'frequency not recorded':`${frequency} Hz`}`);
+        lines.push(`LFP thresholds: lower ${value(`${side} lower lfp threshold (LSB)`) || 'not recorded'} · upper ${value(`${side} upper lfp threshold (LSB)`) || 'not recorded'} LSB`);
+        const ganged=value(`${side} ganged to`);
+        if(ganged&&!/none|not.ganged/i.test(ganged)) lines.push(`Ganged to: ${targetName(participant,sourceSide(ganged,side.toLowerCase()),ganged)} (sensing values above are recorded for ${target})`);
+        if(value(`${side} adaptive status`)) lines.push(`Adaptive state: ${settingValueLabel({label:'Adaptive status',value:value(`${side} adaptive status`)})}`);
+      }
     }
   }
   return lines;
@@ -160,7 +220,7 @@ export function stimulationSettingLines(condition,participant) {
 
 export function stimulationAxisSettings(condition,participant) {
   const lines=stimulationSettingLines(condition,participant);
-  return (lines.length?lines:['Settings not available']).map(escapeText).join('<br>');
+  return (lines.length?lines:['Settings not available']).map(tooltipText).join('<br>');
 }
 
 export function stimulationDetailRows(condition,participant) {
@@ -173,18 +233,18 @@ export function stimulationDetailRows(condition,participant) {
 }
 
 export function stimulationSummary(condition,participant) {
-  return [`<b>${escapeText(condition.label)}</b>`,surveyCount(condition),stimulationAxisSettings(condition,participant)].join('<br>');
+  return [`<b>${tooltipText(condition.label)}</b>`,surveyCount(condition),stimulationAxisSettings(condition,participant)].join('<br>');
 }
 
 export function stimulationPlot(metric,open,closed,reference=null,currentReference=null,options={}) {
-  const finalized=finalizedProgram(metric,reference),current=finalizedProgram(metric,currentReference,'closed_loop','Current CL');
+  const finalized=finalizedProgram(metric,reference),current=finalizedProgram(metric,currentReference,'closed_loop','Reviewed CL reference');
   const closedStart=options.mode==='closed_loop'?0:finalized||current?5:4;
   const slots=[...(options.mode!=='closed_loop'?[
     ...open.map((condition,i)=>({condition,position:i,title:`OL ${i+1}`})),
     ...(finalized?[{condition:finalized,position:3,title:'Finalized OL'}]:[])]:[]),
     ...(options.mode!=='open_loop'?[
       ...closed.map((condition,i)=>({condition,position:i+closedStart,title:`CL ${i+1}`})),
-      ...(current?[{condition:current,position:closedStart+3,title:'Current CL'}]:[])]:[])];
+      ...(current?[{condition:current,position:closedStart+3,title:'Reviewed CL'}]:[])]:[])];
   const populated=slots.filter(slot=>finitePoints(slot.condition).length>0);
   const plot=conditionPlot(metric,populated.map(slot=>slot.condition));
   const positions=populated.map(slot=>slot.position);
@@ -193,11 +253,14 @@ export function stimulationPlot(metric,open,closed,reference=null,currentReferen
     // Plotly box hover produces several quartile labels. Only survey dots own a
     // hover target, yielding one detailed settings tooltip under closest mode.
     if(trace.type==='box') {delete moved.hovertemplate;return {...moved,hoverinfo:'skip'};}
-    return {...moved,hovertemplate:`<b>${escapeText(metric.label)}: %{customdata[1]:.1f}</b><br>%{customdata[0]} Pacific<br>${stimulationSummary(populated[Math.floor(i/2)].condition,options.participant)}<extra></extra>`};
+    return {...moved,hovertemplate:`<b>${tooltipText(metric.label)}: %{customdata[1]:.1f}</b><br>%{customdata[0]} Pacific<br>${stimulationSummary(populated[Math.floor(i/2)].condition,options.participant)}<extra></extra>`};
   });
   plot.fitWidth=true;
   plot.programs=slots.map(({condition,title,position})=>({condition,title,position,countLabel:surveyCount(condition),settings:stimulationSettingLines(condition,options.participant)}));
-  plot.layout.height=390;
+  // Plotly removes a hover label taller than the plot, even when its SVG can
+  // overflow. Reserve room for every wrapped line at the renderer's font size.
+  const hoverLines=Math.max(0,...plot.traces.filter(trace=>trace.type==='scatter').map(trace=>trace.hovertemplate.split('<br>').length));
+  plot.layout.height=Math.max(420,Math.ceil(hoverLines*COMPARISON_HOVER_FONT_SIZE*1.3+24));
   plot.layout.hovermode='closest';
   plot.layout.xaxis={...plot.layout.xaxis,range:[-0.65,options.mode?3.65:current?closedStart+3.65:closedStart+2.65],tickvals:slots.map(slot=>slot.position),tickfont:{size:13},tickangle:0,fixedrange:true,
     ticktext:slots.map(({title})=>`<b>${title.replace(' ','<br>')}</b>`)};
@@ -271,16 +334,16 @@ export function medicationTimeline(episodes,throughDay,periodStart,phases=[],per
     if((knownEnd&&Number.isFinite(periodStart)&&episode.end<periodStart)||(knownStart&&startText>endOfView)) return [];
     const complete=knownStart&&(knownEnd||episode.ongoing);
     const x=complete?[startText,end||endOfView]:[startText||end||(Number.isFinite(periodStart)?localTime(periodStart):endOfView)];
-    const details=[episode.drug_class,episode.dose,episode.frequency,episode.route,episode.timing,episode.note].filter(Boolean).map(value=>escapeText(medicationTerm(value))).join('<br>');
+    const details=[episode.drug_class,episode.dose,episode.frequency,episode.route,episode.timing,episode.note].filter(Boolean).map(value=>tooltipText(medicationTerm(value))).join('<br>');
     const availability=episode.prn?'PRN available; use is not confirmed':'Documented regimen; use is not confirmed';
     const startLabel=knownStart?`From ${localTime(episode.start)} Pacific`:'Start date not recorded; endpoint marker only';
     const endLabel=knownEnd?`Documented end ${localTime(episode.end)} Pacific`:episode.ongoing?(scope.bounded?'Recorded as ongoing in historical notes; later use is unverified':'Documented as ongoing; shown through current day'):'End date not recorded; start marker only';
-    const coverageLabel=scope.bounded?`<br>Display ends before ${localTime(scope.end)} Pacific; this is a coverage limit, not a medication stop date`:'';
+    const coverageLabel=scope.bounded?`<br>${tooltipText(`Display ends before ${localTime(scope.end)} Pacific; this is a coverage limit, not a medication stop date`)}`:'';
     const symbols=complete?[episode.pre_trial||start!==episode.start?'triangle-left':'circle',episode.ongoing||(scope.bounded&&knownEnd&&episode.end>=scope.end)?'triangle-right':'circle']:['diamond-open'];
     return [{type:'scatter',mode:complete?'lines+markers':'markers',x,y:x.map(()=>positions[index]),showlegend:false,
       line:{width:episode.supportive?5:10,color:PALETTE[classes.indexOf(episode.drug_class)%PALETTE.length],dash:episode.prn?'dot':'solid'},
       marker:{size:10,symbol:symbols},opacity:episode.supportive?0.6:1,
-      hovertemplate:`<b>${escapeText(episode.name)}</b><br>${details}<br>${availability}<br>${startLabel}<br>${endLabel}${coverageLabel}<extra></extra>`}];
+      hovertemplate:`<b>${tooltipText(episode.name)}</b><br>${details}<br>${tooltipText(availability)}<br>${tooltipText(startLabel)}<br>${tooltipText(endLabel)}${coverageLabel}<extra></extra>`}];
   });
   const boundaries=phases.filter(phase=>Number.isFinite(periodStart)&&phase.start>=periodStart&&(!scope.bounded||phase.start<scope.end)&&localTime(phase.start)<=endOfView);
   let headerHeight=0;

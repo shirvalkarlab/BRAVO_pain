@@ -40,19 +40,24 @@ export function rollingMedian(points) {
 
 export const escapeText = text => String(text).replace(/[&<>"']/g, char => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[char]));
 
+// Plotly SVG tooltips do not wrap paragraphs automatically. Wrap plain text
+// before escaping so source markup stays literal and no entity is split.
+export const tooltipText = text => String(text).split(/\r?\n/).map(line =>
+  (line.match(/.{1,42}(?:\s|$)|.{1,42}/g) || [""]).map(part => escapeText(part.trim())).join("<br>")).join("<br>");
+
 export function eventTimeLabel(event) {
   return event.time_precision === "day" ? `${localTime(event.time).slice(0, 10)} · time not recorded` : `${localTime(event.time)} Pacific`;
 }
 
-export function homeTiming(event, point) {
+export function homeTiming(event, point, changeContext = "survey may precede change") {
   if (["settings_observed", "settings_observation"].includes(event.kind)) {
-    return `Settings observed ${escapeText(eventTimeLabel(event))}; activation time not established.`;
+    return tooltipText(`Settings observed ${eventTimeLabel(event)}; activation time not established.`);
   }
   if (event.time_precision === "day") {
     const sameDay = point && localTime(point.time).slice(0, 10) === localTime(event.time).slice(0, 10);
-    return `${escapeText(eventTimeLabel(event))}. ${sameDay ? "Settings changed this day; survey may precede change." : "Exact change time is not recorded."}`;
+    return tooltipText(`${eventTimeLabel(event)}. ${sameDay ? `Settings changed this day; ${changeContext}.` : "Exact change time is not recorded."}`);
   }
-  return escapeText(event.evidence || "Home-program timing details not recorded.");
+  return tooltipText(event.evidence || "Home-program timing details not recorded.");
 }
 
 const LABELS = {
@@ -112,7 +117,7 @@ export function settingsSummary(settings, participant = routeParticipant()) {
     if (!rows.length) lines.push(`${heading}: Settings not recorded`);
   }
   lines.push(...chunks(shared.map(row => controllerRowText(row, running(left) || running(right), participant))).map(line => `Shared sensing: ${line}`));
-  return lines.map(escapeText).join("<br>");
+  return lines.map(tooltipText).join("<br>");
 }
 
 export function unknownIntervalsInRange(intervals, range) {
@@ -128,17 +133,17 @@ export function metricTraces(metric, phases, range, smooth, visits = [], homeTra
   const context = (point, visit) => {
     const title = visit ? "Visit day · Home program context; clinic testing may differ" : "Home program context";
     const unknown = unknownIntervals.find(interval => point.time >= interval.start && (interval.end === null || point.time < interval.end));
-    if (unknown) return `${escapeText(phaseMap[point.phase]?.label || "")}<br>${title}<br>${NO_VERIFIED_HOME_ASSIGNMENT}<br>${escapeText(unknown.reason)}`;
+    if (unknown) return `${tooltipText(phaseMap[point.phase]?.label || "")}<br>${tooltipText(title)}<br>${tooltipText(NO_VERIFIED_HOME_ASSIGNMENT)}<br>${tooltipText(unknown.reason)}`;
     let lo = 0, hi = homes.length;
     while (lo < hi) {
       const middle = Math.floor((lo + hi) / 2);
       if (homes[middle].time <= point.time) lo = middle + 1;
       else hi = middle;
     }
-    const setting = lo ? `${summaries[lo - 1]}<br>${homeTiming(homes[lo - 1], point)}` : NO_VERIFIED_HOME_ASSIGNMENT;
-    return `${escapeText(phaseMap[point.phase]?.label || "")}<br>${title}<br>${setting}`;
+    const setting = lo ? `${summaries[lo - 1]}<br>${homeTiming(homes[lo - 1], point)}` : tooltipText(NO_VERIFIED_HOME_ASSIGNMENT);
+    return `${tooltipText(phaseMap[point.phase]?.label || "")}<br>${tooltipText(title)}<br>${setting}`;
   };
-  const hover = `<b>${escapeText(metric.label)}: %{y:.1f}</b><br>%{x} Pacific<br>%{customdata}<extra></extra>`;
+  const hover = `<b>${tooltipText(metric.label)}: %{y:.1f}</b><br>%{x} Pacific<br>%{customdata}<extra></extra>`;
   const traces = [{type: "scatter", mode: "markers", name: "Observed surveys", x: points.map(p => localTime(p.time)), y: points.map(p => p.value),
     marker: {size: 7, opacity: 0.72, color: points.map(p => phaseMap[p.phase]?.color || "#777777")},
     customdata: points.map(p => context(p, false)), hovertemplate: hover}];
