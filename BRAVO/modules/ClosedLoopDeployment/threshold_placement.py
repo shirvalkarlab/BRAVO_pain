@@ -26,8 +26,10 @@ above are set from clinic recordings only, on the calibrated LSB scale: the 3 s 
 voltage-trace recording converted to device units through the calibration measured on
 simultaneous recordings (TD-derived LSB), or the tablet's capture. The ruling keeps both pairs
 exactly as they are: no centring on the home record (chronic log) and no false-crossing rate
-simulated along its hourly levels. Whether the chronic log's LSB is the same quantity as the
-streaming LSB is not settled here.
+simulated along its hourly levels. The chronic log is the streaming power quantity averaged over
+10 minutes, on the same scale (decision 503: the Medtronic-authored ADAPT-PD methods paper describes
+one control signal, shown live in Streaming and stored as 10-minute averages in Timeline); that is
+documented, not measured, and the 10-minute average still differs in spread from the 3 s pieces.
 
 What the pair carries is `home_swing`: how many fold the home record's hourly medians swing across
 the day at the band, a ratio within that one product, so no conversion is involved (no home-record

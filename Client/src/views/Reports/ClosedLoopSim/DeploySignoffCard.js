@@ -264,7 +264,23 @@ export function decidingP(summary) {
 const fmtSignedR = (v) => (v == null || !Number.isFinite(Number(v)) ? "not reported"
   : `${Number(v) < 0 ? "\u2212" : "+"}${Math.abs(Number(v)).toFixed(2)}`);
 
-/** Wave 2 rows of the Evidence block (decisions 484, 495-498), each a warning only, never a gate. */
+/** The "q corrected within the pair" value: the correlation q and, beside it, the same band's
+ * area-under-the-curve q (its own family, decision 500), each with its own ▲ where the server gives
+ * a warning. A summary served before the AUC q (no `family_q_auc_status`) prints as it did. */
+function familyQValue(fc, warnInk) {
+  const hasAuc = fc.family_q_auc_status != null;
+  const src = fc.family_p_source === "chronic" ? "home record's" : "TD";
+  const rPart = fc.family_q != null
+    ? warnInk(!!fc.family_q_warning, `${hasAuc ? "r" : "q"} ${fmt(fc.family_q, 2)} (${fc.family_n} bands, by the ${src} p)`)
+    : fc.family_q_status;
+  if (!hasAuc) return rPart;
+  const aucPart = fc.family_q_auc != null
+    ? warnInk(!!fc.family_q_auc_warning, `AUC ${fmt(fc.family_q_auc, 2)} (${fc.family_n_auc} bands)`)
+    : `AUC: ${fc.family_q_auc_status}`;
+  return <>{rPart} · {aucPart}</>;
+}
+
+/** Wave 2 rows of the Evidence block (decisions 484, 495-498, 500), each a warning only, never a gate. */
 function WaveTwoEvidence({ ev, rep }) {
   const chk = ev && ev.current_removed_check;
   const rc = ev && ev.recent_check;
@@ -313,9 +329,14 @@ function WaveTwoEvidence({ ev, rep }) {
         </>
       ) : null}
       {fc && fc.family_q_status ? (
-        <KV k="q corrected within the pair" v={fc.family_q != null
-          ? warnInk(!!fc.family_q_warning, `q ${fmt(fc.family_q, 2)} (${fc.family_n} bands, by the ${fc.family_p_source === "chronic" ? "home record's" : "TD"} p)`)
-          : fc.family_q_status} />
+        <>
+          <KV k="q corrected within the pair" v={familyQValue(fc, warnInk)} />
+          {fc.family_q_auc_warning ? (
+            <MDTypography variant="caption" display="block" data-testid="signoff-auc-q-warning" sx={note}>
+              {fc.family_q_auc_warning}
+            </MDTypography>
+          ) : null}
+        </>
       ) : null}
       {rep && rep.peak_above_background && rep.peak_above_background.available ? (
         <KV k="Peak above the smooth background (tie-break only)"

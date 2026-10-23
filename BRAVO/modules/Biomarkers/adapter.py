@@ -503,10 +503,11 @@ def bravo_powerdomain_to_chronic_like(recordings):
     Output dicts match the Chronic shape: {SamplingRate:-1, Time:(M,), Data:(M,2) [power, stim],
     ChannelNames:['<hemi> LFP', '<hemi> Amplitude']}.
 
-    SCALE NOTE: power-domain band power and the chronic ~10-min LFP power are on different scales
-    (different sensing band/averaging). By design these are concatenated in RAW device units (no
-    normalization), so the merged series mixes scales — interpret the combined threshold with that
-    in mind.
+    SCALE NOTE: power-domain band power and the chronic ~10-min LFP power are the same device
+    quantity on the same scale, the chronic one averaged over 10 minutes (decision 503; documented
+    by the device description, not measured). By design they are concatenated in RAW device units
+    (no normalization); their spreads differ (10 min against 0.5 s averaging), so interpret a
+    combined threshold with that in mind.
     """
     out = []
     for r in recordings or []:

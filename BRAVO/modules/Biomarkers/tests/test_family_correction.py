@@ -473,3 +473,33 @@ def test_the_choosing_view_gives_the_same_auc_q_as_the_biomarkers_view():
     for ch in ("ZERO_THREE_LEFT", "ZERO_THREE_RIGHT", "ONE_THREE_LEFT"):
         assert ([r["family_q_auc"] for r in _td_auc(raw, ch)]
                 == [r["family_q_auc"] for r in got[ch]["best_auc_rows"]]), ch
+
+
+# ---- the sign-off's band lookup carries the AUC q too (the open item of decision 500) ------------
+def test_band_lookup_carries_the_bands_auc_q_from_its_grid_row_and_keeps_its_correlation_q():
+    sweeps = _with_auc_p(_three_pairs())
+    sweeps["ZERO_THREE_LEFT"]["by_source_grid"]["td"]["best_auc_rows"][4].update(
+        answer="established", p_selection_aware=0.04)
+    out = FC.attach(_resp(sweeps, _rule({1, 2}, {1, 2})))
+    blk = out["family_correction"]
+    b = FC.band_block(out["band_time_sweep"], blk, "ZERO_THREE_LEFT", 12.5)
+    arow = _td_auc(out, "ZERO_THREE_LEFT")[4]
+    for k in FC.AUC_ROW_FIELDS:                               # each equal to its grid row's value
+        assert b[k] == arow[k], k
+    assert b["family_q_auc_status"] == FC.STATUS_AUC_IN and b["family_n_auc"] == 22
+    assert b["family_q_auc_warning"] and b["family_q_auc_warning"] == arow["family_q_auc_warning"]
+    assert b["auc_words"] == blk["auc_family"]["words"]
+    assert b["auc_n_in_family"] == 44 and b["auc_n_built"] == 66
+    # the correlation q is the correlation row's, unchanged by the AUC fields beside it
+    crow = _td_rows(out, "ZERO_THREE_LEFT")[4]
+    for k in FC.ROW_FIELDS:
+        assert b[k] == crow[k], k
+    plain = FC.attach(_resp(_three_pairs(), _rule({1, 2}, {1, 2})))
+    pb = FC.band_block(plain["band_time_sweep"], plain["family_correction"], "ZERO_THREE_LEFT", 12.5)
+    assert {k: b[k] for k in FC.ROW_FIELDS} == {k: pb[k] for k in FC.ROW_FIELDS}
+    # a pair outside the family: no AUC q, and why
+    nb = FC.band_block(out["band_time_sweep"], blk, "ONE_THREE_LEFT", 12.5)
+    assert nb["family_q_auc"] is None and nb["family_q_auc_status"] == FC.STATUS_NOT_ALLOWED
+    # a centre with no row: no AUC q, and why
+    xb = FC.band_block(out["band_time_sweep"], blk, "ZERO_THREE_LEFT", 99.5)
+    assert xb["family_q_auc"] is None and "no area-under-the-curve row" in xb["family_q_auc_status"]

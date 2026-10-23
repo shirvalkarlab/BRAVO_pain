@@ -140,3 +140,41 @@ def test_the_summary_reads_its_band_q_from_the_stored_grid_and_never_builds_one(
     # another score's settings: no stored grid, so no q (and nothing is built)
     nb = FC.summary_block(UID, {"LabelMetric": "vas"}, "ZERO_THREE_LEFT", 12.5, load_newest=_load)
     assert nb["family_q"] is None and "no stored grid" in nb["family_q_status"]
+
+
+def test_the_summarys_auc_q_equals_its_grid_rows_and_the_correlation_q_is_unchanged(monkeypatch):
+    """The sign-off summary carries the band's area-under-the-curve q (decision 500's open item)
+    beside its correlation q: each AUC field equal to that band's AUC row on the corrected grid, the
+    correlation fields equal to the correlation row's, and the stored grid is only read."""
+    payload = _payload()
+    for ch, sw in payload["band_time_sweep"].items():         # distinct AUC p on the TD-only grid
+        for i, r in enumerate(sw["by_source_grid"]["td"]["best_auc_rows"]):
+            r["p_selection_aware"] = 0.001 + 0.03 * ((i * 7) % 22)
+    kept = copy.deepcopy(payload)
+    calls = []
+
+    def _load(kind, uid, *, consumer=None, match=None, **kw):
+        calls.append(kind)
+        meta = {"extra": {"sweep_settings": sweep_settings.sweep_settings_tag_from_request({}),
+                          "rule_version": sweep_settings.GRID_RULE_VERSION}}
+        return (payload, meta) if match(meta) else (None, None)
+
+    monkeypatch.setattr(FC, "rule_block_for_participant", _rule)
+    b = FC.summary_block(UID, {}, "ZERO_THREE_LEFT", 12.5, load_newest=_load)
+    assert calls == [sweep_settings.GRID_KIND]                # read once, never built
+    assert payload == kept
+    grid, _blk = FC.correct(sweep_settings.choosing_grid(copy.deepcopy(kept))["band_time_sweep"],
+                            _rule(UID), label_metric="nrs")
+    arow = next(r for r in grid["ZERO_THREE_LEFT"]["best_auc_rows"] if r["band_center_hz"] == 12.5)
+    crow = next(r for r in grid["ZERO_THREE_LEFT"]["best_correlation_rows"]
+                if r["band_center_hz"] == 12.5)
+    for k in FC.AUC_ROW_FIELDS:
+        assert b[k] == arow[k], k
+    assert b["family_p_auc"] == 0.001 + 0.03 * ((4 * 7) % 22)     # 12.5 Hz is the fifth centre
+    assert b["family_q_auc_status"] == FC.STATUS_AUC_IN and isinstance(b["family_q_auc"], float)
+    for k in FC.ROW_FIELDS:
+        assert b[k] == crow[k], k
+    assert b["family_p"] == 0.02 + 0.01 * 4                   # as before the AUC q was added
+    # no stored grid: no AUC q either, with the same reason
+    nb = FC.summary_block(UID, {"LabelMetric": "vas"}, "ZERO_THREE_LEFT", 12.5, load_newest=_load)
+    assert nb["family_q_auc"] is None and nb["family_q_auc_status"] == nb["family_q_status"]

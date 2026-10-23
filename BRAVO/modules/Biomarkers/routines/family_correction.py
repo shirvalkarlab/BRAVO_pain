@@ -33,7 +33,8 @@ the contacts in force change without the recordings or the ratings changing, so 
 served stale, and no store key changes. The Biomarkers grid response (`attach`, after the sensing
 rule is attached) and the Closed-Loop reader (`ClosedLoopDeployment.adapter
 .band_sweep_grid_for_closed_loop`, on its choosing view, `correct`) both call it; the Closed-Loop
-sign-off summary carries its band's q (`summary_block`). The band tables (`band_results_tables`) do
+sign-off summary carries its band's q (`summary_block`), and the same band's area-under-the-curve
+q beside it (`family_q_auc`, from the same corrected copy). The band tables (`band_results_tables`) do
 not carry q: they are written with the grid and filed under its key, so a q in them would be stored.
 
 A SECOND, SEPARATE FAMILY FOR THE AREA-UNDER-THE-CURVE ROWS (the PI, 2026-10-22: "Go" on the open
@@ -449,6 +450,20 @@ def band_block(sweeps, block, channel, centre):
     for k in ("words", "n_in_family", "n_built", "allowed_pairs", "allowed_pairs_display",
               "pain_score", "method"):
         out[k] = (block or {}).get(k)
+    # the same band's area-under-the-curve q (its own family, decision 500), read from the same
+    # corrected copy: the AUC row at this centre on the pair's choosing grid. No p is computed here.
+    auc_row = None
+    for r in (choosing or {}).get("best_auc_rows") or []:
+        if isinstance(r, dict) and _finite(r.get("band_center_hz")) == _finite(centre):
+            auc_row = r
+            break
+    out.update({k: (auc_row or {}).get(k) for k in AUC_ROW_FIELDS})
+    if auc_row is None:
+        out["family_q_auc_status"] = ("this band has no area-under-the-curve row on the grid"
+                                      if choosing is not None else out["family_q_status"])
+    auc_block = (block or {}).get("auc_family") or {}
+    for k in ("words", "n_in_family", "n_built"):
+        out[f"auc_{k}"] = auc_block.get(k)
     return out
 
 
@@ -486,9 +501,9 @@ def summary_block(participant_uid, request_data, channel, centre, *, load_newest
             if isinstance(payload, dict) and payload.get("band_time_sweep"):
                 break
         if not isinstance(payload, dict) or not payload.get("band_time_sweep"):
-            return {"family_q": None, "family_q_status": ("no stored grid under this summary's pain "
-                                                          "score and settings, so no q"),
-                    "family_q_warning": None}
+            why = "no stored grid under this summary's pain score and settings, so no q"
+            return {"family_q": None, "family_q_status": why, "family_q_warning": None,
+                    "family_q_auc": None, "family_q_auc_status": why, "family_q_auc_warning": None}
         choosing = _sw.choosing_grid(payload).get("band_time_sweep") or {}
         sweeps, block = correct(choosing, rule_block_for_participant(participant_uid),
                                 label_metric=want.get("sweep_metric"))
@@ -497,5 +512,6 @@ def summary_block(participant_uid, request_data, channel, centre, *, load_newest
                                        or {}).get("match_direction")
         return out
     except Exception as exc:                                    # noqa: BLE001 - a label only
-        return {"family_q": None, "family_q_status": f"the correction failed ({exc!r})",
-                "family_q_warning": None}
+        why = f"the correction failed ({exc!r})"
+        return {"family_q": None, "family_q_status": why, "family_q_warning": None,
+                "family_q_auc": None, "family_q_auc_status": why, "family_q_auc_warning": None}
