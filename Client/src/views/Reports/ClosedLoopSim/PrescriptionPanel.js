@@ -42,6 +42,7 @@ import MDButton from "components/MDButton";
 
 import PAL from "./palette";
 import { MODE_LABEL, MODE_ORDER, fmtFieldValue } from "./deployFormat";
+import ThresholdComparison from "./ThresholdComparison";
 
 /** The heading over a row's check notes, counted on that row; null when the row carries none. */
 const CHECK_NOTE_KEYS = ["design_rule_note", "occupancy_note", "startup_bias_note", "robustness_note"];
@@ -331,6 +332,9 @@ export default function ParameterTable({ report, mode, onMode }) {
           {/* A threshold below zero (open item of decision 495): device band power cannot go below
               zero, so that threshold can never be crossed. A warning only, in the open. */}
           <BelowZeroLine data={st && st.data} fields={fields} />
+          {/* Programmed now vs candidates on the home record (the PI, 2026-10-26): a label only,
+              shown with the values (never while they are withheld). */}
+          <ThresholdComparison data={st && st.data} />
           {readBackEnabled ? (
             <MDTypography variant="caption" sx={{ display: "block", fontSize: PAL.fs.body, mt: 0.6, fontWeight: 600,
               color: nTicked === fields.length ? PAL.passText : PAL.warnText }}>

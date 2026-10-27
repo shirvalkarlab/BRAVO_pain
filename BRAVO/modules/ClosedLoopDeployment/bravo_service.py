@@ -97,9 +97,94 @@ REPORT_KIND = "closed_loop_report"
 
 
 def run_for_participant(request_data):
-    """Build the Closed-Loop Deployment report for one participant, inside one request scope."""
+    """Build the Closed-Loop Deployment report for one participant, inside one request scope.
+
+    A band's report then carries `threshold_comparison` (programmed now against candidate
+    thresholds on the home record; `threshold_comparison.py`), worked out on read and never saved:
+    it holds pain-score summaries (CLAUDE.md section 7 rule 5) and changes no threshold, verdict or
+    gate. Neutral `BRAVO_THRESHOLD_COMPARISON=0`: not built."""
     with _request_scope():
-        return _run_for_participant(request_data)
+        out = _run_for_participant(request_data)
+        return _with_threshold_comparison(out, request_data)
+
+
+def _with_threshold_comparison(out, request_data):
+    """``out`` with `threshold_comparison` beside it (a shallow copy), for a band's available report;
+    ``out`` itself under the neutral setting, for the grid alone, or when the report is not available."""
+    try:
+        from modules.ClosedLoopDeployment import threshold_comparison as _tc
+    except ImportError:                                # pragma: no cover - host spelling
+        from ClosedLoopDeployment import threshold_comparison as _tc
+    rd = request_data or {}
+    if (not _tc.ENABLED or not isinstance(out, dict) or out.get("available") is False
+            or not rd.get("Candidates") or rd.get("ThreeSourcePooled") or rd.get("ClosedLoopSimulation")):
+        return out
+    import time as _time
+    t0 = _time.perf_counter()
+    try:
+        block = _threshold_comparison(rd, out)
+    except Exception as exc:                           # noqa: BLE001 - a label only; the report stands
+        _log.exception("closed-loop: the threshold comparison failed for %s", rd.get("ParticipantId"))
+        block = {"available": False, "reason": f"the threshold comparison could not be built: {exc!r}"}
+    block["seconds"] = _time.perf_counter() - t0
+    out = dict(out)
+    out["threshold_comparison"] = block
+    return out
+
+
+def _programmed_adaptive(participant):
+    """`threshold_comparison.programmed_adaptive` of the newest device export, remembered under that
+    file's identity (the device-facts memo, its own key), so a new export is a miss."""
+    from modules import DataCurator as _DC
+    from modules.ClosedLoopDeployment import device_facts as _df, session_report_facts as _srf
+    from modules.ClosedLoopDeployment import threshold_comparison as _tc
+    sfs = _srf.session_report_files(participant)
+    if not sfs:
+        return {"available": False, "reason": "no device export on record"}
+    newest = _srf.newest_by_stamp(sfs)
+    key = ("threshold_comparison_programmed", str(participant.uid), str(newest.uid), str(newest.hashed or ""))
+    return _df._memoised_active_group_facts(key, lambda: _tc.programmed_adaptive(_DC.loadPerceptJSON(newest)))
+
+
+def _threshold_comparison(rd, report):
+    """The `threshold_comparison` block for one band's report (see `threshold_comparison.py`)."""
+    import numpy as np
+    from modules.Biomarkers import bravo_service as bs
+    from modules.Biomarkers.routines import availability as av, chronic_band_choice as cbc
+    from modules.ClosedLoopDeployment import threshold_comparison as _tc
+    uid = rd.get("ParticipantId")
+    participant = _participant_or_none(uid)
+    cand = (rd.get("Candidates") or [{}])[0] or {}
+    pair = cbc._canon(cand.get("channel")) if cand.get("channel") is not None else None
+    band = {"pair": pair, "centre_hz": cand.get("center_hz"), "side": request_hemisphere(rd)}
+    th = report.get("threshold") or {}
+    report_pair = {"upper": th.get("upper"), "lower": th.get("lower"), "rule": th.get("placement_rule")}
+    ps_info = report.get("pain_score") or {}
+    key = ps_info.get("key") or "nrs"
+    label = ps_info.get("label") or key
+    # the home record (chronic log) as C5 reads it, and each lead's own current
+    chronic = bs._load_recordings(uid, bs.CHRONIC_TYPES)
+    pdl = bs._load_recordings(uid, bs.POWERDOMAIN_TYPES)
+    samples = cbc.chronic_samples_by_pair(chronic, pdl)
+    schedules = _tc.frequency_schedules(chronic)
+    currents = cbc.lead_currents(chronic)
+    # the pain score the report is computed on, as the page's other pain readings take it
+    req = {"ParticipantId": uid, "LabelMetric": key}
+    if rd.get("IncludeClinicSheetRatings") is not None:
+        req["IncludeClinicSheetRatings"] = rd["IncludeClinicSheetRatings"]
+    pro = bs._load_pros(req, participant)
+    if str(rd.get("IncludeClinicSheetRatings") or "") in ("1", "true", "True"):
+        pro, _blk = bs._merge_clinic_sheet_ratings_into_pro_df(uid, key, key, pro, req)
+    blended, metric, _parts = bs._resolve_biomarker_metric({"LabelMetric": key}, pro)
+    ps = av.pain_series(blended, metric)
+    design = _adapter.design_rule_if_stored(participant, cand, hemisphere=request_hemisphere(rd)) or {}
+    block = _tc.comparison_block(
+        programmed=_programmed_adaptive(participant), band=band, report_pair=report_pair,
+        samples_by_pair=samples, schedules=schedules, lead_currents=currents,
+        report_t=np.asarray(ps.get("t", []), float), report_y=np.asarray(ps.get("y", []), float),
+        pain_label=label, design_table=design.get("table"))
+    block["pain_score_key"] = metric
+    return block
 
 
 def _run_for_participant(request_data):
