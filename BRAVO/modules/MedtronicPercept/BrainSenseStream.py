@@ -143,7 +143,10 @@ def saveBrainSenseStreams(StreamingTD, StreamingPower, FixBreaking=True):
 
         elif len(Channel) == 1:
             Recording["ChannelNames"] = [Channel[0] + " Power", Channel[0] + " Stimulation"]
-            ChannelIndex = 0 if np.all(np.array(StreamingPower[n]["Power"][:,1]) == 0) else 1
+            # the side read is the one with non-zero readings; an empty place on the grid (NaN,
+            # marked missing) is no reading and does not count (decision 480 (e))
+            _other = np.array(StreamingPower[n]["Power"][:,1], dtype=float)
+            ChannelIndex = 0 if np.all(_other[~np.isnan(_other)] == 0) else 1
             Recording["Data"] = np.zeros((len(StreamingPower[n]["Power"]), 2))
             Recording["Missing"] = np.zeros((len(StreamingPower[n]["Missing"]), 2))
             Recording["Data"][:,0] = StreamingPower[n]["Power"][:,ChannelIndex]
@@ -161,6 +164,12 @@ def saveBrainSenseStreams(StreamingTD, StreamingPower, FixBreaking=True):
 
         Recording["StartTime"] = StreamingPower[n]["FirstPacketDateTime"]
         Recording["Duration"] = Recording["Data"].shape[0] / Recording["SamplingRate"]
+        # each row's own reading time, seconds from the first reading (NaN for an empty place); the
+        # row's place on the grid, row / SamplingRate, is at most half a spacing from it. Named
+        # `ReadingTime`, not `Time`: two old readers take a stored `Time` as their time axis.
+        Recording["ReadingTime"] = np.asarray(StreamingPower[n]["Time"], dtype=float).copy()
+        if StreamingPower[n].get("SlotLayout"):
+            Recording["SlotLayout"] = StreamingPower[n]["SlotLayout"]
         Recording["Descriptor"] = {
             "Therapy": StreamingPower[n]["TherapySnapshot"]
         }
@@ -217,7 +226,8 @@ def saveBrainSenseStreams(StreamingTD, StreamingPower, FixBreaking=True):
                 if np.max(StartAmplitude) == 0:
                     PreviousUniqueAmplitudes = []
                     for n in StimulationChannelIndexes:
-                        PreviousUniqueAmplitudes.extend(np.unique(PowerDomainRecordings[i-1]["Data"][:, n]).tolist())
+                        _ma = PowerDomainRecordings[i-1]["Data"][:, n]
+                        PreviousUniqueAmplitudes.extend(np.unique(_ma[~np.isnan(_ma)]).tolist())   # empty places are no current
 
                     # Stimulation Unchanged
                     if not len(PreviousUniqueAmplitudes) == len(StimulationChannelIndexes): 
@@ -243,14 +253,22 @@ def saveBrainSenseStreams(StreamingTD, StreamingPower, FixBreaking=True):
                 TimeDomainRecordings[i-1]["Missing"] = np.concatenate((TimeDomainRecordings[i-1]["Missing"], np.ones((nSampleSkipped, TimeDomainRecordings[i-1]["Missing"].shape[1])), TimeDomainRecordings[i]["Missing"]))
                 TimeDomainRecordings[i-1]["Duration"] = TimeDomainRecordings[i]["StartTime"] + TimeDomainRecordings[i]["Duration"] - TimeDomainRecordings[i-1]["StartTime"]
 
-                nSampleSkipped = int(Timeskip * PowerDomainRecordings[i]["SamplingRate"])
+                # the band power's own places (decision 480 (e)): the second block's first reading
+                # goes to the place nearest its own start, counted from the first block's start at
+                # the stated rate (the time-domain gap above gave a different count whenever the
+                # two products' durations differed); the places between hold no number (NaN),
+                # marked missing, and each row keeps its own reading time
+                PowerRate = PowerDomainRecordings[i]["SamplingRate"]
+                PowerGap = PowerDomainRecordings[i]["StartTime"] - PowerDomainRecordings[i-1]["StartTime"]
+                nSampleSkipped = int(np.floor(PowerGap * PowerRate + 0.5)) - PowerDomainRecordings[i-1]["Data"].shape[0]
                 if nSampleSkipped < 0: 
                     nSampleSkipped = 0
 
-                FillingData = np.zeros((nSampleSkipped, PowerDomainRecordings[i-1]["Data"].shape[1]))
-                FillingData[:, StimulationChannelIndexes] = StartAmplitude
+                FillingData = np.full((nSampleSkipped, PowerDomainRecordings[i-1]["Data"].shape[1]), np.nan)
                 PowerDomainRecordings[i-1]["Data"] = np.concatenate((PowerDomainRecordings[i-1]["Data"], FillingData, PowerDomainRecordings[i]["Data"]))
                 PowerDomainRecordings[i-1]["Missing"] = np.concatenate((PowerDomainRecordings[i-1]["Missing"], np.ones((nSampleSkipped, PowerDomainRecordings[i-1]["Missing"].shape[1])), PowerDomainRecordings[i]["Missing"]))
+                if "ReadingTime" in PowerDomainRecordings[i-1] and "ReadingTime" in PowerDomainRecordings[i]:
+                    PowerDomainRecordings[i-1]["ReadingTime"] = np.concatenate((PowerDomainRecordings[i-1]["ReadingTime"], np.full(nSampleSkipped, np.nan), PowerDomainRecordings[i]["ReadingTime"] + PowerGap))
                 PowerDomainRecordings[i-1]["Duration"] = PowerDomainRecordings[i]["StartTime"] + PowerDomainRecordings[i]["Duration"] - PowerDomainRecordings[i-1]["StartTime"]
 
                 del(PowerDomainRecordings[i])
@@ -303,6 +321,16 @@ def createDefaultAnalysis(TimeDomainRecordings, PowerDomainRecordings):
                     
     return AllAnalyses
 
+def _real_rows(recording, column):
+    """The rows of one column that hold a reading the device made: not marked missing, and a
+    number (an empty place on the band-power grid is NaN, decision 480 (e))."""
+    values = np.asarray(recording["Data"][:, column], dtype=float)
+    real = np.isfinite(values)
+    missing = recording.get("Missing")
+    if missing is not None and np.shape(missing) == np.shape(recording["Data"]):
+        real &= np.asarray(missing)[:, column] == 0
+    return real
+
 def processTherapyInformation(data, devceInfo):
     StimulationSeries = []
     TherapyConfiguration = data["Descriptor"]
@@ -327,6 +355,11 @@ def processTherapyInformation(data, devceInfo):
             
             Stimulation = np.around(data["Data"][:,i],2)
             TimeArray = np.arange(len(Stimulation)) / data["SamplingRate"] + data["StartTime"]
+            # only the device's own readings (decision 480 (e)): a place with no reading is no current
+            _real = _real_rows(data, i)
+            Stimulation, TimeArray = Stimulation[_real], TimeArray[_real]
+            if len(Stimulation) == 0:
+                continue
             indexOfChanges = np.where(np.abs(np.diff(Stimulation)) > 0)[0]+1
             if len(indexOfChanges) == 0:
                 indexOfChanges = np.insert(indexOfChanges,0,0)
@@ -404,8 +437,9 @@ def extractPowerBands(Data, TherapySeries):
     for i in range(len(Data["ChannelNames"])):
         if Data["ChannelNames"][i].endswith(" Power"):
             TimeArray = np.arange(Data["Data"].shape[0]) / Data["SamplingRate"] + Data["StartTime"]
+            _real = _real_rows(Data, i)
             for j in range(len(TherapySeries)-1):
-                DataSelection = (TimeArray > TherapySeries[j]["Time"]+3) & (TimeArray < TherapySeries[j+1]["Time"]-3)
+                DataSelection = (TimeArray > TherapySeries[j]["Time"]+3) & (TimeArray < TherapySeries[j+1]["Time"]-3) & _real
                 TherapySeries[j][Data["ChannelNames"][i]] = Data["Data"][DataSelection,i]
 
     return TherapySeries

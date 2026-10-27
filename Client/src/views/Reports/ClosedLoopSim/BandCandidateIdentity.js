@@ -58,7 +58,7 @@ function KV({ label, children }) {
  * show further down. Folded rather than deleted, because the audit trail is worth keeping one click
  * away.
  */
-export default function BandCandidateIdentity({ bc, envelope }) {
+export default function BandCandidateIdentity({ bc, envelope, decides = null }) {
   const ev = bc.evidence || {};
   const lbl = bc.label || {};
   const prov = bc.provenance || {};
@@ -129,7 +129,18 @@ export default function BandCandidateIdentity({ bc, envelope }) {
                     : ev.credible_ci === true
                       ? <span style={{ color: PAL.ink }}> · ✓ credible</span> : null}
                 </KV>
-                <KV label="p from the mixed-effects model">{fmtP(ev.p_glmer)}</KV>
+                {/* Which p decides the verdict (decision 482: the rotation p), as the sign-off's
+                    "validated" gate names it (`decides`: "rotation" | "glmer" | null). */}
+                <KV label="p from the mixed-effects model">
+                  {fmtP(ev.p_glmer)}
+                  {decides === "glmer" ? " · decides" : (decides === "rotation" ? " · shown only" : "")}
+                </KV>
+                {/* the same model's exact rotation test, beside it (decision 477, "show both") */}
+                <KV label="p from shifting ratings in time">
+                  {fmtP(ev.p_rotation)}
+                  {ev.p_rotation != null && ev.rotation_n_orders ? ` (${ev.rotation_n_orders} shifts)` : ""}
+                  {decides === "rotation" ? " · decides" : ""}
+                </KV>
                 {/* "grouped by week" is stated because the ROC panel lower down groups the SAME
                     data by individual pain rating, and a reader comparing the two counts must
                     be able to see they are counting different things (open item 15). */}

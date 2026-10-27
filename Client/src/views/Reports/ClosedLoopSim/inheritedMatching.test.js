@@ -11,14 +11,16 @@
  *   3. the summary takes every setting but the direction, which the ROC's own toggle sets;
  *   4. a report or summary computed under other matching settings is withheld and named;
  *   5. the page's one line says which settings it inherited.
+ *
+ * Merged here 2026-10-05: candidateRequestParams.test.js. Each merged file's tests sit in a
+ * describe block named after it, with its reason above it.
  */
-import { saveControls } from "views/Reports/Biomarkers/biomarkerStateStore";
 
+import { saveControls } from "views/Reports/Biomarkers/biomarkerStateStore";
 import { biomarkerGridSettings } from "./useBandSweepGrid";
 import { deploymentReportBody } from "./useDeploymentReport";
-import { summaryRequestParams, withheldIfOtherBand } from "./candidateRequestParams";
-import { inheritedMatching, inheritedMatchingLine, matchingRequestKeys, MATCHING_KEYS }
-  from "./inheritedMatching";
+import requestParamsFromCandidate, { summaryRequestParams, withheldIfOtherBand } from "./candidateRequestParams";
+import { inheritedMatching, inheritedMatchingLine, MATCHING_KEYS, matchingRequestKeys } from "./inheritedMatching";
 
 const UID = "u-331";
 const BAND = { contact: "ONE_THREE_LEFT", center_freq_hz: 24.5, label: {}, grid_settings: {
@@ -109,5 +111,40 @@ describe("5. the page says which settings it inherited", () => {
     const line = inheritedMatchingLine(inheritedMatching(UID));
     expect(line).toMatch(/^Matching from Biomarkers, 2026-09-26 21:05 UTC: ±30 min/);
     expect(line).toMatch(/clinic sheets in, median split, Left Leg VAS\.$/);
+  });
+});
+
+/* From candidateRequestParams.test.js.
+ * A band picked on the "Choose a band" grid carries its grid's pain score, split and match window
+ * to the deployment summary (2026-09-23). Before, its empty label contributed nothing and the
+ * summary used NRS and a tertile split whatever grid the band came from.
+ */
+describe("from candidateRequestParams", () => {
+  const GRID = { sweep_metric: "left_leg_vas", metric_label: "Left Leg VAS", match_tolerance_min: 60,
+    match_direction: "pro_first", allow_window_reuse: false, label_strategy: "tertile",
+    percentile_low: 33.3333, percentile_high: 66.6667, include_clinic_sheet_ratings: true };
+
+  test("a grid-chosen band carries its grid's pain score, split and window", () => {
+    expect(requestParamsFromCandidate({ contact: "ONE_THREE_LEFT", label: {}, grid_settings: GRID }))
+      .toEqual({ LabelMetric: "left_leg_vas", LabelStrategy: "tertile", PercentileLow: 33.3333,
+        PercentileHigh: 66.6667, MatchToleranceMin: 60 });
+  });
+
+  test("never the match direction, which the cut-point sets, nor the clinic-sheet switch", () => {
+    const rp = requestParamsFromCandidate({ label: {}, grid_settings: GRID });
+    expect(rp).not.toHaveProperty("MatchDirection");
+    expect(rp).not.toHaveProperty("IncludeClinicSheetRatings");
+  });
+
+  test("a discovery candidate's own label still wins where it says something", () => {
+    const bc = { label: { pro_metric: "nrs", binarization: { strategy: "median" }, match_tolerance_min: 30 },
+      grid_settings: GRID };
+    expect(requestParamsFromCandidate(bc)).toEqual({ LabelMetric: "nrs", LabelStrategy: "median",
+      PercentileLow: 33.3333, PercentileHigh: 66.6667, MatchToleranceMin: 30 });
+  });
+
+  test("a band with neither says nothing, as before", () => {
+    expect(requestParamsFromCandidate({ label: {} })).toEqual({});
+    expect(requestParamsFromCandidate(null)).toEqual({});
   });
 });

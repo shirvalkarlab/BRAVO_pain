@@ -313,3 +313,57 @@ def test_longest_run_helper_uses_a_declared_tolerance_rather_than_equality():
     assert RP._longest_run_at_level_s(amp, 2.0, 3.0, tol=0.0) == 0.0
     assert RP._longest_run_at_level_s(None, 2.0, 3.0) is None
     assert RP._longest_run_at_level_s(amp, 2.0, None) is None
+
+
+# --- the four record-derived notes on the card, one wiring ----------------------------------------
+# The design rule (design_rule_note), the threshold occupancy check (occupancy_note), the
+# start-of-stretch bias check (startup_bias_note) and the robustness interval (robustness_note) each
+# hang one sentence on the card's rows. These three tests were written four times over, once in each
+# check's own test file (test_design_rule.py, test_occupancy.py, test_startup_bias.py,
+# test_robustness.py; moved here 2026-10-05); what each note says, and which rows it touches, is
+# still tested in that check's own file.
+_DR_TIMING = dict(averaging_ms=3000.0, onset_ms=30000.0)
+
+# note -> (the inputs for which the note must be None, the "nothing available" payload to attach)
+_NOTES = {
+    "design_rule_note": (
+        lambda x: PR.design_rule_note(x, upper=210.0, lower=160.0, **_DR_TIMING),
+        [{"refused": True, "reason": "x"}, None],
+        lambda pr: PR.attach_design_rule(pr, None, **_DR_TIMING)),
+    "occupancy_note": (
+        PR.occupancy_note, [{"available": False, "reason": "x"}, None],
+        lambda pr: PR.attach_occupancy(pr, {"available": False, "reason": "x"})),
+    "startup_bias_note": (
+        PR.startup_bias_note, [{"refused": True, "reason": "x"}, None],
+        lambda pr: PR.attach_startup_bias(pr, {"refused": True, "reason": "x"})),
+    "robustness_note": (
+        PR.robustness_note,
+        [{"refused": True, "reason": "x"}, None, {"refused": False, "intervals": {"onset_s": None}}],
+        lambda pr: PR.attach_robustness(pr, {"refused": True, "reason": "x"})),
+}
+
+
+def _all_modes():
+    plan = TY.ThresholdPlan(upper=210.579, lower=161.903, capture_amp_low=1.4, capture_amp_high=4.8)
+    return PR.prescribe_all_modes(threshold_plan=plan, candidate=_cand(), power_series=None,
+                                  validated_hemispheres=("Left",), configuring_both_hemispheres=False)
+
+
+@pytest.mark.parametrize("note", list(_NOTES))
+def test_each_note_is_none_when_its_check_was_refused_or_is_absent(note):
+    make, empty_inputs, _ = _NOTES[note]
+    for x in empty_inputs:
+        assert make(x) is None, (note, x)
+
+
+@pytest.mark.parametrize("note", list(_NOTES))
+def test_attaching_a_note_with_nothing_available_is_a_no_op(note):
+    out = _NOTES[note][2](_all_modes())
+    assert all(getattr(f, note) is None for f in out["modes"][PA.DUAL].fields)
+
+
+@pytest.mark.parametrize("note", list(_NOTES))
+def test_as_rows_carries_every_note_key(note):
+    rows = _all_modes()["modes"][PA.DUAL].as_rows()
+    assert all(note in r for r in rows)
+    assert all(r[note] is None for r in rows)

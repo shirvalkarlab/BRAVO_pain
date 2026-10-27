@@ -24,7 +24,8 @@
  *   4. SIGN AND PRINT, and Export.
  *   5. ONE "Details" FOLD holding everything that explained the above: who can resolve each item,
  *      the rule table's own sentences, how each value was derived and checked, and the full
- *      sign-off record. Closed when the configuration is allowed and supported, open otherwise.
+ *      sign-off record. Closed by default whatever the verdict (the PI, 2026-10-08); the
+ *      analysis's own reasons for stopping sit in the open under the bullets.
  *      The print stylesheet opens it, so the paper record keeps its full detail; the SCREEN is what
  *      is short.
  *
@@ -44,16 +45,19 @@ import { TRACKS } from "./stateTracks";
 import { provisionalCaveat } from "./ProvisionalNote";
 import { fmtHz } from "./deployFormat";
 import ParameterTable, { ParameterDetails } from "./PrescriptionPanel";
-import SignoffRecord, { useSignoffActions, StaleNotice, SnapshotFigures } from "./DeploySignoffCard";
+import SignoffRecord, { useSignoffActions, StaleNotice, SnapshotFigures, decidingP } from "./DeploySignoffCard";
 import WhatWouldChangeThis from "./WhatWouldChangeThis";
 import { JUMP_ROW_CLASS } from "views/Reports/paper/links";
 import BandCandidateIdentity from "./BandCandidateIdentity";
+import DeviceRuleLedger from "./DeviceRuleLedger";
 
 // Jump targets, set as `id` on the Grid items in index.js, in the order the page draws them.
 // DeploymentJumpLinks.order.test.js holds this list to the page's own order.
 export const JUMPS = [
+  { id: "cl-stim-program", label: "Stimulation program" },
+  { id: "cl-wiring", label: "Sense-to-control algorithm wiring" },
+  { id: "cl-decision", label: "Deployment decision" },
   { id: "cl-grid", label: "Band selection" },
-  { id: "cl-rules", label: "Device rule check" },
   { id: "cl-evidence", label: "Evidence consistency" },
   { id: "cl-stability", label: "Stability across stimulation states" },
   { id: "cl-background", label: "Background" },
@@ -101,8 +105,8 @@ export function decisionStatus(rep) {
     return { key: "unsupported", ink: STATE.blocked.ink, glyph: STATE.blocked.glyph,
       headline: "Device allows it; the analysis does not support it",
       sub: n
-        ? `The analysis stopped for ${n === 1 ? "a reason" : `${n} reasons`} of its own, printed `
-          + "under Details. Nothing here is permission to program."
+        ? `The analysis stopped for ${n === 1 ? "a reason" : `${n} reasons`} of its own, listed `
+          + "below. Nothing here is permission to program."
         : "The server's verdict is \"unsupported\". Nothing here is permission to program." };
   }
   if (provisionalCaveat(rep)) {
@@ -219,8 +223,41 @@ const SECONDARY = { textTransform: "none", ...TYPE.body, fontWeight: 400, minHei
   px: 2, borderRadius: "4px", boxShadow: "none", backgroundColor: PAL.surface, color: PAL.ink,
   border: `1px solid ${PAL.ink3}`, "&:hover": { backgroundColor: PAL.fillMuted } };
 
+/**
+ * The words naming which stimulator a card answers for, from the sense-to-control wiring (the PI,
+ * 2026-10-08): "Right stimulator · contralateral sensing, from the left band". Null with no wiring.
+ */
+export function stimulatorLine(stimulator) {
+  if (!stimulator) return null;
+  const { stim, source, kind } = stimulator;
+  if (kind === "contralateral") return `${stim} stimulator · contralateral sensing, from the ${source.toLowerCase()} band`;
+  if (kind === "no_band") return `${stim} stimulator · driven by a ${source.toLowerCase()} band`;
+  return `${stim} stimulator · ipsilateral sensing`;
+}
+
+/** A stimulator the wiring drives from a side with no band chosen: not checked, said in one card. */
+export function UncheckedStimulatorCard({ stimulator }) {
+  return (
+    <Card className="cl-decision-card" data-testid={`decision-unchecked-${stimulator.stim}`}
+      sx={{ width: "100%", backgroundColor: PAL.surface, border: `1px solid ${PAL.rule}`,
+        borderRadius: "6px", boxShadow: "none" }}>
+      <MDBox p={3}>
+        <MDTypography sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink }}>{stimulatorLine(stimulator)}</MDTypography>
+        <MDTypography component="h2" sx={{ ...TYPE.answer, ...WRAP.balance, color: STATE.notChecked.ink, mt: 0.5 }}>
+          <span aria-hidden="true" style={{ marginRight: 8 }}>{STATE.notChecked.glyph}</span>
+          {`Not checked: no band chosen on the ${stimulator.source.toLowerCase()}`}
+        </MDTypography>
+        <MDTypography sx={{ ...TYPE.lead, color: PAL.ink, mt: 1 }}>
+          Nothing here is permission to program.
+        </MDTypography>
+      </MDBox>
+    </Card>
+  );
+}
+
 export default function DecisionCard({ participantUid, bandCandidate, summary, deploymentReport,
-                                       chosenBand, bandRecord, cutpoint, mode, onMode, onRecompute }) {
+                                       chosenBand, bandRecord, cutpoint, mode, onMode, onRecompute,
+                                       stimulator = null }) {
   const bc = bandCandidate || {};
   const rep = repOf(deploymentReport);
   const loading = !!(deploymentReport && deploymentReport.loading);
@@ -235,7 +272,6 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
       sub: `The chosen ${mismatch.what || "band"} is ${mismatch.chosen}. Nothing on this page `
         + "describes it until the analysis is recomputed." }
     : decisionStatus(rep);
-  const allowedAndSupported = status.key === "supported" || status.key === "supported_provisional";
   const red = deviceBullets(rep);
   const yellow = unevaluatedBullets(rep, sm);
   const vd = (rep && rep.verdict_detail) || {};
@@ -263,6 +299,11 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
         <StaleNotice inputsStale={actions.inputsStale} computedAt={actions.computedAt}
           staleWhy={actions.staleWhy} />
 
+        {stimulator ? (
+          <MDTypography data-testid="decision-stimulator" sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink }}>
+            {stimulatorLine(stimulator)}
+          </MDTypography>
+        ) : null}
         {eyebrow ? (
           <MDTypography sx={{ ...TYPE.body, color: PAL.ink2 }}>{eyebrow}</MDTypography>
         ) : null}
@@ -295,6 +336,21 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
               label="Why the device refuses" />
             <Bullets items={yellow} cls="cl-bullets-yellow" ink={PAL.warnText} glyph={STATE.caution.glyph}
               label="Evidence that was not evaluated" />
+            {/* The module's blocker sentences, verbatim, in ink with ✕: the analysis's own reasons it
+                could not go on (no thresholds placed, a step that failed), not the device refusing,
+                and red is only for a device refusal or a value above the safe ceiling (the PI,
+                2026-09-26, TASTE_AUDIT.md D14). In the open since the Details fold stays closed
+                (the PI, 2026-10-08), so the reason is never one click away. */}
+            {blockers.length ? (
+              <MDBox className="cl-blockers" mt={1}>
+                {blockers.map((b) => (
+                  <MDTypography key={b} data-blocker="" sx={{ ...TYPE.body, fontWeight: 600, display: "block", color: STATE.blocked.ink, py: 0.25 }}>
+                    <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.blocked.glyph}</span>
+                    {b}
+                  </MDTypography>
+                ))}
+              </MDBox>
+            ) : null}
           </>
         ) : null}
 
@@ -319,26 +375,17 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
         </MDBox>
 
         <MDBox className="cl-details" mt={3}>
-          {/* Keyed on the verdict, so the fold opens by itself when the answer changes to one that
-              needs reading, and a reader's own toggle survives every other re-render. */}
-          <Fold key={status.key} show={detailsLabel} hide="Hide details" defaultOpen={!allowedAndSupported}>
+          {/* Closed by default whatever the verdict (the PI, 2026-10-08: "have the details collapsed
+              by default"); the red and caution bullets above already say why. Until then it opened
+              by itself on any verdict but "allowed and supported". Keyed on the verdict, so a new
+              answer starts closed again and a reader's own toggle survives every other re-render. */}
+          <Fold key={status.key} show={detailsLabel} hide="Hide details">
             <WhatWouldChangeThis report={deploymentReport} bare />
-            {/* The module's blocker sentences, verbatim, in ink with ✕: they are the analysis's own
-                reasons it could not go on (no thresholds placed, a step that failed), not the device
-                refusing, and red is only for a device refusal or a value above the safe ceiling
-                (the PI, 2026-09-26, TASTE_AUDIT.md D14). Its warnings (today the two D26 capture
-                checks) are not repeated here: they are the first entries of the caveats list in the
-                sign-off record below, and the D26 row above quotes them too. */}
-            {blockers.length ? (
-              <Section title="The analysis's own reasons it could not go on">
-                {blockers.map((b) => (
-                  <MDTypography key={b} data-blocker="" sx={{ ...TYPE.body, display: "block", color: STATE.blocked.ink, mt: 0.5 }}>
-                    <span aria-hidden="true" style={{ marginRight: 6 }}>{STATE.blocked.glyph}</span>
-                    {b}
-                  </MDTypography>
-                ))}
-              </Section>
-            ) : null}
+            {/* The device rule check, every rule, here rather than in a card of its own (the PI,
+                2026-10-08: "consolidate these"); its refusals are the red bullets above. */}
+            <Section title="Device rule check, every rule">
+              <DeviceRuleLedger report={deploymentReport} bare />
+            </Section>
             <Section title="How each value was worked out and checked">
               <ParameterDetails report={deploymentReport} mode={mode} />
             </Section>
@@ -348,7 +395,8 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
             </Section>
             {bc.contact ? (
               <Section title="The band as chosen">
-                <BandCandidateIdentity bc={bc} envelope={chosenBand} />
+                <BandCandidateIdentity bc={bc} envelope={chosenBand}
+                  decides={decidingP(summary && summary.data ? summary.data : null)} />
               </Section>
             ) : null}
           </Fold>

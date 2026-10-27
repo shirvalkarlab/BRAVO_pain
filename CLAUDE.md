@@ -32,9 +32,12 @@ cd Client && export PATH="/usr/local/bin:$PATH" npm_config_cache=/tmp/npmcache \
 cd Client && CI=true npx react-scripts test --watchAll=false src/views/Reports/figureStyle.test.js
 ```
 
+- **Fast run while working, full run before every commit** (the PI, 2026-10-05): `sh _agent_bridge/run_both_suites.sh --fast` leaves out ControlAnalyses and the tests listed in `BRAVO/modules/slow_tests.py` (about 40 s against 59 s).
 - **Two suites; a green run of one is not a green platform.** `run_tests.py` (plain `assert`):
   Biomarkers, CacheStore, DecodeCommon, ControlAnalyses, MedtronicPercept. pytest:
-  ClosedLoopDeployment, StimOptimizer, CacheStore, DecodeCommon, ControlAnalyses (the shared three
+  ClosedLoopDeployment, StimOptimizer, CacheStore, DecodeCommon, ControlAnalyses, StimRL (its
+  snapshot-database tests skip without SQLAlchemy; all run in the study's venv on the Mac),
+  SurveyForms (the shared three
   take no test arguments). Markers in `modules/pytest.ini`: `store` runs serially, `live` daily.
 - **No linter, type checker or formatter exists;** the gates are the two suites, the build and the
   page tests. **CI** (`.github/workflows/ci.yml`, every push and pull request): pytest without
@@ -138,6 +141,15 @@ its line about `MEGA_HANDOFF.md`, archived), `jevgrep` (rule 14).
     (`views/Reports/paper/selectStyle.js`). Verdict words belong on the Closed-Loop page. Details:
     skill `bravo-stimoptimizer-figures`, "House style for every BRAVO page".
 
+16. **A stuck job is stopped the moment it is found, before any diagnosis** (the PI, 2026-10-05, after
+    a background pass sat locked for 6.5 hours while it was being diagnosed). Stop it by process
+    number, confirm none is left, then work out why from a reproduction. Before ending a turn, check
+    nothing of ours is running far past its normal time. Every background loop's pass has a time limit.
+
+17. **`docker-compose.override.yml` may be committed and pushed** (the PI, 2026-10-06) when it holds no
+    password, token or key (check with `rg -i "token|password|key"` first). It is this server's own
+    settings. Any edit to it still needs his go-ahead first, and a container recreate to take effect.
+
 ## 8. Read first, and on demand
 
 @HOUSE_RULES_writing_and_claims.md
@@ -169,3 +181,41 @@ Full rules, notations and edge cases: `docs/clinic_sheets_parsing.yaml` (machine
 - **Clinic and home streams are never merged**: clinic ratings choose, home ratings confirm.
 - Traps: "8/10" stored by Excel as 10 August; Left lead 0-3 and Right 8-11; text after "/" in old
   notation is sEEG; bipolar "1+2-"; the device record cannot tell bipolar from monopolar.
+
+## 11. Ingester, calibration and REDCap rules (the PI, 2026-10-05; decisions 436-448)
+
+**Ingester.**
+- Ingest ALL neural data of every type from every export: event PSDs, BrainSense time-domain and band
+  power, indefinite streaming, montages and every survey mode (time-domain and PSD), electrode
+  identifier, in-session signal checks, threshold band-power streams, the chronic LSB log.
+  **Never discard intact neural data of any kind.**
+- Drop only a bit-for-bit duplicate of an ingested recording; one value off means ingest, time-stamp,
+  use for matching. Compare device values at face value: never rescale, and never compute a spectrum
+  or "relative power" of our own to decide identity or which run a spectrum belongs to.
+- Copies of an item in several exports are merged, never first-copy-wins; the result must not depend
+  on the order exports arrive. One export at a time, in session order.
+- Every time on the TABLET clock, never the INS clock. A spectrum whose run cannot be told is kept,
+  stamped with the session start (tablet clock) and flagged run unknown.
+- An event with no neural data is dropped; a recording missing one data type keeps the others, and the
+  missing type contributes no time to matching. Ingest never depends on pain-rating matching.
+- Extractor failures are written on the export's row, never swallowed.
+- Fix the ingester and re-ingest the whole record; never backfill or patch piecemeal. Verify a
+  re-ingest in the scratch database (`BRAVOReingest`) against the exports type by type first, then
+  live after a backup.
+- Montage facts: one side's 6 contact pairs are recorded together; the two sides one after the other.
+
+**Calibration.**
+- Device values at face value, no scaling; log power enters no calculation (§7.13).
+- The threshold band-power streams check the PSD->LSB route (decision 447): measured LSB against the
+  bridge's prediction from a same-export device PSD on the same contact pair at the stream's sensing
+  frequency, on the Biomarkers calibration panel and wherever the conversion is shown.
+- Signal-check spectra are the same quantity as montage spectra and go through the same bridge,
+  unscaled.
+
+**REDCap.**
+- REDCap stores California wall-clock time; it is converted to UTC, the scale every device and tablet
+  time is stored on (BRAVO stores seconds since 1970, UTC).
+- Every rating counts: repeated identical reports are independent ratings; a daily survey filed once
+  (no repeat label) is kept. Any pain survey dated after the implant (2025-07-16) must be ingested;
+  the stage-0 pain surveys all predate it.
+- With the clinic-sheet switch on, sheet ratings reach every pain reader on the page (decision 436).

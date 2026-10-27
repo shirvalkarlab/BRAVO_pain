@@ -232,7 +232,7 @@ class Field_:
             return "none"
         if self.status == "device_default":
             return "manufacturer"
-        if self.status == "read_off_programmer":
+        if self.status in ("read_off_programmer", "your_program"):
             return "clinician"
         if self.status == "device_computed":
             # Neither "participant" nor "manufacturer" is right here. The number is produced by the
@@ -492,6 +492,26 @@ def prescribe_all_modes(**kw):
     return {"recommended": rec.get("mode"), "recommendation": rec, "modes": out}
 
 
+
+def _with_home_swing(why, plan):
+    """``why`` with the threshold pair's home-swing warning appended (wave 2, C7; the PI,
+    2026-10-20: "Keep thresholds, warn"), the way C6 appends to a row's ``why``. Unchanged when the
+    plan carries no ``home_swing`` block (the neutral setting) or the block has no warning."""
+    w = ((getattr(plan, "placement", None) or {}).get("home_swing") or {}).get("warning")
+    if not w:
+        return why
+    return f"{why} {w}" if why else w
+
+def _with_below_zero(why, plan, which):
+    """``why`` with the pair's below-zero warning for threshold ``which`` ("upper", "lower",
+    "single") appended (a warning only; open item of decision 495). Unchanged when the plan carries
+    no ``below_zero`` block (the neutral setting) or that threshold is not below zero."""
+    w = (((getattr(plan, "placement", None) or {}).get("below_zero") or {}).get("warnings")
+         or {}).get(which)
+    if not w:
+        return why
+    return f"{why} {w}" if why else w
+
 def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_series=None,
               t_s=None, dt_s=None, replay_result=None, measured_latency_s=None,
               record_timing=None, programmed_timing=None):
@@ -548,6 +568,23 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
                     why="Recommended from the biomarker's own timescale, not hardcoded; see "
                         "percept_adaptive.recommend_threshold_mode."))
 
+    # --- the user's stimulation program (decision 467) -------------------------------------------
+    # Only when the Closed-Loop page's "Stimulation program" card was edited; the stimulated side's.
+    _sp_all = cand.get("stim_program") or {}
+    _sp_side = str(cand.get("actuated_hemisphere") or "").capitalize()
+    _sp = _sp_all.get(_sp_side) or {}
+    if _sp:
+        try:
+            from ClosedLoopDeployment import stim_program as _SPm
+        except ImportError:                              # pragma: no cover - host spelling
+            from . import stim_program as _SPm
+        F.append(Field_("Stimulation contacts", _SPm.contacts_text(_sp.get("contacts") or {}) or None,
+                        "", "your_program", why=f"From your stimulation program ({_sp_side} side)."))
+        F.append(Field_("Rate", _sp_all.get("rate_hz"), "Hz", "your_program",
+                        why="From your stimulation program; one rate for both sides."))
+        F.append(Field_("Pulse width", _sp.get("pw_us"), "us", "your_program",
+                        why=f"From your stimulation program ({_sp_side} side)."))
+
     # --- thresholds: the field set differs by mode -----------------------------------------------
     tp = threshold_plan
     up = getattr(tp, "upper", None)
@@ -577,6 +614,10 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
             why_up = ("Placed at the capture mean measured at the LOWER amplitude. The naming is "
                       "crossed on purpose (D24). Set manually in Dual mode.")
             why_lo = "Placed at the capture mean measured at the UPPER amplitude (D24)."
+        # Wave 2, C7 (a warning only): the home swing at the band, appended to both reasons.
+        why_up, why_lo = _with_home_swing(why_up, tp), _with_home_swing(why_lo, tp)
+        # A threshold below zero (a warning only): band power cannot go below zero.
+        why_up, why_lo = _with_below_zero(why_up, tp, "upper"), _with_below_zero(why_lo, tp, "lower")
         F.append(Field_("Upper LFP threshold", up, "LFP power", "derived",
                         range_source=thr_src, programmed=_prog("upper_threshold"), why=why_up))
         F.append(Field_("Lower LFP threshold", lo, "LFP power", "derived",
@@ -595,9 +636,11 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
         # front-end had to detect this row by matching its `why` text, which is a fragile stopgap
         # its author flagged for replacement — this is that replacement.
         F.append(Field_("Single LFP threshold", single, "LFP power", "device_computed",
-                        why="NOT typed in. The device computes it as 0.75 x (Upper - Lower) + "
+                        why=_with_below_zero(_with_home_swing(
+                            "NOT typed in. The device computes it as 0.75 x (Upper - Lower) + "
                             "Lower from the captured pair (D20), so it is shown here for the "
-                            "clinician to verify against the device rather than to enter."))
+                            "clinician to verify against the device rather than to enter.", tp),
+                            tp, "single")))
 
     # --- onset durations: TWO in dual, ONE in single ---------------------------------------------
     rng = PA.ONSET_RANGE_DUAL_MS if is_dual else PA.ONSET_RANGE_SINGLE_MS
@@ -735,18 +778,41 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
     tp_lim = _SAFE.ensure_applied(tp) if tp is not None else None
     a_lo, a_hi = tp_lim.amplitude_limits() if tp_lim is not None else (None, None)
     lim_src = f"documented range {PA.RANGE_SOURCE_FDA}"
-    F.append(Field_("Adaptive amplitude limit, lower", a_lo, "mA", "derived",
+    # The user's program sets the limits when it states them (decision 467), still held to the safe
+    # ceiling; the rows then say which capture currents the thresholds came from (D28 links them).
+    lim_why_lo = ("Inherits the lower capture amplitude (D28), which makes the choice of "
+                  "capture amplitudes a therapeutic decision and not only a measurement "
+                  "one. Must be above zero (D07).")
+    lim_why_hi = "Inherits the upper capture amplitude (D28)."
+    lim_status_lo = lim_status_hi = "derived"
+    lim_note_lo = getattr(tp_lim, "amp_limit_low_note", None)
+    lim_note_hi = getattr(tp_lim, "amp_limit_high_note", None)
+    for _which in ("lower", "upper"):
+        _v = _sp.get(f"{_which}_limit_mA") if _sp else None
+        if _v is None:
+            continue
+        _cap_note = None
+        if tp_lim is not None and getattr(tp_lim, "safety_ceiling_mA", None) is not None:
+            _v, _cap_note = _SAFE.cap(_v, tp_lim.safety_ceiling_mA, tp_lim.safety_ceiling_provenance,
+                                      was=f"your program's {_which} limit")
+        _cap_at = a_lo if _which == "lower" else a_hi
+        _why = ("From your stimulation program. "
+                + (f"The thresholds were placed from the capture at {_cap_at:g} mA (D28)."
+                   if _cap_at is not None else "No capture current is on record for this band."))
+        if _which == "lower":
+            a_lo, lim_why_lo, lim_status_lo, lim_note_lo = _v, _why, "your_program", _cap_note
+        else:
+            a_hi, lim_why_hi, lim_status_hi, lim_note_hi = _v, _why, "your_program", _cap_note
+    F.append(Field_("Adaptive amplitude limit, lower", a_lo, "mA", lim_status_lo,
                     range_=PA.ADAPTIVE_AMP_LIMIT_RANGE_MA, range_source=lim_src,
                     programmed=_prog("lower_limit_mA"),
-                    ceiling_note=getattr(tp_lim, "amp_limit_low_note", None),
-                    why="Inherits the lower capture amplitude (D28), which makes the choice of "
-                        "capture amplitudes a therapeutic decision and not only a measurement "
-                        "one. Must be above zero (D07)."))
-    F.append(Field_("Adaptive amplitude limit, upper", a_hi, "mA", "derived",
+                    ceiling_note=lim_note_lo,
+                    why=lim_why_lo))
+    F.append(Field_("Adaptive amplitude limit, upper", a_hi, "mA", lim_status_hi,
                     range_=PA.ADAPTIVE_AMP_LIMIT_RANGE_MA, range_source=lim_src,
                     programmed=_prog("upper_limit_mA"),
-                    ceiling_note=getattr(tp_lim, "amp_limit_high_note", None),
-                    why="Inherits the upper capture amplitude (D28)."))
+                    ceiling_note=lim_note_hi,
+                    why=lim_why_hi))
     paused = cand.get("paused_amplitude_mA")
     paused_note = None
     if paused is not None and tp_lim is not None:
@@ -754,7 +820,8 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
                                         tp_lim.safety_ceiling_provenance,
                                         was="the stated paused amplitude")
     F.append(Field_("Paused amplitude", paused, "mA",
-                    "derived" if paused else "read_off_programmer",
+                    ("your_program" if _sp.get("amp_mA") is not None else "derived") if paused
+                    else "read_off_programmer",
                     # The general amplitude envelope (C7 of the 2026-09-15 review, decision 200):
                     # every other current row printed its range and this one printed none.
                     range_=PA.ADAPTIVE_AMP_LIMIT_RANGE_MA, range_source=lim_src,

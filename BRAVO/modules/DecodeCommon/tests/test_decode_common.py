@@ -51,16 +51,13 @@ CHANNEL_NAMES = [
 ]
 
 
-def test_canonical_name_matches_the_platform_rule():
-    for name in CHANNEL_NAMES:
-        assert canon_channel(name) == availability._canon_channel(name), (
-            "the canonical form disagrees with the platform on %r" % (name,))
-
-
-def test_canonical_name_is_idempotent():
+def test_canonical_name_matches_the_platform_rule_and_is_idempotent():
+    """(Merged 2026-10-05 with `test_canonical_name_is_idempotent`.)"""
     for name in CHANNEL_NAMES:
         once = canon_channel(name)
-        assert canon_channel(once) == once
+        assert once == availability._canon_channel(name), (
+            "the canonical form disagrees with the platform on %r" % (name,))
+        assert canon_channel(once) == once, "not idempotent on %r" % (name,)
 
 
 # ----------------------------------------------------------------------------------------
@@ -85,28 +82,24 @@ def test_a_session_relative_start_time_is_refused_not_read_as_1970():
     assert to_epoch(12.5) is None
 
 
-def test_a_naive_start_time_is_read_as_utc_on_every_host():
+def test_a_naive_start_time_is_read_as_utc_on_every_host_and_an_explicit_offset_is_unchanged():
     """Open item 19, DECISIONS_and_open_items.md: a start time with no timezone attached names a
     moment in Universal Time (UTC), never the process's own local zone. `expected` is built with
     an explicit UTC offset rather than borrowed from either function under test, so this would
     have failed under the old rule on any host that does not itself run in Universal Time --
     unlike `test_start_time_matches_the_platform_rule`, which only proves the two functions agree
     with EACH OTHER and would have passed even under the old, host-dependent rule.
+
+    An explicit offset is already unambiguous; naive-means-UTC must not touch it. The Z suffix,
+    an explicit +00:00, and a genuinely non-UTC offset (-08:00, the same instant restated) must
+    all resolve to the same moment as their naive counterpart. (Merged 2026-10-05 with
+    `test_a_timezone_aware_start_time_is_unchanged_by_the_naive_utc_rule`.)
     """
     expected = datetime.datetime(2023, 11, 14, 22, 13, 20, tzinfo=datetime.timezone.utc).timestamp()
-    naive_string = "2023-11-14T22:13:20"
-    naive_datetime = datetime.datetime(2023, 11, 14, 22, 13, 20)
-    for value in (naive_string, naive_datetime):
+    for value in ("2023-11-14T22:13:20", datetime.datetime(2023, 11, 14, 22, 13, 20)):
         assert to_epoch(value) == expected, "the canonical form read %r as local time" % (value,)
         assert availability._to_epoch(value) == expected, (
             "the platform read %r as local time" % (value,))
-
-
-def test_a_timezone_aware_start_time_is_unchanged_by_the_naive_utc_rule():
-    """An explicit offset is already unambiguous; naive-means-UTC must not touch it. The Z suffix,
-    an explicit +00:00, and a genuinely non-UTC offset (-08:00, the same instant restated) must
-    all still resolve to the same moment as their naive counterpart above."""
-    expected = datetime.datetime(2023, 11, 14, 22, 13, 20, tzinfo=datetime.timezone.utc).timestamp()
     for value in ("2023-11-14T22:13:20Z", "2023-11-14T22:13:20+00:00",
                   "2023-11-14T14:13:20-08:00",
                   datetime.datetime(2023, 11, 14, 22, 13, 20, tzinfo=datetime.timezone.utc)):
@@ -180,19 +173,15 @@ def test_spectrum_records_keep_their_original_order():
     assert list(idx.psd("ZERO_THREE_LEFT")["t"]) == [T0 + 300, T0 + 100, T0 + 200]
 
 
-def test_a_recording_with_an_unreadable_start_time_is_dropped_and_counted():
+def test_a_recording_or_spectrum_record_with_an_unreadable_time_is_dropped_and_counted():
+    """(Merged 2026-10-05 with `test_a_spectrum_record_with_an_unreadable_time_is_dropped_and_counted`.)"""
     good = _td_recording(["ZERO_THREE_LEFT"], t0=T0)
     bad = _td_recording(["ZERO_THREE_LEFT"], t0=12.5)      # session-relative, refused
-    idx = _index([good, bad], [])
-    s = idx.summary()
+    s = _index([good, bad], []).summary()
     assert s["n_td_recordings_offered"] == 2
     assert s["n_td_traces_kept"] == 1
-
-
-def test_a_spectrum_record_with_an_unreadable_time_is_dropped_and_counted():
-    idx = _index([], [_psd_record("ZERO_THREE_LEFT", T0),
-                      _psd_record("ZERO_THREE_LEFT", None)])
-    s = idx.summary()
+    s = _index([], [_psd_record("ZERO_THREE_LEFT", T0),
+                    _psd_record("ZERO_THREE_LEFT", None)]).summary()
     assert s["n_psd_records_offered"] == 2
     assert s["n_psd_records_kept"] == 1
 
@@ -292,3 +281,63 @@ def test_tiles_identical_through_the_form_and_in_the_recording_lists_order():
     _assert_tiles_identical(a, b)
     assert a["n_td_windows"] > 0 and a["n_psd_windows"] == 4
     assert {"BrainSense streaming", "Montage", "Indefinite stream"} <= set(a["td"]["source"])
+
+
+# ----------------------------------------------------------------------------------------
+# the band labeller: the device's own bins, the same in both copies (decision 505's open item)
+# ----------------------------------------------------------------------------------------
+
+#: The table as it stood until 2026-10-27, written out by hand: it stopped at 26.4 Hz, so the
+#: device's 27.34 and 28.32 Hz sensing frequencies were labelled 26.4 Hz.
+_BINS_BEFORE_2026_10_27 = [3.9, 4.9, 5.9, 6.8, 7.8, 8.8, 9.8, 10.7, 11.7, 12.7, 13.7, 14.6,
+                           15.6, 16.6, 17.6, 18.6, 19.5, 20.5, 21.5, 22.5, 23.4, 24.4, 25.4, 26.4]
+
+
+def _labellers():
+    try:
+        from modules.DecodeCommon import representation as R
+    except ImportError:
+        from DecodeCommon import representation as R
+    return R, availability
+
+
+def test_the_band_labellers_agree_and_follow_the_device_spacing():
+    """The two copies of the bin table are the same array, every entry is the device's bin k
+    (k * 250/256 Hz, a 256-point transform at 250 samples a second) rounded to 0.1 Hz, from bin 4
+    (3.9 Hz) to the Nyquist limit, bin 128 (125.0 Hz), and the first 24 are the old table."""
+    R, av = _labellers()
+    a, b = np.asarray(av._FFT_BINS), np.asarray(R._FFT_BINS)
+    assert a.dtype == b.dtype and a.shape == b.shape and np.array_equal(a, b), "the two tables differ"
+    assert list(a) == [round(k * 250.0 / 256.0, 1) for k in range(4, 129)]
+    assert a.size == 125 and a[0] == 3.9 and a[-1] == 125.0
+    assert list(a[:24]) == _BINS_BEFORE_2026_10_27
+    assert np.all(np.diff(a) > 0), "bins in order, none repeated"
+
+
+def test_the_devices_sensing_frequencies_above_26_hz_get_their_own_labels():
+    """27.34 Hz is 27.3 and 28.32 Hz is 28.3 (they were 26.4); 26.37 Hz stays 26.4, in both copies;
+    every device bin centre, exact or as the device spells it to two decimals, is its own bin."""
+    R, av = _labellers()
+    for snap in (R.snap_freq, av.snap_freq):
+        assert snap(27.34) == 27.3 and snap(28.32) == 28.3 and snap(26.37) == 26.4
+        assert snap(27.34375) == 27.3 and snap(28.3203125) == 28.3
+        assert snap(None) is None and snap(float("nan")) is None and snap("x") is None
+        for k in range(4, 129):
+            for v in (k * 250.0 / 256.0, round(k * 250.0 / 256.0, 2)):
+                assert snap(v) == round(k * 250.0 / 256.0, 1), (k, v, snap(v))
+        assert snap(200.0) == 125.0               # above the Nyquist limit: the top bin
+        # the first inputs that move are those past halfway from 26.4 to 27.3 Hz
+        assert snap(26.84) == 26.4 and snap(26.86) == 27.3
+
+
+def test_every_label_the_old_table_gave_below_its_top_is_unchanged():
+    """Each old bin maps to itself, and every input from 0 to 26.849 Hz (in steps of 0.001 Hz) gets
+    the label the old table gave it: only inputs at or past 26.85 Hz, halfway to 27.3 Hz, move."""
+    R, av = _labellers()
+    old = np.asarray(_BINS_BEFORE_2026_10_27)
+    for snap in (R.snap_freq, av.snap_freq):
+        for c in _BINS_BEFORE_2026_10_27:
+            assert snap(c) == c, c
+        for hz in np.arange(0.0, 26.8495, 0.001):
+            want = float(old[int(np.argmin(np.abs(old - hz)))])
+            assert snap(float(hz)) == want, (hz, snap(float(hz)), want)
