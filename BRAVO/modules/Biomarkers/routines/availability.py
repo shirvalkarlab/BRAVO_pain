@@ -71,9 +71,13 @@ TYPE_MAP = {
 # Recording types to load for the availability timeline (superset of the decoder's four).
 AVAILABILITY_TYPES = list(TYPE_MAP.keys())
 
-# Percept LFP-power FFT bins (snapped sensing center freqs), matching FREQ_PALETTE on the frontend.
-_FFT_BINS = np.array([3.9, 4.9, 5.9, 6.8, 7.8, 8.8, 9.8, 10.7, 11.7, 12.7, 13.7, 14.6,
-                      15.6, 16.6, 17.6, 18.6, 19.5, 20.5, 21.5, 22.5, 23.4, 24.4, 25.4, 26.4])
+# Percept LFP-power FFT bins (snapped sensing center freqs): the device's own spacing, 250/256 Hz
+# (a 256-point transform at 250 samples a second), each centre rounded to 0.1 Hz, from bin 4 (3.9 Hz)
+# to the Nyquist limit, bin 128 (125.0 Hz). Until 2026-10-27 the table stopped at bin 27 (26.4 Hz), so
+# the device's 27.34 and 28.32 Hz sensing frequencies were labelled 26.4 Hz and merged with real
+# 26.37 Hz readings (decision 505's open item). The first 24 entries are the old table, unchanged.
+# The frontend colours and labels every centre by the same spacing (`snapFreq`, BiomarkerTimeline.js).
+_FFT_BINS = np.array([round(k * 250.0 / 256.0, 1) for k in range(4, 129)])
 
 
 def _canon_channel(name):
@@ -1177,8 +1181,9 @@ def _modeled_lsb_at_center_scan(channel, center_hz, *, td_recordings=None, psd_r
     """
     # Honor the deployment ROC's CHOSEN band center exactly — do NOT snap to a device FFT bin. The
     # transform DSP (td_to_lsb) and the bridge (device_psd_to_lsb) integrate band power at any center
-    # via the PSD, so a high-gamma ROC winner (e.g. 55 Hz) must be converted at 55 Hz, not clamped to
-    # the 26.4 Hz top of the sensing-bin table (snap_freq is for timeline-display bin alignment only).
+    # via the PSD, so a high-gamma ROC winner (e.g. 55 Hz) must be converted at 55 Hz, not at the
+    # nearest device bin (55.7 Hz). snap_freq is for timeline-display bin alignment only (until
+    # 2026-10-27 its table also stopped at 26.4 Hz, which would have clamped 55 Hz to 26.4).
     try:
         cz = float(center_hz)
     except (TypeError, ValueError):

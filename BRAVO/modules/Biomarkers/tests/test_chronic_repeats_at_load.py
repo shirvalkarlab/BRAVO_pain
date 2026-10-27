@@ -72,7 +72,9 @@ def test_the_saved_timeline_is_filed_under_the_new_rule():
     """The saved acquisition timeline (its stimulation row and band-power lines read the chronic
     log) is filed under the recording set, which the merge does not change; the rule version
     moves so the old timeline, every repeat counted, is not served."""
-    assert BS._ACQ_TIMELINE_RULE_VERSION.startswith("v6_chronic_readings_once")
+    # v6 was this change's own version; any later rule (v7, 2026-10-27: the band labeller's table to
+    # 125 Hz) keeps the timeline that counted every repeat out of reach as well
+    assert int(BS._ACQ_TIMELINE_RULE_VERSION[1:].split("_")[0]) >= 6
 
 
 def test_the_loader_carries_the_signal_lead_and_files_a_copy_under_its_lead():

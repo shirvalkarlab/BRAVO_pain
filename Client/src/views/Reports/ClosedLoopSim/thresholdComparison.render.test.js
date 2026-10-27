@@ -73,7 +73,7 @@ describe("Programmed now vs candidates (RCS08, L 0-3 27.5 Hz, the band the devic
     const lim = document.querySelector('[data-testid="threshold-comparison-limits"]');
     expect(lim.textContent).toMatch(/^▲13 Left Leg VAS reports have a home reading at this band, 13 of them filed 07:00-20:00, over 17 days\. Too few/);
     expect(lim.textContent).toContain("A clinician programs the device; nothing here writes to it.");
-    expect(container.textContent).toContain("round 27.34 and 28.32 Hz down to 26.4 Hz");
+    expect(container.textContent).toContain("the other pages file the same readings by the device's 0.98 Hz bins (27.34 Hz as 27.3, 28.32 Hz as 28.3)");
   });
 });
 

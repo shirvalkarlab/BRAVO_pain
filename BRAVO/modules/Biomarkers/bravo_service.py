@@ -4570,7 +4570,7 @@ _ACQ_TIMELINE_KIND = "acquisition_timeline"
 # v2 (decision 313): a chronic file spanning the implant date is dated from it, not from 2025-06-18.
 # v3 (item P-11, 2026-10-06): indefinite streaming adds modelled points at the band in force.
 # v4 (decision 461, 2026-10-06): each streaming run's own band; chronic samples under the pair in force.
-_ACQ_TIMELINE_RULE_VERSION = "v6_chronic_readings_once"   # v5: decision 462; v6: each chronic reading once, the averaged-in invalid code blanked (item 6a/6b, 2026-10-18)  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
+_ACQ_TIMELINE_RULE_VERSION = "v7_bins_to_125hz"   # v5: decision 462; v6 "v6_chronic_readings_once": each chronic reading once, the averaged-in invalid code blanked (item 6a/6b, 2026-10-18); v7 2026-10-27: every sensing and peak frequency labelled by the device's 250/256 Hz bins up to 125 Hz (27.34 Hz is 27.3, 28.32 Hz is 28.3; the table stopped at 26.4 Hz)  # tablet clock (2026-09-26): every time from the tablet's clock, TabletClock.py
 
 
 def _acquisition_timeline_key(recording_set):

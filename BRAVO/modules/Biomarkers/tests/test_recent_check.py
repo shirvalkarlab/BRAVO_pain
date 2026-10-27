@@ -344,7 +344,7 @@ def test_the_neutral_setting_files_grids_under_the_rule_before_c8():
     env["BRAVO_RECENT_CHECK"] = "0"
     off = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
                          timeout=120).stdout.split()
-    assert on == ["True", "v34_recent_check", "v8_recent_check"], on
+    assert on == ["True", "v35_bins_to_125hz", "v8_recent_check"], on
     assert off == ["False", "v33_daily_swing", "v7_daily_swing"], off
 
 

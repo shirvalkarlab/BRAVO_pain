@@ -23,9 +23,10 @@ contact pair, never pooled.
 
 WHICH READINGS. A home reading counts for a band when the device's own sensing frequency at its
 time (the chronic schedule's `FreqScheduleHz`, unrounded) is within 0.5 Hz of the band's centre,
-the nearest such frequency (C5's rule). The schedule is read unrounded because the band labeller
-the other pages use (`representation.snap_freq`) stops at 26.4 Hz, so 27.34 and 28.32 Hz sensing
-is filed there as 26.4 Hz (found on 2026-10-26; open).
+the nearest such frequency (C5's rule). The schedule is read unrounded. The band labeller the
+other pages use (`representation.snap_freq`) stopped at 26.4 Hz until 2026-10-27, filing 27.34 and
+28.32 Hz sensing as 26.4 Hz (found on 2026-10-26); it now runs on the device's 250/256 Hz bins to
+125 Hz, so it files the same readings at 27.3 and 28.3 Hz and the two agree.
 
 WHAT IT CANNOT SHOW. The pain reports with a home reading at one band are few and all filed by day;
 there is no randomised comparison; a difference on one visit day or one fortnight is not evidence
@@ -79,8 +80,8 @@ WHAT = ("The thresholds the device runs now beside three candidates, each read o
 LIMITS_FIXED = ("No randomised comparison: the reports were not assigned to thresholds. A difference "
                 "here over a few days is not evidence that a candidate is better. A clinician programs "
                 "the device; nothing here writes to it.")
-LABELLER_NOTE = ("Home readings are taken at the device's own sensing frequency: the home-record labels "
-                 "elsewhere on the pages round 27.34 and 28.32 Hz down to 26.4 Hz (open).")
+LABELLER_NOTE = ("Home readings are taken at the device's own sensing frequency; the other pages file "
+                 "the same readings by the device's 0.98 Hz bins (27.34 Hz as 27.3, 28.32 Hz as 28.3).")
 DUTY_WHAT = ("share of 10-minute readings after which the Dual mode would hold the upper current: up after "
              "a reading above the upper threshold, down after one below the lower, held between; the "
              "device decides on its own averaging (seconds), so this is an estimate")

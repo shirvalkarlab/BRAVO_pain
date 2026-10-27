@@ -6,7 +6,8 @@ device writes it (the active group in `Groups.Final`; RCS08's group D of 2026-10
 ganged to the left lead's signal); the manufacturer guidance's percentiles worked by hand; the three
 state shares adding to the whole; candidate (c) fitted on the earlier reports only (the later ones
 and the later home readings can be anything); home readings chosen by the device's own sensing
-frequency, not the band label that clamps at 26.4 Hz; and the neutral setting, field for field.
+frequency, not the band label (which clamped at 26.4 Hz until 2026-10-27); and the neutral setting,
+field for field.
 """
 import copy
 import subprocess
@@ -152,8 +153,9 @@ def test_the_fitted_candidate_never_uses_a_later_report_or_a_later_home_reading(
 
 def test_home_readings_are_chosen_by_the_devices_own_frequency_not_the_clamped_label():
     """RCS08's left lead sensed L 0-3 at 26.37 Hz, then at 27.34 Hz from 2026-10-08; the band labeller
-    files both as 26.4 Hz. The 27.5 Hz band takes only the 27.34 Hz readings; 26.5 Hz only the
-    26.37 Hz ones."""
+    filed both as 26.4 Hz until 2026-10-27, and the samples here still carry that label, so the band
+    is shown to be chosen by the schedule, not the label. The 27.5 Hz band takes only the 27.34 Hz
+    readings; 26.5 Hz only the 26.37 Hz ones."""
     t = np.arange(0.0, 20 * 600.0, 600.0) + 1.79e9
     switch = t[10]
     samples = {"ZERO_THREE_LEFT": {"t": t, "y": np.arange(20.0), "freq_hz": np.full(20, 26.4)}}

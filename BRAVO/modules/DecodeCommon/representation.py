@@ -70,13 +70,15 @@ import numpy as np
 # code is a miss rather than a wrong answer. This is not the canonicalisation rule's own
 # version -- that is `_CHANNEL_CANON_VERSION` in bravo_service, and a change there must also
 # bump this.
-CHANNEL_INDEX_VERSION = 5      # 2: traces carry `seq` (recording order) and `product`
+CHANNEL_INDEX_VERSION = 6      # 2: traces carry `seq` (recording order) and `product`
                                 # 3: native_lsb_by_channel added (Power-Domain + Chronic Timeline,
                                 #    values unconverted -- the "one decoding step" for every
                                 #    stream `availability.lsb_series` reads, per its own tiers)
                                 # 4: each streaming run's own band; chronic samples filed under the
                                 #    contact pair in force (decision 461, `run_band_hz`, `chronic_pair_keys`)
                                 # 5: a streaming run reading 0 throughout left out (decision 462)
+                                # 6: the band labeller's table runs to 125 Hz (2026-10-27): 27.34 and
+                                #    28.32 Hz readings filed at 27.3 and 28.3 Hz, no longer at 26.4
 
 
 def canon_channel(name):
@@ -134,11 +136,13 @@ def to_epoch(value):
     return None
 
 
-#: The device's own FFT bin centers, byte-for-byte `availability._FFT_BINS`. Duplicated here for
-#: the same reason `canon_channel` is duplicated above -- this package must be exercisable with no
-#: import of the Biomarkers routines, and a test asserts the two arrays agree.
-_FFT_BINS = np.array([3.9, 4.9, 5.9, 6.8, 7.8, 8.8, 9.8, 10.7, 11.7, 12.7, 13.7, 14.6,
-                      15.6, 16.6, 17.6, 18.6, 19.5, 20.5, 21.5, 22.5, 23.4, 24.4, 25.4, 26.4])
+#: The device's own FFT bin centers, byte-for-byte `availability._FFT_BINS`: the spacing 250/256 Hz,
+#: rounded to 0.1 Hz, from 3.9 Hz (bin 4) to the Nyquist limit, 125.0 Hz (bin 128). Until 2026-10-27
+#: it stopped at 26.4 Hz, so 27.34 and 28.32 Hz sensing was labelled 26.4 Hz (decision 505's open
+#: item). Duplicated here for the same reason `canon_channel` is duplicated above -- this package
+#: must be exercisable with no import of the Biomarkers routines, and a test asserts the two arrays
+#: agree (`test_decode_common.test_the_band_labellers_agree_and_follow_the_device_spacing`).
+_FFT_BINS = np.array([round(k * 250.0 / 256.0, 1) for k in range(4, 129)])
 
 #: The device's missing-sample sentinel for LFP power columns, byte-for-byte
 #: `availability._POWER_SENTINEL`.
