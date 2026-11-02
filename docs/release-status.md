@@ -1,10 +1,22 @@
-# November 1 source update — validation in progress
+# November Prasad update — live acceptance passed November 2, 2026 UTC
 
 The [Prasad update](prasad-update-2026-11-01.md) integrates canonical report
 behavior through `de7ea132`, preserving all seven Aditya All Data Streams tabs.
-The full local frontend suite passes 185 suites / 1,978 tests and the production
-bundle builds. Final CI and hosted acceptance remain pending; the earlier
-accepted release below is historical.
+The complete portable backend CI suite passes 3,700 tests; the frontend passes
+185 suites / 1,978 tests and builds successfully. Six changed critical scientific
+modules have individually enforced branch coverage above 95%.
+
+Live checks verified normal owner/viewer sign-in, identical saved presentation
+responses, populated seven-tab views, selectors, recorded settings and sampled
+chart tooltips. The native Closed-loop check read existing saved results under
+read-only guards without rebuilding; the full native page was not rendered.
+No provider import or data migration was performed. Existing jobs and private
+configuration were preserved, target timers restored and maintenance cleared.
+The public source and final checks are tracked in
+[PR #23](https://github.com/shirvalkarlab/BRAVO_pain/pull/23).
+
+The older checkpoints below describe their dated acceptance scope. They do not
+assert that every optional analysis or upstream source is complete.
 
 # Release status
 
