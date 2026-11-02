@@ -70,6 +70,49 @@ def _rule(left_rings, right_rings):
     return SR.sensing_rule_block({"Left": set(left_rings), "Right": set(right_rings)})
 
 
+def test_dated_contacts_missing_and_present_keep_rule_provenance(monkeypatch):
+    from modules.Biomarkers.routines import stim_current
+    monkeypatch.setattr(stim_current, "contacts_in_force", lambda uid: None)
+    missing = FC.rule_block_for_participant("synthetic")
+    assert missing["available"] is False and missing["by_side"] == {}
+    assert "no dated stimulation settings" in missing["reason"]
+    monkeypatch.setattr(stim_current, "contacts_in_force", lambda uid: {
+        "by_side": {"Left": {"rings": {1}}, "Right": {"rings": {2}}}})
+    present = FC.rule_block_for_participant("synthetic")
+    assert present["available"] is True
+    assert FC.allowed_pairs(present) == FC.allowed_pairs(_rule([1], [2]))
+
+
+def test_missing_grids_and_malformed_rows_are_not_added_to_the_family():
+    ch = "ZERO_THREE_LEFT"
+    grid = _grid(ch, [0.02])
+    grid["best_correlation_rows"].append(None)
+    grid["best_auc_rows"].append("unavailable")
+    grid["by_source_grid"] = {"td": _grid(ch, [0.03]), "psd": None}
+    grid["by_source_grid"]["td"]["best_correlation_rows"].append(None)
+    grid["by_source_grid"]["td"]["best_auc_rows"].append(None)
+    original = copy.deepcopy(grid)
+    corrected, block = FC.correct({ch: grid, "ZERO_THREE_RIGHT": None}, _rule([1, 2], [1, 2]))
+    assert grid == original
+    assert block["n_in_family"] == 1
+    assert corrected[ch]["by_source_grid"]["td"]["best_correlation_rows"][0]["family_q"] == 0.03
+    assert corrected["ZERO_THREE_RIGHT"] is None
+    assert corrected[ch]["best_auc_rows"][-1] == "unavailable"
+    absent, empty = FC.correct({ch: {"choosing_grid": "none"}}, _rule([1, 2], []))
+    assert empty["n_in_family"] == 0
+    assert absent[ch]["choosing_grid"] == "none"
+
+
+def test_mixed_grid_choice_uses_its_own_p_values(monkeypatch):
+    ch = "ZERO_THREE_LEFT"
+    monkeypatch.setattr(SW, "CHOOSING_GRID", "mixed")
+    sweep = _sweep(ch, [0.03], "synthetic left")
+    corrected, block = FC.correct({ch: sweep}, _rule([1, 2], []))
+    assert block["n_in_family"] == 1
+    assert corrected[ch]["best_correlation_rows"][0]["family_q"] == 0.001
+    assert corrected[ch]["by_source_grid"]["td"]["best_correlation_rows"][0]["family_q"] is None
+
+
 def _resp(sweeps, rule):
     return {"band_time_sweep": sweeps, "label_metric": "nrs", "metric_label": "NRS (0–10)",
             "sensing_rule": rule}

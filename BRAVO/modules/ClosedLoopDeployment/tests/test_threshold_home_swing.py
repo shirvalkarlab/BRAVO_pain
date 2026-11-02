@@ -57,6 +57,31 @@ PAIR = "ZERO_THREE_RIGHT"
 CAND = {"channel": PAIR, "center_hz": 9.5, "band_width_hz": 5.0}
 
 
+def test_absent_plan_and_nonfinite_home_values_do_not_invent_thresholds():
+    samples = {PAIR: {"t": [1760000000.0], "y": [float("nan")], "freq_hz": [9.77]}}
+    block = TPL.home_swing_block(samples, PAIR, 9.5)
+    assert block["status"] == DS.STATUS_NO_HOME_RECORD
+    assert block["ratio"] is None and block["n_readings"] == 0
+    plan, placement = TPL.with_home_swing(None, None, block)
+    assert plan is None and placement == {"home_swing": block}
+    assert TPL.with_below_zero(None, placement) == (None, placement)
+    for up, lo in ((float("nan"), 1), (2, float("inf"))):
+        assert TPL.single_threshold(up, lo) is None
+
+
+def test_failed_averaging_reports_unavailable_instead_of_a_numeric_median(monkeypatch):
+    from ClosedLoopDeployment import occupancy
+
+    def unavailable(*args, **kwargs):
+        raise ValueError("synthetic missing averaging input")
+
+    monkeypatch.setattr(occupancy, "averaged_readings", unavailable)
+    answer = TPL.median_level([], [], averaging_s=3.0)
+    assert answer["available"] is False
+    assert answer["median"] is None and answer["n_readings"] == 0
+    assert "synthetic missing averaging input" in answer["reason"]
+
+
 def _samples(level_by_local_hour, *, freq_hz=9.77, days=6, pair=PAIR):
     """A chronic log on ``pair`` at ``freq_hz``: one reading every 10 minutes for ``days`` days,
     each reading the value its California local hour is given."""
@@ -77,6 +102,15 @@ def _record_plan():
                                                       "min_separation": 100.0}],
                          averaging_ms=3000, onset_ms=30000)
     return TPL.apply(cap, pl, observed_series=np.linspace(200.0, 800.0, 101)), pl
+
+
+def test_missing_observations_do_not_become_zero_occupancy():
+    plan, placement = _record_plan()
+    placed = TPL.apply(plan, placement, observed_series=[float("nan"), float("inf")])
+    assert placed.upper == plan.upper and placed.lower == plan.lower
+    assert placed.frac_time_below is None
+    assert placed.frac_time_between is None
+    assert placed.frac_time_above is None
 
 
 # --- the warning -------------------------------------------------------------------------------

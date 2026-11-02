@@ -262,3 +262,99 @@ def test_the_neutral_setting_is_read_from_the_environment():
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env,
                          cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     assert out.stdout.strip() == "False", out.stderr
+
+
+def test_complete_comparison_keeps_threshold_sources_and_current_observations_distinct():
+    # Six fictional days; four levels per day. Daytime quartiles are 175/325.
+    t = _utc([f"2024-02-{d:02d} 10:{m:02d}" for d in range(1, 7) for m in (0, 10, 20, 30)])
+    y = np.tile([100., 200., 300., 400.], 6)
+    rt, ry = t + 300, y / 10
+    programmed = {"available": True, "group": "GROUP_B", "sides": {"Left": {
+        "signal_pair": "ZERO_TWO_LEFT", "centre_hz": 29.3, "upper": 350., "lower": 150.,
+        "lower_limit_mA": .5, "upper_limit_mA": 4.}}}
+    kw = dict(programmed=programmed, band={"pair": "ZERO_TWO_LEFT", "centre_hz": 29.5, "side": "Left"},
+              report_pair={"upper": 300., "lower": 150., "rule": "clinic-only"},
+              samples_by_pair={"ZERO_TWO_LEFT": {"t": t, "y": y}},
+              schedules={"Left": [(t[0], 29.3)]}, lead_currents={"Left": {"t": t.tolist(), "y": (y / 100).tolist()}},
+              report_t=rt, report_y=ry, pain_label="Synthetic pain")
+    before = copy.deepcopy(kw)
+    block = TC.comparison_block(**kw)
+    rows = {r["key"]: r for r in block["rows"]}
+    assert set(rows) == {TC.ROW_PROGRAMMED, TC.ROW_CLINIC, TC.ROW_GUIDANCE, TC.ROW_FITTED}
+    assert (rows[TC.ROW_GUIDANCE]["lower"], rows[TC.ROW_GUIDANCE]["upper"]) == (175., 325.)
+    assert rows[TC.ROW_PROGRAMMED]["shares"]["all"]["above"] == .25
+    assert rows[TC.ROW_PROGRAMMED]["device_current"]["median_mA"] == 2.5
+    assert rows[TC.ROW_PROGRAMMED]["device_current"]["median_mA_when"] == {"above": 4., "between": 2.5, "below": 1.}
+    assert rows[TC.ROW_CLINIC]["upper"] == 300. and rows[TC.ROW_CLINIC]["rule"] == "clinic-only"
+    assert block["n_reports"] == 24 and not block["too_few_reports"] and block["changes_nothing"]
+    assert block["programmed"]["same_band_as_report"] is True
+    assert kw["programmed"] == before["programmed"] and np.array_equal(kw["report_y"], before["report_y"])
+    # A missing current series must not turn into a measured zero.
+    kw["lead_currents"] = {"Left": {"t": t.tolist(), "y": [float("nan")] * t.size}}
+    absent = TC.comparison_block(**kw)
+    assert "device_current" not in absent["rows"][0]
+    # Each candidate is evaluated on the report band; a different programmed band is qualified.
+    kw["programmed"]["sides"]["Left"]["centre_hz"] = 12.5
+    other = TC.comparison_block(**kw)
+    assert other["programmed"]["same_band_as_report"] is False
+    assert other["rows"][0]["n_readings"] == 0
+    assert any("at its own" in note for note in other["notes"])
+
+
+def test_comparison_missing_inputs_keep_unavailability_explicit():
+    kw = dict(programmed={"available": False, "reason": "missing export"},
+              band={"pair": "ZERO_TWO_LEFT", "centre_hz": 29.5, "side": "Left"},
+              report_pair={}, samples_by_pair={}, schedules={}, report_t=[], report_y=[], pain_label="Pain")
+    block = TC.comparison_block(**kw)
+    assert block["rows"] == [] and block["n_reports"] == 0 and block["too_few_reports"]
+    assert block["programmed"]["reason"] == "missing export"
+    assert any("No home record" in note for note in block["notes"])
+    t = _utc(["2024-02-01 10:00"])
+    kw.update(samples_by_pair={"ZERO_TWO_LEFT": {"t": t, "y": [200.]}},
+              schedules={"Left": [(t[0], 29.3)]}, report_t=t + 300, report_y=[20.])
+    block = TC.comparison_block(**kw)
+    assert [r["key"] for r in block["rows"]] == [TC.ROW_GUIDANCE]
+    assert not block["fit"]["available"] and any("not fitted" in n for n in block["notes"])
+
+
+def test_incomplete_device_fields_and_bad_schedule_entries_do_not_create_measurements():
+    entry = {"HemisphereLocation": "HemisphereLocationDef.Right", "Channel": "SensingElectrodeConfigDef.ZERO_AND_ONE",
+             "SensingSetup": {"FrequencyInHertz": "invalid"}, "UpperLfpThreshold": float("inf")}
+    export = {"Groups": {"Final": [None, {"ActiveGroup": True}, {"ActiveGroup": True, "ProgramSettings": {
+        "SensingChannel": [None, {"HemisphereLocation": "Unknown"}, entry]}}]}}
+    side = TC.programmed_adaptive(export)["sides"]["Right"]
+    assert side["signal_pair"] == "ZERO_ONE_RIGHT" and side["upper"] is None and side["centre_hz"] is None
+    recs = [None, {"ChannelNames": ["Unknown"], "FreqScheduleHz": [[0, 12]]},
+            {"ChannelNames": ["RightHemisphere ZERO_ONE"], "FreqScheduleHz": [[], None, [1, "bad"], [2, np.nan], [3, 12.5]]}]
+    assert TC.frequency_schedules(recs) == {"Left": [], "Right": [(3., 12.5)]}
+    assert np.isnan(TC.frequency_at([2], [])).all()
+    assert TC.frequency_at([], [(0, 1)]).size == 0
+    assert TC.local_hours([]).size == TC.local_days([]).size == 0
+    assert TC.side_of_pair("unknown") is None and TC._pair_words("unknown") == "unknown"
+    assert TC._pair_words("ZERO_ONE_RIGHT") == "R 0-1"
+
+
+def test_empty_thresholds_and_small_samples_have_no_invented_inference():
+    t = _utc(["2024-02-01 10:00", "2024-02-01 10:10"])
+    assert TC.state_shares([], 2, 1)["above"] is None
+    assert TC.state_shares([1, 2], None, 1)["between"] is None
+    assert TC.duty(t, [1, 2], None, 1)["high"] is None
+    assert TC.duty(t, [1, 2], 1.5, .5)["high_night"] is None
+    night = _utc(["2024-02-01 01:00", "2024-02-01 01:10"])
+    assert TC.duty(night, [1, 2], 1.5, .5)["high_day"] is None
+    assert TC.covering_index([1], []).tolist() == [-1]
+    assert TC._median_interval([1, 2, 3, 4, 5, 6]) == {"n": 6, "median": 3.5, "low": 1., "high": 6.}
+    assert TC.rotation_p([1, 0], [1, 2]) == (None, None, 0)
+    assert TC.fit_upper_on_earlier(t + 300, [1, 2], t, [1, 2])["available"] is False
+    assert "no daytime" in TC.fit_upper_on_earlier(night + 300, [1, 2], night, [1, 2])["reason"]
+    assert TC.flags(-1, -2, None) == ["lower threshold below zero", "upper threshold below zero"]
+    assert "Too few" in TC.limits_text(2, None, None, "Pain")
+
+
+def test_day_resampling_keeps_days_together_and_reports_insufficient_draws():
+    t = _utc(["2024-02-01 10:00", "2024-02-01 11:00", "2024-02-02 10:00", "2024-02-02 11:00"])
+    # One above and one below each day; all resampled complete days retain a difference of ten.
+    state = np.array([1, 0, 1, 0]); pain = np.array([20., 10., 20., 10.])
+    assert TC.day_resampled_interval(state, pain, t, n_boot=150) == (10., 10.)
+    assert TC.day_resampled_interval(state, pain, t, n_boot=20) == (None, None)
+    assert TC.day_resampled_interval(np.ones(4), pain, t, n_boot=150) == (None, None)

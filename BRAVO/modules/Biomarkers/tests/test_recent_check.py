@@ -402,3 +402,22 @@ def test_the_grid_and_the_sign_off_print_the_same_cut_on_explicit_live_record():
     assert grid_cut["choice_cut_date"] == signoff_cut["choice_cut_date"]
     assert grid_cut["choice_cut_s"] == signoff_cut["choice_cut_s"]
     assert grid_cut["n_reports"] == signoff_cut["n_reports"] > 0
+
+
+def test_recent_warning_edge_cases_preserve_missingness_and_original_row_fields():
+    assert TS.choice_cut([1., 2.], share=0) is None
+    assert TS.cut_block([1., 2., 3.])["n_reports"] == 3
+    assert TS.cut_block([1., 2., 3.], [1.])["n_reports"] == 3
+    t = np.arange(12.) + 1
+    cut = {"choice_cut_s": 0., "choice_cut_date": "synthetic"}
+    constant = TS.recent_check(np.ones(12), t, t, cut, r_all=.5, n_boot=100, rng=np.random.default_rng(1))
+    assert constant["pearson_r"] is None and constant["consistent"] is None
+    assert "does not vary" in constant["note"]
+    no_direction = TS.recent_check(t, t, t, cut, r_all=None, n_boot=100, rng=np.random.default_rng(1))
+    assert no_direction["pearson_r"] == pytest.approx(1) and no_direction["warning"] is None
+    assert no_direction["consistent"] is None
+    assert TS.appended_text(None) is None
+    assert TS.append_warning(None, "note") == "note"
+    rows = [None, {"why": "original", "threshold": 17}, {"recent_check": {"note": "missing"}, "threshold": 23}]
+    TS.append_to_rows(rows)
+    assert rows == [None, {"why": "original", "threshold": 17}, {"recent_check": {"note": "missing"}, "threshold": 23, "why": "missing"}]

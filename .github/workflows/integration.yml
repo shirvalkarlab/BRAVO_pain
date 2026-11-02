@@ -1,9 +1,9 @@
 name: Integration validation
 on:
   push:
-    branches: [aditya, aditya-jetstream-publication]
+    branches: [bravo_pain_aditya_jetstream]
   pull_request:
-    branches: [aditya]
+    branches: [bravo_pain_aditya_jetstream]
   workflow_dispatch:
 permissions:
   contents: read
@@ -95,14 +95,14 @@ jobs:
           summary = files["BRAVO/modules/MedtronicPercept/ContactAdjudication.py"]["summary"]
           assert summary["num_branches"] > 0 and summary["covered_branches"] / summary["num_branches"] >= 0.95, summary
           PYTHON
-      - name: Chronic band decisions and daily swing branch coverage (synthetic)
+      - name: Scientific selection and threshold branch coverage (synthetic)
         run: |
-          uv run --frozen python scripts/run_portable_tests.py BRAVO/modules/Biomarkers/tests/test_chronic_band_choice.py BRAVO/modules/Biomarkers/tests/test_daily_swing.py --cov=BRAVO/modules/Biomarkers/routines --cov-config=/dev/null --cov-branch --cov-report=json:chronic-choice-coverage.json
+          uv run --frozen python scripts/run_portable_tests.py BRAVO/modules/Biomarkers/tests/test_chronic_band_choice.py BRAVO/modules/Biomarkers/tests/test_daily_swing.py BRAVO/modules/Biomarkers/tests/test_family_correction.py BRAVO/modules/Biomarkers/tests/test_recent_check.py BRAVO/modules/ClosedLoopDeployment/tests/test_family_correction_closed_loop.py BRAVO/modules/ClosedLoopDeployment/tests/test_threshold_placement.py BRAVO/modules/ClosedLoopDeployment/tests/test_threshold_home_swing.py BRAVO/modules/ClosedLoopDeployment/tests/test_threshold_below_zero.py BRAVO/modules/ClosedLoopDeployment/tests/test_threshold_comparison.py --cov=BRAVO/modules/Biomarkers/routines --cov=BRAVO/modules/ClosedLoopDeployment --cov-config=/dev/null --cov-branch --cov-report=json:chronic-choice-coverage.json
           uv run --frozen python - <<'PYTHON'
           import json
           files = json.load(open("chronic-choice-coverage.json"))["files"]
-          for module in ("chronic_band_choice", "daily_swing"):
-              summary = files[f"BRAVO/modules/Biomarkers/routines/{module}.py"]["summary"]
+          for module in ("Biomarkers/routines/chronic_band_choice", "Biomarkers/routines/daily_swing", "Biomarkers/routines/family_correction", "Biomarkers/routines/time_split", "ClosedLoopDeployment/threshold_comparison", "ClosedLoopDeployment/threshold_placement"):
+              summary = files[f"BRAVO/modules/{module}.py"]["summary"]
               assert summary["num_branches"] > 0, (module, summary)
               assert summary["covered_branches"] / summary["num_branches"] >= 0.95, (module, summary)
               print(module, summary["covered_branches"], "/", summary["num_branches"], "branches")
