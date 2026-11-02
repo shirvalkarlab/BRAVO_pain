@@ -35,6 +35,8 @@ from .routines import deployment_current
 from .routines import sheet_ratings
 from .routines import local_time
 from .routines import chronic_band_choice
+from .routines import time_split
+from .routines import family_correction
 #: the module under a name no function's local `sweep_settings` dict can hide (wave 2, C5)
 _SWEEP_SETTINGS_MODULE = sweep_settings
 from modules.DecodeCommon import data_start as _data_start
@@ -4028,7 +4030,7 @@ _ACQ_TIMELINE_KIND = "acquisition_timeline"
 # v2 (decision 313): a chronic file spanning the implant date is dated from it, not from 2025-06-18.
 # v3 (item P-11, 2026-10-06): indefinite streaming adds modelled points at the band in force.
 # v4 (decision 461, 2026-10-06): each streaming run's own band; chronic samples under the pair in force.
-_ACQ_TIMELINE_RULE_VERSION = "v8_event_contact_adjudication_provenance"
+_ACQ_TIMELINE_RULE_VERSION = "v9_event_contact_adjudication_bins_to_125hz"
 
 
 def _acquisition_timeline_key(recording_set):
@@ -7101,8 +7103,36 @@ def deployment_summary(request_data):
     (`_deployment_summary_build`) and served to every request with the same inputs
     (`summary_input_fingerprints` plus the code). Inside one request scope, so the pain reports
     are fetched once."""
-    return _serve_saved_band_answer(DEPLOYMENT_SUMMARY_KIND, request_data,
-                                    lambda rd: _deployment_summary_build(rd))
+    out = _serve_saved_band_answer(DEPLOYMENT_SUMMARY_KIND, request_data,
+                                   lambda rd: _deployment_summary_build(rd))
+    return _attach_summary_family_q(out, request_data)
+
+
+def _attach_summary_family_q(summary, request_data):
+    """The sign-off summary's band q (wave 2, C9; a label and warning only), put on AFTER the
+    saved answer is served or built, so it is never stored and no key changes: the stored grid under
+    the summary's pain score and settings, corrected with today's contacts
+    (`family_correction.summary_block`), under ``evidence.family_correction``; its warning, when the
+    band is established or supported on the grid with q above 0.05, listed with the caveats. No
+    gate, verdict or ready_to_program reads it. A copy; the switch off returns the summary as it
+    was. Never raises."""
+    if (not family_correction.ENABLED or not isinstance(summary, dict)
+            or not summary.get("available")):
+        return summary
+    try:
+        ident = summary.get("identity") or {}
+        fq = family_correction.summary_block((request_data or {}).get("ParticipantId"),
+                                             request_data, ident.get("contact"),
+                                             ident.get("center_freq_hz"))
+        out = dict(summary)
+        out["evidence"] = dict(out.get("evidence") or {}, family_correction=fq)
+        if fq.get("family_q_warning"):
+            out["caveats"] = list(out.get("caveats") or []) + [
+                "Correction across bands (warning only): " + str(fq["family_q_warning"])]
+        return out
+    except Exception:                                      # noqa: BLE001 - a label only
+        _log.warning("Biomarkers: the summary's band q could not be attached", exc_info=True)
+        return summary
 
 
 # Closed-Loop panels saved on the server, grouped by endpoint (decision 428).
@@ -7131,6 +7161,46 @@ def band_lsb_and_power(request_data):
     """The band-power / device-unit panel, saved on the server (decision 428)."""
     return _serve_saved_band_answer(PANEL_KINDS["band_lsb_and_power"], request_data,
                                     lambda rd: _band_lsb_and_power_build(rd))
+
+
+#: What the sign-off's recent-reports check reads, in words (wave 2, C8).
+SUMMARY_RECENT_FEATURE = ("the sign-off's own matched band power (the mean over the band of each "
+                          "matched PSD, as its mixed model reads it), the median per pain report, "
+                          "against that report's pain score")
+
+
+def _summary_recent_check(core, n_boot):
+    """The recent-reports check on the sign-off's own matched reports (wave 2, C8; a warning only):
+    one value per pain report (the median of its matched samples' band power), r on all of them and
+    `time_split.recent_check` on those after the cut, the cut from `_recent_cut` on the series the
+    sign-off was built from (the pain reports after the clinic-sheet merge, `core["pm"]`), the same
+    cut the heat-map grid prints. Its own generator. Never raises."""
+    try:
+        t_all = np.asarray(core["pm"][0], dtype=float)
+        y_all = np.asarray(core["pm"][1], dtype=float)
+        cut = _recent_cut(t_all, y_all)
+        feat = analytics._band_feature_from_detail(core["pooled"], core["channel"], core["center_hz"],
+                                                   core["band_width_hz"])
+        if feat is None:
+            return {"available": False, "choice_cut_date": cut.get("choice_cut_date"),
+                    "status": None, "reason": "this band is not in the sign-off's matched data"}
+        bp = np.asarray(feat[0], dtype=float)
+        rg = np.asarray(feat[2]).astype(int)
+        ok = np.isfinite(bp) & (rg >= 0) & (rg < t_all.size)
+        groups = np.unique(rg[ok])
+        x = np.asarray([float(np.median(bp[ok & (rg == g)])) for g in groups], dtype=float)
+        y, t = y_all[groups], t_all[groups]
+        m = np.isfinite(x) & np.isfinite(y)
+        r_all = (float(np.corrcoef(x[m], y[m])[0, 1])
+                 if int(m.sum()) >= 3 and np.ptp(x[m]) > 0 and np.ptp(y[m]) > 0 else None)
+        rc = time_split.recent_check(x, y, t, cut, r_all=r_all, n_boot=int(n_boot),
+                                     rng=np.random.default_rng([0, 8, 1]))
+        rc.update(available=True, n_reports=int(m.sum()), feature=SUMMARY_RECENT_FEATURE,
+                  cut=dict(cut))
+        return rc
+    except Exception as exc:                                    # noqa: BLE001 - a warning only
+        _log.warning("Biomarkers: the sign-off's recent-reports check failed", exc_info=True)
+        return {"available": False, "status": None, "reason": f"the check raised {exc!r}"}
 
 
 def _deployment_summary_build(request_data):
@@ -7550,6 +7620,12 @@ def _deployment_summary_build(request_data):
     _crc = g.get("rotation_current_removed") if sweep_settings.CURRENT_REMOVED_CHECK else None
     if _crc is not None and _crc.get("warning"):
         caveats.append("Current-removed check (warning only): " + str(_crc.get("words")))
+    # THE RECENT-REPORTS CHECK (wave 2, C8; the PI, 2026-10-21: "Recent-reports check, warn"), a
+    # warning only: the band's link with pain on the sign-off's own matched reports after the one
+    # cut, its text listed with the caveats; no gate, verdict or ready_to_program reads it.
+    _rc = _summary_recent_check(core, n_boot) if sweep_settings.RECENT_CHECK else None
+    if _rc is not None and time_split.appended_text(_rc):
+        caveats.append("Recent-reports check (warning only): " + time_split.appended_text(_rc))
 
     def _ff(x):
         try:
@@ -7625,6 +7701,8 @@ def _deployment_summary_build(request_data):
             "auc_current_removed": auc_current_removed,
             # the rotation test with the current as a covariate, a warning only (decision 484)
             **({"current_removed_check": _crc} if sweep_settings.CURRENT_REMOVED_CHECK else {}),
+            # the recent-reports check, a warning only (wave 2, C8)
+            **({"recent_check": _rc} if _rc is not None else {}),
         },
         "power": power,
         # Forward / out-of-sample validation (audit C2): the held-out AUC + CI shown beside the
@@ -7876,7 +7954,7 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                               outlier_n_mad, outlier_scale, metric_key, metric_label,
                               n_perm=None, n_boot=None, seed=0, match_direction="pro_first",
                               region_map=None, participant_uid=None, from_clinic_sheet=None,
-                              adjust_for_stim_current=False):
+                              adjust_for_stim_current=False, recent_cut=None):
     """Run the sweep for every sensing contact pair that has a cache, one entry per pair.
 
     `participant_uid` selects WHOSE outlier ceilings apply (review B3): the ceiling table is keyed
@@ -7939,6 +8017,11 @@ def _band_time_sweep_channels(raw_by_channel, pro_times, *, tol_s, allow_window_
                 # the hours of day of each best row's own reports (wave 2, C6, a warning only)
                 **({"report_times_s": np.asarray(pro_times, dtype=float)}
                    if _SWEEP_SETTINGS_MODULE.DAILY_SWING else {}),
+                # the recent-reports check on each best correlation row, against the request's one
+                # cut (wave 2, C8, a warning only); the source grids inherit it with `kw`
+                **({"recent_check": {"cut": recent_cut,
+                                     "report_times_s": np.asarray(pro_times, dtype=float)}}
+                   if recent_cut is not None else {}),
                 power_feature=("band power in the device's own least-significant-bit units, "
                                "reached from the 250 samples-per-second voltage trace by the "
                                "validated transform, or from the device's own spectrum where no "
@@ -8406,6 +8489,11 @@ def band_time_sweep_for_participant(request_data):
     # a list exactly when the sheets were read and carry this score, as before the helper existed
     from_clinic_sheet = ([bool(v) for v in _flags]
                          if include_sheets and clinic_sheet_block["reason"] is None else None)
+    # THE REQUEST'S ONE CUT for the recent-reports check (wave 2, C8; the PI, 2026-10-21), on the
+    # series the grid is built from, after the merge: every pair, every source grid and every chronic
+    # answer read this one. The sign-off builds it the same way (`_recent_cut`).
+    recent_cut = (_recent_cut(pro_times, pain_values) if _SWEEP_SETTINGS_MODULE.RECENT_CHECK
+                  else None)
 
     # The saved result key includes tile identity, pain-report snapshot, score and all
     # sweep settings. Changed recordings, reports or controls therefore invalidate it.
@@ -8457,9 +8545,13 @@ def band_time_sweep_for_participant(request_data):
                 participant_uid, request_data,
                 sweep_key=(stored["sweep_key"] or {}).get("signature_key"),
                 done_metric=label_metric)
-            # Preserve the behavior covered by the regression tests.
-            return attach_sensing_rule(attach_stored_stability_answers(stored, participant_uid),
-                                       participant_uid)
+            # The stability answer for THIS grid, read at request time (decision 185): it lands in
+            # the store after the grid does, so it is never part of the stored response. The
+            # device's sensing rule with TODAY's contacts likewise (2026-09-26).
+            # the correction across the band choices (wave 2, C9), with today's contacts: after
+            # the sensing rule, which names the family's pairs; never stored (decision 185's way)
+            return family_correction.attach(attach_sensing_rule(
+                attach_stored_stability_answers(stored, participant_uid), participant_uid))
 
     # Through the SAME memo the cell drill-down reads, so a grid that actually builds also leaves
     # this worker ready for the first hover on it. Deliberately placed AFTER the stored-response
@@ -8488,7 +8580,8 @@ def band_time_sweep_for_participant(request_data):
         high_pct=high_pct, outlier_n_mad=outlier_n_mad, outlier_scale=outlier_scale,
         metric_key=label_metric, metric_label=metric_label, match_direction=match_direction,
         region_map=_region_map(Participant, chan_order), participant_uid=participant_uid,
-        from_clinic_sheet=from_clinic_sheet, adjust_for_stim_current=adjust_current)
+        from_clinic_sheet=from_clinic_sheet, adjust_for_stim_current=adjust_current,
+        recent_cut=recent_cut)
     # THE CHRONIC LOG AS THE MAIN SOURCE (wave 2, C5): its own answer per pair and chronic
     # frequency, on the same pain series as the grid (`pro_times`, `pain_values`, after the
     # clinic-sheet merge), and on every best row which source decides the band.
@@ -8497,7 +8590,9 @@ def band_time_sweep_for_participant(request_data):
         chronic_s = _attach_chronic_choice(
             participant_uid, sweeps, pro_times, pain_values, tol_s=tol_s,
             match_direction=match_direction, allow_window_reuse=allow_window_reuse,
-            chronic_match=chronic_match)
+            chronic_match=chronic_match, recent_cut=recent_cut)
+    if recent_cut is not None:
+        _finish_recent_check(sweeps, recent_cut)
     # The switch's own block on every contact pair's sweep too, because the heat maps' caption is
     # drawn from the pair it shows (the same reason `display_short` sits on each pair).
     for _sw in (sweeps or {}).values():
@@ -8551,6 +8646,7 @@ def band_time_sweep_for_participant(request_data):
         "served_from_store": False,
         "store_keys": None,
         "clinic_sheet_ratings": clinic_sheet_block,
+        **({"recent_check_cut": dict(recent_cut)} if recent_cut is not None else {}),
     }
     # Carried BEFORE the write, so the stored copy holds it too: anything derived from this grid
     # names the entry it came from by the sweep's own key, never by a key re-derived from the
@@ -8590,13 +8686,17 @@ def band_time_sweep_for_participant(request_data):
         participant_uid, request_data,
         sweep_key=(out["sweep_key"] or {}).get("signature_key"),
         done_metric=label_metric)
-    # Preserve the behavior covered by the regression tests.
-    return attach_sensing_rule(attach_stored_stability_answers(out, participant_uid), participant_uid)
+    # after the write above: today's contacts are never part of the stored grid (2026-09-26), nor
+    # the correction across the band choices that follows them (wave 2, C9)
+    return family_correction.attach(attach_sensing_rule(
+        attach_stored_stability_answers(out, participant_uid), participant_uid))
 
 
 #: The request key that asks for one cell's underlying (band power, pain score) pairs alone,
 #: added for the heat-map redesign's click-through drill-down (Track A, task A2).
 BAND_TIME_SWEEP_CELL_KEY = "BandTimeSweepCell"
+#: Which grid's cell (open item of decision 492): "td", "psd", or absent for the mixed grid.
+BAND_TIME_SWEEP_CELL_SOURCE_KEY = "Source"
 
 
 def _wants_band_time_sweep_cell(request_data):
@@ -8615,10 +8715,25 @@ def band_time_sweep_cell_for_participant(request_data):
     the grid response the browser holds from its own sweep request, and this endpoint exists only
     to supply the raw pairs a scatter and a pair of violin plots need, which the stored grid
     response never carried.
+
+    `Source` (open item of decision 492; the PI, 2026-10-22: "Go"): which grid's cell. Absent (or
+    "mixed") is the mixed grid, exactly as before, field for field. "td" is the TD-only grid's cell
+    and "psd" the PSD-only grid's, matched with the same matcher modes those grids are built with
+    (`availability.live_lsb_band_medians_by_length(sources=...)`, decision 492): TD alone with the
+    PSD fill off; every report with a PSD snapshot in its window, ignoring TD. Those two answers also
+    carry `grid_source`, the count read from a PSD snapshot, and each point's `from_device_spectrum`.
     """
     participant_uid = request_data["ParticipantId"]
     Participant = models.Participant.find(uid=participant_uid)
     blank = {"band_time_sweep_cell": None}
+    source_raw = str(request_data.get(BAND_TIME_SWEEP_CELL_SOURCE_KEY) or "").strip().lower()
+    if source_raw in ("", "mixed"):
+        grid_source = None
+    elif source_raw in (sweep_settings.GRID_SOURCE_TD, sweep_settings.GRID_SOURCE_PSD):
+        grid_source = source_raw
+    else:
+        return dict(blank, message=(f"Source must be \"td\", \"psd\" or left out for the mixed "
+                                    f"grid; got {source_raw!r}."))
     channel = request_data.get("Channel")
     center_raw = request_data.get("BandCenterHz")
     seconds_raw = request_data.get("IntegrationSeconds")
@@ -8696,7 +8811,9 @@ def band_time_sweep_cell_for_participant(request_data):
     power, _stats, centers, _col, chunk_excl, _from_device = _band_time_sweep_power_by_seconds(
         pro_times, raw_cache, center_hz, tol_s=tol_s, allow_window_reuse=allow_window_reuse,
         seconds=[seconds], match_direction=match_direction, channel=canon_channel,
-        participant_uid=participant_uid)
+        participant_uid=participant_uid,
+        # the mixed grid's matcher unless a source grid's cell is asked for (open item of 492)
+        **({"sources": grid_source} if grid_source is not None else {}))
     mat = power.get(float(seconds))
     if mat is None or mat.size == 0 or not centers.size:
         return dict(blank, message="No band-power measurements could be produced for this cell.")
@@ -8725,6 +8842,18 @@ def band_time_sweep_cell_for_participant(request_data):
         label = "high" if yb == 1 else ("low" if yb == 0 else "excluded")
         points.append({"pain": float(p), "power": float(v), "label": label,
                        "from_clinic_sheet": bool(from_clinic_sheet[i]) if i < from_clinic_sheet.size else False})
+        if grid_source is not None:
+            # which recording answered this report: True where the device's own PSD snapshot did
+            points[-1]["from_device_spectrum"] = (bool(_from_device[i])
+                                                  if i < len(_from_device) else False)
+
+    source_fields = {}
+    if grid_source is not None:
+        n_dev = sum(1 for pt in points if pt["from_device_spectrum"])
+        source_fields = {"grid_source": grid_source,
+                         "grid_source_label": {"td": "TD only", "psd": "PSD only"}[grid_source],
+                         "n_points_from_device_spectrum": n_dev,
+                         "n_points_from_td": len(points) - n_dev}
 
     return {
         "band_time_sweep_cell": {
@@ -8741,6 +8870,7 @@ def band_time_sweep_cell_for_participant(request_data):
             "low_cut": low_cut,
             "high_cut": high_cut,
             "split_why": split_why,
+            **source_fields,
         },
         "message": None,
     }
@@ -8797,7 +8927,8 @@ def _chronic_recording_identity(participant_uid):
 
 
 def _attach_chronic_choice(participant_uid, sweeps, pro_times, pain_values, *, tol_s,
-                           match_direction, allow_window_reuse, chronic_match="covering"):
+                           match_direction, allow_window_reuse, chronic_match="covering",
+                           recent_cut=None):
     """The chronic log's answer on every pair's sweep and every best row (wave 2, C5; the PI,
     2026-10-18: "the chronic log may choose"), in place. Returns the seconds it took.
 
@@ -8833,7 +8964,8 @@ def _attach_chronic_choice(participant_uid, sweeps, pro_times, pain_values, *, t
                 centres=sw.get("center_freqs_hz") or [], tol_s=float(tol_s),
                 match_direction=match_direction, allow_window_reuse=bool(allow_window_reuse),
                 seed=0, pairs=[ch], chronic_match=chronic_match,
-                **({"daily_swing": True} if sweep_settings.DAILY_SWING else {}))[
+                **({"daily_swing": True} if sweep_settings.DAILY_SWING else {}),
+                **({"recent_cut": recent_cut} if recent_cut is not None else {}))[
                     availability._canon_channel(ch)]
         sw["chronic_band_choice"] = {k: v for k, v in blk.items() if k != "by_centre"}
         grids = [(sweep_settings.GRID_SOURCE_MIXED, sw)] + [
@@ -8847,6 +8979,28 @@ def _attach_chronic_choice(participant_uid, sweeps, pro_times, pain_values, *, t
                 # wave 2, C6: the daily swing at each band, a warning only (the PI, 2026-10-19)
                 chronic_band_choice.attach_daily_swing(g.get("best_correlation_rows"), blk)
     return float(_time.perf_counter() - t0)
+
+
+def _recent_cut(pro_times, pain_values):
+    """The one cut of the recent-reports check (wave 2, C8): `time_split.cut_block` on the pain series
+    a page builds (times and scores after the clinic-sheet merge). The heat-map grid and the
+    Closed-Loop sign-off both call this on the series they build, so they print one cut date."""
+    return time_split.cut_block(pro_times, pain_values)
+
+
+def _finish_recent_check(sweeps, recent_cut):
+    """After the chronic answers and the daily swing are on: each best correlation row's recent-check
+    text appended to its `why` (mixed, TD-only and PSD-only grids), and the cut on each pair's sweep,
+    where the heat maps' caption reads it. In place (wave 2, C8, a warning only)."""
+    for sw in (sweeps or {}).values():
+        if not isinstance(sw, dict):
+            continue
+        sw["recent_check_cut"] = dict(recent_cut)
+        grids = [sw] + [g for name, g in (sw.get("by_source_grid") or {}).items()
+                        if name in (sweep_settings.GRID_SOURCE_TD, sweep_settings.GRID_SOURCE_PSD)
+                        and isinstance(g, dict)]
+        for g in grids:
+            time_split.append_to_rows(g.get("best_correlation_rows"))
 
 
 def _band_sweep_signature(participant_uid, pro_df, label_metric, settings):

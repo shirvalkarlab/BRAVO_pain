@@ -193,6 +193,40 @@ def test_the_tag_is_one_definition_shared_by_writer_and_reader():
 OLDER_RULE = "v23_correlation_by_recording_source"      # the grid rule before decision 315
 
 
+@pytest.mark.parametrize("disabled,old_rule", [
+    (None, "v34_daily_swing_per_window_null_products"),
+    ("BRAVO_RECENT_CHECK", "v34_daily_swing_per_window_null_products"),
+    ("BRAVO_DAILY_SWING", "v33_chronic_covering_per_window_null_products"),
+    ("BRAVO_CHRONIC_CHOICE", "v31_td_psd_apart_per_window_null_products"),
+    ("BRAVO_SOURCE_GRIDS", "v30_current_removed_per_window_null_products"),
+])
+def test_pre_125hz_grid_cannot_cross_page_under_any_warning_mode(
+        grid_sandbox, monkeypatch, disabled, old_rule):
+    """A newest-grid lookup must not bypass the updated native-bin identity."""
+    import importlib
+    flags = ("BRAVO_RECENT_CHECK", "BRAVO_DAILY_SWING",
+             "BRAVO_CHRONIC_CHOICE", "BRAVO_SOURCE_GRIDS")
+    try:
+        with monkeypatch.context() as mode:
+            for flag in flags:
+                mode.delenv(flag, raising=False)
+            if disabled is not None:
+                mode.setenv(disabled, "0")
+            importlib.reload(sweep_settings)
+            assert "bins_to_125hz" in sweep_settings.GRID_RULE_VERSION
+            assert sweep_settings.GRID_RULE_VERSION != old_rule
+            _write_ruled(("pre-125hz", disabled), 0.31, rule=old_rule)
+            attempted = []
+            _refuse_build(mode, attempted)
+            got = adapter.band_sweep_grid_for_closed_loop(UID, {})
+            assert got["available"] is False
+            assert attempted == [(UID, {})]
+            assert sweep_settings.grid_written_under_rule_in_force(
+                {"extra": {"rule_version": sweep_settings.GRID_RULE_VERSION}})
+    finally:
+        importlib.reload(sweep_settings)
+
+
 def _inputs():
     """The two raw inputs every grid names in its chain, written for real; their keys."""
     st.store("raw_lsb_tiles", UID, ("tiles", 1), {"tiles": [[0.0]]}, writer="biomarkers")

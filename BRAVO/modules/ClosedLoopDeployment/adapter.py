@@ -894,7 +894,26 @@ def band_sweep_grid_for_closed_loop(participant_uid, request_data=None, *, consu
             new_sweep[key] = new_rows
         out_sweeps[channel] = new_sweep
 
+    # THE CORRECTION ACROSS THE BAND CHOICES (wave 2, C9; a label and warning only): each band's q
+    # over every band the device's sensing rule allows with today's contacts, on this choosing view,
+    # put on here and never stored. `BRAVO_FAMILY_CORRECTION=0` skips it.
+    family_block = None
+    try:
+        try:
+            from Biomarkers.routines import family_correction as _family
+        except ImportError:                                      # pragma: no cover
+            from modules.Biomarkers.routines import family_correction as _family
+        if _family.ENABLED:
+            out_sweeps, family_block = _family.correct(
+                out_sweeps, _family.rule_block_for_participant(participant_uid),
+                label_metric=want.get("sweep_metric"))
+    except Exception:                                            # noqa: BLE001 - a label only
+        _log.warning("closed-loop: the correction across bands failed for %s", participant_uid,
+                     exc_info=True)
+        family_block = {"available": False, "words": "the correction across bands failed"}
+
     return {"available": True, "band_time_sweep": out_sweeps, "stamp": stamp,
+            **({"family_correction": family_block} if family_block is not None else {}),
             "grid_settings": grid_settings,
             "choosing_grid": _sweep_settings.CHOOSING_GRID,
             "cross_setting_stability_included": any_stability,
@@ -3003,7 +3022,72 @@ def design_rule_signature(participant, *, tiles_key, contact, centre_hz, hemisph
             str(hemisphere), mid)
 
 
+def _home_chronic_samples(uid, loaded=None):
+    """The home record (chronic log) by contact pair, as C5 reads it (`chronic_band_choice.
+    chronic_samples_by_pair` over the loader's chronic and streaming recordings)."""
+    try:
+        from Biomarkers import bravo_service as _bs_h
+        from Biomarkers.routines import chronic_band_choice as _cbc_h
+    except ImportError:                                   # pragma: no cover - the other spelling
+        from modules.Biomarkers import bravo_service as _bs_h
+        from modules.Biomarkers.routines import chronic_band_choice as _cbc_h
+    loaded = loaded if isinstance(loaded, dict) else {}
+    chronic = _bs_h._load_recordings(uid, _bs_h.CHRONIC_TYPES)
+    pdl = loaded.get("power") if loaded.get("power") is not None else \
+        _bs_h._load_recordings(uid, _bs_h.POWERDOMAIN_TYPES)
+    return _cbc_h.chronic_samples_by_pair(chronic, pdl)
+
+
 def _place_thresholds_from_record(participant, rep, cands, *, hemisphere, loaded=None, epochs=None):
+    """Decision 180's placement (`_place_thresholds_core`), and then (wave 2, C7, a warning only)
+    the home swing at the band on the pair and on every returned placement, record or capture: both
+    are set from clinic recordings only. Skipped entirely under `BRAVO_THRESHOLD_HOME_SWING=0`."""
+    from . import threshold_placement as _tpl
+    plan, placement = _place_thresholds_core(participant, rep, cands, hemisphere=hemisphere,
+                                             loaded=loaded, epochs=epochs)
+    plan, placement = _with_home_swing_on_pair(participant, plan, placement, cands, loaded)
+    if _tpl.BELOW_ZERO and plan is not None and getattr(plan, "upper", None) is not None:
+        # A threshold below zero (a warning only; open item of decision 495): band power cannot
+        # go below zero. On the record pair and the capture pair alike; no number moves. Appended
+        # after the home swing, so each note is the old note plus this warning.
+        try:
+            plan, placement = _tpl.with_below_zero(plan, placement)
+        except Exception:                                # noqa: BLE001 - never moves the pair
+            _log.warning("closed-loop: the below-zero check could not be made for %s",
+                         getattr(participant, "uid", participant), exc_info=True)
+    return plan, placement
+
+
+def _with_home_swing_on_pair(participant, plan, placement, cands, loaded):
+    """Wave 2, C7 (a warning only): the home swing at the band on the pair (`threshold_placement.
+    home_swing_block`), or the pair as it was under `BRAVO_THRESHOLD_HOME_SWING=0`."""
+    from . import threshold_placement as _tpl
+    if not _tpl.HOME_SWING or plan is None or getattr(plan, "upper", None) is None:
+        return plan, placement
+    c0 = (cands[0] or {}) if cands else {}
+    contact, centre = c0.get("channel"), c0.get("center_hz")
+    uid = str(getattr(participant, "uid", participant))
+    try:
+        samples = _home_chronic_samples(uid, loaded)
+        why = None
+    except Exception as exc:                             # noqa: BLE001 - said on the block
+        _log.warning("closed-loop: the home record could not be read for %s", uid, exc_info=True)
+        samples, why = None, f"the home record could not be read: {exc!r}"
+    try:
+        try:
+            from Biomarkers.routines import chronic_band_choice as _cbc_p
+        except ImportError:                               # pragma: no cover - the other spelling
+            from modules.Biomarkers.routines import chronic_band_choice as _cbc_p
+        pair = None if contact is None else _cbc_p._canon(contact)  # the key C5 files pairs under
+        block = _tpl.home_swing_block(samples, pair, centre, reason=why)
+        return _tpl.with_home_swing(plan, placement, block)
+    except Exception:                                    # noqa: BLE001 - never moves the pair
+        _log.warning("closed-loop: the home swing could not be worked out for %s", uid,
+                     exc_info=True)
+        return plan, placement
+
+
+def _place_thresholds_core(participant, rep, cands, *, hemisphere, loaded=None, epochs=None):
     """Decision 180: return ``(plan, placement)`` where ``plan`` is ``rep.threshold`` re-placed from
     the record when that is possible and the capture plan (labelled) when it is not.
 
@@ -4190,6 +4274,16 @@ def report_for_participant(participant, request_data=None, *, candidates=None, h
             participant, candidate=(cands[0] if cands else None), hemisphere=hemisphere,
             threshold_plan=rep.threshold, loaded=_3loaded, epochs=eps)
         out["closed_loop_design_rule"] = _dr_summary
+        # Wave 2, C7 (a warning only): the pair's home swing beside the rule's separation; the
+        # stored table is untouched. Absent under the neutral setting.
+        _hs_dr = (getattr(rep.threshold, "placement", None) or {}).get("home_swing")
+        if _hs_dr is not None and isinstance(_dr_summary, dict):
+            out["closed_loop_design_rule"] = dict(_dr_summary, home_swing=dict(_hs_dr))
+        # A threshold below zero (a warning only), beside it; absent under the neutral setting.
+        _bz_dr = (getattr(rep.threshold, "placement", None) or {}).get("below_zero")
+        if _bz_dr is not None and isinstance(out.get("closed_loop_design_rule"), dict):
+            out["closed_loop_design_rule"] = dict(out["closed_loop_design_rule"],
+                                                  below_zero=dict(_bz_dr))
         _dr_payload = design_rule_if_stored(participant, (cands[0] if cands else None),
                                             hemisphere=hemisphere)
         if _dr_payload is not None and out.get("prescriptions"):

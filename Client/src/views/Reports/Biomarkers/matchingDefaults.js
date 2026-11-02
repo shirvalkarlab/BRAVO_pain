@@ -34,7 +34,23 @@ export const MATCHING_DEFAULTS = Object.freeze({
   refractoryMin: 2,
   matchExtentSec: 30,
   includeClinicSheetRatings: false,
+  // Wave 2, C5 (decision 493): how a pain report meets the home record (chronic log); the server's
+  // `chronic_band_choice.CHRONIC_MATCH_DEFAULT`. Not a request key of the Closed-Loop page (only the
+  // Biomarkers page may override it), so it is not in CONTROL_REQUEST_KEYS below.
+  chronicMatch: "covering",
 });
+
+/** The two ways a pain report meets the home record, in the page's words (the PI, 2026-10-19). */
+export const CHRONIC_MATCH_OPTIONS = Object.freeze([
+  { value: "covering", label: "10-minute average covering the report (recommended)" },
+  { value: "window", label: "Page matching window" },
+]);
+
+/** The request field for the home-record match: `{ ChronicMatch }` only when it is not the
+ *  default, so a default request (and its saved grid's key) is exactly what it was before. */
+export function chronicMatchParam(value) {
+  return value && value !== MATCHING_DEFAULTS.chronicMatch ? { ChronicMatch: value } : {};
+}
 
 /**
  * The version of these defaults a saved setting was written under. 1 is everything saved before

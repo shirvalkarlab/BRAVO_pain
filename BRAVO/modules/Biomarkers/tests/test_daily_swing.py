@@ -238,13 +238,14 @@ def test_the_neutral_setting_files_grids_under_the_rule_before_c6():
             "print(S.DAILY_SWING, S.GRID_RULE_VERSION, T.RULE_VERSION)" % here)
     env = dict(os.environ)
     env.pop("BRAVO_DAILY_SWING", None)
+    env["BRAVO_RECENT_CHECK"] = "0"          # C8 off; both modes retain the corrected 125 Hz bins.
     on = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
                         timeout=120).stdout.split()
     env["BRAVO_DAILY_SWING"] = "0"
     off = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
                          timeout=120).stdout.split()
-    assert on == ["True", "v34_daily_swing_per_window_null_products", "v7_daily_swing"], on
-    assert off == ["False", "v33_chronic_covering_per_window_null_products", "v6_chronic_covering"], off
+    assert on == ["True", "v37_daily_swing_bins_to_125hz_per_window_null_products", "v7_daily_swing"], on
+    assert off == ["False", "v37_chronic_covering_bins_to_125hz_per_window_null_products", "v6_chronic_covering"], off
 
 
 def test_empty_partial_and_nonpositive_profiles_remain_explicit():
