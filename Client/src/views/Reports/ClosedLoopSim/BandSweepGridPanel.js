@@ -56,6 +56,8 @@ import Fold from "./Fold";
 import { gridSourceWords, CurrentScopeNotes } from "views/Reports/Biomarkers/SweepProvenance";
 import { fmtHz, fmtNum } from "./deployFormat";
 import { recordChosenBand } from "./bandCandidateStore";
+import { deciderOf, currentOutWords, recentWords, familyFootnote, familyAucFootnote, cutDateWords,
+  dailySwingWords, rIntervalN } from "views/Reports/Biomarkers/gridReadouts";
 
 /** One channel's rows, correlation and AUC merged by band centre so one row = one grid point. */
 function mergedRows(sweepForChannel) {
@@ -79,6 +81,11 @@ function mergedRows(sweepForChannel) {
     existing.auc_answer = r.answer;
     existing.family_wise_q_auc = r.family_wise_q_8_to_30hz;
     existing.family_wise_significant_auc = r.family_wise_significant_8_to_30hz;
+    // the separate area-under-the-curve q (its own family, within the pair; open item of 497)
+    existing.family_q_auc = r.family_q_auc;
+    existing.family_q_auc_status = r.family_q_auc_status;
+    existing.family_q_auc_warning = r.family_q_auc_warning;
+    existing.family_n_auc = r.family_n_auc;
     // The stability field is attached identically to both grids by
     // `Biomarkers.bravo_service._attach_grid_export_columns`, so either side's copy is the answer;
     // prefer whichever side actually carries it in case only one grid's row was ever built.
@@ -153,10 +160,12 @@ function inkFor(v, lo, hi) {
   return luminance > 0.55 ? PAL.ink : PAL.onFill;
 }
 
-/** "q 0.002 (fdr 22 bands)": the number the server sends (`family_wise_q_8_to_30hz`) is a
+/** "grid q 0.002 (fdr 22 bands)": the number the server sends (`family_wise_q_8_to_30hz`) is a
  *  Benjamini-Hochberg q, not a p -- the PI, 2026-09-26: printing it as "p" is a mislabel; 2026-09-27:
- *  shortened to the "fdr" shorthand. Exported for its own test. */
-export const allowanceWords = (q, n = 22) => (q != null ? `q ${fmtNum(q, 3)} (fdr ${n} bands)` : null);
+ *  shortened to the "fdr" shorthand. "grid q" since wave 2 (decisions 497, 498): the q corrected
+ *  within each pair by the deciding source's p is another number, printed bare ("q 0.96") in the
+ *  "q" column, so the two never share a name. Exported for its own test. */
+export const allowanceWords = (q, n = 22) => (q != null ? `grid q ${fmtNum(q, 3)} (fdr ${n} bands)` : null);
 
 /** A mark drawn by SHAPE only, in the ink (SPEC section 3.2): no green, no red. */
 function ShapeMark({ glyph, label }) {
@@ -176,11 +185,77 @@ function FamilyWiseMark({ significant, q }) {
   }
   return (
     <Tooltip title={significant
-      ? `still clear after allowing for the 22 bands tested${words ? `: ${words}` : ""}`
-      : `not clear after allowing for the 22 bands tested${words ? `: ${words}` : ""}; still selectable; this is a label, not a check that can refuse`}>
-      <span>{significant ? <ShapeMark glyph="✓" label="still clear after allowing for 22 bands" />
-        : <ShapeMark glyph="–" label="not clear after allowing for 22 bands" />}</span>
+      ? `still clear after allowing for this grid's 22 bands${words ? `: ${words}` : ""}`
+      : `not clear after allowing for this grid's 22 bands${words ? `: ${words}` : ""}; still selectable; this is a label, not a check that can refuse`}>
+      <span>{significant ? <ShapeMark glyph="✓" label="still clear after allowing for this grid's 22 bands" />
+        : <ShapeMark glyph="–" label="not clear after allowing for this grid's 22 bands" />}</span>
     </Tooltip>
+  );
+}
+
+/** Wave 2 (decisions 484, 493, 496-498): the four short cells beside each band -- which source
+ *  decides it, the current-removed check, the recent-reports check and the q corrected within the
+ *  pair -- each with its full words in the hover (`title`), all read off the row. */
+const SOURCE_SHORT = { home: "Home", TD: "TD", none: "none" };
+export function sourceCell(row) {
+  const d = deciderOf(row);
+  if (!d) return { text: "", title: "" };
+  const title = d === "home"
+    ? `Decided by: home record (chronic log). ${rIntervalN(row.pearson_r, row.pearson_r_low, row.pearson_r_high, row.n_pain_reports)}`
+      + (row.td_values ? `; TD alone: ${rIntervalN(row.td_values.pearson_r, row.td_values.pearson_r_low,
+        row.td_values.pearson_r_high, row.td_values.n_pain_reports)}` : "")
+      + (row.daily_swing ? `. Daily swing: ${dailySwingWords(row.daily_swing)}` : "")
+      + (row.chronic_match_warning ? `. ${row.chronic_match_warning}` : "")
+    : `Decided by: ${d === "TD" ? "TD" : "nothing (this row cannot choose)"}`
+      + (row.daily_swing ? `. Daily swing: ${dailySwingWords(row.daily_swing)}` : "");
+  return { text: SOURCE_SHORT[d] || d, title };
+}
+const STATUS_GLYPH = { holds: "✓", warning: "▲", "constant current": "=", "not assessed": "○" };
+export function currentCell(row) {
+  const chk = row && row.current_removed_check;
+  if (!chk) return { text: "", title: "" };
+  return { text: STATUS_GLYPH[chk.status] || "○", title: chk.words || currentOutWords(chk) || "" };
+}
+export function recentCell(row) {
+  const rc = row && row.recent_check;
+  if (!rc) return { text: "", title: "" };
+  let text = "–";
+  if (rc.status === "checked") text = rc.warning ? "▲" : "✓";
+  else if (rc.status === "too few recent reports") text = "few";
+  return { text, title: rc.words || rc.note || recentWords(rc) || rc.status || "" };
+}
+function corrQCell(row) {
+  if (!row || !row.family_q_status) return { text: "", title: "" };
+  if (row.family_q == null) return { text: "out", title: row.family_q_status };
+  return { text: `${row.family_q_warning ? "▲" : ""}${fmtNum(row.family_q, 2)}`,
+    title: row.family_q_warning || `q ${fmtNum(row.family_q, 2)}, corrected within this pair` };
+}
+function aucQCell(row) {
+  if (!row || !row.family_q_auc_status) return null;
+  if (row.family_q_auc == null) return { text: "out", title: `AUC q: ${row.family_q_auc_status}` };
+  return { text: `${row.family_q_auc_warning ? "▲" : ""}${fmtNum(row.family_q_auc, 2)}`,
+    title: row.family_q_auc_warning
+      || `AUC q ${fmtNum(row.family_q_auc, 2)}, its own family, corrected within this pair` };
+}
+/** The q column: the correlation q, then the AUC q (its own family) where the AUC row carries one,
+ *  "0.87 · 0.73"; ▲ first when either is warned. */
+export function qCell(row) {
+  const c = corrQCell(row);
+  const a = aucQCell(row);
+  if (!a) return c;
+  const strip = (t) => String(t || "").replace(/^▲/, "");
+  const warn = String(c.text || "").startsWith("▲") || String(a.text).startsWith("▲");
+  return { text: `${warn ? "▲" : ""}${strip(c.text) || "–"} · ${strip(a.text)}`,
+    title: [c.title, a.title].filter(Boolean).join("; ") };
+}
+function SmallCell({ cell, testId }) {
+  const warn = String(cell.text || "").startsWith("▲");
+  return (
+    <div data-testid={testId} title={cell.title || undefined}
+      style={{ ...TYPE.body, textAlign: "center", lineHeight: `${CELL_H}px`, whiteSpace: "nowrap",
+        color: warn ? PAL.warnText : PAL.ink }}>
+      {cell.text}
+    </div>
   );
 }
 
@@ -310,6 +385,12 @@ export function bandRecordFromGrid(grid, channel, centreHz) {
 }
 
 const SIDES = ["Left", "Right"];
+
+/** The recent-reports cut the grid's pairs carry (one cut for every pair, decision 496). */
+function recentCut(sweeps) {
+  const ch = Object.keys(sweeps || {}).find((k) => sweeps[k] && sweeps[k].recent_check_cut);
+  return ch ? sweeps[ch].recent_check_cut : null;
+}
 const SIDE_INK = { Left: SIDE.left, Right: SIDE.right };
 
 /**
@@ -359,6 +440,10 @@ function SideColumn({ side, channels, sweeps, refused, chosen, active, offNote, 
       : (allowed[0] || channels[0]);
   const sw = sweeps[channel] || {};
   const rows = mergedRows(sw);
+  // A pair outside the q's family (decisions 497, 498) says so once, with the row's own status.
+  const outRow = rows.find((r) => r.family_q_status && r.family_q == null);
+  const outsideFamily = outRow && rows.every((r) => !r.family_q_status || r.family_q == null)
+    ? outRow.family_q_status : null;
   const isChosen = (row) => !!(active && chosen && chosen.contact === channel && chosen.centerHz != null
     && Math.abs(Number(chosen.centerHz) - row.band_center_hz) < 1e-6);
 
@@ -431,15 +516,24 @@ function SideColumn({ side, channels, sweeps, refused, chosen, active, offNote, 
           {`${labelOf(channel)}: ${refused[channel]}.`}
         </MDTypography>
       ) : null}
+      {channels.length && outsideFamily ? (
+        <MDTypography data-testid={`band-side-${side}-family`} sx={{ ...TYPE.body, color: PAL.ink3, mb: 1 }}>
+          {`q: ${labelOf(channel)} is outside the family (${outsideFamily}).`}
+        </MDTypography>
+      ) : null}
       {channels.length ? (
         <MDBox sx={{ display: "grid",
-          gridTemplateColumns: "60px minmax(44px,1fr) minmax(44px,1fr) 40px 40px 36px",
-          columnGap: "4px", rowGap: "2px", alignItems: "center", overflowX: "auto" }}>
+          gridTemplateColumns: "48px minmax(40px,1fr) minmax(40px,1fr) 34px 34px 44px 34px 34px 84px 32px",
+          columnGap: "3px", rowGap: "2px", alignItems: "center", overflowX: "auto" }}>
           <MDTypography variant="caption" sx={{ ...HEAD, justifyContent: "flex-end" }}>Hz</MDTypography>
-          <MDTypography variant="caption" title="correlation with pain" sx={HEAD}>r</MDTypography>
+          <MDTypography variant="caption" title="correlation with pain, by the source that decides" sx={HEAD}>r</MDTypography>
           <MDTypography variant="caption" sx={HEAD}>AUC</MDTypography>
-          <MDTypography variant="caption" title="corrected for the 22 bands tested" sx={HEAD}>Corr.</MDTypography>
+          <MDTypography variant="caption" title="this grid's own allowance for its 22 bands (grid q, fdr)" sx={HEAD}>fdr</MDTypography>
           <MDTypography variant="caption" title="same at every setting" sx={HEAD}>Same</MDTypography>
+          <MDTypography variant="caption" title="which source decides the band: the home record (chronic log) or TD" sx={HEAD}>Source</MDTypography>
+          <MDTypography variant="caption" title="the link with pain with the current taken out (a warning only)" sx={HEAD}>Current out</MDTypography>
+          <MDTypography variant="caption" title="the link with pain on the later 30% of ratings (a warning only)" sx={HEAD}>Later 30%</MDTypography>
+          <MDTypography variant="caption" title="q corrected within this pair: r (by the deciding source's p) · AUC (its own family)" sx={HEAD}>q r · AUC</MDTypography>
           <MDTypography variant="caption" title="use this band" sx={HEAD}>Use</MDTypography>
           {rows.map((row) => {
             const on = isChosen(row);
@@ -471,6 +565,10 @@ function SideColumn({ side, channels, sweeps, refused, chosen, active, offNote, 
               <div key={`${id}-st`} style={{ textAlign: "center", lineHeight: `${CELL_H}px` }}>
                 <StabilityMark stability={row.cross_setting_stability} />
               </div>,
+              <SmallCell key={`${id}-src`} testId={`${id}-source`} cell={sourceCell(row)} />,
+              <SmallCell key={`${id}-cur`} testId={`${id}-current`} cell={currentCell(row)} />,
+              <SmallCell key={`${id}-rc`} testId={`${id}-recent`} cell={recentCell(row)} />,
+              <SmallCell key={`${id}-q`} testId={`${id}-q`} cell={qCell(row)} />,
               <div key={`${id}-use`} style={{ textAlign: "center" }}>
                 <input type="radio" id={id} name={`cl-use-band-${participantUid}-${side}`} checked={on}
                   disabled={SessionController.isReadOnly?.() || !active || row.can_choose_band === false} title={row.cannot_choose_why || undefined}
@@ -586,18 +684,40 @@ function BandSweepGridPanel({ grid, participantUid, committed, committedBySide, 
         ))}
       </MDBox>
 
-      <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, mt: 2 }}>
-        {"Corr.: corrected for 22 bands · Same: same at every setting · ✓ passes · – fails "
-          + "correction · ✕ differs across settings · ? unknown · ○ not tested"}
+      <MDTypography data-testid="band-grid-key" sx={{ ...TYPE.body, color: PAL.ink2, mt: 2 }}>
+        {"fdr: this grid's own allowance for its 22 bands (grid q) · Same: same at every setting · "
+          + "✓ passes · – does not · ✕ differs across settings · ? unknown · ○ not tested"}
       </MDTypography>
+      <MDTypography data-testid="band-grid-key-wave2" sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>
+        {"Source: Home = home record (chronic log) decides, TD = TD decides · Current out: link with the "
+          + "current taken out, ✓ holds, ▲ warning · Later 30%: ✓ same clear sign, ▲ warning, few = too few "
+          + "recent reports · warnings only, never a refusal"}
+      </MDTypography>
+      {familyFootnote(grid.family_correction) ? (
+        <MDTypography data-testid="band-grid-family" sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>
+          {`${familyFootnote(grid.family_correction)}, by the deciding source's p`}
+        </MDTypography>
+      ) : null}
+      {familyAucFootnote(grid.family_correction) ? (
+        <MDTypography data-testid="band-grid-family-auc" sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>
+          {`${familyAucFootnote(grid.family_correction)}, by each AUC row's own shuffle p`}
+        </MDTypography>
+      ) : null}
+      {cutDateWords(recentCut(sweeps)) ? (
+        <MDTypography data-testid="band-grid-cut" sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>
+          {cutDateWords(recentCut(sweeps))}
+        </MDTypography>
+      ) : null}
 
       <Fold show="Reading guide, limits" hide="Hide how to read this" mt={2}>
         <MDTypography sx={{ ...TYPE.body, color: PAL.ink2, maxWidth: "68ch" }}>
           Each colour cell is the strongest of {countWord(nLengthsForChannel(anySweep || {}, mergedRows(anySweep || {})))} lengths of signal for that band, so
           optimistic by construction; hover for its 95% range, length and number of reports. Colours
           stop at ±0.5 (correlation) and 0.25/0.75 (AUC); stronger values draw at the end colour and
-          print their true number. Every TD band eligible for selection is selectable, including those failing the 22-band
-          correction: marks are labels, not refusals. One band can be chosen on each side; the
+          print their true number. Every TD band eligible for selection is selectable, whatever its fdr mark, its q or its
+          warnings: marks are labels, not refusals. On a band the home record (chronic log) covers,
+          the home record decides and its r, interval and count are the ones shown; TD's own are in
+          the Source hover. One band can be chosen on each side; the
           sense-to-control wiring above decides which side drives which stimulator, and a side it
           does not read is greyed. The device rule check needs current, pulse width, rate and
           impedance, which a band alone lacks, so no allowed or refused mark is shown here; it runs

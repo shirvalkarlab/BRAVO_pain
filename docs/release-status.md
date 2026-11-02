@@ -1,3 +1,11 @@
+# November 1 source update — validation in progress
+
+The [Prasad update](prasad-update-2026-11-01.md) integrates canonical report
+behavior through `de7ea132`, preserving all seven Aditya All Data Streams tabs.
+The full local frontend suite passes 185 suites / 1,978 tests and the production
+bundle builds. Final CI and hosted acceptance remain pending; the earlier
+accepted release below is historical.
+
 # Release status
 
 The shared site is [BRAVO on Jetstream](https://bravo-aditya.mde260021.projects.jetstream-cloud.org/).

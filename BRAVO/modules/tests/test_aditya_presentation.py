@@ -861,3 +861,41 @@ def test_reviewed_program_mode_evidence_is_private_input_only_and_copy_isolated(
     assert p.read_context('p')['program_mode_evidence'][0]['mode']=='SENSING_ONLY'
     response=p.pain_timeline({},p.read_context('p'))
     assert 'program_mode_evidence'not in response and 'pdf_sha256'not in json.dumps(response)
+
+
+def test_canonical_125hz_bins_reach_aditya_with_raw_values_and_testing_exclusion(monkeypatch):
+    """Band relabelling separates observations without changing measurements or eligibility."""
+    from copy import deepcopy
+    import numpy as np
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[2]))
+    from modules.DecodeCommon import representation
+    from modules.Biomarkers.routines import availability
+
+    times = [datetime(2026, 1, day, 12, tzinfo=p.PACIFIC).timestamp() for day in (8, 9, 10, 11)]
+    values = [[10.0, 0.0], [20.0, 1.0], [30.0, 2.0], [40.0, 3.0]]
+    frequencies = [26.37, 27.34, 27.34, 28.32]
+    raw = {'ChannelNames': ['LeftHemisphere LFP', 'LeftHemisphere Amplitude'],
+           'RecordingType': 'MedtronicChronicBrainSense', 'SamplingRate': -1,
+           'Time': times, 'Data': values, 'ContactSchedule': [[times[0] - 1, '0-3']],
+           'FreqScheduleHz': [[ts - 1, hz] for ts, hz in zip(times, frequencies)],
+           'ScheduleFlagged': [], 'ScheduleNoRecord': []}
+    before = deepcopy(raw)
+    prepared, _ = representation.merge_chronic_repeats([raw])
+    context = auto_context(datetime(2026, 1, 8, tzinfo=p.PACIFIC).timestamp())
+    context['visit_days'] = ['2026-01-09']
+    result = p.neural_timeline(
+        {'window': 'custom', 'start_date': '2026-01-08', 'end_date': '2026-01-11'},
+        context, prepared, representation.native_lsb_by_channel, representation.chronic_pair_keys,
+        now=datetime(2026, 1, 12, tzinfo=p.PACIFIC),
+        calendar={'status': 'stored_snapshot', 'days': ['2026-01-07'], 'clinic_days': ['2026-01-07']},
+        stim_series=availability.stim_series)
+    segments = [segment for window in result['observation_windows']
+                for panel in window['panels'] for segment in panel['segments']]
+    assert sorted(segment['center_frequency_hz'] for segment in segments) == [26.4, 27.3, 28.3]
+    points = sorted((point for segment in segments for point in segment['points']), key=lambda v: v['time'])
+    assert [(point['time'], point['power'], point['amplitude']) for point in points] == [
+        (times[i], values[i][0], values[i][1]) for i in (0, 2, 3)]
+    assert all(segment['mode'] == 'unknown' and segment['threshold_status'] == 'unavailable'
+               and segment['thresholds'] == [] for segment in segments)
+    np.testing.assert_array_equal(raw['Data'], before['Data'])
+    assert raw == before

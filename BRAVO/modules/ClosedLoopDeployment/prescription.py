@@ -490,6 +490,26 @@ def prescribe_all_modes(**kw):
     return {"recommended": rec.get("mode"), "recommendation": rec, "modes": out}
 
 
+
+def _with_home_swing(why, plan):
+    """``why`` with the threshold pair's home-swing warning appended (wave 2, C7; the PI,
+    2026-10-20: "Keep thresholds, warn"), the way C6 appends to a row's ``why``. Unchanged when the
+    plan carries no ``home_swing`` block (the neutral setting) or the block has no warning."""
+    w = ((getattr(plan, "placement", None) or {}).get("home_swing") or {}).get("warning")
+    if not w:
+        return why
+    return f"{why} {w}" if why else w
+
+def _with_below_zero(why, plan, which):
+    """``why`` with the pair's below-zero warning for threshold ``which`` ("upper", "lower",
+    "single") appended (a warning only; open item of decision 495). Unchanged when the plan carries
+    no ``below_zero`` block (the neutral setting) or that threshold is not below zero."""
+    w = (((getattr(plan, "placement", None) or {}).get("below_zero") or {}).get("warnings")
+         or {}).get(which)
+    if not w:
+        return why
+    return f"{why} {w}" if why else w
+
 def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_series=None,
               t_s=None, dt_s=None, replay_result=None, measured_latency_s=None,
               record_timing=None, programmed_timing=None, participant_uid=None, hemisphere=None):
@@ -608,6 +628,10 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
             why_up = ("Placed at the capture mean measured at the LOWER amplitude. The naming is "
                       "crossed on purpose (D24). Set manually in Dual mode.")
             why_lo = "Placed at the capture mean measured at the UPPER amplitude (D24)."
+        # Wave 2, C7 (a warning only): the home swing at the band, appended to both reasons.
+        why_up, why_lo = _with_home_swing(why_up, tp), _with_home_swing(why_lo, tp)
+        # A threshold below zero (a warning only): band power cannot go below zero.
+        why_up, why_lo = _with_below_zero(why_up, tp, "upper"), _with_below_zero(why_lo, tp, "lower")
         F.append(Field_("Upper LFP threshold", up, "LFP power", "derived",
                         range_source=thr_src, programmed=_prog("upper_threshold"), why=why_up))
         F.append(Field_("Lower LFP threshold", lo, "LFP power", "derived",
@@ -626,9 +650,11 @@ def prescribe(*, mode, threshold_plan=None, candidate=None, timing=None, power_s
         # front-end had to detect this row by matching its `why` text, which is a fragile stopgap
         # its author flagged for replacement — this is that replacement.
         F.append(Field_("Single LFP threshold", single, "LFP power", "device_computed",
-                        why="NOT typed in. The device computes it as 0.75 x (Upper - Lower) + "
+                        why=_with_below_zero(_with_home_swing(
+                            "NOT typed in. The device computes it as 0.75 x (Upper - Lower) + "
                             "Lower from the captured pair (D20), so it is shown here for the "
-                            "clinician to verify against the device rather than to enter."))
+                            "clinician to verify against the device rather than to enter.", tp),
+                            tp, "single")))
 
     # --- onset durations: TWO in dual, ONE in single ---------------------------------------------
     rng = PA.ONSET_RANGE_DUAL_MS if is_dual else PA.ONSET_RANGE_SINGLE_MS

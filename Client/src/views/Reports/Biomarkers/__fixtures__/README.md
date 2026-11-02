@@ -15,3 +15,11 @@ They are not measured observations, fit-validation datasets, or scientific evide
 
 Private historical validation belongs in separately configured local tests; these
 fixtures cannot establish numeric agreement with any participant's prior results.
+
+- `synthetic_source_grids.js`: independently authored compact response contracts for
+  source selection, home-record matching, per-pair correlation/AUC families and
+  source-specific drill-down/cache behavior. Three channels, ten displayed centers,
+  two signal lengths, invented dates in 2040, mixed/TD/PSD counts 24/8/16. The
+  family metadata describes a full 22-band correction while the rendering fixture
+  retains only the rows needed for these cases. Summary statistics are UI inputs,
+  not estimates validated from the invented drill-down points.

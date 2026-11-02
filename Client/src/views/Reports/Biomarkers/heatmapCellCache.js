@@ -22,8 +22,11 @@ const CELLS = new Map();          // insertion order = least recently used first
 
 const SLOT_MARK = "/heatmapGrid/";
 
-export function cellKey(uid, metric, shownKey, channel, center, seconds) {
-  return [uid, metric, shownKey || "", channel, center, seconds].join("|");
+/** `source` ("td", "psd"; open item of decision 492) names a source grid's cell; the mixed grid's
+ *  cell keeps the key it always had. */
+export function cellKey(uid, metric, shownKey, channel, center, seconds, source) {
+  const parts = [uid, metric, shownKey || "", channel, center, seconds];
+  return (source ? [...parts, source] : parts).join("|");
 }
 
 export function getCell(key) {
