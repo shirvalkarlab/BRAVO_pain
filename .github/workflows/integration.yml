@@ -1,9 +1,9 @@
 name: Integration validation
 on:
   push:
-    branches: [bravo_pain_aditya_jetstream]
+    branches: [aditya, aditya-jetstream-publication]
   pull_request:
-    branches: [bravo_pain_aditya_jetstream]
+    branches: [aditya]
   workflow_dispatch:
 permissions:
   contents: read
