@@ -1,4 +1,21 @@
-# November Prasad update — live acceptance passed November 2, 2026 UTC
+# Timed clinic-rating correction — live acceptance passed November 9, 2026 UTC
+
+The [clinic-rating correction](clinic-rating-import.md), published in
+[PR #24](https://github.com/shirvalkarlab/BRAVO_pain/pull/24), is deployed. Explicitly
+timed pain ratings are retained when a clinic workbook gives an amplitude range
+or lacks a scalar current. Unknown amplitudes remain missing and fixed-setting
+models retain their exclusions. No source values, timestamps or clinic MPQ
+ratings are invented.
+
+Exact-candidate and merged-public-head CI passed. Live acceptance checked normal
+authenticated data reads, source-matched clinic ratings, all seven Aditya tabs,
+recorded-setting controls and a clinic-point tooltip. Existing configuration and
+sync schedules were preserved. Optional native analyses were not recomputed for
+this parser-only release. Independent source streams can succeed even when a
+conflicting device export remains withheld; aggregate sync status is not a claim
+that every stream failed or every source file was accepted.
+
+# Earlier November Prasad update — live acceptance passed November 2, 2026 UTC
 
 The [Prasad update](prasad-update-2026-11-01.md) integrates canonical report
 behavior through `de7ea132`, preserving all seven Aditya All Data Streams tabs.
