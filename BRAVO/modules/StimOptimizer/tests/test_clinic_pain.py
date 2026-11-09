@@ -761,3 +761,41 @@ def test_the_day_conversion_runs_once_per_frame(monkeypatch):
         monkeypatch.setattr(m, "local_calendar_day", counted)
     CP.epoch_frame_from_steps(_steps())
     assert len(calls) == 1
+
+@pytest.mark.parametrize('amplitude', [None, 'L 0-1.5 / R 0-2.5', 'Adapting (0 to 1.5 & 0 to 2.5)'])
+def test_full_stream_keeps_timed_pain_without_inventing_fixed_current(tmp_path, amplitude):
+    from Biomarkers.routines.sheet_ratings import sheet_ratings_for_metric
+    rows = [
+        {'Timestamp': datetime.time(13, 1, 2), 'Amp (mA)': amplitude,
+         'Rate (Hz)': 55, 'PW (µs)': '80/90', 'Left Leg': 4.5},
+        {'Amp (mA)': amplitude, 'Left Leg': 2.5},
+    ]
+    path = _write_generic_workbook(tmp_path / 'Synthetic In-Clinic 11_12_26.xlsx', rows)
+    stored = CP.parse_workbook(path, keep_unrated=True)
+    assert len(stored) == 1
+    assert stored.iloc[0]['left_leg'] == 4.5
+    assert stored.iloc[0]['row_index'] == 12
+    assert stored.iloc[0]['t_utc'] == pd.Timestamp('2026-11-12T21:01:02Z')
+    assert not stored.iloc[0]['t_inferred']
+    assert stored[['amp_mA_Left', 'amp_mA_Right']].isna().all().all()
+    assert CP.epoch_frame_from_steps(stored).empty
+    times, values, settings = sheet_ratings_for_metric(stored, 'left_leg_vas')
+    assert times.tolist() == [pd.Timestamp('2026-11-12T21:01:02Z').timestamp()]
+    assert values.tolist() == [45.0]
+    assert settings.tolist() == ['clinic']
+    assert sheet_ratings_for_metric(stored, 'mpq')[0].size == 0
+    assert CP.parse_workbook(path).empty
+
+
+def test_full_stream_does_not_reuse_prior_current_after_adaptive_range(tmp_path):
+    path = _write_generic_workbook(tmp_path / 'Synthetic In-Clinic 11_12_26.xlsx', [
+        {'Timestamp': datetime.time(13), 'Amp (mA)': '1/2', 'Rate (Hz)': 55, 'Left Leg': 6},
+        {'Timestamp': datetime.time(13, 5), 'Amp (mA)': 'L 0-1.5 / R 0-2.5',
+         'Rate (Hz)': 55, 'Left Leg': 4},
+    ])
+    stored = CP.parse_workbook(path, keep_unrated=True)
+    assert stored['left_leg'].tolist() == [6, 4]
+    assert stored.loc[1, ['amp_mA_Left', 'amp_mA_Right']].isna().all()
+    ep = CP.epoch_frame_from_steps(stored)
+    assert len(ep) == 1
+    assert ep.iloc[0]['pain_Left_Leg'] == 6

@@ -88,7 +88,10 @@ CLINIC_PAIN_KIND = "clinic_pain_steps"
 #: v3 (2026-10-01): unrated steps are kept (as exposure, `rating_source` None) and unrated steps
 #: are filled from the visit's own Notes tab by time (`rating_source` "notes_tab"); the stored
 #: table therefore changes shape, so the version moves and every participant re-ingests once.
-_RULE_VERSION = "v3b_clinic_pain_2026-10-01"
+#: v4: the full stored stream also retains explicitly timed ratings without a
+#: scalar amplitude (for example adaptive ranges). Unknown current stays missing;
+#: epoch_frame_from_steps continues to exclude these rows from fixed-setting models.
+_RULE_VERSION = "v4_clinic_pain_2026-11-09"
 
 #: The seven pain-site fields this module reports, in the order the task and the sheets themselves
 #: use. `overall` also catches the two 2025 workbooks' "Verbal" column and July 2025's "Current
@@ -498,10 +501,11 @@ def _row_is_blank_for(ws, r, cmap, max_col):
 
 def _parse_generic_stim_testing(ws, *, file_title, file_name, sha256, setting, max_col=33,
                                 keep_unrated=False):
-    """`keep_unrated` (2026-10-01): also emit one row per step that carries no pain rating at all
-    -- a row where a current was set and neither it nor any row of the same step (a two-row step's
-    test row) was rated -- with every pain field None and `rating_source` None. Such a row is
-    EXPOSURE (the patient received that setting), never pain data."""
+    """With `keep_unrated`, retain unrated exposure rows and explicitly timed pain
+    ratings even when scalar current is unknown. An unrated exposure row has a
+    known current but no rating on either its ramp or test row; every pain field
+    and `rating_source` remains None. Unknown adaptive current stays missing,
+    so its measured ratings cannot enter a fixed-setting model."""
     rows_out = []
     step_id = 0
     unrated = {}                     # step_id -> the row dict of a step-start row with no rating
@@ -593,8 +597,12 @@ def _parse_generic_stim_testing(ws, *, file_title, file_name, sha256, setting, m
             continue
 
         if state["amp_L"] is None and state["amp_R"] is None and not have_ever_set_amp:
-            counts.n_skipped_no_setting += 1
-            continue
+            # A measured pain score does not require a known fixed current.
+            # Preserve it in the full stream only when its time is explicit;
+            # never turn an adaptive range into a scalar or invent a time.
+            if not (keep_unrated and hasattr(ts_v, "hour")):
+                counts.n_skipped_no_setting += 1
+                continue
 
         counts.n_with_pain += 1
         rated_steps.add(step_id)
