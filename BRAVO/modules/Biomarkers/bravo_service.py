@@ -7805,6 +7805,11 @@ def _attach_summary_family_q(summary, request_data):
         if fq.get("family_q_warning"):
             out["caveats"] = list(out.get("caveats") or []) + [
                 "Correction across bands (warning only): " + str(fq["family_q_warning"])]
+        # the band's area-under-the-curve q (decisions 500, 504), listed the same way (decision 508)
+        if fq.get("family_q_auc_warning"):
+            out["caveats"] = list(out.get("caveats") or []) + [
+                "Correction across bands, area under the curve (warning only): "
+                + str(fq["family_q_auc_warning"])]
         return out
     except Exception:                                      # noqa: BLE001 - a label only
         _log.warning("Biomarkers: the summary's band q could not be attached", exc_info=True)
