@@ -1,3 +1,21 @@
+# Verified late neural imports — live acceptance passed November 10, 2026 UTC
+
+[PR #26](https://github.com/shirvalkarlab/BRAVO_pain/pull/26) adds guarded admission
+for a delayed masked-device export after a newer trusted report has arrived.
+Native counter and both tablet session bounds must agree on order after the
+reviewed seed. The existing latest-reference bilateral measurement, event and
+canonical-clock proofs remain mandatory; INS wall-clock drift does not establish
+ordering. Existing signed receipts and raw-byte preservation remain unchanged.
+
+All five candidate and merged-head CI jobs passed. The isolated importer suite
+passed 737 tests, with 100% true branch coverage for masked identity and 98.1% for
+the upstream adapter. Live acceptance verified normal authenticated source and
+recording lists, streaming timestamps and sample fingerprints, and the refreshed
+neural timeline. Existing source/event records were preserved. Historical source
+and contact ambiguities remain retained and flagged; this acceptance does not
+claim recomputation of optional native scientific analyses. The application and
+existing schedules remain active. See the [import contract](../scripts/daily_import/MANUAL_SYNC.md).
+
 # Timed clinic-rating correction — live acceptance passed November 9, 2026 UTC
 
 The [clinic-rating correction](clinic-rating-import.md), published in
