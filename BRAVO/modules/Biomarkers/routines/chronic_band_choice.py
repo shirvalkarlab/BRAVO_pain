@@ -131,7 +131,24 @@ def covering_reports(report_t, sample_t, period_s=CHRONIC_PERIOD_S):
 
 
 #: A chronic frequency goes on a band centre only when it is LESS than this far from it, in Hz.
-MAX_CENTRE_GAP_HZ = 0.5
+#: Decision 509 (the PI, 2026-11-10: "Finish all the open items"; the limit is my call): the device's
+#: 5 Hz band and the grid's 5 Hz band must overlap by more than 80%, so the gap must be under 1.0 Hz
+#: (was 0.5, which left the device's 7.81 Hz bin, 0.69 Hz below 8.5, on no centre). Two frequencies
+#: on one centre: the nearer answers (unchanged). Midway between two centres: the lower one.
+MAX_CENTRE_GAP_HZ = 1.0
+#: A gap at or above this (the old limit) is stated in words on the entry, its row and the page.
+GAP_WORDS_FROM_HZ = 0.5
+
+
+def centre_gap_words(freq_hz, centre):
+    """"sensed 0.7 Hz below this band's centre" when the frequency is GAP_WORDS_FROM_HZ or more from
+    the centre it answers for, else None."""
+    if centre is None or freq_hz is None:
+        return None
+    off = round(float(freq_hz) - float(centre), 6)
+    if abs(off) < GAP_WORDS_FROM_HZ:
+        return None
+    return "sensed %.1f Hz %s this band's centre" % (abs(off), "below" if off < 0 else "above")
 #: Reports with a chronic value needed before the chronic log gives an answer at a band (the same
 #: minimum the heat map's own interval needs, `_best_rows_correlation`).
 MIN_REPORTS = 8
@@ -183,6 +200,27 @@ def grid_centre_for(freq_hz, centres, max_gap_hz=MAX_CENTRE_GAP_HZ):
         return None
     i = int(np.argmin(np.abs(c - f)))
     return float(c[i]) if abs(float(c[i]) - f) < float(max_gap_hz) else None
+
+
+#: The heat-map grid's centres sit 1 Hz apart inside the adaptive sensing range (8 to 30 Hz), so a
+#: reader holding one band centre can rebuild its neighbours (`answers_for_centre`).
+GRID_CENTRE_SPACING_HZ = 1.0
+_GRID_LO_HZ, _GRID_HI_HZ = 8.0, 30.0
+
+
+def answers_for_centre(freq_hz, centre_hz):
+    """True when ``freq_hz`` answers for the grid centre ``centre_hz`` under `grid_centre_for`, read
+    against that centre and its neighbours on the grid (1 Hz either side, inside 8 to 30 Hz): the
+    nearest centre, less than MAX_CENTRE_GAP_HZ away. For a reader that holds one centre, not the
+    grid's list (the Closed-Loop threshold card's home swing, decision 509)."""
+    try:
+        c = float(centre_hz)
+    except (TypeError, ValueError):
+        return False
+    near = [x for x in (c - GRID_CENTRE_SPACING_HZ, c, c + GRID_CENTRE_SPACING_HZ)
+            if _GRID_LO_HZ - 1e-9 <= x <= _GRID_HI_HZ + 1e-9]
+    got = grid_centre_for(freq_hz, near)
+    return got is not None and abs(got - c) < 1e-9
 
 
 def chronic_samples_by_pair(chronic_recordings, powerdomain_recordings=None):
@@ -421,6 +459,9 @@ def chronic_band_choice(samples_by_pair, currents_by_side, report_t, pain, *, ce
             used = sorted({j for js in owned for j in js})
             entry = {"freq_hz": f, "grid_centre_hz": centre,
                      "centre_gap_hz": (None if centre is None else round(abs(centre - f), 6)),
+                     "centre_offset_hz": (None if centre is None else round(f - centre, 6)),
+                     **({"centre_gap_words": centre_gap_words(f, centre)}
+                        if centre_gap_words(f, centre) else {}),
                      "n_readings": int(ts.size),
                      "first_reading_s": float(ts.min()), "last_reading_s": float(ts.max()),
                      "n_readings_matched": int(len(used)),
@@ -469,7 +510,8 @@ def row_block(pair_block, centre):
         else None
     if entry is None:
         return {"covered": False, "n_reports": 0, "words": NO_HOME_RECORD}
-    keep = ("freq_hz", "grid_centre_hz", "centre_gap_hz", "n_readings", "n_readings_matched",
+    keep = ("freq_hz", "grid_centre_hz", "centre_gap_hz", "centre_offset_hz", "centre_gap_words",
+            "n_readings", "n_readings_matched",
             "first_reading_s", "last_reading_s", "first_matched_report_s", "last_matched_report_s",
             "n_reports", "pearson_r", "pearson_r_low", "pearson_r_high", "p_rotation",
             "n_rotations", "answer", "direction", "current_removed_check", "covered", "why",
@@ -481,6 +523,8 @@ def row_block(pair_block, centre):
                         if out.get("why") else "home record at this band gives no answer")
     else:
         out["words"] = "decided by the home record (chronic log)"
+    if out.get("centre_gap_words"):
+        out["words"] = out["words"] + "; " + out["centre_gap_words"]
     return out
 
 

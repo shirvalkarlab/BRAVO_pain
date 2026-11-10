@@ -197,7 +197,8 @@ export function sourceCell(row) {
   const d = deciderOf(row);
   if (!d) return { text: "", title: "" };
   const title = d === "home"
-    ? `Decided by: home record (chronic log). ${rIntervalN(row.pearson_r, row.pearson_r_low, row.pearson_r_high, row.n_pain_reports)}`
+    ? `Decided by: home record (chronic log${row.chronic_centre_gap_words ? `, ${row.chronic_centre_gap_words}` : ""}). `
+      + `${rIntervalN(row.pearson_r, row.pearson_r_low, row.pearson_r_high, row.n_pain_reports)}`
       + (row.td_values ? `; TD alone: ${rIntervalN(row.td_values.pearson_r, row.td_values.pearson_r_low,
         row.td_values.pearson_r_high, row.td_values.n_pain_reports)}` : "")
       + (row.daily_swing ? `. Daily swing: ${dailySwingWords(row.daily_swing)}` : "")

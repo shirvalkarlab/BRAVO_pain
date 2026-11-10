@@ -91,6 +91,20 @@ def test_a_home_frequency_half_a_hertz_or_more_away_is_not_this_band():
     assert b["status"] == DS.STATUS_NO_HOME_RECORD and b["warning"] == NO_HOME
 
 
+def test_a_home_frequency_answers_for_the_band_c5_puts_it_on_and_no_other():
+    """Decision 509: a home frequency answers for the nearest grid centre when under 1.0 Hz from it,
+    so the threshold card's home swing follows the same mapping: 7.8 Hz (0.7 Hz below 8.5, nothing
+    nearer) is 8.5 Hz's; 10.2 Hz stays 10.5 Hz's, never 9.5's, though both are under 1.0 Hz away."""
+    b = TPL.home_swing_block(_samples(_two_fold, freq_hz=7.8), PAIR, 8.5)
+    assert b["status"] == DS.STATUS_MEASURED and b["chronic_freq_hz"] == 7.8
+    assert TPL.home_swing_block(_samples(_two_fold, freq_hz=10.2), PAIR, 10.5)["chronic_freq_hz"] == 10.2
+    assert TPL.home_swing_block(_samples(_two_fold, freq_hz=10.2), PAIR, 9.5)["status"] == DS.STATUS_NO_HOME_RECORD
+    # past the top of the grid (29.5 Hz is its last centre), 30.3 Hz is 29.5 Hz's
+    assert TPL.home_swing_block(_samples(_two_fold, freq_hz=30.3), PAIR, 29.5)["chronic_freq_hz"] == 30.3
+    # 1.0 Hz or more from every centre: no band's
+    assert TPL.home_swing_block(_samples(_two_fold, freq_hz=7.4), PAIR, 8.5)["status"] == DS.STATUS_NO_HOME_RECORD
+
+
 def test_an_unreadable_home_record_says_so_and_names_the_reason():
     b = TPL.home_swing_block(None, PAIR, 9.5, reason="the home record could not be read: boom")
     assert b["status"] == TPL.HOME_STATUS_UNREADABLE and "boom" in b["reason"]

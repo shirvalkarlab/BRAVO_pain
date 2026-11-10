@@ -88,12 +88,13 @@ def _daily_swing_module():
     return _ds
 
 
-def _grid_centre_for(f, centres):
+def _answers_for_centre(f, centre_hz):
+    """C5's mapping, read for one centre (decision 509: under 1.0 Hz, the nearest centre)."""
     try:
         from Biomarkers.routines import chronic_band_choice as _cbc
     except ImportError:                                   # pragma: no cover - the other spelling
         from modules.Biomarkers.routines import chronic_band_choice as _cbc
-    return _cbc.grid_centre_for(f, centres)
+    return _cbc.answers_for_centre(f, centre_hz)
 
 
 def home_swing_warning(block: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -119,7 +120,8 @@ def home_swing_block(samples_by_pair, pair, centre_hz, *, reason=None) -> Dict[s
 
     ``samples_by_pair`` is `chronic_band_choice.chronic_samples_by_pair`'s answer (``None`` with a
     ``reason`` when the home record could not be read). The chronic frequency is the one C5's mapping
-    puts on this centre (under 0.5 Hz away; the nearer, then the one with more readings); its hourly
+    puts on this centre (the nearest grid centre, under 1.0 Hz away since decision 509; the
+    nearer, then the one with more readings); its hourly
     profile is C6's. Only the ratio, its hours and the counts are kept, never a home-record value."""
     _ds = _daily_swing_module()
     out: Dict[str, Any] = {"status": None, "pair": None if pair is None else str(pair),
@@ -141,7 +143,7 @@ def home_swing_block(samples_by_pair, pair, centre_hz, *, reason=None) -> Dict[s
         y = np.asarray(d.get("y", []), dtype=float)
         hz = np.asarray(d.get("freq_hz", []), dtype=float)
         for f in sorted({float(v) for v in hz[np.isfinite(hz)]}):
-            if _grid_centre_for(f, [float(centre_hz)]) is None:
+            if not _answers_for_centre(f, float(centre_hz)):
                 continue
             sel = hz == f
             cand = (abs(f - float(centre_hz)), -int(sel.sum()), f, t[sel], y[sel])

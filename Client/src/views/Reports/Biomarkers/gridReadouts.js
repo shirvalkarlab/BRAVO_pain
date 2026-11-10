@@ -434,6 +434,8 @@ export function chronicCountsWords(ch) {
   const parts = [`${ch.n_reports} matched`];
   if (ch.n_reports_in_gap != null) parts.push(`${ch.n_reports_in_gap} in a gap`);
   if (ch.n_reports_log_elsewhere != null) parts.push(`${ch.n_reports_log_elsewhere} log elsewhere`);
+  // decision 509: a home frequency 0.5-1.0 Hz from this band's centre answers for it; say how far
+  if (ch.centre_gap_words) parts.push(ch.centre_gap_words);
   return parts.join(" · ");
 }
 

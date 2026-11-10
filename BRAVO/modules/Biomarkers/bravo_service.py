@@ -9631,8 +9631,12 @@ def _chronic_recording_identity(participant_uid):
             .values_list("uid", "hashed", "type"):
         ident.append((str(u), str(h), str(t), ""))
     ident.sort()
-    blob = (repr(ident) + "|start=%r|index=%r" % (
-        float(_data_start.data_start_s(participant_uid) or 0.0), _repr.CHANNEL_INDEX_VERSION))
+    # decision 509: the largest gap at which a chronic frequency answers for a band centre is part of
+    # how its readings are filed, so it moves the key under every setting (as the index version does)
+    from .routines import chronic_band_choice as _cbc
+    blob = (repr(ident) + "|start=%r|index=%r|gap=%r" % (
+        float(_data_start.data_start_s(participant_uid) or 0.0), _repr.CHANNEL_INDEX_VERSION,
+        float(_cbc.MAX_CENTRE_GAP_HZ)))
     return "%d:%s" % (len(ident), hashlib.blake2b(blob.encode("utf8"), digest_size=16).hexdigest())
 
 

@@ -3,7 +3,8 @@ log may choose"; `routines/chronic_band_choice.py`).
 
 Held here, on values:
   * each chronic frequency goes on the heat map's nearest band centre only when it is LESS than
-    0.5 Hz away (24.41 Hz -> 24.5 Hz; 7.8 Hz -> no centre);
+    1.0 Hz away (decision 509; was 0.5): 24.41 Hz -> 24.5 Hz; 7.8 Hz -> 8.5 Hz, its gap stated in
+    words ("sensed 0.7 Hz below this band's centre"); a nearer frequency on the same centre wins;
   * readings filed under another contact pair never count for this one (CLAUDE.md rule 13), and
     adding them changes nothing on this pair, field for field;
   * a band the chronic log does not cover (no frequency maps to it, or too few reports matched)
@@ -55,14 +56,60 @@ def _reports(n=40, seed=1):
     return rt, pain
 
 
-def test_each_chronic_frequency_goes_on_the_nearest_centre_only_under_half_a_hertz():
+def test_each_chronic_frequency_goes_on_the_nearest_centre_under_one_hertz():
+    # decision 509: the device's 5 Hz band must overlap the grid's 5 Hz band by more than 80%, so a
+    # frequency maps when it is LESS than 1.0 Hz from the nearest centre (was 0.5)
+    assert CBC.MAX_CENTRE_GAP_HZ == 1.0
     assert CBC.grid_centre_for(24.41, CENTRES) == 24.5
     assert CBC.grid_centre_for(24.4, CENTRES) == 24.5        # the device's snapped bin
     assert CBC.grid_centre_for(9.77, CENTRES) == 9.5
-    assert CBC.grid_centre_for(7.81, CENTRES) is None          # 0.69 Hz from 8.5: no centre
-    assert CBC.grid_centre_for(9.0, [8.5, 9.5]) is None        # exactly 0.5 Hz: not less than
+    assert CBC.grid_centre_for(7.81, CENTRES) == 8.5           # 0.69 Hz below 8.5: now mapped
+    assert CBC.grid_centre_for(7.8, CENTRES) == 8.5
+    assert CBC.grid_centre_for(9.0, [8.5, 9.5]) == 8.5         # a midpoint: the lower centre
     assert CBC.grid_centre_for(29.9, CENTRES) == 29.5
-    assert CBC.grid_centre_for(30.1, CENTRES) is None
+    assert CBC.grid_centre_for(30.1, CENTRES) == 29.5          # 0.6 Hz above 29.5
+    assert CBC.grid_centre_for(7.5, CENTRES) is None           # exactly 1.0 Hz: not less than
+    assert CBC.grid_centre_for(6.84, CENTRES) is None          # 1.66 Hz from 8.5
+    assert CBC.grid_centre_for(30.6, CENTRES) is None
+
+
+def test_a_frequency_off_the_old_limit_records_its_gap_in_words_and_the_nearer_one_wins():
+    rt, pain = _reports()
+    far, _ = R.merge_chronic_repeats([_rec(rt - 60.0, 100.0 + pain, np.ones(rt.size), freq=7.81)])
+    blk = CBC.chronic_band_choice(CBC.chronic_samples_by_pair(far), {}, rt, pain, centres=CENTRES,
+                                  tol_s=900.0, n_boot=200)["ONE_THREE_LEFT"]
+    e = blk["by_centre"][8.5]
+    assert e["freq_hz"] == 7.8 and e["grid_centre_hz"] == 8.5 and e["covered"] is True
+    assert e["centre_gap_hz"] == 0.7 and e["centre_offset_hz"] == -0.7
+    assert e["centre_gap_words"] == "sensed 0.7 Hz below this band's centre"
+    row = CBC.label_rows([{"band_center_hz": 8.5, "pearson_r": 0.1}], blk, SW.GRID_SOURCE_TD)[0]
+    assert row["choice_source"] == "chronic"
+    assert row["chronic"]["centre_gap_words"] == e["centre_gap_words"]
+    assert row["chronic"]["words"] == ("decided by the home record (chronic log); sensed 0.7 Hz "
+                                       "below this band's centre")
+    seen = SW.chronic_decides(row)
+    assert seen["chronic_centre_gap_words"] == e["centre_gap_words"]
+    assert seen["why"].startswith("decided by the home record (chronic log, 7.8 Hz, sensed 0.7 Hz "
+                                  "below this band's centre): r ")
+    # within the old limit no words are added (the gap is still recorded)
+    near, _ = R.merge_chronic_repeats([_rec(rt - 60.0, 100.0 + pain, np.ones(rt.size), freq=8.79)])
+    nb = CBC.chronic_band_choice(CBC.chronic_samples_by_pair(near), {}, rt, pain, centres=CENTRES,
+                                 tol_s=900.0, n_boot=200)["ONE_THREE_LEFT"]["by_centre"][8.5]
+    assert nb["centre_gap_hz"] == 0.3 and nb["centre_offset_hz"] == 0.3
+    assert nb.get("centre_gap_words") is None
+    nrow = CBC.label_rows([{"band_center_hz": 8.5}], {"by_centre": {8.5: nb}}, SW.GRID_SOURCE_TD)[0]
+    assert nrow["chronic"]["words"] == "decided by the home record (chronic log)"
+    assert "chronic_centre_gap_words" not in SW.chronic_decides(nrow)
+    # both on one pair at different times: 8.8 Hz (0.3 Hz away) answers at 8.5, 7.8 Hz is still listed
+    h = rt.size // 2
+    both, _ = R.merge_chronic_repeats([
+        _rec(rt[:h] - 60.0, 100.0 + pain[:h], np.ones(h), freq=7.81),
+        _rec(rt[h:] - 60.0, 100.0 + pain[h:], np.ones(rt.size - h), freq=8.79)])
+    bb = CBC.chronic_band_choice(CBC.chronic_samples_by_pair(both), {}, rt, pain, centres=CENTRES,
+                                 tol_s=900.0, n_boot=200)["ONE_THREE_LEFT"]
+    assert sorted(e["freq_hz"] for e in bb["frequencies"]) == [7.8, 8.8]
+    assert all(e["grid_centre_hz"] == 8.5 for e in bb["frequencies"])
+    assert bb["by_centre"][8.5]["freq_hz"] == 8.8
 
 
 def _pair_samples(pain, rt, extra_other_pair=False):
@@ -109,8 +156,8 @@ def test_a_band_the_chronic_log_does_not_cover_cannot_be_labelled_chronic():
     assert rows[0]["choice_source"] == "TD", rows[0]
     assert rows[0]["chronic"] == {"covered": False, "n_reports": 0,
                                   "words": "no home record at this band"}
-    # a chronic frequency 0.69 Hz from every centre covers nothing
-    recs, _ = R.merge_chronic_repeats([_rec(rt - 60.0, 100.0 + pain, np.ones(rt.size), freq=7.81)])
+    # a chronic frequency 1.66 Hz from every centre covers nothing (decision 509: 7.81 Hz now maps)
+    recs, _ = R.merge_chronic_repeats([_rec(rt - 60.0, 100.0 + pain, np.ones(rt.size), freq=6.84)])
     far = CBC.chronic_band_choice(CBC.chronic_samples_by_pair(recs), {}, rt, pain,
                                   centres=CENTRES, tol_s=900.0, n_boot=200)["ONE_THREE_LEFT"]
     assert far["by_centre"] == {} and far["frequencies"][0]["grid_centre_hz"] is None
@@ -306,3 +353,16 @@ def test_the_chronic_match_is_in_the_key_and_only_a_non_default_one_in_the_tag()
     keys = {m: SW._key_settings_from_sidecar({"sweep_settings": SW.sweep_settings_tag_from_request(
         {"ChronicMatch": m})})["chronic_match"] for m in ("covering", "window")}
     assert keys == {"covering": "covering", "window": "window"}
+
+
+def test_the_centre_gap_limit_is_in_the_grids_chronic_identity_and_version():
+    """Decision 509: the gap limit decides which readings answer for a band, so it is part of the
+    chronic identity that goes into every grid key (as the channel-index version is), and the grid's
+    rule version moved with it."""
+    import re
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "bravo_service.py")).read()
+    body = src[src.index("def _chronic_recording_identity"):]
+    body = body[:body.index("\ndef ")]
+    assert re.search(r"\|gap=%r", body) and "MAX_CENTRE_GAP_HZ" in body
+    assert SW.GRID_RULE_VERSION.startswith("v37_centre_gap_1hz") or not SW.RECENT_NOTE
