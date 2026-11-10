@@ -130,6 +130,42 @@ def test_both_authoritative_tablet_session_bounds_must_advance():
     with pytest.raises(ValueError):m.advancing_session(candidate,reference)
 
 
+@pytest.mark.parametrize('candidate,reference,expected', [
+    (report(3, 3), report(2, 2), 'forward'),
+    (report(2, 2), report(3, 3), 'historical'),
+    (report(2, 2), report(1, 1), 'forward'),
+])
+def test_late_arrival_order_uses_native_counter_and_tablet_clock(candidate, reference, expected):
+    # INS wall time can disagree arbitrarily or reset within either session.
+    for r in (candidate, reference):
+        r['DeviceInformation']['Initial']['DeviceDateTime'] = '2099-01-01T00:00:00Z'
+        r['DeviceInformation']['Final']['DeviceDateTime'] = '2000-01-01T00:00:00Z'
+    assert m.admission_session(candidate, reference, report(1, 1)) == expected
+
+
+@pytest.mark.parametrize('candidate,reference,seed', [
+    (report(1, 1), report(3, 3), report(1, 1)),  # seed replay
+    (report(1, 1), report(3, 3), report(2, 2)),  # before reviewed seed
+    (report(3, 3), report(3, 3), report(1, 1)),  # latest replay
+    (report(4, 2), report(3, 3), report(1, 1)),  # crossed independent clocks
+    (report(2, 4), report(3, 3), report(1, 1)),
+    (report(2, 3), report(3, 3), report(1, 1)),  # tied tablet bounds
+    (report(3, 2), report(3, 3), report(1, 1)),  # tied native counter
+    ({**report(2, 2), 'SessionEndDate': '2026-01-04T00:00:00Z'}, report(3, 3), report(1, 1)),
+])
+def test_historical_admission_rejects_replays_crossed_or_unrooted_sessions(candidate, reference, seed):
+    with pytest.raises(ValueError):
+        m.admission_session(candidate, reference, seed)
+
+
+@pytest.mark.parametrize('which', ['candidate', 'reference', 'seed'])
+def test_historical_admission_validates_every_session(which):
+    reports = dict(candidate=report(2, 2), reference=report(3, 3), seed=report(1, 1))
+    reports[which]['DeviceInformation']['Final']['DeviceDateTimeBlockId'] = 8
+    with pytest.raises(ValueError):
+        m.admission_session(**reports)
+
+
 def test_rooted_graph_and_rolling_reference(validators):
     first = row('f' * 32, '1' * 64, receipt())
     second = row('2' * 32, '3' * 64, receipt('2' * 32, '3' * 64, 'f' * 32, '1' * 64))

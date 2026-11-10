@@ -214,7 +214,8 @@ class Runtime(target_adapter.TargetRuntime):
         # the seed and this one report are retained in this invocation's memory.
         item = self._masked_reference_item
         reference = self._masked_reference(item['source_uid'], item['raw_sha256'])
-        masked_identity.advancing_session(report, reference)
+        seed = self._masked_reference(scope['seed_source_uid'], scope['seed_raw_sha256'])
+        masked_identity.admission_session(report, reference, seed)
         proof = native_continuity.prove_continuity(report, reference)
         prior = deepcopy(reference)
         prior_counts = TabletClock.convert_export(prior, table)

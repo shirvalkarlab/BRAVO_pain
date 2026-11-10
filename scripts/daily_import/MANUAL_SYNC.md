@@ -84,8 +84,8 @@ the seed names an authenticated, previously accepted original report. It never
 adds a masked token to `approved_device_serials` or recovers a serial number.
 
 Every new report must have matching wholly block-masked Initial/Final serials,
-a unique native owner/type/exact-lead match to that existing device, an advancing
-session in the same native clock block, and complete bilateral chronic and
+a unique native owner/type/exact-lead match to that existing device, a session
+strictly after the reviewed seed in the same native clock block, and complete bilateral chronic and
 spectral continuity with the latest trusted read. All overlapping measurements
 and explicit contact claims must agree. A changed or omitted contact claim
 relative to the reference cannot supply a witness. Identical contact-free
@@ -94,6 +94,24 @@ Canonical conversion must preserve every common native
 measurement timestamp. Unknown clocks, conflicting measurements, changed
 provider objects, ambiguous devices, absent meaningful overlap and new clock
 blocks remain withheld. Existing array/contact preservation rules still apply.
+
+A delayed report may fall before the latest trusted report while remaining after
+the seed. Both tablet session bounds and the native final counter must agree on
+that strict order; ties, crossed clocks and reads at/before the seed are rejected.
+INS wall-clock strings are not ordering evidence: they can drift or be corrected
+within a session. Historical admission uses exactly the same latest-reference
+measurement, event and canonical-clock checks as forward admission. It never
+searches older references for a passing comparison. Raw SHA/HMAC deduplication
+still rejects duplicate allocation, and a late report does not replace the
+latest rolling reference. Receipt format and existing signed chains are unchanged.
+
+These checks establish source continuity, not universal agreement among every
+historical event claim. A rolling export may no longer carry the earliest events
+present in an older report. Conflicting old claims must remain in their immutable
+source reports and investigation evidence; do not rewrite old group IDs, choose
+between simultaneous ON/OFF claims, or describe clock correction as resolving a
+content disagreement. Normal ingestion preserves the existing event rows and
+retains the new source's raw bytes and settings record.
 
 `MaskedDeviceAdmission` records the exact source/reference raw identities,
 private binding digest, native proof and clock proof. Only descendants whose

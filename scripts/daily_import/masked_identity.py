@@ -61,7 +61,7 @@ def masked_serial(report):
 
 
 def advancing_session(candidate, reference):
-    """The opt-in covers new reads in one native block, never replayed old reads."""
+    """Require strictly advancing native counter AND both tablet session bounds."""
     def bounds(report):
         if any(not isinstance(report[key], str) for key in ('SessionDate', 'SessionEndDate')):
             raise ValueError('masked session dates unavailable')
@@ -84,6 +84,26 @@ def advancing_session(candidate, reference):
     old, new = bounds(reference), bounds(candidate)
     if old[0] != new[0] or old[1] >= new[1] or old[2] >= new[2] or old[3] >= new[3]:
         raise ValueError('masked session does not advance the trusted read')
+
+
+def admission_session(candidate, reference, seed):
+    """Admit forward or late reads within the already rooted session interval.
+
+    Late arrival is distinct from duplicate content (checked by raw SHA/HMAC in
+    the caller). The candidate must still follow the reviewed seed and must be
+    strictly ordered with the latest trusted report on BOTH independent clocks.
+    Equal, crossed or changed-block reads fail. This only checks session order;
+    the same latest-reference measurement, event and canonical-clock proofs are
+    mandatory in either direction. INS wall-clock strings are never ordering
+    evidence because that clock can drift or be reset during a session.
+    """
+    advancing_session(candidate, seed)
+    try:
+        advancing_session(candidate, reference)
+    except ValueError:
+        advancing_session(reference, candidate)
+        return 'historical'
+    return 'forward'
 
 
 def validate_key(key):

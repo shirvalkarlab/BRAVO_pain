@@ -224,10 +224,13 @@ def test_unrelated_known_source_needs_no_new_certificate(case):
     case.runtime.verify_masked_admission(case.row,case.digest)
 
 
-def test_latest_rooted_reference_only_and_bounded_raw_memory(case, monkeypatch):
+@pytest.mark.parametrize('latest,incoming', [(2, 3), (3, 2)])
+@pytest.mark.parametrize('failure', [None, 'prove_continuity', 'verify_clock_agreement'])
+def test_latest_rooted_reference_only_and_bounded_raw_memory(case, monkeypatch, latest, incoming, failure):
     c=case
-    second=deepcopy(c.row); second.uid='f'*32; second.metadata={'Device':D,'ClockAnchor':anchor(report())}
-    second.pointer=str(c.root/P/(second.uid+'.json')); raw=json.dumps(report()).encode(); Path(second.pointer).write_bytes(raw)
+    newest=report(latest,latest)
+    second=deepcopy(c.row); second.uid='f'*32; second.metadata={'Device':D,'ClockAnchor':anchor(newest)}
+    second.pointer=str(c.root/P/(second.uid+'.json')); raw=json.dumps(newest).encode(); Path(second.pointer).write_bytes(raw)
     sha=hashlib.sha256(raw).hexdigest()
     cert=policy.record(c.binding,second.uid,sha,S,c.digest,{'proof':True},dict(agreement={'clock':True},table_digest='a'*16,configuration_digest='b'*64),KEY)
     second.metadata['MaskedDeviceAdmission']=cert; c.index[sha]=second
@@ -237,7 +240,16 @@ def test_latest_rooted_reference_only_and_bounded_raw_memory(case, monkeypatch):
     monkeypatch.setattr(u.native_continuity,'validate_clock_receipt',lambda value:True)
     prepare(c)
     assert c.runtime._masked_reference_item['source_uid']==second.uid
-    assert c.runtime.admit_masked(json.dumps(report(3,3)).encode(),{'sha256':'0'*64})
+    if failure:
+        monkeypatch.setattr(u.native_continuity,failure,Mock(side_effect=ValueError('conflict')))
+        with pytest.raises(ValueError,match='conflict'):
+            c.runtime.admit_masked(json.dumps(report(incoming,incoming)).encode(),{'sha256':'0'*64})
+        assert not c.runtime._masked_admissions
+        c.runtime.command.assert_not_called()
+        return
+    assert c.runtime.admit_masked(json.dumps(report(incoming,incoming)).encode(),{'sha256':'0'*64})
+    # A late file proves continuity with the latest source, never an older fallback.
+    assert u.native_continuity.prove_continuity.call_args.args[1]==newest
     assert len(c.runtime._masked_raw_cache)==2
     assert c.runtime._masked_admissions['0'*64][0]['source_uid']==second.uid
 
