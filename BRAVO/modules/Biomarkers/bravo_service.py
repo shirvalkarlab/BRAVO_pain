@@ -8300,8 +8300,8 @@ def _deployment_summary_build(request_data):
     # warning only: the band's link with pain on the sign-off's own matched reports after the one
     # cut, its text listed with the caveats; no gate, verdict or ready_to_program reads it.
     _rc = _summary_recent_check(core, n_boot) if sweep_settings.RECENT_CHECK else None
-    if _rc is not None and time_split.appended_text(_rc):
-        caveats.append("Recent-reports check (warning only): " + time_split.appended_text(_rc))
+    if _rc is not None and time_split.caveat_text(_rc):
+        caveats.append(time_split.caveat_text(_rc))       # a note says so (decision 507)
 
     def _ff(x):
         try:

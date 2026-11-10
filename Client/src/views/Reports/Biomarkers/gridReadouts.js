@@ -458,11 +458,13 @@ export function dailySwingWords(ds) {
 }
 
 /** The recent-reports check (decision 496, a warning only; no p, the recent reports were also used
- *  in choosing): "▲ r −0.22 [−0.53, +0.13], n=25", "too few (n=8)", "none". */
+ *  in choosing): "▲ r −0.22 [−0.53, +0.13], n=25" (warning), "~ r +0.20 [−0.10, +0.50], n=17"
+ *  (note: same sign, too few to confirm, decision 507), "too few (n=8)", "none". */
 export function recentWords(rc) {
   if (!rc) return null;
   if (rc.status === "checked") {
-    return `${rc.warning ? "▲ " : ""}${rIntervalN(rc.pearson_r, rc.pearson_r_low, rc.pearson_r_high, rc.n_after)}`;
+    // decision 507: "~" marks the note (same sign, too few recent reports to confirm it)
+    return `${rc.warning ? "▲ " : (rc.note ? "~ " : "")}${rIntervalN(rc.pearson_r, rc.pearson_r_low, rc.pearson_r_high, rc.n_after)}`;
   }
   if (rc.status === "too few recent reports") return `too few (n=${rc.n_after != null ? rc.n_after : "?"})`;
   return rc.status || null;

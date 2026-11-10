@@ -14,8 +14,13 @@ after the cut, at the length of signal and from the source its row already uses,
 by the row's own method (whole reports resampled in blocks, `analytics._block_boot_r_interval`), and
 the counts after and before the cut. Status: "checked", "too few recent reports" (fewer than
 `RECENT_MIN_REPORTS` after the cut), or "no reports after the cut". A checked band whose recent r has
-the other sign, or whose recent interval reaches across zero, gets a warning appended to `why`; the
-other two statuses get a short note instead.
+the other sign from its r on all reports, or whose recent interval leaves out its r on all reports,
+gets a warning appended to `why`. The same sign with an interval reaching across zero gets a NOTE
+instead (decision 507, the PI, 2026-11-10: "Finish all the open items"): with 10-17 recent reports
+the interval crosses zero on nearly every band, so it says the recent reports are too few to confirm
+the sign on their own, and is not a warning. The other two statuses get a short note too. Neutral
+`BRAVO_RECENT_NOTE=0`: decision 496's rule (a warning whenever the recent r is not the same clear
+sign).
 
 WHAT IT IS NOT. Band choice stays on ALL the data: nothing is blanked, and no answer, status,
 verdict, gate or p reads this. The recent reports were also used in choosing, so this checks
@@ -27,6 +32,8 @@ No Django: the callers hand in the series.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -37,6 +44,12 @@ from .local_time import local_calendar_day
 RECENT_SHARE = 0.70
 #: Fewer recent reports than this and the band is not checked ("too few recent reports").
 RECENT_MIN_REPORTS = 10
+
+#: Decision 507: True, a warning only for the other sign or an interval leaving out the r on all
+#: reports, a note for the same sign with an interval across zero. False is the neutral setting
+#: (`BRAVO_RECENT_NOTE=0`): decision 496's rule. `sweep_settings.RECENT_NOTE` reads the same switch
+#: for the grid's key.
+NOTE_RULE = os.environ.get("BRAVO_RECENT_NOTE", "1").strip() != "0"
 
 STATUS_CHECKED = "checked"
 STATUS_TOO_FEW = "too few recent reports"
@@ -143,12 +156,34 @@ def recent_check(x, y, t, cut, *, r_all, n_boot, rng):
         out["words"] = head
         return out
     clear = lo is not None and hi is not None and (lo > 0 or hi < 0)
-    out["consistent"] = bool(clear and np.sign(r) == np.sign(ra))
-    if out["consistent"]:
+    if not NOTE_RULE:                                   # the neutral setting: decision 496's rule
+        out["consistent"] = bool(clear and np.sign(r) == np.sign(ra))
+        if out["consistent"]:
+            out["words"] = head + ": the same clear sign as on all reports"
+        else:
+            out["warning"] = head + ": not the same clear sign as on all reports. " + WARNING_TAIL
+            out["words"] = out["warning"]
+        return out
+    other_sign = r * ra < 0
+    leaves_out = lo is not None and hi is not None and not (lo <= ra <= hi)
+    if other_sign:
+        out["consistent"] = False
+        out["warning"] = (head + ": the other sign from all reports (r %s). " % _fmt(ra)
+                          + WARNING_TAIL)
+        out["words"] = out["warning"]
+    elif leaves_out:
+        out["consistent"] = False
+        out["warning"] = (head + ": its interval leaves out the r on all reports (%s). " % _fmt(ra)
+                          + WARNING_TAIL)
+        out["words"] = out["warning"]
+    elif clear:
+        out["consistent"] = True
         out["words"] = head + ": the same clear sign as on all reports"
     else:
-        out["warning"] = head + ": not the same clear sign as on all reports. " + WARNING_TAIL
-        out["words"] = out["warning"]
+        out["consistent"] = False
+        out["note"] = (head + ": the same sign as on all reports (r %s), but the recent reports are "
+                       "too few to confirm the sign on their own" % _fmt(ra))
+        out["words"] = out["note"]
     return out
 
 
@@ -157,6 +192,19 @@ def appended_text(rc):
     if not isinstance(rc, dict):
         return None
     return rc.get("warning") or rc.get("note") or None
+
+
+def caveat_text(rc, note_rule=None):
+    """The line the Closed-Loop sign-off lists with its caveats: a warning says "(warning only)", a
+    note says "(note, not a warning)" (decision 507); under the neutral setting every text carried
+    "(warning only)", as before. None when the check has neither."""
+    txt = appended_text(rc)
+    if not txt:
+        return None
+    rule = NOTE_RULE if note_rule is None else bool(note_rule)
+    if rc.get("warning") or not rule:
+        return "Recent-reports check (warning only): " + txt
+    return "Recent-reports check (note, not a warning): " + txt
 
 
 def append_warning(why, text):

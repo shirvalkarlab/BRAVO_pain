@@ -216,7 +216,8 @@ export function recentCell(row) {
   const rc = row && row.recent_check;
   if (!rc) return { text: "", title: "" };
   let text = "–";
-  if (rc.status === "checked") text = rc.warning ? "▲" : "✓";
+  // decision 507: the same sign with an interval across zero is a note ("~"), not a warning
+  if (rc.status === "checked") text = rc.warning ? "▲" : (rc.note ? "~" : "✓");
   else if (rc.status === "too few recent reports") text = "few";
   return { text, title: rc.words || rc.note || recentWords(rc) || rc.status || "" };
 }
@@ -681,8 +682,8 @@ function BandSweepGridPanel({ grid, participantUid, committed, committedBySide, 
       </MDTypography>
       <MDTypography data-testid="band-grid-key-wave2" sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>
         {"Source: Home = home record (chronic log) decides, TD = TD decides · Current out: link with the "
-          + "current taken out, ✓ holds, ▲ warning · Later 30%: ✓ same clear sign, ▲ warning, few = too few "
-          + "recent reports · warnings only, never a refusal"}
+          + "current taken out, ✓ holds, ▲ warning · Later 30%: ✓ same clear sign, ~ same sign, too few to "
+          + "confirm, ▲ warning, few = too few recent reports · warnings only, never a refusal"}
       </MDTypography>
       {familyFootnote(grid.family_correction) ? (
         <MDTypography data-testid="band-grid-family" sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>

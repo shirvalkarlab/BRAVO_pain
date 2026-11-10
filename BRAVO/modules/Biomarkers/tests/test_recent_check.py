@@ -8,8 +8,10 @@ does not keep the same clear sign. Held here, on values:
     moves when a report is added (it is rolling);
   * one cut on every grid (mixed, TD-only, PSD-only) and every chronic answer of a request; the
     grid and the sign-off take it from the same function on the same series;
-  * a band whose sign flips on the recent reports gets the warning, appended to `why`; a consistent
-    band gets none;
+  * a band whose sign flips on the recent reports, or whose recent interval leaves out its r on all
+    reports, gets the warning, appended to `why`; the same sign with an interval across zero gets a
+    note instead (too few recent reports to confirm the sign; decision 507); a consistent band gets
+    neither;
   * fewer than `RECENT_MIN_REPORTS` recent reports, and none at all, give their short notes;
   * every answer, status, interval and p is the same with and without the check, field for field,
     on the grid and on the chronic answer (the neutral setting skips it);
@@ -143,10 +145,10 @@ def test_a_sign_flip_on_the_recent_reports_gives_the_warning():
     assert rc["n_after"] == 18 and rc["n_before"] == 42 and rc["choice_cut_date"] == cut["choice_cut_date"]
     assert rc["pearson_r"] < 0 and rc["consistent"] is False
     assert rc["warning"] == (
-        "On the 18 reports after %s, r is %+.2f [%+.2f, %+.2f]: not the same clear sign as on all "
-        "reports. These recent reports were also used in choosing, so this checks consistency over "
+        "On the 18 reports after %s, r is %+.2f [%+.2f, %+.2f]: the other sign from all reports "
+        "(r %+.2f). These recent reports were also used in choosing, so this checks consistency over "
         "time, not an independent test" % (cut["choice_cut_date"], rc["pearson_r"],
-                                           rc["pearson_r_low"], rc["pearson_r_high"]))
+                                           rc["pearson_r_low"], rc["pearson_r_high"], r_all))
     assert rc["note"] is None and TS.appended_text(rc) == rc["warning"]
     rows = [{"why": "the interval ...", "recent_check": rc}]
     TS.append_to_rows(rows)
@@ -159,7 +161,10 @@ def test_a_sign_flip_on_the_recent_reports_gives_the_warning():
 
 
 def test_a_consistent_band_gets_no_warning():
-    x, y, t = _series(r_old=0.9, r_new=0.95)
+    # the same strength before and after the cut: the recent interval holds the r on all reports
+    # (a much stronger recent link, r 0.97 [0.93, 0.99] against 0.92 on all, is warned since
+    # decision 507: its interval leaves out the r on all reports)
+    x, y, t = _series(r_old=0.9, r_new=0.9)
     cut = TS.cut_block(t, y)
     r_all = float(np.corrcoef(x, y)[0, 1])
     rc = TS.recent_check(x, y, t, cut, r_all=r_all, n_boot=300, rng=np.random.default_rng(4))
@@ -170,13 +175,81 @@ def test_a_consistent_band_gets_no_warning():
     TS.append_to_rows(rows)
     assert rows[0]["why"] == "w"
     assert rc["words"].startswith("On the 18 reports after ")
-    # an interval reaching across zero, same sign: a warning too
-    x2, y2, t2 = _series(n=40, r_old=0.9, r_new=0.15, seed=3)
-    rc2 = TS.recent_check(x2, y2, t2, TS.cut_block(t2, y2), r_all=float(np.corrcoef(x2, y2)[0, 1]),
-                          n_boot=300, rng=np.random.default_rng(4))
-    assert rc2["status"] == "checked"
-    if rc2["pearson_r_low"] <= 0 <= rc2["pearson_r_high"]:
-        assert rc2["consistent"] is False and rc2["warning"]
+    assert rc["words"].endswith(": the same clear sign as on all reports")
+
+
+# ---- which outcome: warning, note or neither (decision 507) -------------------------------------
+
+def _with_interval(lo, hi, r_all, note_rule=True):
+    """The check on a band whose recent r is positive, with the bootstrap interval forced to
+    (``lo``, ``hi``) so each outcome is reached exactly; ``note_rule`` False is the neutral setting
+    (`BRAVO_RECENT_NOTE=0`, decision 496's rule)."""
+    x, y, t = _series(r_old=0.6, r_new=0.6)
+    cut = TS.cut_block(t, y)
+    orig_iv, orig_rule = TS.analytics._block_boot_r_interval, TS.NOTE_RULE
+    TS.analytics._block_boot_r_interval = lambda *a, **k: (lo, hi)
+    TS.NOTE_RULE = note_rule
+    try:
+        rc = TS.recent_check(x, y, t, cut, r_all=r_all, n_boot=10, rng=np.random.default_rng(0))
+    finally:
+        TS.analytics._block_boot_r_interval, TS.NOTE_RULE = orig_iv, orig_rule
+    assert rc["status"] == "checked" and rc["pearson_r"] > 0
+    head = "On the 18 reports after %s, r is %+.2f" % (cut["choice_cut_date"], rc["pearson_r"])
+    return rc, head
+
+
+def test_same_sign_with_an_interval_across_zero_is_a_note_not_a_warning():
+    rc, head = _with_interval(-0.10, 0.70, 0.30)
+    assert rc["warning"] is None and rc["consistent"] is False
+    assert rc["note"] == (head + " [-0.10, +0.70]: the same sign as on all reports (r +0.30), but "
+                          "the recent reports are too few to confirm the sign on their own")
+    assert rc["words"] == rc["note"] and TS.appended_text(rc) == rc["note"]
+    assert TS.caveat_text(rc) == "Recent-reports check (note, not a warning): " + rc["note"]
+    # no interval at all, same sign: the same note
+    rc2, _ = _with_interval(None, None, 0.30)
+    assert rc2["warning"] is None and rc2["note"].endswith("too few to confirm the sign on their own")
+
+
+def test_the_other_sign_is_a_warning():
+    rc, head = _with_interval(-0.10, 0.70, -0.30)
+    assert rc["note"] is None and rc["consistent"] is False
+    assert rc["warning"] == (head + " [-0.10, +0.70]: the other sign from all reports (r -0.30). "
+                             + TS.WARNING_TAIL)
+    assert TS.caveat_text(rc) == "Recent-reports check (warning only): " + rc["warning"]
+
+
+def test_an_interval_that_leaves_out_the_all_reports_r_is_a_warning():
+    # same sign and clear of zero, but the r on all reports lies outside the recent interval
+    rc, head = _with_interval(0.40, 0.90, 0.10)
+    assert rc["note"] is None and rc["consistent"] is False
+    assert rc["warning"] == (head + " [+0.40, +0.90]: its interval leaves out the r on all reports "
+                             "(+0.10). " + TS.WARNING_TAIL)
+    # the same sign, interval across zero, all-reports r outside it: a warning, not the note
+    rc2, head2 = _with_interval(-0.05, 0.20, 0.50)
+    assert rc2["note"] is None and "leaves out the r on all reports (+0.50)" in rc2["warning"]
+
+
+def test_clear_same_sign_holding_the_all_reports_r_is_neither():
+    rc, head = _with_interval(0.10, 0.90, 0.50)
+    assert rc["consistent"] is True and rc["warning"] is None and rc["note"] is None
+    assert rc["words"] == head + " [+0.10, +0.90]: the same clear sign as on all reports"
+    assert TS.appended_text(rc) is None and TS.caveat_text(rc) is None
+
+
+def test_the_neutral_setting_keeps_decision_496s_rule():
+    # interval across zero, same sign: the old warning, word for word
+    rc, head = _with_interval(-0.10, 0.70, 0.30, note_rule=False)
+    assert rc["note"] is None and rc["consistent"] is False
+    assert rc["warning"] == (head + " [-0.10, +0.70]: not the same clear sign as on all reports. "
+                             + TS.WARNING_TAIL)
+    assert TS.caveat_text(rc, note_rule=False) == "Recent-reports check (warning only): " + rc["warning"]
+    # clear same sign with the all-reports r outside the interval: consistent under the old rule
+    rc2, _ = _with_interval(0.40, 0.90, 0.10, note_rule=False)
+    assert rc2["consistent"] is True and rc2["warning"] is None
+    # under the old rule every note carried the warning prefix in the sign-off caveats
+    few = {"status": TS.STATUS_TOO_FEW, "warning": None, "note": "Recent-reports check: only 8"}
+    assert TS.caveat_text(few, note_rule=False) == "Recent-reports check (warning only): " + few["note"]
+    assert TS.caveat_text(few) == "Recent-reports check (note, not a warning): " + few["note"]
 
 
 def test_too_few_and_no_recent_reports_give_their_notes():
@@ -344,8 +417,16 @@ def test_the_neutral_setting_files_grids_under_the_rule_before_c8():
     env["BRAVO_RECENT_CHECK"] = "0"
     off = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
                          timeout=120).stdout.split()
-    assert on == ["True", "v35_bins_to_125hz", "v8_recent_check"], on
+    assert on == ["True", "v36_recent_note", "v8_recent_check"], on
     assert off == ["False", "v33_daily_swing", "v7_daily_swing"], off
+    # decision 507's own neutral setting: the note rule off, decision 496's rule and its key
+    env.pop("BRAVO_RECENT_CHECK", None)
+    env["BRAVO_RECENT_NOTE"] = "0"
+    code2 = code.replace("print(S.RECENT_CHECK,", "from modules.Biomarkers.routines import time_split as TS;"
+                         "print(S.RECENT_CHECK, S.RECENT_NOTE, TS.NOTE_RULE,")
+    note_off = subprocess.run([sys.executable, "-c", code2], env=env, capture_output=True, text=True,
+                              timeout=120).stdout.split()
+    assert note_off == ["True", "False", "False", "v35_bins_to_125hz", "v8_recent_check"], note_off
 
 
 def test_the_band_tables_carry_the_recent_columns():
