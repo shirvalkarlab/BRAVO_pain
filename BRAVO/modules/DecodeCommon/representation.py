@@ -70,7 +70,7 @@ import numpy as np
 # code is a miss rather than a wrong answer. This is not the canonicalisation rule's own
 # version -- that is `_CHANNEL_CANON_VERSION` in bravo_service, and a change there must also
 # bump this.
-CHANNEL_INDEX_VERSION = 6      # 2: traces carry `seq` (recording order) and `product`
+CHANNEL_INDEX_VERSION = 7      # 2: traces carry `seq` (recording order) and `product`
                                 # 3: native_lsb_by_channel added (Power-Domain + Chronic Timeline,
                                 #    values unconverted -- the "one decoding step" for every
                                 #    stream `availability.lsb_series` reads, per its own tiers)
@@ -79,6 +79,7 @@ CHANNEL_INDEX_VERSION = 6      # 2: traces carry `seq` (recording order) and `pr
                                 # 5: a streaming run reading 0 throughout left out (decision 462)
                                 # 6: the band labeller's table runs to 125 Hz (2026-10-27): 27.34 and
                                 #    28.32 Hz readings filed at 27.3 and 28.3 Hz, no longer at 26.4
+                                # 7: a frequency of 0 Hz or below has no label (decision 510)
 
 
 def canon_channel(name):
@@ -161,6 +162,10 @@ def snap_freq(hz):
     except (TypeError, ValueError):
         return None
     if not np.isfinite(hz):
+        return None
+    if hz <= 0.0:
+        # decision 510: 0 Hz is no band; the montage survey writes a contact's peak frequency as 0
+        # when it reports no peak (it was labelled 3.9 Hz, the first bin, and modelled there)
         return None
     return float(_FFT_BINS[int(np.argmin(np.abs(_FFT_BINS - hz)))])
 

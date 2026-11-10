@@ -330,14 +330,27 @@ def test_the_devices_sensing_frequencies_above_26_hz_get_their_own_labels():
         assert snap(26.84) == 26.4 and snap(26.86) == 27.3
 
 
-def test_every_label_the_old_table_gave_below_its_top_is_unchanged():
-    """Each old bin maps to itself, and every input from 0 to 26.849 Hz (in steps of 0.001 Hz) gets
-    the label the old table gave it: only inputs at or past 26.85 Hz, halfway to 27.3 Hz, move."""
+def test_every_label_the_old_table_gave_above_zero_and_below_its_top_is_unchanged():
+    """Each old bin maps to itself, and every input above 0 up to 26.849 Hz (in steps of 0.001 Hz)
+    gets the label the old table gave it: only inputs at or past 26.85 Hz, halfway to 27.3 Hz,
+    move (and 0 Hz itself, which has no label since decision 510: the next test)."""
     R, av = _labellers()
     old = np.asarray(_BINS_BEFORE_2026_10_27)
     for snap in (R.snap_freq, av.snap_freq):
         for c in _BINS_BEFORE_2026_10_27:
             assert snap(c) == c, c
-        for hz in np.arange(0.0, 26.8495, 0.001):
+        for hz in np.arange(0.001, 26.8495, 0.001):
             want = float(old[int(np.argmin(np.abs(old - hz)))])
             assert snap(float(hz)) == want, (hz, snap(float(hz)), want)
+
+
+def test_a_frequency_of_zero_or_below_has_no_label():
+    """Decision 510: the montage survey writes a contact's peak frequency as 0 when it reports no
+    peak (on RCS08 every other peak lies between 10.7 and 28.3 Hz, and 469 contact entries read
+    0.0 with no artefact flagged); 0 Hz is no band, so both labellers return None for it and for
+    anything below, as they do for a missing value. Anything above 0 keeps its label."""
+    R, av = _labellers()
+    for snap in (R.snap_freq, av.snap_freq):
+        assert snap(0) is None and snap(0.0) is None and snap(-0.0) is None
+        assert snap(-1.0) is None and snap("0") is None and snap(np.float64(0.0)) is None
+        assert snap(0.001) == 3.9 and snap(1.0) == 3.9 and snap(3.9) == 3.9

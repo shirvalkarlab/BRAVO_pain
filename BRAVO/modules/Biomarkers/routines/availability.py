@@ -102,6 +102,10 @@ def snap_freq(hz):
         return None
     if not np.isfinite(hz):
         return None
+    if hz <= 0.0:
+        # decision 510: 0 Hz is no band; the montage survey writes a contact's peak frequency as 0
+        # when it reports no peak (it was labelled 3.9 Hz, the first bin, and modelled there)
+        return None
     return float(_FFT_BINS[int(np.argmin(np.abs(_FFT_BINS - hz)))])
 
 
