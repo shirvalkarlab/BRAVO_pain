@@ -53,6 +53,77 @@ def get_redcap_credentials(redcap_config=None):
     )
 
 
+#: How long one process keeps a REDCap project connection (decision 432). PyCap keeps the project's
+#: design on the connection once fetched -- its data dictionary (`metadata`) and form-event map --
+#: and a new connection per download fetched both again: two of every download's three calls
+#: (0.23-0.48 s and 0.22 s). The design changes only when the project is edited; the reports are
+#: fetched from the server on every download whatever this says.
+PROJECT_KEEP_SECONDS = 3600.0
+_PROJECTS = {}
+
+#: Every REDCap call gives up after this long (decision 464): on 2026-10-06 REDCap went silent from
+#: Jetstream2 for over two hours, and with no limit each request waited about 2 minutes (the
+#: system's own connection give-up) before failing.
+REDCAP_TIMEOUT_SECONDS = 20.0
+#: ONE DOWNLOAD PER REFRESH PASS (the PI, 2026-10-06, ruling on decision 22 for the refresh job only;
+#: decision 464). When this names a folder, the first download of a given request writes its table
+#: there and every later identical request in the same pass reads it. The refresh job sets it for one
+#: pass and deletes the folder after; pages never set it, so a page still downloads every time.
+PASS_DIR_ENV = "BRAVO_REDCAP_PASS_DIR"
+
+
+class RedcapUnavailable(RuntimeError):
+    """REDCap did not answer (no connection, or no reply within `REDCAP_TIMEOUT_SECONDS`)."""
+
+
+def _pass_file(fields, records):
+    d = os.environ.get(PASS_DIR_ENV)
+    if not d:
+        return None
+    import hashlib
+    import json as _json
+    key = _json.dumps([list(fields or []), list(records or [])])
+    return os.path.join(d, hashlib.blake2b(key.encode("utf8"), digest_size=12).hexdigest() + ".pkl")
+
+
+def _now():
+    import time
+    return time.monotonic()
+
+
+def forget_projects():
+    """Drop every kept REDCap connection (tests; or after the project's design is edited)."""
+    _PROJECTS.clear()
+
+
+def _project(api_url, api_key):
+    """This process's REDCap project connection for these credentials, made at most once an hour."""
+    import redcap  # PyCap; lazy so tests / library imports don't require it
+    key = (api_url, api_key)
+    hit = _PROJECTS.get(key)
+    if hit is not None and _now() - hit[0] <= PROJECT_KEEP_SECONDS:
+        return hit[1]
+    try:
+        project = redcap.Project(api_url, api_key, timeout=REDCAP_TIMEOUT_SECONDS)
+    except Exception as exc:                                   # noqa: BLE001 -- said plainly below
+        raise _unavailable(exc) from exc
+    _PROJECTS[key] = (_now(), project)
+    return project
+
+
+def _unavailable(exc):
+    """A plain error for a REDCap that did not answer; any other error is passed on unchanged."""
+    try:
+        import requests
+        silent = isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout))
+    except ImportError:                                        # pragma: no cover
+        silent = False
+    if silent:
+        return RedcapUnavailable(f"REDCap did not answer within {REDCAP_TIMEOUT_SECONDS:.0f} s "
+                                 f"({type(exc).__name__})")
+    return exc
+
+
 def pull_redcap(redcap_config=None, save=False, save_path=None, fields=None, records=None):
     """
     Pull survey data from REDCap, returning a pandas DataFrame.
@@ -72,22 +143,32 @@ def pull_redcap(redcap_config=None, save=False, save_path=None, fields=None, rec
     tidy pain-report table is unchanged (proved cell-by-cell on the live RCS08 record: 760 rows,
     identical columns, zero differing cells).
     """
-    import redcap  # PyCap; lazy so tests / library imports don't require it
-
+    shared = _pass_file(fields, records)
+    if shared and os.path.exists(shared):
+        return pd.read_pickle(shared)                          # this refresh pass's one download
     api_url, api_key = get_redcap_credentials(redcap_config)
 
-    project = redcap.Project(api_url, api_key)
+    # The connection (with the project's design) is kept for up to an hour (decision 432); the
+    # reports below are fetched from the server on every call.
+    project = _project(api_url, api_key)
     export_kwargs = {}
     if fields:
         export_kwargs["fields"] = list(fields)
     if records:
         export_kwargs["records"] = list(records)
-    redcap_data = project.export_records(
-        format_type="df",
-        export_checkbox_labels=True,
-        export_survey_fields=True,
-        **export_kwargs,
-    )
+    try:
+        redcap_data = project.export_records(
+            format_type="df",
+            export_checkbox_labels=True,
+            export_survey_fields=True,
+            **export_kwargs,
+        )
+    except Exception as exc:                                   # noqa: BLE001 -- said plainly
+        raise _unavailable(exc) from exc
+    if shared:
+        tmp = f"{shared}.{os.getpid()}.tmp"
+        redcap_data.to_pickle(tmp)
+        os.replace(tmp, shared)                                # whole file or none, for the other replays
 
     if save:
         if save_path is None:
@@ -159,7 +240,18 @@ def process_redcap(redcap_data, field_map):
 
     instruments = field_map.get("instruments")
     if instruments and "redcap_repeat_instrument" in df.columns:
-        df = df[df["redcap_repeat_instrument"].isin(instruments)]
+        # A survey filed ONCE rather than as a repeat has no repeat label but is the same survey:
+        # its own timestamp and at least one score are filled (decision 448; one RCS08 rating of
+        # 2025-07-30 was dropped here).
+        cols = []
+        for v in metric_labels.values():
+            cols += list(v) if isinstance(v, (list, tuple)) else [v]
+        cols = [c for c in cols if c in df.columns]
+        one_off = df["redcap_repeat_instrument"].isna() | (df["redcap_repeat_instrument"].astype(str).str.strip() == "")
+        if timestamp_label in df.columns:
+            one_off &= df[timestamp_label].notna() & (df[timestamp_label].astype(str).str.strip() != "")
+        one_off &= df[cols].notna().any(axis=1) if cols else False
+        df = df[df["redcap_repeat_instrument"].isin(instruments) | one_off]
     record_id = field_map.get("pt", field_map.get("record_id"))
     if record_id is not None and "record_id" in df.columns:
         df = df[df["record_id"].astype(str) == str(record_id)]
@@ -180,7 +272,10 @@ def process_redcap(redcap_data, field_map):
             proc[key] = pd.to_numeric(df[value], errors="coerce")
 
     proc[TIDY_TIMESTAMP_COL] = df[timestamp_label]
-    proc = proc.sort_values(TIDY_TIMESTAMP_COL).reset_index(drop=True)
+    # Time first, then every value: reports filed at the same time come out in one order whatever
+    # order REDCap returned them in, so the table's digest does not move for nothing.
+    proc = proc.sort_values([TIDY_TIMESTAMP_COL] + [c for c in proc.columns if c != TIDY_TIMESTAMP_COL],
+                            kind="mergesort", na_position="last").reset_index(drop=True)
     # IMPORTANT: do NOT fillna(0) the pain metrics — an unreported survey day must stay NaN so the
     # median cutoff, correlations, and KMeans labeler DROP it rather than treat it as a real
     # zero-pain report. (Rigor-review fix; deviates from the source notebook's fillna(0).)

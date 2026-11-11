@@ -18,10 +18,7 @@
  */
 import "@testing-library/jest-dom";
 import { render as rtlRender, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
 
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 import { invalidateAll, putResult, settingsKey } from "database/resultCache";
 import { biomarkerHeatmapSlot } from "views/Reports/moduleCacheKeys";
 
@@ -30,6 +27,7 @@ import BiomarkerHeatmapGrids, {
 } from "./BiomarkerHeatmapGrids";
 import { fmtP, hoverReadout } from "./gridReadouts";
 import sweep from "./__fixtures__/rcs08_band_sweep.json";
+import { wrap } from "testUtils/render";
 
 jest.mock("plotly.js-dist", () => {
   const noop = () => {};
@@ -49,12 +47,6 @@ jest.mock("graphing-utility/Plotly", () => ({
 jest.mock("database/session-control", () => ({ SessionController: { query: jest.fn() } }));
 // eslint-disable-next-line import/first
 import { SessionController } from "database/session-control";
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 
 const UID = "2e3c75c00d7f4f37b53a048d195f11da";
 const METRICS = [{ key: "nrs", label: "NRS (0–10)" }, { key: "vas", label: "VAS (0–100)" }];
@@ -184,6 +176,6 @@ describe("6. nothing reads as crossing 0.05 that did not", () => {
     best.family_wise_q_8_to_30hz = 0.046;
     const col = sw.center_freqs_hz.indexOf(best.band_center_hz);
     const row = sw.integration_seconds_delivered.indexOf(best.integration_seconds_delivered);
-    expect(hoverReadout(sw, "correlation", col, row)).toMatch(/q < 0\.05 \(fdr 22 bands\)/);
+    expect(hoverReadout(sw, "correlation", col, row)).toMatch(/grid q < 0\.05 \(fdr 22 bands\)/);
   });
 });

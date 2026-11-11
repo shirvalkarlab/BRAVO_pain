@@ -15,8 +15,9 @@ would silently split the two apart -- the page on one key, the background answer
 the only symptom would be a stability column that never fills in.
 
 Run inside the container:
-    docker exec -w /usr/src/BRAVO bravo_pain-bravo-server-1 python3 -W ignore \
-        modules/Biomarkers/tests/test_stability_background_launch.py
+    docker exec -w /usr/src/BRAVO bravo_pain-bravo-server-1 python3 -W ignore         modules/Biomarkers/tests/test_stability_background_launch.py
+
+Merged here 2026-10-05: test_stability_answer_uses_grid_score.py, test_sweep_rows_carry_stability_answer.py, test_stability_intervals_clustered_on_report.py.
 """
 import inspect
 import json
@@ -24,7 +25,6 @@ import os
 import re
 import sys
 import tempfile
-
 _BRAVO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 sys.path.insert(0, _BRAVO_ROOT)
@@ -36,8 +36,6 @@ try:
 except Exception:
     pass
 from Biomarkers import bravo_service as bs  # noqa: E402
-
-
 #: Request fields the sweep reads that are deliberately NOT carried into the background run, each
 #: with the reason it is not. A field that belongs in neither this list nor
 #: `STABILITY_GRID_SETTING_KEYS` is the failure the guard test below exists to catch.
@@ -451,7 +449,6 @@ def test_a_stopped_early_run_is_kept_from_replacing_its_OWN_grids_answer_not_ano
         bs._SHARED_CACHE_DIR_OVERRIDE = was_override
 
 
-
 def test_the_stored_answer_names_its_grid_and_its_rule_in_its_sidecar():
     """The Closed-Loop card cannot rebuild this answer's key (it has no Django), so it finds the
     answer by what the sidecar says it is for: the grid's key since 2026-09-23 and, since
@@ -482,6 +479,7 @@ def test_the_stored_answer_names_its_grid_and_its_rule_in_its_sidecar():
         bs.band_time_sweep_for_participant = real_sweep
         bs.stability_grid_for_participant = real_grid
         bs._SHARED_CACHE_DIR_OVERRIDE = was_override
+
 
 def test_the_daily_default_grids_answer_is_kept_however_many_others_are_written():
     """A grid at the daily defaults is kept on disk through a keep group (decision 318); its
@@ -526,16 +524,291 @@ def test_the_daily_default_grids_answer_is_kept_however_many_others_are_written(
         bs._SHARED_CACHE_DIR_OVERRIDE = was_override
 
 
-if __name__ == "__main__":
-    _fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
-    _passed = _failed = 0
-    for _fn in _fns:
-        try:
-            _fn()
-            _passed += 1
-            print(f"PASS {_fn.__name__}")
-        except Exception as exc:                                  # noqa: BLE001
-            _failed += 1
-            print(f"FAIL {_fn.__name__}: {exc!r}")
-    print(f"\n{_passed} passed, {_failed} failed")
-    sys.exit(1 if _failed else 0)
+# --------------------------------------------------------------------------------------------------
+# merged from test_stability_answer_uses_grid_score.py
+# A grid's stability answer is computed on the grid's own pain score (found 2026-09-26, decision 331).
+#
+# The daily precompute asks for a grid with `SweepMetric` only. The stability run passed that request
+# on unchanged, and the per-point setup reads `LabelMetric`, which then fell back to NRS: on RCS08 the
+# daily Left Leg VAS grid carried NRS stability answers (100 "cannot tell", 32 "behaves differently",
+# identical to the NRS grid's). This pins that the run hands the per-point setup the grid's own score.
+#
+# Run inside the container:
+#     python3 -W ignore modules/Biomarkers/tests/test_stability_answer_uses_grid_score.py
+
+
+def _capture_setup_request(request_data):
+    seen = {}
+    saved = (bs.band_time_sweep_for_participant, bs.stability_grid_points, bs.stability_grid_for_participant)
+    try:
+        bs.band_time_sweep_for_participant = lambda req: {"band_time_sweep": {"X": {}}, "band_width_hz": 5.0,
+                                                            "sweep_key": {"signature_key": "k", "provenance": []}}
+        bs.stability_grid_points = lambda sweeps: [("X", 20.5)]
+
+        def fake_grid(uid, points, **kw):
+            seen.update(kw.get("request_data") or {})
+            return None                                   # stop before anything is stored
+        bs.stability_grid_for_participant = fake_grid
+        bs.compute_and_store_stability_grid("participant-under-test", request_data=request_data, force=True)
+    finally:
+        (bs.band_time_sweep_for_participant, bs.stability_grid_points,
+         bs.stability_grid_for_participant) = saved
+    return seen
+
+
+def test_a_sweep_metric_only_request_is_answered_on_that_score():
+    seen = _capture_setup_request({"SweepMetric": "left_leg_vas"})
+    assert seen.get("LabelMetric") == "left_leg_vas", seen
+
+
+def test_an_explicit_label_metric_agrees_with_the_grid_score():
+    seen = _capture_setup_request({"SweepMetric": "back_vas", "LabelMetric": "nrs"})
+    assert seen.get("LabelMetric") == "back_vas", seen
+
+
+# --------------------------------------------------------------------------------------------------
+# merged from test_sweep_rows_carry_stability_answer.py
+# B3 of the 2026-09-15 review (decision 185): the cross-setting stability answer -- "does this band
+# still track pain under a different stimulation setting?" -- computed in the background for every
+# stored grid (decisions 96-98) and drawn only on the Closed-Loop page's "Choose a band" card, now
+# reaches the Biomarkers grid's own headline rows. Read from the store under THIS grid's own key
+# (the same key the background run wrote), never the newest grid of any settings.
+#
+# The answer words are the Closed-Loop card's (`DecodeCommon.stability_answer`, one home): "behaves
+# the same" / "behaves differently" / "cannot tell" / "not tested".
+
+
+import django                                            # noqa: E402
+django.setup()
+from CacheStore import store as cs                      # noqa: E402
+from DecodeCommon import stability_answer as SA         # noqa: E402
+
+
+def _grid(points):
+    rows = [{"band_center_hz": f, "pearson_r": 0.1} for _, f in points]
+    return {"band_time_sweep": {"L": {"center_freqs_hz": [f for _, f in points],
+                                      "best_correlation_rows": [dict(r) for r in rows],
+                                      "best_auc_rows": [dict(r) for r in rows]}},
+            "band_width_hz": 5.0, "label_metric": "nrs",
+            "sweep_key": {"signature_key": "sweepkeyone", "provenance": []}}
+
+
+def test_the_answer_words_have_one_home_and_map_the_biomarkers_verdicts():
+    assert SA.answer_for_verdict("stable") == "behaves the same"
+    assert SA.answer_for_verdict("stim-dependent") == "behaves differently"
+    assert SA.answer_for_verdict("inconclusive") == "cannot tell"
+    assert SA.answer_for_verdict("anything else") is None
+    assert SA.ANSWERS == ("behaves the same", "behaves differently", "cannot tell", "not tested")
+
+
+def test_rows_carry_the_stored_answer_for_this_grids_own_key_and_not_tested_where_absent():
+    was = bs._SHARED_CACHE_DIR_OVERRIDE
+    tmp = tempfile.mkdtemp(prefix="stability_rows_")
+    try:
+        bs._SHARED_CACHE_DIR_OVERRIDE = tmp
+        points = [("L", 8.5), ("L", 9.5), ("L", 10.5)]
+        stored = {"kind": bs.STABILITY_GRID_KIND, "rule_version": bs.STABILITY_GRID_RULE_VERSION,
+                  "participant_uid": "abc", "band_width_hz": 5.0, "label_metric": "nrs",
+                  "n_points_requested": 3,
+                  "points": {"L|8.5": {"available": True, "lrt_p": 0.03,
+                                       "stability_verdict": "stim-dependent",
+                                       "equivalence": {"verdict": "stim-dependent", "reason": "the interaction test rejects"}},
+                             "L|9.5": {"available": True, "lrt_p": 0.4,
+                                       "stability_verdict": "inconclusive",
+                                       "equivalence": {"verdict": "inconclusive", "reason": "interval wider than the margin"}},
+                             "L|10.5": {"available": False, "reason": "too few eras"}}}
+        sig = bs._stability_grid_sig_tuple("sweepkeyone", band_width_hz=5.0, points=points)
+        assert cs.store(bs.STABILITY_GRID_KIND, "abc", sig, stored, writer="biomarkers",
+                        trigger="test", provenance=[], root=tmp)
+
+        out = bs.attach_stored_stability_answers(_grid(points), "abc")
+        assert out["cross_setting_stability_from_store"] == 3
+        for key in ("best_correlation_rows", "best_auc_rows"):
+            rows = out["band_time_sweep"]["L"][key]
+            by = {r["band_center_hz"]: r["cross_setting_stability"] for r in rows}
+            assert by[8.5]["answer"] == "behaves differently" and by[8.5]["p_value"] == 0.03
+            assert by[9.5]["answer"] == "cannot tell"
+            assert by[10.5]["answer"] == "not tested" and "too few eras" in by[10.5]["reason"]
+            assert all(r["cross_setting_stability"]["answers_possible"] == list(SA.ANSWERS) for r in rows)
+
+        # A grid under ANOTHER key gets nothing from this entry: every row says not yet computed.
+        other = _grid(points); other["sweep_key"] = {"signature_key": "sweepkeytwo", "provenance": []}
+        out2 = bs.attach_stored_stability_answers(other, "abc")
+        assert out2["cross_setting_stability_from_store"] == 0
+        for r in out2["band_time_sweep"]["L"]["best_correlation_rows"]:
+            assert r["cross_setting_stability"]["answer"] == "not tested"
+            assert "not been computed" in r["cross_setting_stability"]["reason"]
+        print("OK stability answers reach the Biomarkers rows under this grid's own key")
+    finally:
+        bs._SHARED_CACHE_DIR_OVERRIDE = was
+
+
+def test_the_closed_loop_translation_uses_the_same_words():
+    """The Closed-Loop card's translation (`ClosedLoopDeployment.stability`) and the Biomarkers
+    rows must never disagree about a word: both read `DecodeCommon.stability_answer`."""
+    try:
+        from ClosedLoopDeployment import stability as CLS
+    except ImportError:
+        from modules.ClosedLoopDeployment import stability as CLS
+    assert CLS.ANSWERS == SA.ANSWERS
+    # one home: the Closed-Loop module carries no second copy of the words or the verdict map
+    import inspect
+    src = inspect.getsource(CLS)
+    assert "stability_answer import" in src
+    assert '"stable": "behaves the same"' not in src, "the verdict map is typed twice"
+    assert 'ANSWERS = ("behaves' not in src, "the answer words are typed twice"
+    raw = {"available": True, "lrt_p": 0.03, "stability_verdict": "stim-dependent",
+           "equivalence": {"verdict": "stim-dependent", "reason": "r", "margin_log_or": CLS.STABILITY_EQUIVALENCE_MARGIN_LOG_OR}}
+    assert CLS.finding_from_stability_result(raw, "L", 8.5).answer == SA.answer_for_verdict("stim-dependent")
+
+
+# --------------------------------------------------------------------------------------------------
+# merged from test_stability_intervals_clustered_on_report.py
+# The per-state odds-ratio intervals, and the "behaves the same" check that reads the same standard
+# error, count each pain report once (the PI, 2026-09-25 night, the P-03 follow-up).
+#
+# Several neural samples are matched to one pain report, and every one of them carries that report's
+# rating. The per-state logistic fit behind the odds ratio treated every sample as independent, so a
+# report matched to ten samples counted ten times and the interval came out narrower than the data
+# justify. The standard error is now CLUSTERED ON THE PAIN REPORT: the CR1 sandwich (the fit's own
+# information matrix either side of the summed per-report score products, times the small-sample
+# factor G/(G-1) * (N-1)/(N-K), G reports, N samples, K = 2 coefficients) -- statsmodels'
+# `cov_type="cluster"` with its default correction, which is Stata's. The odds ratio itself does not
+# move; only its standard error does.
+#
+# The first two tests need no R and run under both runners; the third needs the mixed model and is
+# skipped (as a plain return) where R is absent.
+
+
+import datetime as _dt
+import numpy as np
+import pandas as pd
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from Biomarkers.routines import analytics  # noqa: E402
+Z975 = 1.959963984540054
+
+
+def _frame(n_reports=40, per_report=1, seed=3):
+    """One stimulation state, `n_reports` reports each matched to `per_report` IDENTICAL samples."""
+    rng = np.random.default_rng(seed)
+    x = rng.normal(0, 1, n_reports)
+    p = 1 / (1 + np.exp(-(0.2 + 0.9 * x)))
+    y = (rng.uniform(size=n_reports) < p).astype(int)
+    rep = np.repeat(np.arange(n_reports), per_report)
+    return pd.DataFrame({"pain_high": y[rep], "band_power": x[rep],
+                         "stim_era": pd.Categorical(["OFF"] * rep.size,
+                                                    categories=["OFF", "LOW", "HIGH"]),
+                         "report": rep})
+
+
+def _cr1_by_hand(df):
+    """The CR1 sandwich for the slope, written out, so the test names the estimator exactly."""
+    import statsmodels.api as sm
+    X = sm.add_constant(df["band_power"].to_numpy())
+    y = df["pain_high"].to_numpy()
+    fit = sm.GLM(y, X, family=sm.families.Binomial()).fit()
+    mu = fit.fittedvalues
+    bread = np.linalg.inv((X * (mu * (1 - mu))[:, None]).T @ X)
+    scores = X * (y - mu)[:, None]
+    g = df["report"].to_numpy()
+    meat = np.zeros((2, 2))
+    for k in np.unique(g):
+        s = scores[g == k].sum(axis=0)
+        meat += np.outer(s, s)
+    G, N, K = np.unique(g).size, len(y), 2
+    cov = (G / (G - 1)) * ((N - 1) / (N - K)) * bread @ meat @ bread
+    return float(fit.params[1]), float(np.sqrt(cov[1, 1])), float(fit.bse[1])
+
+
+def test_the_state_slope_carries_the_cr1_standard_error_clustered_on_the_pain_report():
+    df = _frame(n_reports=40, per_report=3)
+    df.loc[df.index % 3 == 1, "band_power"] += 0.05       # samples of one report need not be identical
+    tbl = analytics._era_slope_table(df, group_col="report")
+    b, se_cr1, se_plain = _cr1_by_hand(df)
+    got = tbl["OFF"]
+    assert abs(got["slope_log_or"] - b) <= 1e-12, (got, b)
+    assert abs(got["se"] - se_cr1) <= 1e-9 * se_cr1, (got["se"], se_cr1)
+    assert abs(got["se_unclustered"] - se_plain) <= 1e-12, (got["se_unclustered"], se_plain)
+    assert got["n"] == 120 and got["n_reports"] == 40, got
+    assert "CR1" in got["se_method"] and "pain report" in got["se_method"], got["se_method"]
+    assert tbl["LOW"] is None and tbl["HIGH"] is None
+
+
+def test_each_rating_counts_once_however_many_samples_it_matched():
+    """The point of the change. Copy every report's one sample six times: the unclustered standard
+    error shrinks by the square root of six (the fit thinks it has six times the data); the one
+    clustered on the report stays where the one-sample-per-report fit put it."""
+    one = analytics._era_slope_table(_frame(per_report=1), group_col="report")["OFF"]
+    six = analytics._era_slope_table(_frame(per_report=6), group_col="report")["OFF"]
+    assert abs(six["slope_log_or"] - one["slope_log_or"]) <= 1e-6
+    assert abs(six["se_unclustered"] * np.sqrt(6) - one["se_unclustered"]) <= 1e-4 * one["se_unclustered"]  # the fit stops at its own tolerance
+    ratio = six["se"] / one["se_unclustered"]
+    assert 0.75 < ratio < 1.35, ratio
+    assert six["se"] > 2.0 * six["se_unclustered"], (six["se"], six["se_unclustered"])
+
+
+def test_a_state_resting_on_one_pain_report_has_no_standard_error():
+    df = _frame(n_reports=1, per_report=8)
+    df["pain_high"] = [0, 1] * 4                          # both classes, one report
+    assert analytics._era_slope_table(df, group_col="report")["OFF"] is None
+
+
+def test_without_a_report_column_the_fit_says_it_counted_samples():
+    tbl = analytics._era_slope_table(_frame(per_report=2))
+    got = tbl["OFF"]
+    assert got["se"] == got["se_unclustered"]
+    assert "not clustered" in got["se_method"], got["se_method"]
+
+
+# --- the stability test itself (needs R for its mixed-model comparison) ----------------------
+_T0 = 1_750_000_000.0
+_H, _M = 3600.0, 60.0
+
+
+def _iso(ep):
+    return _dt.datetime.utcfromtimestamp(ep).isoformat(sep=" ")
+
+
+def _detail(seed=0, per_report=4):
+    rng = np.random.default_rng(seed)
+    n = 90
+    t, rg = [], []
+    for r in range(n):
+        for k in range(per_report):
+            t.append(_T0 + r * 6 * _H + (k - per_report / 2) * 10 * _M)
+            rg.append(r)
+    t, rg = np.asarray(t), np.asarray(rg)
+    pain = rng.normal(5, 2, n)
+    F = 60
+    f = np.linspace(0.95, 100, F)
+    psd = np.abs(rng.normal(1, 0.2, (t.size, 1, F)))
+    band = (f >= 17.5) & (f <= 22.5)
+    psd[:, 0, band] *= (1 + 0.15 * (pain[rg] - pain.mean()))[:, None]
+    detail = {"f_set": f, "psd": psd, "labels": pain[rg], "rating_group": rg,
+              "chan_order": ["ZERO_TWO_LEFT"], "times": [_iso(x) for x in t]}
+    # the current steps three hours before reports 30 and 60, so no report straddles a step
+    stim = {"t": [_T0 - 10 * _H, _T0 + (30 * 6 - 3) * _H, _T0 + (60 * 6 - 3) * _H],
+            "y": [0.0, 0.7, 2.5]}
+    return detail, stim
+
+
+def test_the_stability_test_reads_the_clustered_error_for_intervals_and_the_verdict():
+    detail, stim = _detail()
+    out = analytics.band_stim_stability(detail, "ZERO_TWO_LEFT", 20.0, stim_series=stim,
+                                        strategy="median")
+    if not out.get("available"):
+        assert "unavailable" in out.get("reason", ""), out
+        return
+    assert "clustered on the pain report" in out["or_by_era_interval"], out["or_by_era_interval"]
+    for tag in ("OFF", "LOW", "HIGH"):
+        sl, ci = out["slope_by_era"][tag], out["or_by_era_ci"][tag]
+        assert sl["n_reports"] == 30 and sl["n"] == 120, (tag, sl)
+        assert sl["se"] != sl["se_unclustered"], (tag, sl)
+        assert abs(ci[0] - np.exp(sl["slope_log_or"] - Z975 * sl["se"])) <= 1e-12 * ci[0]
+        assert abs(ci[1] - np.exp(sl["slope_log_or"] + Z975 * sl["se"])) <= 1e-12 * ci[1]
+        assert out["or_by_era_n_reports"][tag] == 30
+    eq = out["equivalence"]
+    a, b = eq["pair"].split(" vs ")
+    se = np.sqrt(out["slope_by_era"][a]["se"] ** 2 + out["slope_by_era"][b]["se"] ** 2)
+    half = (eq["ci"][1] - eq["ci"][0]) / 2.0
+    assert abs(half - 1.6448536269514722 * se) <= 1e-9, (half, se)

@@ -882,10 +882,33 @@ def configuration_exposure(es, side, rings) -> dict:
     # "ever powered" means the FULL rings carried current; a segment trial is said beside it
     out["ever_powered"] = bool(out["amp_max_full_rings_mA"] is not None and out["amp_max_full_rings_mA"] > 0)
     span = f"{out['first']} to {out['last']}" if out["first"] else "undated"
+    # THE STRETCHES THAT CARRIED CURRENT, AND WHERE THE LAST ONE ENDED (page review 2026-10-02, A10,
+    # traced on RCS08 L C+1-): "over 23 stretches ... to 2026-06-24" counted 4 stretches at 0 mA and
+    # gave the START of the last stretch, which ran to 2026-07-07. `last` keeps its meaning (the last
+    # stretch's start); the sentence reads the fields below.
+    pw = (~partial) & (amps.fillna(0.0).to_numpy() > 0)
+    ps_ = sub.loc[pw]
+    out["epochs_powered"] = int(pw.sum())
+    out["epochs_zero_mA"] = int(((~partial) & ~(amps.fillna(0.0).to_numpy() > 0)).sum())
+    out["hours_powered"] = float(np.nansum(pd.to_numeric(ps_.get("dur_h"), errors="coerce"))) if "dur_h" in ps_ else 0.0
+    out["reports_powered"] = int(np.nansum(pd.to_numeric(ps_.get("n"), errors="coerce"))) if "n" in ps_ else 0
+    out["first_powered"] = out["last_end"] = None
+    if len(ps_) and "t0" in ps_:
+        s0 = pd.to_datetime(ps_["t0"], utc=True, errors="coerce")
+        s1 = (pd.to_datetime(ps_["t_end"], utc=True, errors="coerce") if "t_end" in ps_
+              else s0 + pd.to_timedelta(pd.to_numeric(ps_.get("dur_h"), errors="coerce"), unit="h"))
+        if s0.notna().any():
+            out["first_powered"] = str(s0.min().date())
+        if s1.notna().any():
+            out["last_end"] = str(s1.max().date())
     if out["ever_powered"]:
+        pspan = (f"{out['first_powered']} to {out['last_end']}" if out["first_powered"] and out["last_end"]
+                 else "undated")
         out["sentence"] = (f"{label} carried up to {out['amp_max_full_rings_mA']:g} mA over "
-                           f"{_n(out['epochs_full_rings'], 'stretch')} of unchanged settings, {out['hours']:.0f} h, {span}, with "
-                           f"{_n(out['reports'], 'pain report')} inside")
+                           f"{_n(out['epochs_powered'], 'stretch')} of unchanged settings, "
+                           f"{out['hours_powered']:.0f} h ({out['hours_powered'] / 24.0:.0f} days), {pspan}, with "
+                           f"{_n(out['reports_powered'], 'pain report')} inside"
+                           + (f"; {out['epochs_zero_mA']} more at 0 mA" if out["epochs_zero_mA"] else ""))
     else:
         out["sentence"] = (f"{label} was programmed for {_n(out['epochs_full_rings'], 'stretch')} of unchanged settings, "
                            f"{span}, at 0.0 mA only: the full rings have never carried current, so nothing in the "

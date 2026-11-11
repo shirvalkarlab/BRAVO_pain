@@ -68,3 +68,16 @@ describe("figure defaults", () => {
     expect(PLOTLY_LAYOUT.xaxis.title.text).toBeUndefined();
   });
 });
+
+describe("wrapLabel: long figure titles and notes break at word boundaries (page review 2026-10-02, 4.8)", () => {
+  const { wrapLabel } = require("./figureStyle");
+  it("breaks into lines no longer than the limit, joined with <br>", () => {
+    const out = wrapLabel("chance of detecting a real link with pain (%)", 24);
+    expect(out).toBe("chance of detecting a<br>real link with pain (%)");
+    out.split("<br>").forEach((l) => expect(l.length).toBeLessThanOrEqual(24));
+  });
+  it("leaves a short text as it is, and never splits a word", () => {
+    expect(wrapLabel("coin toss", 22)).toBe("coin toss");
+    expect(wrapLabel("supercalifragilistic word", 5)).toBe("supercalifragilistic<br>word");
+  });
+});

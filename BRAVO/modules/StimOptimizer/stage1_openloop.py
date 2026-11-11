@@ -1158,6 +1158,7 @@ def _fit_rate_stratum(pwl, pwr, rate, sub, *, amp_grid, sgp_left, sgp_right,
         mu_star=float(mu[i_star]), sd_star=float(sd[i_star]),
         n_reports_total=float(sub["n"].sum()), coverage=coverage,
         meta=dict(kernel=gp.hyperparameters["kernel"], n_safe=int(safe.sum()), points=points,
+                  current_effect_at_minimum=gp.hyperparameters["current_effect_at_minimum"],
                   # The pre-registered check, computed where the surface is fitted and carried with
                   # it. A warning; it refuses nothing (the PI, 2026-09-22).
                   **({"calibration": stratum_calibration(gp, sub)} if calibration_check else {})))
@@ -1228,6 +1229,7 @@ def _fit_pooled_rate_stratum(rate, sub, *, pwl_col, pwr_col, pw_in_force, amp_gr
         mu_star=float(mu[i_star]), sd_star=float(sd[i_star]),
         n_reports_total=float(sub["n"].sum()), coverage=coverage,
         meta=dict(kernel=gp.hyperparameters["kernel"], n_safe=int(safe.sum()), points=points,
+                  current_effect_at_minimum=gp.hyperparameters["current_effect_at_minimum"],
                   pooled_pulse_widths=True, pairings=pairings, n_pairings=len(pairings),
                   **({"calibration": stratum_calibration(
                       gp, sub, setting_cols=("amp_mA_Left", "amp_mA_Right", pwl_col, pwr_col))}
@@ -1337,6 +1339,7 @@ def _fit_joint_stratum(pwl, pwr, sub, *, grid, sgp_left, sgp_right, incumbent_xy
         mu_star_unconstrained=float(mu[i_star_unc]),
         envelope_empty=envelope_empty, envelope_constrained=constrained,
         meta=dict(kernel=gp.hyperparameters["kernel"],
+                  current_effect_at_minimum=gp.hyperparameters["current_effect_at_minimum"],
                   log_marginal_likelihood=gp.hyperparameters["log_marginal_likelihood"],
                   n_reports_total=float(sub["n"].sum()),
                   rates_delivered=[float(v) for v in sorted(sub["freq_hz"].unique())],
@@ -1693,6 +1696,7 @@ def run_stage1(design_csv, *, hemispheres=("Left", "Right"), primary_item="left_
             n_safe=sl.meta["n_safe"], queue_size=sl.meta["queue_size"],
             stop=bool(sl.stopping.stop), stop_binding=sl.stopping.binding,
             kernel=sl.meta["kernel"],
+            current_effect_at_minimum=sl.meta.get("current_effect_at_minimum"),
             adaptive_envelope_applied=bool(sl.envelope_constrained),
             opt_rate_hz_unconstrained=sl.x_star_unconstrained[0],
             opt_amp_mA_left_unconstrained=sl.x_star_unconstrained[1],

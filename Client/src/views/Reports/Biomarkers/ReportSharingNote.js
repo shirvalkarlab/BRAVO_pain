@@ -19,7 +19,9 @@ export default function ReportSharingNote({ summary }) {
     <MDTypography variant="caption" component="div" data-testid="report-sharing-warning"
       sx={{ color: PAL.warnText, fontStyle: "italic", display: "block", mt: 0.25 }}>
       <span aria-hidden="true" style={{ marginRight: 6 }}>▲</span>
-      {sh.warning}
+      {/* page review A13: named by its source, since its count (whole recording sessions) is not
+          the heat maps' (3-second chunks of one pair) */}
+      {String(sh.warning).replace(/^Warning:\s*/, "Session matching: ")}
     </MDTypography>
   );
 }

@@ -853,7 +853,7 @@ class QueryClosedLoopChosenBand(RestViews.APIView):
     decision 233). Until 2026-09-23 the choice lived only in the browser that made it.
 
     One endpoint, three actions. ``read`` returns the band chosen now (or none) with the last rows
-    of the history; ``choose`` records a new choice; ``clear`` records that none is chosen. The
+    of the history and the newest band on each side (``by_side``); ``choose`` records a new choice; ``clear`` records that none is chosen. The
     record is append-only (``modules.ClosedLoopDeployment.chosen_band``): nothing is rewritten, the
     current band is the newest row, and every row names who made it. A save that did not land says
     so (``saved`` False with a reason), so the page can say the choice lives in this browser only.
@@ -885,6 +885,8 @@ class QueryClosedLoopChosenBand(RestViews.APIView):
         if action == "read":
             out = chosen_band.current(uid)
             out["history"] = chosen_band.history(uid, limit=20)
+            # One band per side (the PI, 2026-10-08), for "2 independent controllers".
+            out["by_side"] = chosen_band.current_by_side(uid)["by_side"]
         elif action == "choose":
             out = chosen_band.choose(uid, request.data.get("BandCandidate"), chosen_by=who,
                                      source=request.data.get("Source"),
@@ -1000,6 +1002,128 @@ class QueryLsbPower(RestViews.APIView):
 
         Analysis = json_compliant_handler(Analysis)
         return Response(status=200, data=Analysis)
+
+
+class QueryElectrodeIdentifierCheck(RestViews.APIView):
+    """
+    The electrode identifier's own spectra and rankings (each electrode against the other lead's
+    contact 3, stimulation off) for the Biomarkers page's bottom fold (the PI, 2026-10-06).
+
+    **URL:** ``/queryElectrodeIdentifierCheck``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId (uid).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.electrode_identifier_check(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "electrode identifier error: " + str(e)})
+
+        return Response(status=200, data=json_compliant_handler(Analysis))
+
+
+class QueryTimelineDetail(RestViews.APIView):
+    """
+    The Biomarkers timeline's detail panel (item P-18, the PI's go-ahead 2026-10-06): for one
+    clicked mark, the voltage trace, the device's own PSD and the device's sensed band power within
+    12 h, on that contact pair only. Device values at face value; no pain rating.
+
+    **URL:** ``/queryTimelineDetail``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId (uid), Channel, Dtype, Product, TStart (epoch s).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId", "Channel",
+                                                                         "Dtype", "TStart"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        try:
+            from modules.Biomarkers import bravo_service
+            Analysis = bravo_service.timeline_detail(request.data)
+        except Exception as e:
+            return Response(status=200, data={"available": False, "reason": "timeline detail error: " + str(e)})
+
+        return Response(status=200, data=json_compliant_handler(Analysis))
+
+
+class QueryStimProgram(RestViews.APIView):
+    """
+    The Closed-Loop page's "Stimulation program" card (decision 467): the program the device runs
+    today, from the newest export, for "Inherit current settings". Nothing is written anywhere.
+
+    **URL:** ``/queryStimProgram``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId (uid).
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        from modules.ClosedLoopDeployment import bravo_service
+        return Response(status=200, data=json_compliant_handler(bravo_service.stim_program(request.data)))
+
+
+class QueryWiringComparison(RestViews.APIView):
+    """
+    The Closed-Loop page's wiring card (decision 472): the three sense-to-control wirings run as two
+    Dual Threshold controllers over the time both sides were recorded, scored on the same pain
+    ratings, with a recommendation. Reads only; gates nothing.
+
+    **URL:** ``/queryWiringComparison``  **Methods:** POST
+
+    **Request Parameters:** ParticipantId, Bands ({"Left": {...}, "Right": {...}}), PainScore, and the
+    matching settings and StimProgram the page sends with its reports.
+    """
+
+    parser_classes = [RestParsers.JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    @method_decorator(csrf_protect if not settings.DEBUG else csrf_exempt)
+    def post(self, request):
+        if not get_or_none(sanitize_input)(request.data, required_keys=["ParticipantId"]):
+            return Response(status=400, data={"message": "Malformed Input"})
+
+        Permissions = Database.checkAccessPermission(request.user, request.data["ParticipantId"],
+                                study_uid=request.user.configuration["ActiveStudy"] if "ActiveStudy" in request.user.configuration.keys() else None)
+        if not Permissions:
+            return Response(status=403)
+
+        from modules.ClosedLoopDeployment import bravo_service
+        return Response(status=200, data=json_compliant_handler(bravo_service.wiring_comparison(request.data)))
 
 
 class QueryPsdLsbConversionModel(RestViews.APIView):

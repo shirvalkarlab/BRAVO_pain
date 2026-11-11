@@ -251,6 +251,101 @@ function CurrentRemovedAuc({ ev }) {
   );
 }
 
+/** Which p decides the band's verdict, read off the summary's "validated" gate label (decision 482:
+ *  "Band validated (rotation test)"; the neutral setting puts "(mixed-effects)" back). */
+export function decidingP(summary) {
+  const g = ((summary && summary.gates) || []).find((x) => x && x.key === "validated");
+  const label = (g && g.label) || "";
+  if (/rotation test/i.test(label)) return "rotation";
+  if (/mixed-effects/i.test(label)) return "glmer";
+  return null;
+}
+
+const fmtSignedR = (v) => (v == null || !Number.isFinite(Number(v)) ? "not reported"
+  : `${Number(v) < 0 ? "\u2212" : "+"}${Math.abs(Number(v)).toFixed(2)}`);
+
+/** The "q corrected within the pair" value: the correlation q and, beside it, the same band's
+ * area-under-the-curve q (its own family, decision 500), each with its own ▲ where the server gives
+ * a warning. A summary served before the AUC q (no `family_q_auc_status`) prints as it did. */
+function familyQValue(fc, warnInk) {
+  const hasAuc = fc.family_q_auc_status != null;
+  const src = fc.family_p_source === "chronic" ? "home record's" : "TD";
+  const rPart = fc.family_q != null
+    ? warnInk(!!fc.family_q_warning, `${hasAuc ? "r" : "q"} ${fmt(fc.family_q, 2)} (${fc.family_n} bands, by the ${src} p)`)
+    : fc.family_q_status;
+  if (!hasAuc) return rPart;
+  const aucPart = fc.family_q_auc != null
+    ? warnInk(!!fc.family_q_auc_warning, `AUC ${fmt(fc.family_q_auc, 2)} (${fc.family_n_auc} bands)`)
+    : `AUC: ${fc.family_q_auc_status}`;
+  return <>{rPart} · {aucPart}</>;
+}
+
+/** Wave 2 rows of the Evidence block (decisions 484, 495-498, 500), each a warning only, never a gate. */
+function WaveTwoEvidence({ ev, rep }) {
+  const chk = ev && ev.current_removed_check;
+  const rc = ev && ev.recent_check;
+  const fc = ev && ev.family_correction;
+  const placement = rep && rep.available !== false && rep.threshold_placement;
+  const hs = placement && placement.home_swing;
+  const note = { fontSize: PAL.fs.body, color: PAL.ink3, mt: 0.3 };
+  const warnInk = (w, text) => (w ? <span style={{ color: PAL.warnText }}><span aria-hidden="true" style={{ marginRight: 4 }}>▲</span>{text}</span> : text);
+  let recentV = null;
+  if (rc) {
+    if (rc.status === "checked") {
+      recentV = warnInk(!!rc.warning, `after ${rc.choice_cut_date}: r ${fmtSignedR(rc.pearson_r)} `
+        + `[${fmtSignedR(rc.pearson_r_low)}, ${fmtSignedR(rc.pearson_r_high)}], n=${rc.n_after}`);
+    } else if (rc.status === "too few recent reports") {
+      recentV = `after ${rc.choice_cut_date}: too few (n=${rc.n_after})`;
+    } else {
+      recentV = `after ${rc.choice_cut_date || "the cut"}: none`;
+    }
+  }
+  return (
+    <>
+      {chk ? (
+        <KV k="Holds with current removed" v={warnInk(chk.status === "warning",
+          `${chk.status === "holds" ? "holds" : chk.status}${chk.p != null ? ` · p ${fmt(chk.p, 3)}` : ""}`)} />
+      ) : (ev && "current_removed_check" in ev ? <KV k="Holds with current removed" v="not assessed" /> : null)}
+      {rc ? (
+        <>
+          <KV k="Later 30% of ratings" v={recentV} />
+          {rc.warning || rc.note ? (
+            <MDTypography variant="caption" display="block" data-testid="signoff-recent-note" sx={note}>
+              {rc.warning || rc.note}
+            </MDTypography>
+          ) : null}
+        </>
+      ) : null}
+      {hs ? (
+        <>
+          <KV k="Thresholds from home record" v={warnInk(!!hs.warning,
+            `no; ${hs.thresholds_from || "clinic recordings only"}`
+            + (hs.ratio != null ? ` · home swing ${Number(hs.ratio).toFixed(1)}-fold` : ""))} />
+          {hs.warning ? (
+            <MDTypography variant="caption" display="block" data-testid="signoff-home-swing" sx={note}>
+              {hs.warning}
+            </MDTypography>
+          ) : null}
+        </>
+      ) : null}
+      {fc && fc.family_q_status ? (
+        <>
+          <KV k="q corrected within the pair" v={familyQValue(fc, warnInk)} />
+          {fc.family_q_auc_warning ? (
+            <MDTypography variant="caption" display="block" data-testid="signoff-auc-q-warning" sx={note}>
+              {fc.family_q_auc_warning}
+            </MDTypography>
+          ) : null}
+        </>
+      ) : null}
+      {rep && rep.peak_above_background && rep.peak_above_background.available ? (
+        <KV k="Peak above the smooth background (tie-break only)"
+          v={`${fmt(rep.peak_above_background.median_ratio, 2)}× (${rep.peak_above_background.n_psds} PSDs)`} />
+      ) : null}
+    </>
+  );
+}
+
 const RULE_LABEL = { youden: "Balanced (Youden J)", f1: "Favor detection (F1)", cost: "Cost-weighted" };
 
 /**
@@ -437,6 +532,14 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
   if (!data) return null;
   return (
     <MDBox className="cl-signoff-record">
+      {/* The pain score every reading on this record uses (the odds ratio and the AUCs share it and
+          one band-power feature), named once, on its own line, in bold (the PI, 2026-10-03). */}
+      {id && id.pro_metric ? (
+        <MDTypography variant="caption" display="block" data-testid="signoff-pain-score"
+          sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.ink, mb: 0.5 }}>
+          {`Pain score: ${painScoreLabel(id.pro_metric)}`}
+        </MDTypography>
+      ) : null}
       <MDTypography variant="caption" display="block" sx={{ fontSize: PAL.fs.body, color: PAL.ink2, mb: 1 }}>
         {`Statistical checks, as evidence and not as permission: ${data.n_gates_passed} of ${data.n_gates} passed`}
         {data.n_necessary != null ? `, of which ${data.n_necessary_passed} of ${data.n_necessary} required` : ""}
@@ -458,7 +561,7 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
               <KV k="Region" v={id.region || "not given"} />
               <KV k="Band" v={`${fmt(id.band_lo_hz, 1)}–${fmt(id.band_hi_hz, 1)} Hz`} />
               <KV k="Centre (moved to the nearest band the device computes)" v={`${fmt(id.center_freq_hz, 1)} → ${fmt(id.snapped_center_freq_hz, 2)} Hz`} />
-              <KV k="Pain score / high-low split" v={`${id.pro_metric} / ${id.binarization}`} />
+              <KV k="Pain score / high-low split" v={`${painScoreLabel(id.pro_metric)} / ${id.binarization}`} />
               <KV k="Pain ratings used" v={ratingsUsedText(id.clinic_sheet_ratings)} />
               <KV k="Pain score used" v={painScoreUsedText(_rep && _rep.pain_score, id.pro_metric)} />
               <KV k="Polarity / suggested mode" v={`${dc.polarity} / ${dc.suggested_mode || "not given"}`} />
@@ -518,7 +621,21 @@ function SignoffRecord({ bandCandidate, summary, deploymentReport, chosenBand, b
                   } />
                 )}
                 <KV k="Odds ratio (95% range)" v={`${fmt(ev.odds_ratio)} (${fmt(ev.or_ci_low)}–${fmt(ev.or_ci_high)})${ev.credible_ci ? " ✓" : ""}`} />
-                <KV k="p from the mixed-effects model (ratings grouped in time)" v={ev.p_glmer != null ? ev.p_glmer.toExponential(2) : "not reported"} />
+                {/* Which p decides the verdict (decision 482), read off the "validated" gate. */}
+                {decidingP(data) ? (
+                  <MDTypography variant="caption" display="block" data-testid="signoff-decides"
+                    sx={{ fontSize: PAL.fs.body, fontWeight: 600, color: PAL.ink, mt: 0.3 }}>
+                    {decidingP(data) === "rotation" ? "Decides: p from shifting ratings"
+                      : "Decides: p from the mixed-effects model"}
+                  </MDTypography>
+                ) : null}
+                <KV k={`p from the mixed-effects model (ratings grouped in time)${decidingP(data) === "rotation" ? ", shown only" : ""}`} v={ev.p_glmer != null ? ev.p_glmer.toExponential(2) : "not reported"} />
+                {/* The same model's exact rotation test, beside it (decision 477, "show both"): on
+                    RCS08 the model's own p read <= 0.05 for 8.3 % of unrelated bands, this 5 %. */}
+                <KV k={`p from shifting ratings in time${decidingP(data) === "rotation" ? " (decides)" : ""}`} v={ev.p_rotation != null
+                  ? `${fmt(ev.p_rotation, 3)}${ev.rotation_n_orders ? ` (${ev.rotation_n_orders} shifts)` : ""}`
+                  : "not reported"} />
+                <WaveTwoEvidence ev={ev} rep={_rep} />
                 <KV k="Readings behind the switching point / reports" v={`${ev.n_matched_samples ?? "not reported"} / ${ev.n_clusters ?? "not reported"}`} />
                 <BurnInNote ev={ev} />
                 {pw && pw.available ? (

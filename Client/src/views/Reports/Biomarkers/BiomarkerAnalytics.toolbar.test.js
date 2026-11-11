@@ -8,23 +8,15 @@
 import "@testing-library/jest-dom";
 import React from "react";
 import { render } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
 
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 import BiomarkerAnalytics from "./BiomarkerAnalytics";
+import { wrap } from "testUtils/render";
 
 jest.mock("plotly.js-dist", () => ({
   react: jest.fn(), purge: jest.fn(), restyle: jest.fn(), relayout: jest.fn(), newPlot: jest.fn(),
 }));
 // eslint-disable-next-line import/first
 import Plotly from "plotly.js-dist";
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 
 const analytics = {
   timedomain: {

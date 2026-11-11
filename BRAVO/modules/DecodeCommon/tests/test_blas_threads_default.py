@@ -37,14 +37,12 @@ def _run(extra_env):
     return out.stdout.split("\n")
 
 
-def test_the_default_is_one_maths_thread():
+def test_the_default_is_one_maths_thread_and_a_count_already_in_the_environment_wins():
+    """(Merged 2026-10-05 with `test_a_thread_count_already_in_the_environment_wins`.)"""
     lines = _run({})
     assert lines[0] == "1 1 1", lines
     if lines[1] != "no-threadpoolctl":
         assert lines[1] == "1", f"BLAS runs {lines[1]} threads after BRAVO.maths_threads"
-
-
-def test_a_thread_count_already_in_the_environment_wins():
     lines = _run({"OPENBLAS_NUM_THREADS": "3"})
     assert lines[0].split()[0] == "3", lines
 
@@ -56,7 +54,6 @@ def test_settings_imports_it_before_anything_else():
 
 
 if __name__ == "__main__":
-    test_the_default_is_one_maths_thread()
-    test_a_thread_count_already_in_the_environment_wins()
+    test_the_default_is_one_maths_thread_and_a_count_already_in_the_environment_wins()
     test_settings_imports_it_before_anything_else()
     print("ok")

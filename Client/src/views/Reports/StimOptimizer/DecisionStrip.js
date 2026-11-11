@@ -335,7 +335,12 @@ function SideBlock({ r, plan, planLoading, planErr, halfRange, timeState, timeNo
           ? "Predicted change in pain against today's setting: no difference could be formed."
           : <>Predicted change in pain against today&apos;s setting:{" "}
             <span style={{ ...VALUE, fontWeight: WEIGHT.strong }}>{fmtPts(gain).replace(/ pts$/, " pain points")}</span>
-            {sd === null ? "." : <>, with an uncertainty of <span style={VALUE}>{`± ${sd.toFixed(2)}`}</span> (1 standard deviation).</>}</>}
+            {sd === null ? "."
+              // the fit found no effect of current (its effect variance sat at the smallest value
+              // allowed; the PI, 2026-10-02): the ± is then the scatter of the ratings
+              : (r.stratum && r.stratum.current_effect_at_minimum === true)
+                ? <>. No effect of current found on these stretches; <span style={VALUE}>{`± ${sd.toFixed(2)}`}</span> is the scatter of the pain ratings.</>
+                : <>, with an uncertainty of <span style={VALUE}>{`± ${sd.toFixed(2)}`}</span> (1 standard deviation).</>}</>}
       </MDTypography>
       <MDBox mt={0.5} display="flex" alignItems="center" columnGap={2} rowGap={0.5} flexWrap="wrap">
         <GainBar gain={gain} sd={sd} halfRange={halfRange} width={GAIN_BAR_WIDTH} />

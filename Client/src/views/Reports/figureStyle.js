@@ -89,6 +89,22 @@ export const directLabel = (x, y, text, color = T.ink) => ({
 });
 
 /**
+ * A long axis title or note broken at word boundaries into lines of at most `maxChars`, joined with
+ * Plotly's <br> (page review 2026-10-02, 4.8: titles and notes were clipped at the figure's edges).
+ * A single word longer than the limit stays whole.
+ */
+export function wrapLabel(text, maxChars = 40) {
+  const words = String(text || "").split(/\s+/).filter(Boolean);
+  const lines = [];
+  words.forEach((w) => {
+    const last = lines.length ? lines[lines.length - 1] : null;
+    if (last !== null && (last + " " + w).length <= maxChars) lines[lines.length - 1] = last + " " + w;
+    else lines.push(w);
+  });
+  return lines.join("<br>");
+}
+
+/**
  * Text inside SVG figures. SVG figures are drawn at the container's real pixel width (measured),
  * never scaled through a viewBox, so 12 px text stays 12 px on screen; below 480 px wide the
  * figure scrolls inside its card instead of shrinking.

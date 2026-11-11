@@ -822,7 +822,7 @@ def false_crossing_rate(model: FittedModel, *, averaging_s: float, onset_s: floa
     return out
 
 
-def min_separation_for_rate(model: FittedModel, *, averaging_s: float, onset_s: float,
+def _min_separation_for_rate_loop(model: FittedModel, *, averaging_s: float, onset_s: float,
                             level: float, rng: np.random.Generator, dt_s: float,
                             target_per_hour: float = TARGET_CROSSINGS_PER_HOUR,
                             hours: float = DEFAULT_SIM_HOURS,
@@ -837,6 +837,61 @@ def min_separation_for_rate(model: FittedModel, *, averaging_s: float, onset_s: 
                                 separation=float(sep), hours=hours, level=level, rng=rng,
                                 dt_s=dt_s)
         sweep.append({"separation": float(sep), "total_per_hour": float(r["total_per_hour"])})
+    ok = [row["separation"] for row in sweep if row["total_per_hour"] <= target_per_hour]
+    return (min(ok) if ok else None), sweep
+
+
+def min_separation_for_rate(model: FittedModel, *, averaging_s: float, onset_s: float,
+                            level: float, rng: np.random.Generator, dt_s: float,
+                            target_per_hour: float = TARGET_CROSSINGS_PER_HOUR,
+                            hours: float = DEFAULT_SIM_HOURS,
+                            separations: Sequence[float] = SEPARATION_GRID
+                            ) -> Tuple[Optional[float], List[Dict[str, float]]]:
+    """`_min_separation_for_rate_loop`'s answer, vectorised across the separations (decision 421).
+
+    The loop draws, for each separation in turn, ``n`` measurement-noise values and then (for the
+    two-component model) ``n`` fast-component values. The same draws, in the same order, are taken
+    here in ONE call of the same generator -- a normal draw is a scaled standard-normal draw, value
+    for value -- and every separation is then judged at once: the fast component filtered row by
+    row (`lfilter` along the last axis), the window averages and the confirmed-run counts done for
+    all rows together. The answers and the generator's position afterwards are bit for bit the
+    loop's (`tests/test_design_rule_once_and_vectorised.py`)."""
+    seps = [float(x) for x in separations]
+    k = len(seps)
+    n_steps = int(round(hours * 3600.0 / dt_s))
+    if k == 0 or n_steps <= 0:
+        return _min_separation_for_rate_loop(model, averaging_s=averaging_s, onset_s=onset_s,
+                                             level=level, rng=rng, dt_s=dt_s,
+                                             target_per_hour=target_per_hour, hours=hours,
+                                             separations=separations)
+    two = model.kind == "2comp"
+    z = rng.standard_normal((k, 2 if two else 1, n_steps))
+    e = np.sqrt(max(float(model.r0), 0.0)) * z[:, 0, :]
+    if two:
+        from scipy.signal import lfilter
+        w = np.sqrt(max(model.q_f, 0.0)) * z[:, 1, :]
+        fast = lfilter([1.0], [1.0, -model.phi_f], w, axis=1)
+    else:
+        fast = np.zeros((k, n_steps))
+    y = level + fast + e
+    n_per = max(1, int(round(averaging_s / dt_s)))
+    n_win = n_steps // n_per
+    sweep = []
+    if n_win == 0:
+        sweep = [{"separation": sp, "total_per_hour": 0.0} for sp in seps]
+    else:
+        zw = y[:, :n_win * n_per].reshape(k, n_win, n_per).mean(axis=2)
+        n_on = max(1, int(np.ceil(onset_s / (n_per * dt_s))))
+        sep_col = np.asarray(seps)[:, None]
+        tot = np.zeros(k)
+        for b in ((zw > level + sep_col), (zw < level - sep_col)):
+            pad = np.zeros((k, 1), dtype=np.int8)
+            d = np.diff(np.concatenate((pad, b.astype(np.int8), pad), axis=1), axis=1)
+            for i in range(k):
+                starts = np.flatnonzero(d[i] == 1)
+                ends = np.flatnonzero(d[i] == -1)
+                tot[i] += float(np.sum((ends - starts) >= n_on)) / hours
+        sweep = [{"separation": sp, "total_per_hour": float(tot[i])} for i, sp in enumerate(seps)]
     ok = [row["separation"] for row in sweep if row["total_per_hour"] <= target_per_hour]
     return (min(ok) if ok else None), sweep
 
@@ -924,6 +979,29 @@ def analytic_min_separation(sigma: float, readings_per_hour: float,
 # ---------------------------------------------------------------------------------------------
 # The one entry point a caller needs: fit on a participant's own series, build the table
 # ---------------------------------------------------------------------------------------------
+#: THE FITTED NOISE MODEL, KEPT PER SERIES (decision 420). One report fitted the same model to the
+#: same series twice (the record pair's design rule and the band's own onset, decision 417), about
+#: 3 s each plus the Riccati step. Keyed on the exact bytes of the series as fitted and on the fit
+#: settings, so any other series, or other settings, is fitted afresh. Bounded; per process.
+_FIT_MEMO: Dict[Any, Any] = {}
+_FIT_MEMO_MAX = 8
+
+
+def clear_fit_memo():
+    _FIT_MEMO.clear()
+
+
+def _fit_key(stretches, prefer, maxfev_l1, maxfev_l4, restarts):
+    import hashlib
+    h = hashlib.blake2b(digest_size=20)
+    for st in stretches:
+        for arr in st:
+            a = np.ascontiguousarray(np.asarray(arr, dtype=float))
+            h.update(str(a.shape).encode())
+            h.update(a.tobytes())
+    return (h.hexdigest(), str(prefer), int(maxfev_l1), int(maxfev_l4), int(restarts))
+
+
 def design_rule_for_series(t, power, amp_obs, *, upper: float, lower: float,
                            prefer: str = "2comp", maxfev_l1: int = DEFAULT_MAXFEV_L1,
                            maxfev_l4: int = DEFAULT_MAXFEV_L4, restarts: int = DEFAULT_RESTARTS,
@@ -971,15 +1049,25 @@ def design_rule_for_series(t, power, amp_obs, *, upper: float, lower: float,
         return {"refused": True, "reason": "the time base has no positive interval"}
     dt_s = float(np.median(pos))
     stretches, n_empty, n_merged, _bounds = _sim.regrid_stretches(t, p, a, dt_s)
-    try:
-        model, chosen = fit_design_model(stretches, prefer=prefer, maxfev_l1=maxfev_l1,
-                                         maxfev_l4=maxfev_l4, restarts=restarts)
-    except ValueError as ex:
-        return {"refused": True, "reason": str(ex)}
+    key = _fit_key(stretches, prefer, maxfev_l1, maxfev_l4, restarts)
+    kept = _FIT_MEMO.get(key)
+    if kept is None:
+        try:
+            model, chosen = fit_design_model(stretches, prefer=prefer, maxfev_l1=maxfev_l1,
+                                             maxfev_l4=maxfev_l4, restarts=restarts)
+        except ValueError as ex:
+            return {"refused": True, "reason": str(ex)}
+        a_m, c_m, q_m, r_m = state_space_matrices(model)
+        ss = riccati_steady_state(a_m, c_m, q_m, r_m)
+        cross = ctrlsys_cross_check(a_m, c_m, q_m, r_m)
+        kept = (model, chosen, ss, cross)
+        if len(_FIT_MEMO) >= _FIT_MEMO_MAX:
+            _FIT_MEMO.pop(next(iter(_FIT_MEMO)))
+        _FIT_MEMO[key] = kept
+    model, chosen, ss, cross = kept
+    import copy as _copy
+    cross = _copy.deepcopy(cross)
     level = 0.5 * (float(upper) + float(lower))
-    a_m, c_m, q_m, r_m = state_space_matrices(model)
-    ss = riccati_steady_state(a_m, c_m, q_m, r_m)
-    cross = ctrlsys_cross_check(a_m, c_m, q_m, r_m)
     table = separation_table(model, level=level, averaging_grid=averaging_grid,
                              onset_grid=onset_grid, separations=separations, hours=hours,
                              seed=seed, dt_s=dt_s)

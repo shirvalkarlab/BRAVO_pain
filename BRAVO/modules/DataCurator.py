@@ -58,12 +58,40 @@ def loadCacheFile(source_file):
     rawBytes = secureEncoder.decrypt(rawBytes)
     return rawBytes
 
+def implant_device_uids(device_uid=None, serial=None, owner_uid=None, owner_only=None):
+    """Every device record of one implant (decisions 444 and 489, `DecodeCommon/implants.py`): the
+    records sharing a serial number with `device_uid`'s record or with `serial`, and, for an owner the
+    PI's ruling lists, every record of that owner of the listed type (`owner_uid` adds them for an
+    export whose own record is not known yet). `owner_only` keeps the records of that owner."""
+    from modules.DecodeCommon import implants
+    rows = list(models.DBSDevice.objects.values_list("uid", "serial_number", "owner_id", "type"))
+    seeds = [r for r in rows if (device_uid and r[0] == device_uid) or (serial and r[1] == serial)]
+    out = {r[0] for r in seeds} | ({device_uid} if device_uid else set())
+    t = implants.one_implant_type(owner_uid)
+    if t:
+        out |= {r[0] for r in rows if str(r[2]) == str(owner_uid) and r[3] == t}
+    while True:                       # every record linked to one already in, so the set is the same
+        by = {r[0]: r for r in rows}  # whichever record of the implant it starts from
+        more = {r[0] for r in rows for u in out if u in by
+                and implants.same_implant(by[u][2], by[u][3], by[u][1], r[2], r[3], r[1])} - out
+        if not more:
+            break
+        out |= more
+    if owner_only is not None:
+        own = {r[0] for r in rows if str(r[2]) == str(owner_only)}
+        out = {u for u in out if u in own or u == device_uid}
+    return sorted(out)
+
+
 def clock_anchor_table(device_uid=None, owner=None, extra=()):
     """The clock anchors of one device's stored Percept exports (`SourceFile.metadata["ClockAnchor"]`,
     written at ingest), plus `extra`. By device where it is known, since clock blocks are numbered
     per device; by owner otherwise."""
     if device_uid:
-        q = models.SourceFile.objects.filter(device=device_uid)
+        # every device record of the same implant (same serial number), as the ingest builds it
+        # (`_ingest_clock_table`): RCS08's one implant is filed as three device records (decision 444)
+        # (one implant can be several records: same serial, or the PI's ruling, decision 489)
+        q = models.SourceFile.objects.filter(device__in=implant_device_uids(device_uid))
     elif owner is not None:
         q = models.SourceFile.objects.filter(owner=owner)
     else:
@@ -76,11 +104,20 @@ def clock_anchor_tables(owner):
     """{device uid: AnchorTable} over an owner's stored exports, for a caller that reads many of
     them; the key "" holds the exports with no device recorded. One query."""
     rows = {}
+    devs = set(models.SourceFile.objects.filter(owner=owner).values_list("device", flat=True))
+    # each record's implant (decisions 444, 489): the sorted uids of every record of it
+    implant_of = {dev: (tuple(implant_device_uids(dev)) if dev else ("",)) for dev in devs}
     for dev, md in models.SourceFile.objects.filter(owner=owner).values_list("device", "metadata"):
         a = (md or {}).get("ClockAnchor")
         if a:
-            rows.setdefault(dev or "", []).append(a)
-    return {d: TabletClock.AnchorTable(a) for d, a in rows.items()}
+            rows.setdefault(implant_of.get(dev, (dev or "",)), []).append(a)
+    # keyed by device uid as before, each holding every record of its implant
+    out = {}
+    for dev in devs:
+        key = implant_of.get(dev)
+        if key in rows:
+            out[dev or ""] = TabletClock.AnchorTable(rows[key])
+    return out
 
 
 def loadPerceptJSON(source_file, table=None, table_from=None):
@@ -107,16 +144,17 @@ def _ingest_clock_table(JSON, source_file, device=None):
     it), plus this export's own anchor."""
     own = TabletClock.export_anchor(JSON)
     uids = []
+    owner_uid = getattr(source_file, "owner_id", None)
     if device is not None:
-        uids = [device.uid]
+        uids = implant_device_uids(device.uid)            # every record of its implant (decision 489)
     else:
         try:
             serial = JSON["DeviceInformation"]["Final"]["NeurostimulatorSerialNumber"]
             if source_file.metadata.get("automatic_deidentification"):
                 serial = hmac.new(HASH_KEY.encode("utf8"), serial.encode("utf-8"), hashlib.sha256).hexdigest()
-            uids = list(models.DBSDevice.objects.filter(serial_number=serial).values_list("uid", flat=True))
+            uids = implant_device_uids(serial=serial, owner_uid=owner_uid)
         except Exception:
-            uids = []
+            uids = implant_device_uids(owner_uid=owner_uid) if owner_uid else []
     anchors = []
     for u in uids:
         anchors += [(m or {}).get("ClockAnchor") for m in
@@ -201,7 +239,60 @@ def NeuroPacePersystDatDecoder(source_file, person=None):
     person.save()
     return True
 
+def restamp_chronic_schedule(person, device):
+    """Rebuild the one chronic contact/band schedule of `device` (every device record sharing its
+    serial number, for this participant: one implant can be filed as several records, decision 444)
+    from all its exports' settings records and write it onto all its chronic recordings. Returns
+    the counts from `chronic_schedule.restamp_device_chronic`."""
+    from modules.MedtronicPercept import chronic_schedule
+    # every record of the implant (same serial, or the PI's ruling: decision 489), this owner's
+    uids = implant_device_uids(str(device.uid), owner_only=getattr(person, "uid", person))
+    sfs = list(models.SourceFile.objects.filter(owner=person, device__in=uids, type="MedtronicJSON"))
+    rows = list(models.Recording.objects.filter(source__in=sfs, type="MedtronicChronicBrainSense"))
+    by_source = {}
+    for r in rows:
+        by_source.setdefault(str(r.source_id), []).append(r)
+    return chronic_schedule.restamp_device_chronic(sfs, by_source)
+
+
 def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
+    """Decode one Percept export and store everything in it, ONE EXPORT AT A TIME (decision 439).
+    Copies of the same item in different exports are merged, so what is stored must not depend on
+    which of two uploads reached the database first; the lock makes the check-then-write of every
+    item atomic across web workers and batch ingests."""
+    with FileLock(DATABASE_PATH + "PerceptIngestSerial.lock"):
+        return _MedtronicPerceptJSONDecoder(source_file, device=device, person=person)
+
+
+def _store_patient_event(event, source_file, person):
+    """Merge one copy of a patient event into what is stored (decision 439,
+    `BrainSenseEvent.mergeEventData`): create it, attach a PSD or a side a stored copy lacks, fill
+    an empty contact pair, or drop it when no copy has brain data. Returns the action taken."""
+    from modules.MedtronicPercept.BrainSenseEvent import mergeEventData
+    existing = models.DBSEvent.objects.filter(date=event["date"], type=event["type"], name=event["name"],
+                                              source__owner=person).first()
+    record = existing.data.first() if existing is not None else None
+    stored = None if existing is None else (dict(record.metadata or {}) if record is not None else {})
+    action, data, conflicts = mergeEventData(stored, event.get("data"))
+    if conflicts:
+        source_file.metadata.setdefault("IngestConflicts", []).append(
+            {"type": event["type"], "name": event["name"], "date": event["date"], "sides": conflicts})
+    if action == "create":
+        existing = models.DBSEvent(name=event["name"], type=event["type"], date=event["date"], source=source_file)
+        existing.save()
+    if action in ("create", "update"):
+        if record is None:
+            record = models.Recording(name=event["name"], type=event["type"], date=event["date"], source=source_file)
+            record.metadata = data
+            record.save()
+            existing.data.add(record)
+        else:
+            record.metadata = data
+            record.save()
+    return action
+
+
+def _MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     _t0 = time.time()
     def _dstage(label, _last=[time.time()]):
         now = time.time()
@@ -217,6 +308,10 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         _own["anchor"] = a
         return t
     JSON = loadPerceptJSON(source_file, table_from=_table_from)
+    _tc = JSON.get("_TabletClock") or {}
+    # entries the tablet clock could not place are named on the export's row, never silent (decision 444)
+    source_file.metadata["ClockLeftOut"] = _tc.get("left_out") or {}
+    source_file.metadata["ClockLeftUnconverted"] = _tc.get("left_unconverted") or {}
     if _own.get("anchor"):
         # the anchor, and the entries this export carried first (later exports look them up)
         source_file.metadata["ClockAnchor"] = dict(
@@ -229,6 +324,11 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     
     DatabaseEntries = decodeMedtronicJSON(JSON)
     _dstage("decodeMedtronicJSON (CPU structural decode)")
+    # what could not be read is recorded on the export's row, never swallowed (decision 441)
+    source_file.metadata["ProcessFailure"] = DatabaseEntries.get("ProcessFailure") or []
+    source_file.metadata["StreamingPowerSetAside"] = DatabaseEntries.get("StreamingPowerSetAside") or []
+    if source_file.metadata["ProcessFailure"]:
+        print(f"[ingest] extractors failed for {source_file.uid}: {source_file.metadata['ProcessFailure']}", flush=True)
     
     if source_file.metadata["automatic_deidentification"]:
         DatabaseEntries["SessionOverview"]["Name"] = hmac.new(HASH_KEY.encode("utf8"), DatabaseEntries["SessionOverview"]["Name"].encode("utf-8"), hashlib.sha256).hexdigest()
@@ -352,7 +452,35 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     models.TherapyModification.objects.bulk_create(AllEntries)
     _dstage("therapy/stimulation/modification inserts")
     
+    # SPECTRA ACROSS EXPORTS, bit for bit (decision 445): a spectrum whose run cannot be told is
+    # stored once, and only if the same device spectrum is not already held; a recording that
+    # carries a spectrum on its run removes any stored run-unknown copy of it.
+    from modules.MedtronicPercept.BrainSenseSurvey import spectrumKey, streamRelation
+    _held_keys = set()
+    for _md in models.Recording.objects.filter(source__owner=person).exclude(type__in=["MedtronicChronicBrainSense",
+            "PatientControllerEvent", "MedtronicDeviceImpedance"]).values_list("metadata", flat=True):
+        _md = _md or {}
+        _held_keys.update(_md.get("SpectrumKeys") or [])
+        if _md.get("SpectrumKey"):
+            _held_keys.add(_md["SpectrumKey"])
+
     for survey in DatabaseEntries["SurveyRecordings"]:
+        _desc = (survey["recording"].get("Descriptor") or {}) if isinstance(survey["recording"], dict) else {}
+        if survey["type"] == "MedtronicSurveyPSD":
+            _key = spectrumKey(_desc["MedtronicPSD"][0])
+            if _key in _held_keys:
+                continue
+            survey["metadata"] = dict(survey.get("metadata") or {}, SpectrumKey=_key)
+            _held_keys.add(_key)
+        else:
+            _keys = [spectrumKey(q) for q in list(_desc.get("MedtronicPSD") or []) + list(_desc.get("SurveyPSD") or [])
+                     if isinstance(q, dict)]
+            if _keys:
+                survey["metadata"] = dict(survey.get("metadata") or {}, SpectrumKeys=_keys)
+                for _old in models.Recording.objects.filter(source__owner=person, type="MedtronicSurveyPSD"):
+                    if (_old.metadata or {}).get("SpectrumKey") in set(_keys):
+                        _old.delete()
+                _held_keys.update(_keys)
         recording = models.Recording(**{key: survey[key] for key in survey.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
         # Hash-first dedup: compute the content hash (cheap, in-memory) and check the INDEXED
         # Recording.hashed column before writing. The previous pre-write check filtered on
@@ -378,6 +506,26 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
         recording.save()
 
     for stream in DatabaseEntries["StreamingRecordings"]:
+        # THE SAME STREAM IN TWO EXPORTS, on the values (decision 445): identical, or the start of a
+        # stored one -> not stored again; longer, with the stored one as its start -> replaces it;
+        # any value different -> stored.
+        _skip = False
+        if isinstance(stream["recording"], dict) and "Data" in stream["recording"]:
+            for _old in models.Recording.objects.filter(source__owner=person, type=stream["type"], date=stream["date"]):
+                if list((_old.metadata or {}).get("ChannelNames") or []) != list(stream["recording"].get("ChannelNames") or []):
+                    continue
+                try:
+                    _stored = Database.loadSourceFile(_old.pointer, _old.hashed)
+                except Exception:
+                    continue
+                _rel = streamRelation(_stored.get("Data"), stream["recording"]["Data"])
+                if _rel == "duplicate":
+                    _skip = True
+                    break
+                if _rel == "longer":
+                    _old.delete()
+        if _skip:
+            continue
         recording = models.Recording(**{key: stream[key] for key in stream.keys() if key in ["name", "type", "date", "metadata"]}, source=source_file)
         # Hash-first dedup (see SurveyRecordings note): indexed Recording.hashed check before write,
         # replacing the per-recording JSON-blob/JSON_EXTRACT full-table scans.
@@ -426,6 +574,10 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
 
     _dstage("survey/streaming/chronic recording inserts (saveSourceFile + Recording.save)")
     for event in DatabaseEntries["EventRecordings"]:
+        if event["type"] == "PatientControllerEvent":
+            # every copy merged; an event with no brain data in any copy is not stored (decision 439)
+            _store_patient_event(event, source_file, person)
+            continue
         if models.DBSEvent.include(date=event["date"], type=event["type"], name=event["name"], source__owner=person):
             continue
         event_log = models.DBSEvent(**{key: event[key] for key in event.keys() if key in ["name", "type", "date"]}, source=source_file)
@@ -443,8 +595,19 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
     source_file.metadata["Device"] = device.uid
     source_file.device = device.uid
     source_file.metadata["SessionEndTimestamp"] = DatabaseEntries["SessionOverview"]["SessionEndTimestamp"]
+    source_file.metadata["SensingSettingsRecord"] = DatabaseEntries.get("SensingSettingsRecord") or {}
     source_file.owner = person
     source_file.date = DatabaseEntries["SessionOverview"]["SessionTimestamp"]
+    source_file.save()
+
+    # ONE chronic contact/band schedule per device, from every export's settings record, written
+    # onto every chronic recording of the device (decision 487; MedtronicPercept/chronic_schedule.py).
+    # A failure is written on this export's row, never swallowed (decision 441).
+    try:
+        source_file.metadata["ChronicScheduleRestamp"] = restamp_chronic_schedule(person, device)
+    except Exception as e:
+        source_file.metadata["ChronicScheduleRestamp"] = {"failed": repr(e)[:500]}
+        print(f"[ingest] chronic schedule restamp failed for {source_file.uid}: {e!r}", flush=True)
     source_file.save()
 
     person.last_update = models.current_time()
@@ -468,8 +631,11 @@ def MedtronicPerceptJSONDecoder(source_file, device=None, person=None):
                 logging.getLogger(__name__).warning(
                     "Biomarker PSD cache warm after ingestion failed for %s", uid, exc_info=True)
 
-        threading.Thread(target=_warm_biomarker_psd, args=(person.uid,),
-                         name="biomarker-psd-warm", daemon=True).start()
+        # BRAVO_INGEST_WARM=0 skips it: a bulk re-ingest started one per export and they piled up
+        # (40 GB in one process after 50 exports, 2026-10-05); the caches are rebuilt once after.
+        if os.environ.get("BRAVO_INGEST_WARM", "1") != "0":
+            threading.Thread(target=_warm_biomarker_psd, args=(person.uid,),
+                             name="biomarker-psd-warm", daemon=True).start()
     except Exception:
         pass   # never let cache warming affect the ingestion result
 

@@ -277,8 +277,13 @@ export const SessionController = (function () {
     }
   };
 
+  // The server keeps only these (WebSession.py `defaultSessionConfigs`); posting any other key did
+  // nothing there but cost a request, 17-20 on every first load (page review 2026-10-02, 4.7).
+  const SERVER_SESSION_KEYS = ["language", "miniSidenav", "darkMode"];
   const setSession = (type, value, update) => {
-    if (update) query("/api/updateSessions", {[type]: value}).catch((error) => console.log(error));
+    if (update && SERVER_SESSION_KEYS.includes(type)) {
+      query("/api/updateSessions", {[type]: value}).catch((error) => console.log(error));
+    }
     session[type] = value;
     session["lastActive"] = new Date().getTime();
     localStorage.setItem("sessionContext", JSON.stringify(session));

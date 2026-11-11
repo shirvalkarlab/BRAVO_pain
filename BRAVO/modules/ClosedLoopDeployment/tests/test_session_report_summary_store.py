@@ -458,31 +458,27 @@ def _d32_of(sensing):
         "d32_newest_active_sensing_group"]
 
 
-def test_one_pulse_width_per_hemisphere_is_not_interleaving_even_when_the_two_sides_differ():
-    d32 = _d32_of([_chan("Left", 55, 100, "RUNNING", 3.0, 2.0),
-                   _chan("Right", 55, 150, "RUNNING", 2.5, 1.5)])
-    assert d32["interleaving_in_group"] is False
-    assert d32["pulse_widths_seen"] == [100.0, 150.0]
+@pytest.mark.parametrize("channels,interleaving", [
+    # one pulse width per hemisphere is not interleaving, even when the two sides differ
+    ([("Left", 55, 100, "RUNNING", 3.0, 2.0), ("Right", 55, 150, "RUNNING", 2.5, 1.5)], False),
+    # two pulse widths on one hemisphere is
+    ([("Left", 55, 100, "RUNNING", 3.0, 2.0), ("Left", 55, 60, "RUNNING", 3.0, 2.0)], True),
+], ids=["one_per_hemisphere", "two_on_one_hemisphere"])
+def test_interleaving_is_two_pulse_widths_on_one_hemisphere(channels, interleaving):
+    d32 = _d32_of([_chan(*c) for c in channels])
+    assert d32["interleaving_in_group"] is interleaving
+    if not interleaving:
+        assert d32["pulse_widths_seen"] == [100.0, 150.0]
 
 
-def test_two_pulse_widths_on_one_hemisphere_is_interleaving():
-    d32 = _d32_of([_chan("Left", 55, 100, "RUNNING", 3.0, 2.0),
-                   _chan("Left", 55, 60, "RUNNING", 3.0, 2.0)])
-    assert d32["interleaving_in_group"] is True
-
-
-def test_limits_on_a_channel_running_adaptive_therapy_are_adaptive_limits_not_patient_limits():
-    d32 = _d32_of([_chan("Left", 55, 100, "RUNNING", 3.0, 2.0),
-                   _chan("Right", 55, 150, "RUNNING", 2.5, 1.5)])
-    assert d32["patient_limits_configured"] is False
-
-
-def test_limits_on_a_sensing_only_channel_are_patient_limits():
-    d32 = _d32_of([_chan("Left", 55, 100, "NOT_CONFIGURED", 4.0, 0.0),
-                   _chan("Right", 55, 150, "NOT_CONFIGURED", 3.0, 0.0)])
-    assert d32["patient_limits_configured"] is True
-
-
-def test_a_channel_with_no_limit_values_means_patient_limits_are_not_configured():
-    d32 = _d32_of([_chan("Left", 55, 100, "NOT_CONFIGURED")])
-    assert d32["patient_limits_configured"] is False
+@pytest.mark.parametrize("channels,configured", [
+    # limits on a channel running adaptive therapy are adaptive limits, not patient limits
+    ([("Left", 55, 100, "RUNNING", 3.0, 2.0), ("Right", 55, 150, "RUNNING", 2.5, 1.5)], False),
+    # limits on a sensing-only channel are patient limits
+    ([("Left", 55, 100, "NOT_CONFIGURED", 4.0, 0.0), ("Right", 55, 150, "NOT_CONFIGURED", 3.0, 0.0)], True),
+    # a channel with no limit values means patient limits are not configured
+    ([("Left", 55, 100, "NOT_CONFIGURED")], False),
+], ids=["adaptive_channel", "sensing_only_channel", "no_limit_values"])
+def test_patient_limits_are_configured_only_on_a_sensing_only_channel_with_limits(channels, configured):
+    d32 = _d32_of([_chan(*c) for c in channels])
+    assert d32["patient_limits_configured"] is configured

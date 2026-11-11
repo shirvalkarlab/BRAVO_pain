@@ -6,32 +6,18 @@
  */
 import "@testing-library/jest-dom";
 import { render, waitFor } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router-dom";
-import { ThemeProvider } from "@mui/material/styles";
 
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 
-jest.mock("plotly.js-dist", () => {
-  const mark = (gd) => {
-    if (gd && gd.classList) { gd.classList.add("js-plotly-plot"); gd._fullLayout = { width: 700, height: 300 }; }
-    return Promise.resolve(gd);
-  };
-  // Plain functions, not jest.fn: the test setup resets every jest.fn's behaviour before each test.
-  return {
-    react: mark, newPlot: mark, purge: () => {}, restyle: () => Promise.resolve(),
-    relayout: () => Promise.resolve(), toImage: () => Promise.resolve("data:image/png;base64,AAAA"),
-  };
-});
+jest.mock("plotly.js-dist", () => require("testUtils/plotlyStubs").plotlyMarking());
 jest.mock("database/session-control", () => ({ SessionController: { query: jest.fn() } }));
 jest.mock("layouts/DatabaseLayout", () => ({ children }) => <div>{children}</div>);
 
 // eslint-disable-next-line import/first
 import { SessionController } from "database/session-control";
 // eslint-disable-next-line import/first
-import { invalidateAll } from "database/resultCache";
+import { LOCAL_BC, answer, renderClosedLoopPage } from "testUtils/closedLoopPage";
 // eslint-disable-next-line import/first
-import ClosedLoopSim from "./index";
+import { invalidateAll } from "database/resultCache";
 // eslint-disable-next-line import/first
 import REPORT from "./__fixtures__/rcs08_cl_L13_24p5_2026-09-25.json";
 // eslint-disable-next-line import/first
@@ -42,9 +28,6 @@ import FULL from "./__fixtures__/rcs08_deployment_payload_2026-09-15.json";
 
 const SERVER_BC = { contact: "ZERO_THREE_LEFT", contact_label: "L 0-3+", center_freq_hz: 27.5, bandwidth_hz: 5,
   hemisphere: "Left", threshold_mode: "dual", schema_version: "bandcandidate_v1" };
-const LOCAL_BC = { contact: "ONE_THREE_LEFT", contact_label: "L 1-3+", center_freq_hz: 24.5, bandwidth_hz: 5,
-  hemisphere: "Left", threshold_mode: "dual", schema_version: "bandcandidate_v1" };
-const answer = (data, ms) => new Promise((resolve) => setTimeout(() => resolve({ data }), ms));
 
 let asked;
 beforeEach(() => {
@@ -73,16 +56,7 @@ it("sends no band-specific request for the browser's copy when the server names 
   const uid = "SYNCTEST1";
   window.localStorage.setItem(`bravo.bandCandidate.${uid}`,
     JSON.stringify({ band_candidate: LOCAL_BC, participant_uid: uid, committed_at: 1 }));
-  render(
-    <ThemeProvider theme={theme}>
-      <PlatformContextProvider initialStates={{ darkMode: false }}>
-        <MemoryRouter initialEntries={[`/reports/closedloop/${uid}`]}>
-          <Routes>
-            <Route path="/reports/closedloop/:participant_uid" element={<ClosedLoopSim />} />
-          </Routes>
-        </MemoryRouter>
-      </PlatformContextProvider>
-    </ThemeProvider>);
+  renderClosedLoopPage(uid);
   await waitFor(() => {
     expect(asked.some((a) => a.url === "/api/queryDeploymentSummary")).toBe(true);
     expect(asked.some((a) => a.url === "/api/queryClosedLoopDeployment"

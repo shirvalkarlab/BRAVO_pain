@@ -67,38 +67,28 @@ def test_pairs_at_matched_currents_use_each_block_s_last_reading():
     assert p["other_mA"] == 2.5
 
 
-def test_carry_over_reads_the_same_sign_whichever_leg_came_first():
-    rng = np.random.default_rng(1)
+def _ladders(pain_of):
+    """Twelve visits, alternately up-then-down and down-then-up; `pain_of(current, fell, minutes)`."""
     frames = []
     for k in range(12):
-        up = [0, 1, 2, 3, 2, 1, 0]
-        down = [3, 2, 1, 0, 1, 2, 3]
-        aL = up if k % 2 == 0 else down
+        aL = [0, 1, 2, 3, 2, 1, 0] if k % 2 == 0 else [3, 2, 1, 0, 1, 2, 3]
         cur = np.asarray(aL, float)
         prev = np.concatenate([[cur[0]], cur[:-1]])
-        fell = cur < prev
-        pain = 7 - 0.6 * cur - 1.0 * fell + 0.1 * rng.standard_normal(cur.size)
+        pain = pain_of(cur, cur < prev, np.arange(7, dtype=float))
         frames.append(_visit(aL, [0] * 7, pain, visit=f"v{k}", t0=1e5 * k))
-    long = CO.step_frame(pd.concat(frames, ignore_index=True))
-    pairs = CO.leg_pairs(long, "overall")
-    s = CO.by_order(pairs)
-    assert s["falling after rising"]["mean"] < -0.8
-    assert s["falling before rising"]["mean"] < -0.8
+    return CO.by_order(CO.leg_pairs(CO.step_frame(pd.concat(frames, ignore_index=True)), "overall"))
 
 
-def test_drift_within_the_visit_flips_sign_with_the_order():
-    frames = []
-    for k in range(12):
-        up = [0, 1, 2, 3, 2, 1, 0]
-        down = [3, 2, 1, 0, 1, 2, 3]
-        aL = up if k % 2 == 0 else down
-        minutes = np.arange(7, dtype=float)
-        pain = 7 - 0.3 * minutes                     # no carry-over: pain simply falls with time
-        frames.append(_visit(aL, [0] * 7, pain, visit=f"v{k}", t0=1e5 * k))
-    long = CO.step_frame(pd.concat(frames, ignore_index=True))
-    s = CO.by_order(CO.leg_pairs(long, "overall"))
-    assert s["falling after rising"]["mean"] < 0
-    assert s["falling before rising"]["mean"] > 0
+def test_carry_over_reads_the_same_sign_whichever_leg_came_first_and_drift_flips_with_the_order():
+    """(Merged 2026-10-05 from `test_carry_over_reads_the_same_sign_whichever_leg_came_first` and
+    `test_drift_within_the_visit_flips_sign_with_the_order`.)"""
+    rng = np.random.default_rng(1)
+    s = _ladders(lambda cur, fell, _m: 7 - 0.6 * cur - 1.0 * fell + 0.1 * rng.standard_normal(cur.size))
+    assert s["falling after rising"]["mean"] < -0.8, "carry-over, falling after rising"
+    assert s["falling before rising"]["mean"] < -0.8, "carry-over, falling before rising"
+    s = _ladders(lambda _c, _f, minutes: 7 - 0.3 * minutes)   # no carry-over: pain falls with time
+    assert s["falling after rising"]["mean"] < 0, "drift, falling after rising"
+    assert s["falling before rising"]["mean"] > 0, "drift, falling before rising"
 
 
 def test_summary_resamples_whole_visits():

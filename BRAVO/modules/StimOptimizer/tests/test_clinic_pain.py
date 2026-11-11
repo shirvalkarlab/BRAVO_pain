@@ -2,6 +2,8 @@
 (`StimOptimizer.clinic_pain`). Constructed workbooks, written with openpyxl to a temporary
 directory, so every assertion is checked against a real .xlsx file read back through the real
 parser rather than against a hand-built DataFrame.
+
+Merged here 2026-10-05: test_clinic_item_counts.py, test_epoch_frame_rating_days.py (each under its own heading below).
 """
 import datetime
 
@@ -9,11 +11,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-openpyxl = pytest.importorskip("openpyxl")
-
 from StimOptimizer import bravo_service as BS
 from StimOptimizer import clinic_pain as CP
 from StimOptimizer import stage1_openloop as S1
+
+openpyxl = pytest.importorskip("openpyxl")
 
 # =====================================================================================
 # Workbook construction helpers
@@ -118,47 +120,29 @@ def test_bilateral_amp_forms_keep_left_before_the_separator(tmp_path, i, amp_cel
 # planned one, and must not be silently dropped (P-13).
 # =====================================================================================
 
-def test_a_pw_correction_in_parentheses_gives_the_delivered_left_value(tmp_path):
-    rows = [
-        {"Group": "A", "Contacts": "1+2-9-10-", "Amp (mA)": "3.5/3.0", "Rate (Hz)": 55.0,
-         "PW (µs)": "L 100 (did 110 accidentally) / R 150", "Duration (s)": 120.0,
-         "Timestamp": datetime.time(12, 23, 6), "Overall": 5.0},
-    ]
-    path = _write_generic_workbook(tmp_path / "wb_pw_correction.xlsx", rows)
-    df, counts = _parse(path)
-    assert len(df) == 1
-    row = df.iloc[0]
+@pytest.mark.parametrize("amp_cell,pw_cell,when,want", [
     # the patient actually received 110 us on the left, not the planned 100
-    assert row["pw_us_Left"] == 110.0
-    assert row["pw_us_Right"] == 150.0
-
-
-def test_an_amp_correction_in_parentheses_gives_the_delivered_right_value(tmp_path):
+    pytest.param("3.5/3.0", "L 100 (did 110 accidentally) / R 150", datetime.time(12, 23, 6),
+                 {"pw_us_Left": 110.0, "pw_us_Right": 150.0},
+                 id="pw_correction_gives_the_delivered_left_value"),
+    pytest.param("L 1.0 / R 2.0 (actually 2.5)", "60/150", datetime.time(12, 0, 0),
+                 {"amp_mA_Left": 1.0, "amp_mA_Right": 2.5},
+                 id="amp_correction_gives_the_delivered_right_value"),
+    pytest.param("L 0.5 (typo, should be 1.5) / R 1.0", "60/150", datetime.time(12, 0, 0),
+                 {"amp_mA_Left": 1.5, "amp_mA_Right": 1.0},
+                 id="a_correction_worded_should_be_is_also_read"),
+])
+def test_a_correction_in_parentheses_gives_the_delivered_value(tmp_path, amp_cell, pw_cell, when,
+                                                                want):
     rows = [
-        {"Group": "A", "Contacts": "1+2-9-10-", "Amp (mA)": "L 1.0 / R 2.0 (actually 2.5)",
-         "Rate (Hz)": 55.0, "PW (µs)": "60/150", "Duration (s)": 120.0,
-         "Timestamp": datetime.time(12, 0, 0), "Overall": 5.0},
+        {"Group": "A", "Contacts": "1+2-9-10-", "Amp (mA)": amp_cell, "Rate (Hz)": 55.0,
+         "PW (µs)": pw_cell, "Duration (s)": 120.0, "Timestamp": when, "Overall": 5.0},
     ]
-    path = _write_generic_workbook(tmp_path / "wb_amp_correction.xlsx", rows)
+    path = _write_generic_workbook(tmp_path / "wb_correction.xlsx", rows)
     df, counts = _parse(path)
     assert len(df) == 1
     row = df.iloc[0]
-    assert row["amp_mA_Left"] == 1.0
-    assert row["amp_mA_Right"] == 2.5
-
-
-def test_a_correction_worded_should_be_is_also_read(tmp_path):
-    rows = [
-        {"Group": "A", "Contacts": "1+2-9-10-", "Amp (mA)": "L 0.5 (typo, should be 1.5) / R 1.0",
-         "Rate (Hz)": 55.0, "PW (µs)": "60/150", "Duration (s)": 120.0,
-         "Timestamp": datetime.time(12, 0, 0), "Overall": 5.0},
-    ]
-    path = _write_generic_workbook(tmp_path / "wb_amp_shouldbe.xlsx", rows)
-    df, counts = _parse(path)
-    assert len(df) == 1
-    row = df.iloc[0]
-    assert row["amp_mA_Left"] == 1.5
-    assert row["amp_mA_Right"] == 1.0
+    assert {k: row[k] for k in want} == want
 
 
 def test_an_adapting_range_cell_is_not_mistaken_for_a_correction(tmp_path):
@@ -337,11 +321,15 @@ def _clinic_epoch_frame(*, slope_per_mA=0.0, noise_sd=0.3, n_reps=3, seed=0):
 # recommendation (decision 233, ruling 6), held by `test_stratum_calibration.py`, and these tests
 # assert only the verdict. Measured on Jetstream2, one thread: 77.3 s with it and 7.3 s without for
 # the first fit, 80.5 s and 7.2 s for the second, each with the same verdict and the same currents.
-def test_clinic_stream_fit_resolves_a_real_current_effect():
+@pytest.mark.parametrize("slope,noise,seed,resolved", [
     # n_reps=6: `n` is 1 per clinic step (real clinic steps, not pooled REDCap epochs), and the
     # honest-current coverage check sums `n` per (left, right) current pair, requiring at least 5
     # -- so each of the 25 current combinations needs at least 5 repeated clinic steps behind it.
-    d = _clinic_epoch_frame(slope_per_mA=1.2, noise_sd=0.2, n_reps=6, seed=1)
+    pytest.param(1.2, 0.2, 1, True, id="resolves_a_real_current_effect"),
+    pytest.param(0.0, 2.0, 2, False, id="does_not_resolve_with_no_current_effect"),
+])
+def test_clinic_stream_fit_resolves_only_a_real_current_effect(slope, noise, seed, resolved):
+    d = _clinic_epoch_frame(slope_per_mA=slope, noise_sd=noise, n_reps=6, seed=seed)
     incumbent = float(d.iloc[0]["epoch"])
     res = S1.run_stage1(d, hemispheres=("Left", "Right"), primary_item="left_leg",
                         incumbent_epoch=incumbent, pooled_var_override=1.0,
@@ -349,19 +337,7 @@ def test_clinic_stream_fit_resolves_a_real_current_effect():
     ((_key, sl),) = res.slices.items()
     rs = sl.rate_strata[55.0]
     assert rs.fitted is True
-    assert rs.resolution["resolved"] is True, rs.resolution["sentence"]
-
-
-def test_clinic_stream_fit_does_not_resolve_with_no_current_effect():
-    d = _clinic_epoch_frame(slope_per_mA=0.0, noise_sd=2.0, n_reps=6, seed=2)
-    incumbent = float(d.iloc[0]["epoch"])
-    res = S1.run_stage1(d, hemispheres=("Left", "Right"), primary_item="left_leg",
-                        incumbent_epoch=incumbent, pooled_var_override=1.0,
-                        min_tolerated_h=CP.CLINIC_MIN_TOLERATED_H, calibration_check=False)
-    ((_key, sl),) = res.slices.items()
-    rs = sl.rate_strata[55.0]
-    assert rs.fitted is True
-    assert rs.resolution["resolved"] is False
+    assert rs.resolution["resolved"] is resolved, rs.resolution["sentence"]
 
 
 def _redcap_shaped_epoch_frame(*, slope_per_mA, noise_sd, n_per_cell=15, n_reps=3, seed=0):
@@ -625,3 +601,164 @@ def test_the_clinic_fit_asks_stage_one_for_the_site_it_was_given_not_always_the_
     seen.clear()
     CP.fit_clinic_rate_strata("uid")                       # the default is unchanged
     assert seen == ["left_leg"]
+
+
+# ================================================================================================
+# From test_clinic_item_counts.py (merged here 2026-10-05).
+# A clinic setting counts only the ratings that carry the score being fitted (the PI, 2026-09-24).
+#
+# A clinic step can score one pain site and not another. The epoch frame counted every step at a
+# setting as a rating of it (`n`, and the days behind it), and the fit kept only settings with a Left
+# Leg score whichever site it was fitting. So:
+#
+#   * a setting with three steps and two Left Leg scores counted three Left Leg ratings;
+#   * the back site's fit dropped every setting scored on the back alone;
+#   * decision 239's merged coverage counted 36 epochs with no Left Leg score at all (255).
+#
+# Now each setting carries, per site, how many steps scored it and on which days, and the fit keeps
+# the settings that carry ITS site's score and counts only those ratings -- the Left Leg for the leg
+# fit, the back for the back fit, the overall NRS for an NRS fit.
+# ================================================================================================
+
+
+def _step(i, amp, *, left_leg=np.nan, back=np.nan, overall=np.nan, day=0):
+    return dict(visit_date="v1", setting="clinic", file="f", sha256="x", t_local=None,
+                t_utc=pd.Timestamp("2026-01-05", tz="UTC") + pd.Timedelta(days=day, hours=18 + i % 3),
+                amp_mA_Left=float(amp), amp_mA_Right=1.0, freq_hz=55.0, pw_us_Left=60.0,
+                pw_us_Right=160.0, contacts_raw="c", duration_s=60.0, side_effect_score=np.nan,
+                overall=overall, head=np.nan, back=back, left_leg=left_leg, left_foot=np.nan,
+                right_leg=np.nan, right_foot=np.nan, notes=None, row_index=i)
+
+
+STEPS = pd.DataFrame([
+    _step(0, 1.0, left_leg=5.0, day=0), _step(1, 1.0, left_leg=4.0, day=1),
+    _step(2, 1.0, back=6.0, day=2),                                   # back only, a third day
+    _step(3, 2.0, back=3.0, day=0), _step(4, 2.0, back=4.0, day=1),   # a setting scored on the back alone
+    _step(5, 3.0, left_leg=2.0, back=2.0, day=0),
+])
+
+
+def test_each_setting_carries_its_rating_count_and_days_per_site():
+    ep = CP.epoch_frame_from_steps(STEPS).set_index("amp_mA_Left")
+    assert ep.loc[1.0, "n"] == 3, "the step count is kept"
+    assert ep.loc[1.0, "n_pain_Left_Leg"] == 2 and ep.loc[1.0, "n_pain_Back"] == 1
+    assert len(ep.loc[1.0, "rating_days_pain_Left_Leg"]) == 2
+    assert ep.loc[2.0, "n_pain_Left_Leg"] == 0 and ep.loc[2.0, "n_pain_Back"] == 2
+
+
+def _frame_the_fit_is_given(monkeypatch, **kw):
+    seen = []
+
+    def _capture(frame, **k):
+        seen.append(frame.copy())
+        raise RuntimeError("stopped: the frame is what this test is about")
+    monkeypatch.setattr(S1, "run_stage1", _capture)
+    # the fit reads every step since 2026-10-01 (load_clinic_exposure), then fills gaps from REDCap
+    monkeypatch.setattr(CP, "load_clinic_exposure", lambda *a, **k: (STEPS, {"signature_key": "k"}, None))
+    monkeypatch.setattr(CP, "redcap_reports_for", lambda participant: None)
+    out = CP.fit_clinic_rate_strata("uid", **kw)
+    return (seen[0].set_index("amp_mA_Left") if seen else None), out
+
+
+def test_the_leg_fit_counts_only_the_leg_ratings(monkeypatch):
+    fr, _ = _frame_the_fit_is_given(monkeypatch)
+    assert sorted(fr.index) == [1.0, 3.0], "the back-only setting has no leg score to fit"
+    assert fr.loc[1.0, "n"] == 2, "three steps, two of them scored the leg"
+    assert len(fr.loc[1.0, "rating_days"]) == 2
+
+
+def test_the_back_fit_keeps_the_back_only_setting_and_counts_the_back_ratings(monkeypatch):
+    fr, _ = _frame_the_fit_is_given(monkeypatch, primary_item="back")
+    assert sorted(fr.index) == [1.0, 2.0, 3.0]
+    assert fr.loc[1.0, "n"] == 1 and fr.loc[2.0, "n"] == 2
+
+
+def test_a_site_with_too_few_scores_is_not_available_rather_than_fitted_on_another(monkeypatch):
+    fr, out = _frame_the_fit_is_given(monkeypatch, primary_item="overall")   # no NRS on any step
+    assert fr is None
+    assert out["available"] is False
+    assert "overall" in out["reason"].lower()
+
+
+def test_ruling_five_coverage_counts_only_the_leg_ratings():
+    ep = CP.epoch_frame_from_steps(STEPS)
+    leg = CP.epochs_for_item(ep, "left_leg")
+    inf = {"Left": {"rate_hz": 55.0, "pulse_width_us": 60.0, "amplitude_mA": 1.0},
+           "Right": {"rate_hz": 55.0, "pulse_width_us": 160.0, "amplitude_mA": 1.0}}
+    out = CP.next_session_coverage(leg, inf)
+    assert out["n_epochs"] == 2
+
+
+# ================================================================================================
+# From test_epoch_frame_rating_days.py (merged here 2026-10-05).
+# The clinic epoch frame converts each step's instant to a California calendar day ONCE, not once
+# per setting and pain site (2026-10-02: on RCS08 `_rating_days` ran 2,432 times per frame, about
+# half of a 2.3 s build that runs twice per Stim Optimizer request on the Jetstream2 BRAVO).
+#
+# Values, not shapes: every row's day lists equal the per-group conversion they replaced, including
+# steps with no time and a step either side of California midnight; and the conversion runs once.
+# ================================================================================================
+
+
+def _steps():
+    rows = []
+    # 06:30 UTC is the previous California day; 08:30 UTC the same day (summer, UTC-7)
+    times = ["2026-07-01T06:30:00Z", "2026-07-01T08:30:00Z", "2026-07-03T20:00:00Z", None,
+             "2026-08-10T12:00:00Z", "2026-08-10T23:59:00Z", "2026-08-11T07:30:00Z"]
+    for i, t in enumerate(times):
+        rows.append(dict(freq_hz=110.0 if i % 2 else 145.0, amp_mA_Left=1.0 + 0.5 * (i % 3),
+                         amp_mA_Right=0.0, pw_us_Left=60.0, pw_us_Right=60.0,
+                         contacts_raw="1a-1b-1c", t_utc=pd.Timestamp(t) if t else pd.NaT,
+                         duration_s=60.0, setting="clinic" if i < 4 else "home",
+                         visit_date="2026-07-01" if i < 4 else "2026-08-10",
+                         side_effect_score=np.nan,
+                         **{site: (float(i) if (i + k) % 3 else np.nan)
+                            for k, site in enumerate(CP.ITEM_COL)}))
+    rows += [dict(rows[1]), dict(rows[4])]            # repeated settings: groups with n = 2
+    return pd.DataFrame(rows)
+
+
+def _expected_days(steps, ep):
+    """The per-group conversion the frame used to make, row by row of `ep`."""
+    key = ["freq_hz", "amp_mA_Left", "amp_mA_Right", "pw_us_Left", "pw_us_Right"]
+    out = []
+    for _, r in ep.iterrows():
+        sub = steps[np.logical_and.reduce([steps[c].round(CP._SETTING_NDIGITS) == round(r[c], CP._SETTING_NDIGITS)
+                                           for c in key])]
+        exp = {"rating_days": CP._rating_days(sub["t_utc"])}
+        for site, col in CP.ITEM_COL.items():
+            exp[f"rating_days_{col}"] = CP._rating_days(sub.loc[sub[site].notna(), "t_utc"])
+        out.append(exp)
+    return out
+
+
+def test_every_rows_day_lists_equal_the_per_group_conversion():
+    steps = _steps()
+    ep = CP.epoch_frame_from_steps(steps)
+    assert len(ep) == 6                     # steps 0 and 6 share a setting, as do the two copies
+    for (_, r), exp in zip(ep.iterrows(), _expected_days(steps, ep)):
+        for k, v in exp.items():
+            assert r[k] == v, (k, r[k], v)
+    assert any(len(d) == 2 for d in ep["rating_days"])           # a group across two days
+
+
+def test_the_day_conversion_runs_once_per_frame(monkeypatch):
+    import importlib
+    calls = []
+    mods = {}
+    for name in ("modules.Biomarkers.routines.local_time", "Biomarkers.routines.local_time"):
+        try:                                   # whichever spelling clinic_pain can import; the two
+            m = importlib.import_module(name)  # can be one module object, so patch each once
+        except ImportError:
+            continue
+        mods[id(m)] = m
+    for m in mods.values():
+        real = m.local_calendar_day
+
+        def counted(x, _real=real):
+            calls.append(1)
+            return _real(x)
+
+        monkeypatch.setattr(m, "local_calendar_day", counted)
+    CP.epoch_frame_from_steps(_steps())
+    assert len(calls) == 1

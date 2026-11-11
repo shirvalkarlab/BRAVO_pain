@@ -9,13 +9,11 @@ import fs from "fs";
 import path from "path";
 import React from "react";
 import { render, screen } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
 
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 import { invalidateAll, putResult, settingsKey } from "database/resultCache";
 import { CL } from "views/Reports/moduleCacheKeys";
 import LsbPowerPanel from "./LsbPowerPanel";
+import { wrap } from "testUtils/render";
 
 jest.mock("plotly.js-dist", () => ({
   react: jest.fn(), purge: jest.fn(), restyle: jest.fn(), relayout: jest.fn(), newPlot: jest.fn(),
@@ -29,11 +27,6 @@ import { SessionController } from "database/session-control";
 const UID = "2e3c75c00d7f4f37b53a048d195f11da";
 const BC = { contact: "ONE_THREE_LEFT", center_freq_hz: 24.5, bandwidth_hz: 5.0 };
 const REQ = { LabelMetric: "nrs" };
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 
 beforeEach(() => {
   invalidateAll("test setup");
@@ -85,7 +78,8 @@ test("the power-vs-sample-size curve has the restored toolbar; the switching-poi
   expect(Plotly.react).toHaveBeenCalled();
   const calls = Plotly.react.mock.calls;
   // the power curve names its y-axis "chance of detecting a real link with pain (%)"
-  const powerCall = calls.find(([, , layout]) => /chance of detecting a real link/.test(
+  // the y title is wrapped since 2026-10-02 ("chance of detecting a<br>real link…")
+  const powerCall = calls.find(([, , layout]) => /chance of detecting a(<br>| )real link/.test(
     (layout.yaxis && layout.yaxis.title && layout.yaxis.title.text) || ""));
   expect(powerCall).toBeDefined();
   expect(powerCall[3].displayModeBar).not.toBe(false);

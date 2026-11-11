@@ -403,8 +403,27 @@ except ImportError:                                   # pragma: no cover - depen
 
 
 def is_session_report(source_file):
-    """The rule for which ingested files are session reports: the name contains "Session"."""
-    return "Session" in (getattr(source_file, "name", None) or "")
+    """The rule for which ingested files are session reports: a Medtronic device export, or a name
+    containing "Session". Jetstream2 stores every export under a renamed name with neither "Session"
+    nor a date in it; the name rule alone matched 0 of RCS08's 586 exports there (decision 467)."""
+    return (getattr(source_file, "type", None) == "MedtronicJSON"
+            or "Session" in (getattr(source_file, "name", None) or ""))
+
+
+def row_stamp(row):
+    """``report_stamp`` of a stored row's name; when the name carries no date token, the row's
+    stored session date (seconds since 1970, UTC) written in the token's form, then the name, so
+    renamed files order by when the session happened (decision 467)."""
+    import datetime as _dt
+    name = str(getattr(row, "name", "") or "")
+    if _STAMP_TOKEN.search(name):
+        return report_stamp(name)
+    date = getattr(row, "date", None)
+    try:
+        token = _dt.datetime.fromtimestamp(float(date), _dt.timezone.utc).strftime("%Y%m%dT%H%M%S")
+    except (TypeError, ValueError, OverflowError, OSError):
+        return report_stamp(name)
+    return f"{token} {name}"
 
 
 def session_report_files(participant):
@@ -446,14 +465,14 @@ def newest_by_stamp(rows):
     rows = list(rows or [])
     if not rows:
         return None
-    return max(rows, key=lambda r: report_stamp(getattr(r, "name", "") or ""))
+    return max(rows, key=row_stamp)
 
 
 def _decoded_documents(rows, loader):
     """``(stamp, dict-or-None)`` for each ingested row, decrypted through ``loader``; a file that
     cannot be decrypted or parsed becomes ``(stamp, None)`` and is counted, not fatal."""
     for sf in rows:
-        stamp = report_stamp(getattr(sf, "name", "") or "")
+        stamp = row_stamp(sf)
         try:
             raw = loader(sf)
             if isinstance(raw, dict):                            # already decoded (and converted)
@@ -497,7 +516,7 @@ def summary_from_ingested(participant, *, rows=None, loader=None):
     summary = scan_documents(_decoded_documents(rows, loader))
     newest = newest_by_stamp(rows)
     summary["newest_stamp"] = str(newest.name or "") if newest is not None else None
-    summary["newest_stamp_key"] = report_stamp(newest.name) if newest is not None else None
+    summary["newest_stamp_key"] = row_stamp(newest) if newest is not None else None
     summary["built_utc"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
     summary["source_signature"] = list(sig) if sig else None
     summary["participant_uid"] = str(getattr(participant, "uid", participant))

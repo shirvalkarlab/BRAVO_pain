@@ -60,6 +60,7 @@ import { SessionController } from "database/session-control";
 import MDTypography from "components/MDTypography";
 import { T, SPACE, MIN_TEXT_PX } from "assets/theme/base/tokens";
 import SkipToContent from "components/Navbars/DashboardNavbar/SkipToContent";
+import { openNotificationSocket } from "./notificationSocket";
 
 function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
   const navigate = useNavigate();
@@ -91,12 +92,7 @@ function DashboardNavbar({ absolute, light, isMini, fixedNavbar }) {
     // console with "Connection Error"/"Connection Closed" on every page load, and don't reconnect.
     // The onmessage handler is kept intact so that if a Channels backend is ever added, live updates
     // work with no frontend change.
-    let client = null;
-    try {
-      client = new WebSocket(SessionController.getServer().replace("http","ws") + "/socket/notification");
-    } catch (e) {
-      client = null;
-    }
+    const client = openNotificationSocket(() => SessionController.getServer().replace("http","ws") + "/socket/notification");
     if (client) {
     client.onerror = function() {
       // endpoint not implemented; ignore quietly

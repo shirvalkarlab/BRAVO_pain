@@ -104,51 +104,45 @@ def test_td_sliding_corr_grid_reaches_last_session_drops_corrupt_dates():
     assert (last_real - starts.max()).days <= 30, "grid terminated before the last real session"
 
 
-def test_power_center_freqs_standard_path():
-    """Sensing-band center frequency is read from Descriptor.Therapy.<hemi>.SensingSetup and
-    matched to each power contact by its hemisphere token."""
-    rec = {"ChannelNames": ["ZERO_THREE_LEFT POWER", "ZERO_THREE_LEFT Stimulation",
-                            "ONE_THREE_RIGHT POWER", "ONE_THREE_RIGHT Stimulation"],
-           "Descriptor": {"Therapy": {
-               "Left":  {"SensingSetup": {"FrequencyInHertz": 22.46}},
-               "Right": {"SensingSetup": {"FrequencyInHertz": 9.77}}}}}
-    freqs = analytics.power_center_freqs([rec])
-    assert freqs == {"ZERO_THREE_LEFT": 22.46, "ONE_THREE_RIGHT": 9.77}
-
-
-def test_power_center_freqs_direct_hemisphere_key():
-    """Streaming Power-Domain (BrainSenseLfp) TherapySnapshot stores FrequencyInHertz DIRECTLY on
-    the hemisphere dict (not inside a SensingSetup subdict) — the real RCS08 shape. Verified values
-    from RCS008 raw export: ZERO_THREE_LEFT @ 12.7 Hz, ZERO_TWO_RIGHT @ 13.67 Hz."""
-    rec = {"ChannelNames": ["ZERO_THREE_LEFT Power", "ZERO_TWO_RIGHT Power"],
-           "Descriptor": {"Therapy": {
-               "Left":  {"FrequencyInHertz": 12.7, "FrequencyIndex": 13,
-                         "SensingChannel": "SensingChannelDef.ZERO_THREE_LEFT"},
-               "Right": {"FrequencyInHertz": 13.67, "FrequencyIndex": 14}}}}
-    assert analytics.power_center_freqs([rec]) == {"ZERO_THREE_LEFT": 12.7, "ZERO_TWO_RIGHT": 13.67}
-
-
-def test_power_center_freqs_nested_recordingconfig():
-    """Firmware variant: SensingSetup nested under RecordingConfiguration.Config still resolves."""
-    rec = {"ChannelNames": ["ZERO_TWO_LEFT POWER"],
-           "Descriptor": {"Therapy": {"Left": {
-               "RecordingConfiguration": {"Config": {"SensingSetup": {"FrequencyInHertz": 13.18}}}}}}}
-    assert analytics.power_center_freqs([rec]) == {"ZERO_TWO_LEFT": 13.18}
-
-
-def test_power_center_freqs_missing_is_safe():
-    """No Therapy / no SensingSetup / no hemisphere token -> no entry, never raises."""
-    assert analytics.power_center_freqs([{"ChannelNames": ["ZERO_TWO_LEFT POWER"]}]) == {}
-    assert analytics.power_center_freqs(
-        [{"ChannelNames": ["ZERO_TWO_LEFT POWER"], "Descriptor": {"Therapy": {"Left": {}}}}]) == {}
-    # POWER channel with no LEFT/RIGHT token cannot be matched to a hemisphere.
-    rec = {"ChannelNames": ["X POWER"],
-           "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 7.81}}}}}
-    assert analytics.power_center_freqs([rec]) == {}
-    # Non-finite / non-positive frequencies are rejected.
-    rec2 = {"ChannelNames": ["ZERO_TWO_LEFT POWER"],
-            "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 0}}}}}
-    assert analytics.power_center_freqs([rec2]) == {}
+def test_power_center_freqs_reads_every_descriptor_shape_and_missing_is_safe():
+    """The sensing-band centre frequency per power contact, matched by its hemisphere token:
+    - standard: Descriptor.Therapy.<hemi>.SensingSetup;
+    - streaming Power-Domain (BrainSenseLfp) TherapySnapshot: FrequencyInHertz DIRECTLY on the
+      hemisphere dict -- the real RCS08 shape (raw export: ZERO_THREE_LEFT @ 12.7 Hz, ZERO_TWO_RIGHT
+      @ 13.67 Hz);
+    - firmware variant: SensingSetup nested under RecordingConfiguration.Config;
+    - no Therapy / no SensingSetup / no hemisphere token / a non-positive frequency: no entry,
+      never raises."""
+    cases = [
+        ("standard", {"ChannelNames": ["ZERO_THREE_LEFT POWER", "ZERO_THREE_LEFT Stimulation",
+                                       "ONE_THREE_RIGHT POWER", "ONE_THREE_RIGHT Stimulation"],
+                      "Descriptor": {"Therapy": {
+                          "Left": {"SensingSetup": {"FrequencyInHertz": 22.46}},
+                          "Right": {"SensingSetup": {"FrequencyInHertz": 9.77}}}}},
+         {"ZERO_THREE_LEFT": 22.46, "ONE_THREE_RIGHT": 9.77}),
+        ("direct hemisphere key", {"ChannelNames": ["ZERO_THREE_LEFT Power", "ZERO_TWO_RIGHT Power"],
+                                   "Descriptor": {"Therapy": {
+                                       "Left": {"FrequencyInHertz": 12.7, "FrequencyIndex": 13,
+                                                "SensingChannel": "SensingChannelDef.ZERO_THREE_LEFT"},
+                                       "Right": {"FrequencyInHertz": 13.67, "FrequencyIndex": 14}}}},
+         {"ZERO_THREE_LEFT": 12.7, "ZERO_TWO_RIGHT": 13.67}),
+        ("nested RecordingConfiguration", {"ChannelNames": ["ZERO_TWO_LEFT POWER"],
+                                           "Descriptor": {"Therapy": {"Left": {
+                                               "RecordingConfiguration": {"Config": {
+                                                   "SensingSetup": {"FrequencyInHertz": 13.18}}}}}}},
+         {"ZERO_TWO_LEFT": 13.18}),
+        ("no Therapy", {"ChannelNames": ["ZERO_TWO_LEFT POWER"]}, {}),
+        ("no SensingSetup", {"ChannelNames": ["ZERO_TWO_LEFT POWER"],
+                             "Descriptor": {"Therapy": {"Left": {}}}}, {}),
+        ("no hemisphere token", {"ChannelNames": ["X POWER"],
+                                 "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 7.81}}}}},
+         {}),
+        ("non-positive frequency", {"ChannelNames": ["ZERO_TWO_LEFT POWER"],
+                                    "Descriptor": {"Therapy": {"Left": {"SensingSetup": {"FrequencyInHertz": 0}}}}},
+         {}),
+    ]
+    for name, rec, want in cases:
+        assert analytics.power_center_freqs([rec]) == want, name
 
 
 def _group(active, left_hz=None, right_hz=None):
@@ -162,27 +156,20 @@ def _group(active, left_hz=None, right_hz=None):
     return {"ActiveGroup": active, "ProgramSettings": {"SensingChannel": ch}}
 
 
-def test_chronic_center_freqs_group_level():
+def test_chronic_center_freqs_group_level_active_group_wins_and_missing_is_safe():
     """Chronic-trend sensing frequency comes from Groups.Final[].ProgramSettings.SensingChannel[]
-    keyed by HemisphereLocation, mapped to Left/RightHemisphere (the chronic ChannelNames tokens)."""
+    keyed by HemisphereLocation, mapped to Left/RightHemisphere (the chronic ChannelNames tokens).
+    When several groups carry a frequency for the same hemisphere, the ACTIVE group wins. Malformed
+    or absent structures return {} and never raise."""
     groups = {"Final": [_group(active=True, left_hz=10.74, right_hz=8.79)]}
     assert analytics.chronic_center_freqs(groups) == {"LeftHemisphere": 10.74, "RightHemisphere": 8.79}
     # A bare list of groups is also accepted.
     assert analytics.chronic_center_freqs([_group(True, left_hz=7.81)]) == {"LeftHemisphere": 7.81}
-
-
-def test_chronic_center_freqs_active_group_wins():
-    """When several groups carry a frequency for the same hemisphere, the ACTIVE group wins."""
     groups = {"Final": [_group(active=False, left_hz=5.0),
                         _group(active=True, left_hz=10.74)]}
-    assert analytics.chronic_center_freqs(groups) == {"LeftHemisphere": 10.74}
-
-
-def test_chronic_center_freqs_missing_is_safe():
-    """Malformed / absent structures return {} and never raise."""
-    assert analytics.chronic_center_freqs(None) == {}
-    assert analytics.chronic_center_freqs({}) == {}
-    assert analytics.chronic_center_freqs([1, 2, "x", {}]) == {}
+    assert analytics.chronic_center_freqs(groups) == {"LeftHemisphere": 10.74}, "the active group wins"
+    for malformed in (None, {}, [1, 2, "x", {}]):
+        assert analytics.chronic_center_freqs(malformed) == {}, malformed
     # hemisphere present but no finite frequency -> omitted
     assert analytics.chronic_center_freqs({"Final": [_group(True, left_hz=0)]}) == {}
 
@@ -2294,39 +2281,8 @@ def test_deployment_reports_both_weightings_and_their_difference():
     assert "rating-equal" in d["auc_weighting"]
 
 
-# --- F10: the outlier rule's influence must be visible on the exploration path -----------------
-@live
-def test_exploration_publishes_an_outlier_sensitivity_block():
-    """The rule's median and MAD come from the same sample the exclusion then alters, and neither
-    the Fisher-z interval nor the permutation p accounts for that. The headline stays filtered
-    (an exploration correlation is associational) but the unfiltered counterpart must be reported."""
-    import sys
-    sys.path.insert(0, "/usr/src/BRAVO"); sys.path.insert(0, "/usr/src/BRAVO/modules")
-    from modules.Biomarkers import bravo_service as bs
-
-    def find(o, key, path=""):
-        if isinstance(o, dict):
-            if key in o:
-                yield o
-            for k, v in o.items():
-                yield from find(v, key, path + "." + k)
-        elif isinstance(o, list):
-            for v in o[:3]:
-                yield from find(v, key, path)
-
-    r = bs.run_for_participant({"ParticipantId": "2e3c75c00d7f4f37b53a048d195f11da",
-                                "source": "timedomain", "LabelMetric": "nrs"})
-    hits = list(find(r, "outlier_sensitivity"))
-    assert hits, "no outlier_sensitivity block published"
-    blk = hits[0]["outlier_sensitivity"]
-    if blk is None:
-        return
-    for k in ("r_filtered", "r_unfiltered", "n_filtered", "n_unfiltered", "n_excluded",
-              "delta_r", "note"):
-        assert k in blk, f"{k} missing from the sensitivity block"
-    assert blk["n_unfiltered"] >= blk["n_filtered"]
-    assert blk["n_excluded"] == blk["n_unfiltered"] - blk["n_filtered"]
-    assert "same sample" in blk["note"]
+# (F10's outlier-sensitivity test removed 2026-10-03: the block it checked went with the 1,000-shuffle
+# band inference in decision 341; that commit removed its other tests but missed this live-only one.)
 
 
 # --- the rotation null's resolution limit (2026-09-02; decision 315) -----------------------------
@@ -2430,20 +2386,94 @@ def test_locf_carries_rate_forward_and_nans_unparseable_times():
     assert np.all(np.isnan(an._locf_values(times, None)))
 
 
-# --- the declared burn-in exclusion on the validation mixed model (2026-09-05) ------------------
-def test_validation_mixed_model_excludes_the_first_three_weeks_and_says_so():
-    """PI decision 2026-09-05: the across-eras validation mixed model excludes the first three
-    weeks for post-implant signal drift, and the whole record is kept everywhere else.
+# --- the burn-in exclusion on the validation mixed model (2026-09-05; off since 2026-10-02) -----
+def _ten_week_detail():
+    import numpy as np
+    rng = np.random.default_rng(0)
+    n, nf = 240, 24
+    f = np.linspace(5.0, 45.0, nf)
+    t0 = np.datetime64("2026-01-01T00:00:00")
+    times = [str(t0 + np.timedelta64(int(i * 7 * 10 * 86400 / n), "s")) for i in range(n)]
+    return {"f_set": f, "psd": rng.normal(0.0, 1.0, size=(n, 1, nf)),
+            "labels": rng.normal(5.0, 2.0, size=n), "chan_order": ["ZERO_TWO_LEFT"], "times": times}
 
-    Asserts the window is actually applied, that the exclusion travels in the payload so an odds
-    ratio cannot be quoted without it, and that the week index is anchored on the first sample of
-    the WHOLE record rather than the first retained one — otherwise the window would walk forward
-    as data accumulated.
+
+def test_validation_mixed_model_fits_the_whole_record_by_default():
+    """PI decision 2026-10-02: the mixed model no longer drops the first three weeks. Re-measured
+    that day on L 1-3+ 24.5 Hz, NRS, 60-minute window, report-before-recording matching: WITH the
+    exclusion lme4 failed to converge (OR 2.39, interval 2.378-2.392, p 0.0, 86 samples); without
+    it the fit converged (OR 2.12, 0.75-5.99, p 0.156, 92 samples)."""
+    from modules.Biomarkers.routines import analytics
+
+    assert analytics.VALIDATION_EXCLUDE_FIRST_WEEKS == 0
+    det = _ten_week_detail()
+    default = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0)
+    full = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0, exclude_first_weeks=0)
+    if default.get("available") and full.get("available"):
+        assert default["n"] == full["n"]
+        assert default["excluded_first_weeks"] == 0
+        assert default["n_excluded_burn_in"] == 0
+
+
+def _fit_with_stand_in_model(warnings):
+    """band_mixedmodel_inference on the ten-week detail, with pymer4's Lmer replaced by a stand-in
+    that returns a fixed coefficient row and the given lme4 warnings. None when pymer4 is absent."""
+    try:
+        import pandas as pd
+        import pymer4.models as pm
+    except Exception:
+        return None
+    from modules.Biomarkers.routines import analytics
+
+    class StandIn:
+        def __init__(self, formula, data=None, family=None):
+            self.warnings = []
+
+        def fit(self, summarize=False):
+            self.coefs = pd.DataFrame(
+                {"Estimate": [0.0, 0.8], "P-val": [0.5, 1e-100], "Z-stat": [0.1, 21.0],
+                 "OR": [1.0, 2.23], "2.5_ci": [-0.1, 0.799], "97.5_ci": [0.1, 0.801]},
+                index=["(Intercept)", "band_power"])
+            self.ranef_var = pd.DataFrame({"Var": [0.5]})
+            self.warnings = list(warnings)
+
+    real = pm.Lmer
+    pm.Lmer = StandIn
+    try:
+        return analytics.band_mixedmodel_inference(_ten_week_detail(), "ZERO_TWO_LEFT", 20.0)
+    finally:
+        pm.Lmer = real
+
+
+def test_mixed_model_that_did_not_converge_reports_no_odds_ratio_interval_or_p():
+    """2026-10-02: a fit lme4 flags 'failed to converge' left an interval a sliver wide and a p near
+    zero (R 0-3+ 24.5 Hz NRS: OR 1.025, 1.023-1.028, p 3e-104) that the sign-off card read as
+    VALIDATED. Such a fit now carries no odds ratio, interval or p, says it did not converge, and
+    keeps lme4's own words."""
+    g = _fit_with_stand_in_model(["Model failed to converge with max|grad| = 0.0615836 (tol = 0.002)"])
+    if g is None or not g.get("available"):
+        return
+    assert g["converged"] is False
+    assert g["odds_ratio"] is None and g["or_lo"] is None and g["or_hi"] is None and g["p"] is None
+    assert any("failed to converge" in w for w in g["fit_warnings"])
+
+
+def test_mixed_model_that_converged_keeps_its_odds_ratio_and_says_so():
+    g = _fit_with_stand_in_model([])
+    if g is None or not g.get("available"):
+        return
+    assert g["converged"] is True and g["fit_warnings"] == []
+    assert abs(g["odds_ratio"] - 2.23) < 1e-9 and g["p"] == 1e-100
+
+
+def test_validation_mixed_model_still_excludes_first_weeks_when_asked_and_says_so():
+    """The switch stays (decision 2026-09-05's mechanism): asked for three weeks, the window is
+    actually applied, the exclusion travels in the payload so an odds ratio cannot be quoted
+    without it, and the week index is anchored on the first sample of the WHOLE record rather
+    than the first retained one, so the window cannot walk forward as data accumulate.
     """
     import numpy as np
     from modules.Biomarkers.routines import analytics
-
-    assert analytics.VALIDATION_EXCLUDE_FIRST_WEEKS == 3
 
     rng = np.random.default_rng(0)
     n, nf = 240, 24
@@ -2457,7 +2487,7 @@ def test_validation_mixed_model_excludes_the_first_three_weeks_and_says_so():
            "times": times}
 
     full = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0, exclude_first_weeks=0)
-    cut = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0)
+    cut = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0, exclude_first_weeks=3)
 
     # both must at least report; if pymer4/R is missing they degrade identically and the
     # exclusion bookkeeping is still the thing under test
@@ -2715,3 +2745,54 @@ def test_the_old_straight_line_calculation_is_gone_from_this_page():
     for gone in ("band_pain_tracking", "band_pain_tracking_from_detail", "PAIN_TRACKING_TRACKS",
                  "PAIN_TRACKING_NOT_RESOLVED", "PAIN_TRACKING_NOT_ASSESSED"):
         assert not hasattr(analytics, gone), f"{gone} is still on the biomarker page"
+
+
+def test_mixed_model_draws_its_pain_cut_as_the_aucs_do_one_score_per_report():
+    """The PI, 2026-10-03 (93 vs 92 on the sign-off card): the model cut pain into thirds weighting
+    every sample, the AUCs one score per pain report. A report matched to many samples pulled the
+    model's cut its way, so the two kept different samples (live: 92 vs 118 on L 1-3+ 24.5 Hz NRS).
+    The model now cuts as `deployment_roc` does, and keeps exactly the samples the AUC keeps."""
+    import numpy as np
+    from modules.Biomarkers.routines import analytics
+    det = _ten_week_detail()
+    n = len(det["labels"])
+    # report 0 holds 60 samples at a high score; the other 180 samples are one report each
+    rg = np.concatenate([np.zeros(60, int), np.arange(1, n - 59)])
+    labels = np.asarray(det["labels"], float).copy()
+    labels[:60] = 9.5
+    det = {**det, "labels": labels, "rating_group": rg}
+    bp, lab, groups, _t = analytics._band_feature_from_detail(det, "ZERO_TWO_LEFT", 20.0)
+    y_auc = analytics._binarize_labels(lab, strategy="tertile", rating_group=groups)
+    n_auc = int((np.isfinite(bp) & np.isfinite(y_auc)).sum())
+    g = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0)
+    if g.get("available"):
+        assert g["n"] == n_auc
+
+
+def test_mixed_model_refuses_when_the_smaller_pain_group_has_under_ten_samples():
+    """The PI, 2026-10-03: the chosen band (L 0-3+ 25.5 Hz Overall VAS, median split) had 31 high
+    and 7 low samples, and the fit ran away (OR 2.6e9, interval 0 to 2e22) with no warning from
+    lme4. About 10 in the smaller group per predictor is the usual rule for logistic regression
+    (Peduzzi et al. 1996); one predictor here. Below it: no odds ratio, interval or p, and why."""
+    import numpy as np
+    from modules.Biomarkers.routines import analytics
+    det = _ten_week_detail()
+    labels = np.full(len(det["labels"]), 8.0)
+    labels[:7] = 2.0                                   # 7 low against the rest high
+    det = {**det, "labels": labels}
+    g = analytics.band_mixedmodel_inference(det, "ZERO_TWO_LEFT", 20.0, strategy="median")
+    assert analytics.MIXED_MODEL_MIN_PER_GROUP == 10
+    assert g["available"] is True and g["too_few_in_smaller_group"] is True
+    assert g["n_low"] == 7 and g["odds_ratio"] is None and g["p"] is None
+    assert "low-pain" in g["note"]
+
+
+def test_mixed_model_reads_the_aucs_own_band_power_feature():
+    """The PI, 2026-10-03: the model uses the AUC's feature and pain metric, not a copy. The pain
+    metric comes in through the one pooled detail both read; the band power is now read by the
+    same function `deployment_roc` calls, rather than by a second copy of its formula."""
+    import inspect
+    from modules.Biomarkers.routines import analytics
+    src = inspect.getsource(analytics.band_mixedmodel_inference)
+    assert "_band_feature_from_detail(" in src
+    assert "np.nanmean(psd[:, ci, bmask]" not in src

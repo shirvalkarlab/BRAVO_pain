@@ -137,6 +137,11 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
   }, [contacts, contactPick, side, committed]);
   const contactObj = contacts.find((c) => c.sensing_contact === contact) || null;
   const label = (ch) => (contactLabel ? contactLabel(ch) : String(ch || "").replace(/_/g, " "));
+  // The chosen band's pair is on this side but has no stepped-current runs (RCS08 L 0-3+, page
+  // review 2026-10-02): another pair is drawn, and the panel says so rather than calling it chosen.
+  const chosenWithoutRuns = !!(committed && committed.contact && sideOf(committed.contact) === side
+    && contact !== committed.contact && !contacts.some((c) => c.sensing_contact === committed.contact));
+  const isChosen = !!(committed && contact === committed.contact);
 
   // The centre drawn: the committed band's, snapped to the nearest stored centre.
   const centre = useMemo(() => {
@@ -377,10 +382,15 @@ export default function ThreeSourceResponsePanel({ pooled, report, committed, co
           </Stack>
         ) : null}
 
+        {contactObj && chosenWithoutRuns ? (
+          <Typography sx={{ ...TYPE.body, color: PAL.warnText, mb: 0.5 }}>
+            {`▲ No stepped-current runs on ${label(committed.contact)}; showing ${label(contact)}`}
+          </Typography>
+        ) : null}
         {contactObj ? (
           <Typography sx={{ ...TYPE.body, fontWeight: 600, color: PAL.ink, mb: 0.5 }}>
             {`Sensing on ${label(contact)} · drawn at ${fmtHz(centre)} Hz`}
-            {committed && near(centre, committed.centerHz) ? " (the chosen band)" : ""}
+            {isChosen && near(centre, committed.centerHz) ? " (the chosen band)" : ""}
             {` · ${contactObj.n_runs} run${contactObj.n_runs === 1 ? "" : "s"} across `
               + `${contactObj.n_visits} visit${contactObj.n_visits === 1 ? "" : "s"}`}
             {contactObj.stimulation_rates_hz && contactObj.stimulation_rates_hz.length

@@ -6,24 +6,16 @@
  */
 import "@testing-library/jest-dom";
 import { render as rtlRender, screen, fireEvent } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 
 import { reportCoverage, computeMatchedScanModel } from "./binarizationModel";
 import BinarizationPreview from "./BinarizationPreview";
 import MatchWindowBand from "./MatchWindowBand";
+import { wrap } from "testUtils/render";
 
 jest.mock("plotly.js-dist", () => {
   const noop = () => {};
   return { react: () => Promise.resolve(), purge: noop, restyle: noop, relayout: noop, newPlot: noop };
 });
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 
 const H = 3600;
 // five reports one hour apart; samples: one 30 s BEFORE report 0, one 5 min AFTER report 1,
@@ -109,5 +101,18 @@ describe("reportCoverage", () => {
         showDescriptions={false} />));
     expect(container.querySelector('[data-testid="report-coverage"]')).toBeNull();
     expect(container.textContent).not.toContain("Match window");
+  });
+});
+
+describe("clinic-sheet ratings in the coverage sentence (decision 436)", () => {
+  it("says how many of the reports came from clinic sheets when the switch adds any", () => {
+    const cov = { ...reportCoverage({ scanIndex, painSeries, toleranceMin: 2 }), n_clinic: 2 };
+    const { container } = rtlRender(wrap(
+      <MatchWindowBand coverage={cov} metricLabel="Left Leg VAS"
+        matchTolerance={2} setMatchTolerance={() => {}} strategy="tertile" setStrategy={() => {}}
+        strategyOptions={[{ key: "tertile", label: "Tertile (low/high, drop middle)" }]} percentileLow={33} percentileHigh={67}
+        matchDirection="prior" setMatchDirection={() => {}} scanIndex={scanIndex} painSeries={painSeries} />));
+    const first = container.querySelector('[data-coverage-line="window"]').textContent;
+    expect(first).toBe("1 of 5 Left Leg VAS reports (2 from clinic sheets) have a band-power reading within ±2 min");
   });
 });

@@ -38,6 +38,16 @@ export const OKABE_ITO = {
   gray: CONTEXT,
 };
 
+/**
+ * The SenSight lead as BRAVO's therapy-history page draws it (the PI, 2026-10-07; decision 467):
+ * black shaft, grey tip and contacts, the active colour for a negative contact, cyan for a positive
+ * one. Marks only; the sign printed on a contact is white on the two signed fills.
+ */
+export const LEAD = {
+  shaft: "#000000", tip: "#BDBDBD", off: "#AAAAAA", neg: "#D2502B", pos: "#00A9DD",
+  edge: T.surface, signOn: T.onFill, signOff: T.ink2, sensing: T.accent,
+};
+
 /** A colour with an alpha suffix (two hex digits), for light fills of a token colour. */
 const alpha = (hex, aa) => `${hex}${aa}`;
 

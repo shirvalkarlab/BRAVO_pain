@@ -53,6 +53,19 @@ mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 
 say() { echo "[stability-precompute $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >> "$LOG"; }
 
+# EVERY STEP HAS A TIME LIMIT (CLAUDE.md rule 16, decision 452: a stuck pass of the other loop sat
+# 6.5 hours unseen). Each step takes seconds when nothing changed and minutes for a real rebuild; the
+# limits sit far above that. A step past its limit is stopped, named in the log, and counted a failure.
+limited() {
+  local secs="$1"; shift
+  timeout --kill-after=30 "$secs" "$@"
+  local rc=$?
+  if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+    say "STOPPED: still running after the ${secs}s limit: $*"
+  fi
+  return "$rc"
+}
+
 if [ "${STABILITY_PRECOMPUTE:-1}" = "0" ]; then
   say "switched off by STABILITY_PRECOMPUTE=0; not starting"
   exit 0
@@ -92,7 +105,7 @@ while true; do
   # unchanged folder writes nothing. The Drive folder is RCS08's, so the participant is one uid.
   if [ "${CLINIC_SHEET_SYNC:-1}" = "0" ]; then
     say "the clinic-sheet sync is switched off by CLINIC_SHEET_SYNC=0"
-  elif python3 manage.py sync_clinic_sheets --participant "${CLINIC_SHEET_SYNC_PARTICIPANT:-2e3c75c00d7f4f37b53a048d195f11da}" --json >> "$LOG" 2>&1; then
+  elif limited 900 python3 manage.py sync_clinic_sheets --participant "${CLINIC_SHEET_SYNC_PARTICIPANT:-2e3c75c00d7f4f37b53a048d195f11da}" --json >> "$LOG" 2>&1; then
     say "clinic-sheet sync finished, the ingest folder matches the Drive folder and the ingest ran"
   else
     # Exit 2 means no signed-in Google client; exit 1 means at least one sheet could not be fetched
@@ -103,7 +116,7 @@ while true; do
 
   if [ "${BAND_SWEEP_PRECOMPUTE:-1}" = "0" ]; then
     say "the every-pain-score half is switched off by BAND_SWEEP_PRECOMPUTE=0"
-  elif python3 manage.py precompute_band_sweeps --all --json >> "$LOG" 2>&1; then
+  elif limited 7200 python3 manage.py precompute_band_sweeps --all --json >> "$LOG" 2>&1; then
     say "pain-score pass finished, every participant and score either stored an answer or had nothing to store"
   else
     # Exit status 1 here means at least one grid was COMPUTED and could not be kept -- invisible on
@@ -111,7 +124,7 @@ while true; do
     say "PAIN-SCORE PASS FINISHED WITH FAILURES — see the lines above for which participant and score"
   fi
 
-  if python3 manage.py compute_stability_grid --all --json >> "$LOG" 2>&1; then
+  if limited 7200 python3 manage.py compute_stability_grid --all --json >> "$LOG" 2>&1; then
     say "pass finished, every participant either stored an answer or had nothing to store"
   else
     # Exit status 1 means at least one participant computed an answer and could not keep it, or
@@ -126,7 +139,7 @@ while true; do
   # file set reports already_current after one database query.
   if [ "${SESSION_REPORT_SUMMARY_PRECOMPUTE:-1}" = "0" ]; then
     say "the session-report summary rebuild is switched off by SESSION_REPORT_SUMMARY_PRECOMPUTE=0"
-  elif python3 manage.py rebuild_session_report_summary --all --json >> "$LOG" 2>&1; then
+  elif limited 3600 python3 manage.py rebuild_session_report_summary --all --json >> "$LOG" 2>&1; then
     say "session-report summary pass finished, every participant either stored a summary, was current, or had no reports"
   else
     say "SESSION-REPORT SUMMARY PASS FINISHED WITH FAILURES — see the lines above for which participant"
@@ -140,7 +153,7 @@ while true; do
   if [ "${LIVE_TESTS_DAILY:-1}" = "0" ]; then
     say "the daily live-test run is switched off by LIVE_TESTS_DAILY=0"
   else
-    LIVE_OUT="$(sh _agent_bridge/run_both_suites.sh --live 2>&1)"
+    LIVE_OUT="$(limited 1800 sh _agent_bridge/run_both_suites.sh --live 2>&1)"
     say "live tests: $(printf '%s' "$LIVE_OUT" | tr '\n' ' ')"
     if printf '%s' "$LIVE_OUT" | grep -q -E ' failed| error|FAIL=[1-9]'; then
       say "LIVE TESTS FINISHED WITH FAILURES — see _agent_bridge/_suite_logs/host_live.log and container_live.log"

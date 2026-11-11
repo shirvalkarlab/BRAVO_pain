@@ -10,26 +10,27 @@
  *  C7   the browser tab's title is "Stim optimizer".
  *  C9   an empty cell is a word ("not given", "none", "same"), never "—".
  *  C11  no "·" in the jump-link row; C3 the row is the shared, un-underlined jump row.
+ *
+ * Merged here 2026-10-05: StimOptimizer.closedLoopAnswer.test.js. Each merged file's tests sit in
+ * a describe block named after it, with its reason above it.
  */
+
 import "@testing-library/jest-dom";
 import fs from "fs";
 import path from "path";
 import { render as rtlRender } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 import { T } from "assets/theme/base/tokens";
 import { JUMP_ROW_CLASS } from "assets/theme/base/globals";
-
 import oldResponse from "./__fixtures__/rcs08_stim_optimizer_two_stage.json";
 import newResponse from "./__fixtures__/rcs08_stim_optimizer_2026-09-25.json";
 import DecisionStrip from "./DecisionStrip";
 import TwoStagePlanCard from "./TwoStagePlanCard";
 import SensingEvidenceTable from "./SensingEvidenceTable";
-import ClosedLoopChecks from "./ClosedLoopChecks";
+import ClosedLoopChecks, { gateHeadline } from "./ClosedLoopChecks";
 import { HEADING } from "./typeScale";
-import { EMPTY, fmtMa, fmtHz, fmtUs, fmtOf, contactLabel } from "./stimFormat";
+import { contactLabel, EMPTY, fmtHz, fmtMa, fmtOf, fmtUs } from "./stimFormat";
+import StimOptimizer, { TAB_TITLE } from "./index";
+import { wrap } from "testUtils/render";
 
 jest.mock("react-router-dom", () => ({
   ...jest.requireActual("react-router-dom"),
@@ -41,13 +42,7 @@ jest.mock("plotly.js-dist", () => ({
   react: () => Promise.resolve(), purge: () => {}, restyle: () => Promise.resolve(),
   relayout: () => Promise.resolve(), newPlot: () => Promise.resolve(), toImage: () => Promise.resolve(),
 }));
-jest.mock("graphing-utility/Plotly", () => ({
-  PlotlyRenderManager: class {
-    constructor() { this.traces = []; this.layout = {}; }
-    subplots() {} clearData() {} render() {} setLayoutProps() {} setXlabel() {} setYlabel() {}
-    addHeatmap() {} addScatter() {} addShape() {} addAnnotation() {} setTitle() {} purge() {}
-  },
-}));
+jest.mock("graphing-utility/Plotly", () => require("testUtils/plotlyStubs").renderManagerStub());
 jest.mock("views/Reports/RecomputeBar", () => () => <div>recompute bar</div>);
 jest.mock("views/Reports/ControlAnalyses/ControlAnalysesCard", () => ({
   ControlAnalysesSection: () => <div data-testid="control-analyses">control analyses</div>,
@@ -57,14 +52,6 @@ jest.mock("database/useCachedResult", () => ({
     stale: false, staleReasons: [], computedAt: null, notKept: false }),
 }));
 
-// eslint-disable-next-line import/first
-import StimOptimizer, { TAB_TITLE } from "./index";
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 const render = (ui) => rtlRender(wrap(ui));
 function renderPage(fx) {
   global.__SO_FX__ = fx;
@@ -235,5 +222,26 @@ describe("C9: an empty cell is a word, never '—'", () => {
   it("the two-stage card's tables print 'not given' for a missing value", () => {
     const { container } = render(<TwoStagePlanCard plan={oldResponse.two_stage} loading={false} err={null} />);
     expect(bareDashes(container)).toEqual([]);
+  });
+});
+
+/* From StimOptimizer.closedLoopAnswer.test.js.
+ * "Closed-loop readiness" starts closed (the PI, 2026-09-26), so its answer must be in view while
+ * it is: the same count of the four checks the checks card prints ("No: 2 of 4 checks block, 1 not
+ * assessed"), read from the two-stage plan's gate. Before 2026-09-26 the closed section showed its
+ * title alone.
+ */
+describe("from StimOptimizer.closedLoopAnswer", () => {
+  it("the closed-loop section says whether closed loop can start while it is closed", () => {
+    global.__SO_FX__ = newResponse;
+    const { container } = rtlRender(wrap(<StimOptimizer />));
+    const section = container.querySelector("section#closed-loop");
+    expect(section).not.toBeNull();
+    const body = section.querySelector("#closed-loop-body");
+    expect(body.hidden).toBe(true);
+    const shown = Array.from(section.querySelectorAll("p")).filter((p) => p.closest("[hidden]") === null)
+      .map((p) => p.textContent).join(" ");
+    expect(shown).toMatch(/^No: \d of \d checks block/);
+    expect(shown).toContain(gateHeadline(newResponse.two_stage));
   });
 });

@@ -17,10 +17,17 @@ MAY NOT import -- the dependency runs the other way -- so the store, whose raw k
 the self-derived refusal (decision 31), is the only path, and Biomarkers names itself as the
 consumer when it reads.
 
-WHAT IT IS NOT. It is not a claim that the current caused anything, and it is not the current the
-band power was measured under (the matcher chooses a window of recording for each report; this is
-the setting at the report itself). It is a covariate: the quantity that has to be held still before
-"this band rises with pain" means anything on a record where the current was being changed.
+WHICH MOMENT (decision 483; the PI, 2026-10-18: "do all", change 1). The matcher chooses, for each
+report, pieces of recording inside its window, and the report's band power is the median over
+them. The current taken out is the one those pieces were MEASURED under: the median, over the
+report's own pieces (its TD pieces, or its device PSD snapshots where it has none), of the current
+in force at each (`current_at_recordings`). Until 483 it was the setting at the report itself,
+which on a window straddling a settings change is a current none of its recording ran under.
+`CURRENT_READ_AT = "report"` is the neutral setting (the old rule, `current_in_force_for_reports`).
+
+WHAT IT IS NOT. It is not a claim that the current caused anything. It is a covariate: the quantity
+that has to be held still before "this band rises with pain" means anything on a record where the
+current was being changed.
 """
 import logging
 
@@ -34,6 +41,11 @@ CONSUMER = "biomarkers"
 
 #: What the page calls the quantity, wherever it prints it.
 CURRENT_LABEL = "the stimulation current in force (mA)"
+
+#: Where the current is read for each pain report (decision 483): "recording", the median of the
+#: current in force at the report's own pieces of recording; "report", the setting in force when
+#: the report was filed (the neutral setting, the rule before 483).
+CURRENT_READ_AT = "recording"
 
 
 def hemisphere_of_channel(channel):
@@ -212,3 +224,73 @@ def current_in_force_for_reports(participant_uid, report_times_s, *, channel):
         block["reason"] = (f"every pain report predates the first setting on record for the "
                            f"{side} side")
     return values, block
+
+
+def current_at_recordings(times_lists, stream, *, hemisphere):
+    """``(values, info)``: one current per report, the median of the current in force on one side
+    at each of that report's own pieces of recording (``times_lists``, one list of epoch seconds
+    per report), and the counts a page states beside it.
+
+    A piece before the first setting on record has no known current and is left out of its
+    report's median; a report with no piece, or none with a known current, gets NaN (unknown,
+    never zero). ``info["n_reports_spanning_two_currents"]`` counts the reports whose pieces ran
+    under more than one current; ``info["n_reports_without_pieces"]`` those that own none.
+    """
+    lists = [list(x or []) for x in (times_lists or [])]
+    vals = np.full(len(lists), np.nan, dtype=float)
+    n_span = n_empty = 0
+    flat = np.asarray([t for x in lists for t in x], dtype=float)
+    cur = current_in_force_at(flat, stream, hemisphere=hemisphere) if flat.size else flat
+    k = 0
+    for i, x in enumerate(lists):
+        n = len(x)
+        if n == 0:
+            n_empty += 1
+            continue
+        c = cur[k:k + n]
+        k += n
+        c = c[np.isfinite(c)]
+        if c.size:
+            vals[i] = float(np.median(c))
+            if np.unique(np.round(c, 6)).size > 1:
+                n_span += 1
+    return vals, {"n_reports_spanning_two_currents": int(n_span),
+                  "n_reports_without_pieces": int(n_empty)}
+
+
+def current_at_recordings_for_reports(participant_uid, times_lists, *, channel):
+    """``(values, block)`` as `current_in_force_for_reports`, with the current read at each report's
+    own pieces of recording (`current_at_recordings`). ``block`` also says so (``read_at``) and
+    counts the reports whose pieces ran under two currents."""
+    n = len(times_lists or [])
+    side = hemisphere_of_channel(channel)
+    block = {"available": False, "hemisphere": side, "label": CURRENT_LABEL,
+             "read_at": "recording", "n_reports": int(n), "n_with_current": 0,
+             "n_distinct_values": 0, "n_reports_spanning_two_currents": 0,
+             "n_reports_without_pieces": 0, "store_key": None, "reason": None}
+    if side is None:
+        block["reason"] = f"the sensing contact pair {channel!r} does not name a side"
+        return np.full(n, np.nan), block
+    stream = settings_stream_for(participant_uid)
+    if stream is None:
+        block["reason"] = ("no dated stimulation settings have been filed for this participant yet, "
+                           "so the current in force cannot be looked up")
+        return np.full(n, np.nan), block
+    values, info = current_at_recordings(times_lists, stream, hemisphere=side)
+    finite = np.isfinite(values)
+    block.update(info)
+    block.update(available=bool(finite.any()), n_with_current=int(finite.sum()),
+                 n_distinct_values=int(np.unique(np.round(values[finite], 3)).size),
+                 store_key=stream.get("store_key"))
+    if not block["available"]:
+        block["reason"] = (f"no report's recording falls after the first setting on record for the "
+                           f"{side} side")
+    return values, block
+
+
+def covariate_for_reports(participant_uid, report_times_s, recording_times, *, channel):
+    """The heat map's covariate under `CURRENT_READ_AT`: at the recordings (default), or at the
+    reports (the neutral setting, which runs the pre-483 function and nothing else)."""
+    if CURRENT_READ_AT == "report":
+        return current_in_force_for_reports(participant_uid, report_times_s, channel=channel)
+    return current_at_recordings_for_reports(participant_uid, recording_times, channel=channel)

@@ -69,3 +69,9 @@ test("each Left contact's exposure in the clinic sheets is said, planned-only st
   expect(ex).toHaveTextContent("L C+1-2-: 26 steps at 0.5–2.5 mA over 3 visits, 22 rated; 14 more planned but never recorded as given");
   expect(ex).not.toHaveTextContent("off (Left 0 mA)");
 });
+
+test("the stretch column says it counts each row's own rate (the PI, 2026-10-02: per rate)", () => {
+  render(wrap(<NextBlocksCard nextBlocks={nb} />));
+  expect(screen.getByText("Stretches at this rate")).toBeInTheDocument();
+  expect(screen.queryByText("Stretches")).toBeNull();
+});

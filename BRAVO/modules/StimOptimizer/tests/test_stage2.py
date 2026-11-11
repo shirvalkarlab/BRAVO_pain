@@ -7,6 +7,7 @@ candidate that violates a device constraint must be REJECTED rather than clipped
 clipped policy is a different clinical proposal that nobody evaluated.
 """
 import dataclasses
+import functools
 import os
 from pathlib import Path
 
@@ -18,37 +19,20 @@ from StimOptimizer import stage1_openloop as S1
 from StimOptimizer import stage2_closedloop as S2
 from StimOptimizer.routines import percept_adaptive as PA
 from StimOptimizer.routines import stage_gate as GATE
+from StimOptimizer.tests import _helpers as H
 
 
 # ---------------------------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------------------------
-def _setting(hemisphere="Left", rate_hz=130.0, pw_us=60.0, amp_star=2.0, amp_lo=1.0, amp_hi=4.0,
-             rate_resolved=True, pw_resolved=True):
-    return S1.HemisphereSetting(
-        hemisphere=hemisphere, rate_hz=rate_hz, pw_us=pw_us, amp_star_mA=amp_star,
-        amp_delivered_min_mA=amp_lo, amp_delivered_max_mA=amp_hi, n_epochs_fitted=20,
-        rate_resolved=rate_resolved, pw_resolved=pw_resolved, reasons=("fixture",))
+_setting = functools.partial(H.setting, amp_hi=4.0)
 
 
-def _frozen(*settings):
-    return S1.FrozenConfiguration(
-        settings=tuple(settings or (_setting(),)), primary_item="left_leg",
-        incumbent_epoch=1.0, incumbent_rate_hz=55.0, incumbent_pw_us=60.0,
-        data_horizon="test", washin_min=1.0, n_epochs_total=40)
+_frozen = H.frozen
 
 
 def _responding_lfp(n=120, seed=0):
-    rng = np.random.default_rng(seed)
-    amp = np.repeat([1.0, 3.0], n // 2)
-    freqs = np.arange(4.0, 40.0, 0.5)
-    mag = np.abs(rng.normal(1.0, 0.05, (n, freqs.size)))
-    sel = (freqs >= 13.0) & (freqs <= 17.0)
-    mag[:, sel] *= (np.exp(-0.9 * amp)[:, None] * 3.0)
-    ev = GATE.LfpEvidence(amplitude_mA=amp, magnitude=mag, freqs=freqs,
-                          era=np.tile(["a", "b"], n // 2), cluster=np.arange(n))
-    ev.channel = "FIXTURE"
-    return ev
+    return H.responding_lfp(n=n, seed=seed)
 
 
 #: The pain half of the gate's one-band rule (decision 199): the fixture's bands all rise with
@@ -135,17 +119,15 @@ def test_allow_gate_failure_runs_the_enumeration_but_records_that_nothing_is_dep
 # ---------------------------------------------------------------------------------------------
 # Stage 2 must not alter the frozen rate or pulse width
 # ---------------------------------------------------------------------------------------------
-def test_stage2_refuses_a_caller_supplied_rate(passing_gate):
-    """Accepting the argument and ignoring it would hide the caller's misunderstanding."""
+@pytest.mark.parametrize("kw,match", [
+    # Accepting the argument and ignoring it would hide the caller's misunderstanding.
+    ({"rate_hz": 165.0}, "cannot set the stimulation rate"),
+    ({"pw_us": 90.0}, "cannot set the stimulation rate or the pulse width"),
+], ids=["rate", "pulse_width"])
+def test_stage2_refuses_a_caller_supplied_rate_or_pulse_width(passing_gate, kw, match):
     cfg, g, lfp = passing_gate
-    with pytest.raises(ValueError, match="cannot set the stimulation rate"):
-        S2.run_stage2(cfg, g, lfp=lfp, rate_hz=165.0)
-
-
-def test_stage2_refuses_a_caller_supplied_pulse_width(passing_gate):
-    cfg, g, lfp = passing_gate
-    with pytest.raises(ValueError, match="cannot set the stimulation rate or the pulse width"):
-        S2.run_stage2(cfg, g, lfp=lfp, pw_us=90.0)
+    with pytest.raises(ValueError, match=match):
+        S2.run_stage2(cfg, g, lfp=lfp, **kw)
 
 
 def test_the_refusal_quotes_the_device_constraint_and_the_frozen_values(passing_gate):

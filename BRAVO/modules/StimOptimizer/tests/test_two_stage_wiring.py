@@ -10,13 +10,10 @@ flag is in the response key but not in the four tables' key.
 The platform lookups, the design matrix, the settings stream, the flat pipeline fit and the LFP
 evidence builder are stood in for, the way `test_service_store.py` stands them in. What runs for
 real is the service's wiring, the store, Stage 1's scikit-learn fit, the gate and Stage 2.
-Nothing here imports another test file: the two fixtures it needs are copied in.
+Nothing here imports another test file; the fixture builders shared with other files come from
+`_helpers.py` (2026-10-05).
 """
-import importlib
 import math
-import shutil
-import sys
-import tempfile
 import types
 
 import numpy as np
@@ -29,10 +26,10 @@ from StimOptimizer import pipeline as PL
 from StimOptimizer import stage1_openloop as S1
 from StimOptimizer import stage2_closedloop as S2
 from StimOptimizer.routines import stage_gate as GATE
+from StimOptimizer.tests import _helpers as H
 
 st = BS._cache_store
 prov = BS._provenance
-_ledger = importlib.import_module(st.__name__.rsplit(".", 1)[0] + ".ledger")
 
 UID = "PARTICIPANT"
 MATCHED_KEY = st.product_key("therapy_pain_matched", UID, ("m", 1))
@@ -66,101 +63,23 @@ def _matrix(n_per_cell=11, pw_levels=(100.0, 140.0), rates=(55.0, 165.0), seed=0
     return d
 
 
-def _responding_lfp(n=120, seed=0):
-    rng = np.random.default_rng(seed)
-    amp = np.repeat([1.0, 3.0], n // 2)
-    freqs = np.arange(4.0, 40.0, 0.5)
-    mag = np.abs(rng.normal(1.0, 0.05, (n, freqs.size)))
-    sel = (freqs >= 13.0) & (freqs <= 17.0)
-    mag[:, sel] *= (np.exp(-0.9 * amp)[:, None] * 3.0)
-    ev = GATE.LfpEvidence(amplitude_mA=amp, magnitude=mag, freqs=freqs,
-                          era=np.tile(["a", "b"], n // 2), cluster=np.arange(n))
-    ev.channel = "FIXTURE"
-    return ev
+_responding_lfp = H.responding_lfp
 
 
 #: The pain half of the gate's one-band rule (decision 199): the fixture's bands rise with pain.
 PAIN = {"FIXTURE": set(float(c) for c in GATE.DEFAULT_BAND_CENTERS_HZ)}
 
 
-class _Arm:
-    def __init__(self):
-        self.site, self.hemisphere = "left_leg", "Left"
-        self.queue = pd.DataFrame({"rank": [1, 2], "freq_hz": [55.0, 110.0],
-                                   "amp_mA": [2.0, 2.5], "score": [0.3, 0.2]})
-        self.batch = self.queue.head(1).copy()
-        self.meta = {"incumbent_mu": 0.4, "mu_star": -0.6, "sd_star": 0.9, "incumbent_sd": 0.9,
-                     "x_star": [55.0, 2.0], "data_horizon": "h", "washin_min": 1.0,
-                     "amp_col": "amp_mA_Left", "n_epochs_fitted": 10, "kernel": "rbf",
-                     "safe_is_contiguous": True, "safe_contiguous_ceiling": float("nan")}
-        self.ctx = types.SimpleNamespace(meta=self.meta)
-
-    def surface_can_resolve_its_optimum(self, k=1.0):
-        return False
-
-
-class _Report:
-    def __init__(self):
-        self.arms = {"left_leg__Left": _Arm()}
-        self.summary = pd.DataFrame({"arm": ["left_leg__Left"], "n_epochs": [10]})
-        self.manifest = {"declared": "stub"}
-
-    def recommendation_is_supported(self):
-        return False
-
-
-class _LiveEvidenceStub:
-    """Stands in for `pipeline.live_evidence`: records the rate it was pinned to and hands back
-    evidence that responds to amplitude, keyed on one sensing contact."""
-
-    def __init__(self, evidence=None):
-        self.calls = []
-        self.evidence = evidence
-
-    def __call__(self, participant, **kw):
-        self.calls.append(dict(kw))
-        if self.evidence is None:
-            return PL.LiveEvidence(selected=None, selected_key=None,
-                                   selection_note="no cell survived screening",
-                                   screen=pd.DataFrame({"deployable": [False]}),
-                                   audit=pd.DataFrame())
-        return PL.LiveEvidence(selected=self.evidence,
-                               selected_key=("ONE_THREE_LEFT", "Left", float(kw.get("rate_hz"))),
-                               selection_note="stubbed responding cell",
-                               screen=pd.DataFrame({"deployable": [True]}), audit=pd.DataFrame())
-
-
 @pytest.fixture
 def bench(monkeypatch):
-    root = tempfile.mkdtemp(prefix="bravo_so_twostage_")
-    monkeypatch.setattr(BS, "_SHARED_CACHE_DIR_OVERRIDE", root)
-    monkeypatch.setattr(AD, "_SHARED_CACHE_DIR_OVERRIDE", root)
-    monkeypatch.setattr(_ledger, "ENABLED", False)
-    monkeypatch.setattr(st, "ENABLED", True)
-    models = types.ModuleType("Server.models")
-    models.Participant = types.SimpleNamespace(find=lambda uid: types.SimpleNamespace(uid=uid))
-    server = types.ModuleType("Server"); server.models = models
-    monkeypatch.setitem(sys.modules, "Server", server)
-    monkeypatch.setitem(sys.modules, "Server.models", models)
-    stream = pd.DataFrame({"t": pd.to_datetime(["2026-01-01"], utc=True)})
-    stream.attrs[st.STORE_KEY_ATTR] = STREAM_KEY
-    monkeypatch.setattr(AD, "settings_stream", lambda p, **kw: stream)
     es = _matrix()
-    monkeypatch.setattr(AD, "build_design_matrix", lambda p, rd=None, **kw: es.copy())
-    monkeypatch.setattr(BS, "_tiles_key_for", lambda p: (TILES_KEY, None))
-    monkeypatch.setattr(BS, "closed_loop_readiness",     # `**kw`: the `inputs=` pair, 2026-09-12
-                        lambda p, es, include=True, **kw: {"available": False, "reason": "stubbed"})
-    monkeypatch.setattr(BS, "_blockers", lambda rep, arms, observed=None: [])
-    monkeypatch.setattr(BS.pipeline, "run", lambda es, **kw: _Report())
-    live = _LiveEvidenceStub(_responding_lfp())
-    monkeypatch.setattr(PL, "live_evidence", live)
-    st.store("therapy_pain_matched", UID, ("m", 1), es.drop(columns=["t0", "t_end"]),
-             writer="stim_optimizer", provenance=prov.flatten([
-                 prov.entry(STREAM_KEY, kind="therapy_settings", writer="stim_optimizer"),
-                 prov.entry("redcap_reports/PARTICIPANT/r1", kind="redcap_reports",
-                            writer="biomarkers")]), root=root)
-    yield types.SimpleNamespace(root=root, es=es, stream=stream, live=live)
-    shutil.rmtree(root, ignore_errors=True)
+    with H.service_bench(monkeypatch, es.copy, uid=UID, prefix="bravo_so_twostage_",
+                         stream_key=STREAM_KEY, tiles_key=TILES_KEY) as b:
+        monkeypatch.setattr(BS, "_blockers", lambda rep, arms, observed=None: [])
+        monkeypatch.setattr(BS.pipeline, "run", lambda es, **kw: H.StubReport())
+        live = H.LiveEvidenceStub(_responding_lfp())
+        monkeypatch.setattr(PL, "live_evidence", live)
+        yield types.SimpleNamespace(root=b.root, es=es, stream=b.stream, live=live)
 
 
 REQ = {"ParticipantId": UID, "Backend": "none", "Hemispheres": ["Left"]}
@@ -402,7 +321,6 @@ def test_a_second_site_gets_its_own_stage_one_fit_and_the_gate_stays_on_the_firs
 def test_one_site_asked_for_means_no_parallel_block_at_all(bench, shared_stage1):
     out = BS.run_for_participant(dict(REQ_FLAG, Sites=["left_leg"]))
     assert out["two_stage"]["parallel_sites"] == {}
-
 
 
 # ---------------------------------------------------------------------------------------------

@@ -114,7 +114,7 @@ export default function NextBlocksCard({ nextBlocks }) {
           <table style={{ borderCollapse: "collapse", width: "100%" }}>
             <thead>
               <tr>
-                {["Left contact", "Rate", "Predicted change in pain (points)", "Best plausible", "Currents L / R (mA)", "Stretches", "From"].map((h) => (
+                {["Left contact", "Rate", "Predicted change in pain (points)", "Best plausible", "Currents L / R (mA)", "Stretches at this rate", "From"].map((h) => (
                   <th key={h} style={{ ...cell, color: T.ink2, fontWeight: 600 }}>{h}</th>
                 ))}
               </tr>

@@ -11,18 +11,10 @@
  */
 import "@testing-library/jest-dom";
 import { render as rtlRender } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 import DecisionStrip, { decisionHeadline, sideVerdicts } from "./DecisionStrip";
 import response from "./__fixtures__/rcs08_stim_optimizer_two_stage.json";
+import { wrap, clone } from "testUtils/render";
 
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
-const clone = (x) => JSON.parse(JSON.stringify(x));
 const inForce = response.in_force_by_side;
 
 describe("the strip's verdict is the frozen setting's, not the rate move's", () => {
@@ -108,5 +100,29 @@ describe("a gain the server discarded is not drawn", () => {
     const t = container.textContent;
     expect(t).not.toMatch(/0\.83/);
     expect(t).toMatch(/Predicted change in pain against today's setting: no difference could be formed/);
+  });
+});
+
+describe("a flat fit says so beside its predicted change (the PI, 2026-10-02)", () => {
+  // RCS08 L C+2- 60/160 us: the fitted effect of current sat at the kernel's smallest value, so the
+  // "+0.00 ± 1.24" on both sides was no effect of current and the scatter of the ratings.
+  const withFlat = (flag) => {
+    const plan = clone(response.two_stage);
+    plan.stage1.strata = plan.stage1.strata.map((r) => (r.joint_stratum_key === "60_160"
+      ? { ...r, current_effect_at_minimum: flag } : r));
+    return plan;
+  };
+  it("names the ± as rating scatter when the fit found no effect of current", () => {
+    const { container } = rtlRender(wrap(<DecisionStrip arms={{}} plan={withFlat(true)} inForce={inForce} />));
+    const sides = Array.from(container.querySelectorAll('[data-testid="decision-side"]'));
+    sides.forEach((el) => {
+      expect(el.textContent).toMatch(/No effect of current found on these stretches; ± \d+\.\d\d is the scatter of the pain ratings\./);
+      expect(el.textContent).not.toMatch(/with an uncertainty of/);
+    });
+  });
+  it("keeps the uncertainty wording when the fit found an effect", () => {
+    const { container } = rtlRender(wrap(<DecisionStrip arms={{}} plan={withFlat(false)} inForce={inForce} />));
+    expect(container.textContent).toMatch(/with an uncertainty of/);
+    expect(container.textContent).not.toMatch(/No effect of current found/);
   });
 });

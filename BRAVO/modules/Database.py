@@ -245,7 +245,7 @@ def extractParticipantContext(participant_uid, check_files=[], deidentified=Fals
             for lead in device.electrodes.all():
                 LeadInfo = {
                     "Id": lead.uid,
-                    "Target": lead.target.split(" ")[1],
+                    "Target": lead.target.split(" ", 1)[1],   # "MD Thal" stays whole
                     "Hemisphere": lead.target.split(" ")[0],
                     "CustomName": lead.custom_name,
                     "ChannelCount": lead.channel_count,
