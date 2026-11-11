@@ -548,9 +548,34 @@ def label_rows(rows, pair_block, grid_source, *, correlation=True):
             r["choice_source"] = CHOICE_TD
             if r["chronic"]["covered"]:
                 r["choice_source_why"] = AUC_STAYS_TD
+        elif r["chronic"]["covered"] and _established_kept(r):
+            # decision 513: TD's established answer stays; the off-centre home record is shown
+            r["choice_source"] = CHOICE_TD
+            r["chronic"]["shown_beside"] = True
+            r["chronic"]["words"] = (ESTABLISHED_KEPT_WORDS + "; "
+                                     + r["chronic"]["centre_gap_words"])
+            r["choice_source_why"] = r["chronic"]["words"]
         else:
             r["choice_source"] = CHOICE_CHRONIC if r["chronic"]["covered"] else CHOICE_TD
     return rows
+
+
+#: Decision 513: why a covering home record does not decide a band whose TD answer is established.
+ESTABLISHED_KEPT_WORDS = ("TD's established answer kept; the home record, sensed off this band's "
+                          "centre, is shown beside it")
+
+
+def _established_kept(row):
+    """True when the home record on this TD correlation row is sensed GAP_WORDS_FROM_HZ or more off
+    the band's centre AND TD's own answer here is established (decision 513, the PI, 2026-11-11:
+    "if it was established, we should keep that prior establishment and show the slightly offset
+    one next to it"). Off-centre home records still decide bands TD has not established (509)."""
+    from . import sweep_settings as _sw
+    ch = row.get("chronic") or {}
+    gap = ch.get("centre_gap_hz")
+    return bool(_sw.ESTABLISHED_KEPT and ch.get("centre_gap_words") and gap is not None
+                and float(gap) >= GAP_WORDS_FROM_HZ
+                and row.get("answer") == analytics.BAND_PAIN_ESTABLISHED)
 
 
 def attach_daily_swing(rows, pair_block):

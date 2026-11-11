@@ -365,4 +365,69 @@ def test_the_centre_gap_limit_is_in_the_grids_chronic_identity_and_version():
     body = src[src.index("def _chronic_recording_identity"):]
     body = body[:body.index("\ndef ")]
     assert re.search(r"\|gap=%r", body) and "MAX_CENTRE_GAP_HZ" in body
-    assert SW.GRID_RULE_VERSION.startswith("v37_centre_gap_1hz") or not SW.RECENT_NOTE
+    assert SW.GRID_RULE_VERSION.startswith(("v37_centre_gap_1hz", "v38_established_kept")) or not SW.RECENT_NOTE
+
+
+def _off_centre_block(gap_hz, covered=True):
+    f = 8.5 - gap_hz
+    e = {"freq_hz": f, "grid_centre_hz": 8.5, "centre_gap_hz": round(gap_hz, 6),
+         "centre_offset_hz": round(-gap_hz, 6), "n_reports": 14, "pearson_r": -0.16,
+         "pearson_r_low": -0.6, "pearson_r_high": 0.3, "answer": "not_resolved", "covered": covered}
+    w = CBC.centre_gap_words(f, 8.5)
+    if w:
+        e["centre_gap_words"] = w
+    return {"by_centre": {8.5: e}}
+
+
+def test_an_off_centre_home_record_never_takes_a_band_td_has_established():
+    """Decision 513 (the PI, 2026-11-11: "if it was established, we should keep that prior
+    establishment and show the slightly offset one next to it"): a home record sensed 0.7 Hz below
+    8.5 Hz covers the band, but TD's established answer there keeps deciding; the home record's r,
+    n and gap stay on the row's chronic block, marked shown beside, and the words say so."""
+    if not SW.ESTABLISHED_KEPT:
+        return
+    td = {"band_center_hz": 8.5, "pearson_r": -0.48, "n_pain_reports": 72, "answer": "established"}
+    row = CBC.label_rows([dict(td)], _off_centre_block(0.69), SW.GRID_SOURCE_TD)[0]
+    assert row["choice_source"] == "TD"
+    ch = row["chronic"]
+    assert ch["covered"] is True and ch["shown_beside"] is True
+    assert (ch["pearson_r"], ch["n_reports"]) == (-0.16, 14)
+    assert ch["words"] == ("TD's established answer kept; the home record, sensed off this band's "
+                           "centre, is shown beside it; sensed 0.7 Hz below this band's centre")
+    assert row["choice_source_why"] == ch["words"]
+    # TD's own values are untouched, and the choosing view keeps them (no chronic stand-in)
+    assert (row["pearson_r"], row["n_pain_reports"], row["answer"]) == (-0.48, 72, "established")
+    assert SW.chronic_decides(row) is row
+
+
+def test_an_off_centre_home_record_still_decides_where_td_is_not_established():
+    """Decision 513 keeps decision 509 where TD has not established the band: the off-centre home
+    record decides, as before, and is not marked shown beside."""
+    td = {"band_center_hz": 8.5, "pearson_r": -0.1, "n_pain_reports": 72, "answer": "not_resolved"}
+    row = CBC.label_rows([dict(td)], _off_centre_block(0.69), SW.GRID_SOURCE_TD)[0]
+    assert row["choice_source"] == "chronic"
+    assert "shown_beside" not in row["chronic"]
+    assert row["chronic"]["words"].startswith("decided by the home record (chronic log)")
+
+
+def test_a_near_centre_home_record_still_decides_an_established_band():
+    """Decision 513 is about the off-centre readings only: a home record under 0.5 Hz from the centre
+    decides an established band exactly as under decision 509 (no gap words, not shown beside)."""
+    td = {"band_center_hz": 8.5, "pearson_r": -0.48, "n_pain_reports": 72, "answer": "established"}
+    row = CBC.label_rows([dict(td)], _off_centre_block(0.3), SW.GRID_SOURCE_TD)[0]
+    assert row["choice_source"] == "chronic"
+    assert "shown_beside" not in row["chronic"]
+    assert row["chronic"]["words"] == "decided by the home record (chronic log)"
+
+
+def test_the_established_rule_moves_the_grid_version_and_has_a_neutral_setting():
+    """Decision 513 changes the grid rows, so the grid's rule version moved (v38); the neutral
+    setting (`BRAVO_ESTABLISHED_KEPT=0`) files the grid under decision 509's v37."""
+    import subprocess
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    code = ("import sys; sys.path.insert(0, %r); from modules.Biomarkers.routines import "
+            "sweep_settings as S; print(S.ESTABLISHED_KEPT, S.GRID_RULE_VERSION)" % os.path.dirname(here))
+    for env, want in (("1", "True v38_established_kept"), ("0", "False v37_centre_gap_1hz")):
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                             env={**os.environ, "BRAVO_ESTABLISHED_KEPT": env}, timeout=120)
+        assert out.stdout.strip() == want, (out.stdout, out.stderr[-2000:])

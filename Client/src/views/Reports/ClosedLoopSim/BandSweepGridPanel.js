@@ -204,6 +204,12 @@ export function sourceCell(row) {
       + (row.daily_swing ? `. Daily swing: ${dailySwingWords(row.daily_swing)}` : "")
       + (row.chronic_match_warning ? `. ${row.chronic_match_warning}` : "")
     : `Decided by: ${d === "TD" ? "TD" : "nothing (this row cannot choose)"}`
+      // decision 513: TD's established answer kept; the off-centre home record shown beside it
+      + (d === "TD" && row.chronic && row.chronic.shown_beside
+        ? `. Home record shown beside, not deciding (${row.chronic.centre_gap_words}): `
+          + rIntervalN(row.chronic.pearson_r, row.chronic.pearson_r_low, row.chronic.pearson_r_high,
+            row.chronic.n_reports)
+        : "")
       + (row.daily_swing ? `. Daily swing: ${dailySwingWords(row.daily_swing)}` : "");
   return { text: SOURCE_SHORT[d] || d, title };
 }

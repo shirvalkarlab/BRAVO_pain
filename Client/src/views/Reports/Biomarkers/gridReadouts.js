@@ -432,6 +432,8 @@ export function rIntervalN(r, lo, hi, n) {
 export function chronicCountsWords(ch) {
   if (!ch || !ch.covered || ch.n_reports == null) return null;
   const parts = [`${ch.n_reports} matched`];
+  // decision 513: TD's established answer decides; the off-centre home record's own r is shown here
+  if (ch.shown_beside) parts.unshift(`home ${rIntervalN(ch.pearson_r, ch.pearson_r_low, ch.pearson_r_high, null)}, not deciding`);
   if (ch.n_reports_in_gap != null) parts.push(`${ch.n_reports_in_gap} in a gap`);
   if (ch.n_reports_log_elsewhere != null) parts.push(`${ch.n_reports_log_elsewhere} log elsewhere`);
   // decision 509: a home frequency 0.5-1.0 Hz from this band's centre answers for it; say how far

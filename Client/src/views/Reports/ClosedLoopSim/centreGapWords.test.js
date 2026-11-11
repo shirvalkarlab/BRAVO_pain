@@ -26,3 +26,21 @@ describe("home record sensed off the band's centre (decision 509)", () => {
     expect(chronicCountsWords({ ...ch, centre_gap_words: undefined })).toBe("14 matched · 3 in a gap · 2 log elsewhere");
   });
 });
+
+describe("an established TD answer is kept; the off-centre home record is shown beside it (decision 513)", () => {
+  const chronic = { covered: true, shown_beside: true, n_reports: 14, n_reports_in_gap: 3,
+    n_reports_log_elsewhere: 2, pearson_r: -0.16, pearson_r_low: -0.6, pearson_r_high: 0.3,
+    centre_gap_words: WORDS };
+
+  it("Closed-Loop: the Source cell says TD and its hover gives the home record's r beside", () => {
+    const row = { choice_source: "TD", pearson_r: -0.48, n_pain_reports: 72, chronic };
+    const c = sourceCell(row);
+    expect(c.text).toBe("TD");
+    expect(c.title).toBe(`Decided by: TD. Home record shown beside, not deciding (${WORDS}): r −0.16 [−0.60, +0.30], n=14`);
+  });
+
+  it("Biomarkers: the home-record cell leads with the home r, not deciding", () => {
+    expect(chronicCountsWords(chronic)).toBe(
+      `home r −0.16 [−0.60, +0.30], not deciding · 14 matched · 3 in a gap · 2 log elsewhere · ${WORDS}`);
+  });
+});
