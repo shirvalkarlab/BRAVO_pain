@@ -257,7 +257,7 @@ export function UncheckedStimulatorCard({ stimulator }) {
 
 export default function DecisionCard({ participantUid, bandCandidate, summary, deploymentReport,
                                        chosenBand, bandRecord, cutpoint, mode, onMode, onRecompute,
-                                       stimulator = null }) {
+                                       stimulator = null, onChangeBand = null }) {
   const bc = bandCandidate || {};
   const rep = repOf(deploymentReport);
   const loading = !!(deploymentReport && deploymentReport.loading);
@@ -304,8 +304,23 @@ export default function DecisionCard({ participantUid, bandCandidate, summary, d
             {stimulatorLine(stimulator)}
           </MDTypography>
         ) : null}
+        {/* The band line ends in "change", which opens the folded band grid and goes to it (the
+            PI, 2026-11-18: verdict first, band choice one click away rather than a hunt). */}
         {eyebrow ? (
-          <MDTypography sx={{ ...TYPE.body, color: PAL.ink2 }}>{eyebrow}</MDTypography>
+          <MDTypography data-testid="decision-band-line" sx={{ ...TYPE.body, color: PAL.ink2 }}>
+            {eyebrow}
+            {onChangeBand ? (
+              <>
+                {" · "}
+                <MDTypography component="button" type="button" onClick={onChangeBand}
+                  sx={{ ...TYPE.body, color: PAL.accent, background: "none", border: 0, padding: 0,
+                    cursor: "pointer", fontFamily: "inherit", "&:hover": { textDecoration: "underline" },
+                    "&:focus-visible": { outline: `2px solid ${PAL.accent}`, outlineOffset: 2 } }}>
+                  change
+                </MDTypography>
+              </>
+            ) : null}
+          </MDTypography>
         ) : null}
         <MDTypography component="h2" sx={{ ...TYPE.answer, ...WRAP.balance, color: status.ink, mt: 0.5 }}>
           {loading ? "Evaluating the device rules and the evidence…" : (

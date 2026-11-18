@@ -42,7 +42,7 @@
  * the row shows the dashed "not tested" mark rather than a fabricated answer.
  */
 import { memo, useMemo, useState } from "react";
-import { Card, Tooltip } from "@mui/material";
+import { Card, Collapse, Tooltip } from "@mui/material";
 import MDBox from "components/MDBox";
 import MDTypography from "components/MDTypography";
 
@@ -52,6 +52,7 @@ import ColorKey from "views/Reports/paper/ColorKey";
 import { orderContacts } from "views/Reports/Biomarkers/contactOrder";
 import PAL, { SIDE } from "./palette";
 import Fold from "./Fold";
+import FoldArrow from "../paper/FoldArrow";
 import { fmtHz, fmtNum } from "./deployFormat";
 import { recordChosenBand } from "./bandCandidateStore";
 import { deciderOf, currentOutWords, recentWords, familyFootnote, familyAucFootnote, cutDateWords,
@@ -596,7 +597,7 @@ function SideColumn({ side, channels, sweeps, refused, chosen, active, offNote, 
  * `offNote` (why a side not read is greyed), plus the grid and the two callbacks.
  */
 function BandSweepGridPanel({ grid, participantUid, committed, committedBySide, activeSides,
-  offNote, onCandidateChosen, onChoiceRecorded }) {
+  offNote, onCandidateChosen, onChoiceRecorded, open = true, onToggle = null }) {
   // Memoised, because a fresh `{}` on every render (when there is no grid yet) would make every
   // memo below it recompute on every render.
   const sweeps = useMemo(() => (grid && grid.band_time_sweep) || {}, [grid]);
@@ -662,6 +663,21 @@ function BandSweepGridPanel({ grid, participantUid, committed, committedBySide, 
       ) : null}
       {/* The pain score and the matching and split settings this grid was built under, and when --
           the same entry the Biomarkers page shows for its controls (decision 131). */}
+      {/* Folded once a band is chosen (the PI, 2026-11-18): the answer line above stays in view, the
+          grid is one click away, and the decision card's "change" opens it. Kept mounted while
+          folded, so opening it does not redraw the 22 rows (decision 365). */}
+      {onToggle ? (
+        <MDTypography data-testid="band-grid-toggle" component="button" type="button" onClick={onToggle}
+          aria-expanded={!!open}
+          sx={{ ...TYPE.body, color: PAL.ink2, cursor: "pointer", display: "inline-flex",
+            alignItems: "center", gap: 1, background: "none", border: 0, padding: 0, mt: 1,
+            fontFamily: "inherit", "&:hover": { textDecoration: "underline" },
+            "&:focus-visible": { outline: `2px solid ${PAL.accent}`, outlineOffset: 2 } }}>
+          <FoldArrow open={!!open} />
+          {open ? "Hide the band grid" : "Show the band grid"}
+        </MDTypography>
+      ) : null}
+      <Collapse in={!!open} unmountOnExit={false}>
       <SettingsFinePrint gs={grid.grid_settings} />
 
       <MDBox display="flex" gap={4} flexWrap="wrap" mt={2} mb={2}>
@@ -723,6 +739,7 @@ function BandSweepGridPanel({ grid, participantUid, committed, committedBySide, 
           on the bands you tick, in the deployment decision above.
         </MDTypography>
       </Fold>
+      </Collapse>
     </Card>
   );
 }

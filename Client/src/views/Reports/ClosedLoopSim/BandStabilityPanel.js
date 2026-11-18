@@ -134,7 +134,7 @@ function Fact({ label, value }) {
   );
 }
 
-export default function BandStabilityPanel({ stability, cacheStatus, painScore }) {
+export default function BandStabilityPanel({ stability, cacheStatus, painScore, contactLabel = null }) {
   const s = stability || null;
   const answer = s && s.answer ? s.answer : "not tested";
 
@@ -142,7 +142,7 @@ export default function BandStabilityPanel({ stability, cacheStatus, painScore }
   // being about a different band than the one the rest of the page is discussing.
   const bandPhrase = (s && isNum(s.band_center_hz))
     ? `${fmtNum(s.band_center_hz, 1)} Hz centre, ${fmtNum(s.band_width_hz, 1)} Hz wide` +
-      (s.electrode ? `, on ${s.electrode}` : "")
+      (s.electrode ? `, on ${contactLabel ? contactLabel(s.electrode) : s.electrode}` : "")
     : "no band assessed";
 
   // WHEN, audit item P-03. Only printed once the test actually ran: a "not tested" answer has no

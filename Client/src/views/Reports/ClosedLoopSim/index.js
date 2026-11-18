@@ -567,6 +567,21 @@ function ClosedLoopSim() {
     el.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [location.hash, bandSweepGrid.loading]);
 
+  // THE BAND GRID FOLDS ONCE A BAND IS CHOSEN (the PI, 2026-11-18: the verdict first, band choice
+  // one click away rather than a hunt). Until someone clicks, it follows the band: open with none
+  // chosen (the grid is how a first band is chosen), folded with one, and open on arrival from the
+  // Biomarkers page's "Open this grid" link (#cl-grid). A click on its toggle, or on "change" on a
+  // decision card, decides from then on, so ticking a band in an open grid does not fold it away.
+  const [gridOpenChoice, setGridOpenChoice] = useState(null);
+  useEffect(() => { setGridOpenChoice(null); }, [participant_uid]);
+  const gridOpen = gridOpenChoice != null ? gridOpenChoice : (!bc || location.hash === "#cl-grid");
+  const toggleGrid = useCallback(() => setGridOpenChoice(!gridOpen), [gridOpen]);
+  const openGridForChange = useCallback(() => {
+    setGridOpenChoice(true);
+    const el = document.getElementById("cl-grid");
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
   /**
    * THE ONE RECOMPUTE CONTROL FOR THIS PAGE, REPORTING ON BOTH PAGE-LEVEL REQUESTS AT ONCE.
    *
@@ -745,14 +760,16 @@ function ClosedLoopSim() {
                       deploymentReport={st.kind === "contralateral" ? contraReport : report}
                       chosenBand={envelope} bandRecord={bandRecord}
                       cutpoint={cutpointHere} mode={thresholdMode} onMode={setThresholdMode}
-                      onRecompute={onRecomputePage} stimulator={wiring ? st : null} />
+                      onRecompute={onRecomputePage} stimulator={wiring ? st : null}
+                      onChangeBand={openGridForChange} />
                   ) : (
                     <DecisionCard key={st.stim} participantUid={participant_uid} bandCandidate={otherBc}
                       summary={otherSummary}
                       deploymentReport={st.kind === "contralateral" ? otherContraReport : otherReport}
                       chosenBand={otherEnvelope} bandRecord={bandRecord}
                       cutpoint={null} mode={thresholdMode} onMode={setThresholdMode}
-                      onRecompute={onRecomputePage} stimulator={st} />
+                      onRecompute={onRecomputePage} stimulator={st}
+                      onChangeBand={openGridForChange} />
                   )
                 )))}
               </FigureRecordContext.Provider>
@@ -773,6 +790,8 @@ function ClosedLoopSim() {
             offNote={gridOffNote}
             onCandidateChosen={onGridCandidateChosen}
             onChoiceRecorded={onGridChoiceRecorded}
+            open={gridOpen}
+            onToggle={toggleGrid}
           />
         </MDBox>
 
@@ -810,7 +829,7 @@ function ClosedLoopSim() {
             <MDBox id="cl-stability" mb={8}>
               <BandStabilityPanel stability={report?.data?.band_stability}
                 cacheStatus={report?.data?.cache_status}
-                painScore={report?.data?.pain_score} />
+                painScore={report?.data?.pain_score} contactLabel={contactLabel} />
             </MDBox>
 
             {/* BACKGROUND, folded (SPEC section 5.2 item 7): how band power moves with current,
