@@ -18,10 +18,9 @@
  */
 import "@testing-library/jest-dom";
 import { render as rtlRender, screen, fireEvent } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
 
 import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
+import { wrap } from "testUtils/render";
 
 // The decision card reaches Plotly (to photograph the page's figures for the printed record) and
 // the session controller; both mocked exactly as the other tests on this page do.
@@ -41,11 +40,6 @@ import payload from "./__fixtures__/rcs08_deployment_payload_2026-09-15.json";
 
 // The Material Dashboard primitives read the MUI theme and the platform controller out of context
 // (see `panels.payload.test.js` for why both are needed), so every render goes through one wrapper.
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 const render = (ui) => rtlRender(wrap(ui));
 
 const report = { data: payload, loading: false, err: null };

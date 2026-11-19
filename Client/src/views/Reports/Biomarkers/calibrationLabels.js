@@ -21,6 +21,9 @@ export function routeLabel(method) {
   const s = String(method || "");
   const k = kFromServed(s);
   const suffix = k ? ` ×${k}` : "";
+  if (s.startsWith("td_transform") && s.indexOf(";indefinite") >= 0) {
+    return `indefinite TD, stimulation off, transform constant${suffix}`;
+  }
   if (s.startsWith("td_transform")) return `TD, transform constant${suffix}`;
   if (s.startsWith("event_psd_bridge")) return `PSD, bridge constant${suffix}`;
   return "modeled";
@@ -29,13 +32,15 @@ export function routeLabel(method) {
 /** The legend entry for the modeled-LSB glyphs, naming the constants actually seen in the data. It is
  *  the timeline legend's first entry that says TD, so it defines the term. */
 export function modeledLegendName(points) {
-  let kTd = null; let kBridge = null;
+  let kTd = null; let kBridge = null; let hasInd = false;
   (points || []).forEach((p) => {
     const s = String((p && p.method) || "");
     if (!kTd && s.startsWith("td_transform")) kTd = kFromServed(s);
+    if (s.indexOf(";indefinite") >= 0) hasInd = true;
     if (!kBridge && s.startsWith("event_psd_bridge")) kBridge = kFromServed(s);
   });
   const td = kTd ? ` ×${kTd}` : "";
   const br = kBridge ? ` ×${kBridge}` : "";
-  return `modeled LSB  (○ time domain (TD), transform constant${td} · ◇ PSD, bridge constant${br}; red ring = TD saturated)`;
+  const ind = hasInd ? " · □ indefinite TD, stimulation off" : "";
+  return `modeled LSB  (○ time domain (TD), transform constant${td}${ind} · ◇ PSD, bridge constant${br}; red ring = TD saturated)`;
 }

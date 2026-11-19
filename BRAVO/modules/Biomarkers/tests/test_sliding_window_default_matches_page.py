@@ -33,25 +33,10 @@ except Exception:
 from Biomarkers import bravo_service as bs  # noqa: E402
 
 
-def test_a_request_with_no_sliding_window_field_defaults_off():
-    _train_days, _step_days, sliding, _window_months, _window_step_months = bs._window_params({})
-    assert sliding is False
-
-
-def test_an_explicit_true_still_reaches_the_kept_detector():
-    _train_days, _step_days, sliding, _window_months, _window_step_months = bs._window_params(
-        {"SlidingWindow": True})
-    assert sliding is True
-
-
-def test_an_explicit_string_false_still_parses_off():
-    _train_days, _step_days, sliding, _window_months, _window_step_months = bs._window_params(
-        {"SlidingWindow": "false"})
-    assert sliding is False
-
-
-if __name__ == "__main__":
-    for name, fn in list(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            fn()
-            print("ok", name)
+def test_no_field_defaults_off_and_an_explicit_true_or_string_false_still_parse():
+    """No field: off (what every live request has meant). An explicit True still reaches the kept
+    detector; the string "false" still parses off."""
+    for request, want in (({}, False), ({"SlidingWindow": True}, True),
+                          ({"SlidingWindow": "false"}, False)):
+        _train_days, _step_days, sliding, _window_months, _window_step_months = bs._window_params(request)
+        assert sliding is want, (request, sliding)

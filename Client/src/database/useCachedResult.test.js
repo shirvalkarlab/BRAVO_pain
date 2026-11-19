@@ -106,3 +106,33 @@ test("a rejected fetch keeps the original rejection, not only its message", asyn
   expect(api.err).toMatch(/Request failed/);
   expect(api.errRaw && api.errRaw.response && api.errRaw.response.status).toBe(403);
 });
+
+test("an expired login on Recompute goes to the login screen; another 403 does not", async () => {
+  const { loginRedirect } = require("./loginExpired");
+  const go = jest.fn();
+  const saved = loginRedirect.go;
+  loginRedirect.go = go;
+  loginRedirect.reset();
+  try {
+    // Found 2026-11-17: the page kept its old copy and Recompute looked dead for hours.
+    const other = Object.assign(new Error("Request failed"), { response: { status: 403, data: { detail: "You do not have permission to perform this action." } } });
+    const expired = Object.assign(new Error("Request failed"), { response: { status: 403, data: { detail: "Authentication credentials were not provided." } } });
+    let api = null;
+    const fetcher = jest.fn(() => Promise.reject(other));
+    putResult(MODULE, UID, settingsKey({ a: 1 }), { value: 0 }, null);
+    const { rerender } = render(<Probe settings={{ a: 2 }} fetcher={fetcher} onApi={(x) => { api = x; }} />);
+    await settle();
+    await act(async () => { await api.recompute(); });
+    await settle();
+    expect(go).not.toHaveBeenCalled();
+
+    fetcher.mockImplementation(() => Promise.reject(expired));
+    rerender(<Probe settings={{ a: 2 }} fetcher={fetcher} onApi={(x) => { api = x; }} />);
+    await act(async () => { await api.recompute(); });
+    await settle();
+    expect(go).toHaveBeenCalledWith("/login");
+  } finally {
+    loginRedirect.go = saved;
+    loginRedirect.reset();
+  }
+});

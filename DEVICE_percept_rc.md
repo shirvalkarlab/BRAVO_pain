@@ -149,6 +149,34 @@ exported files.** The device's own power reading exists in the programmed produc
 
 `BrainSenseSurveys` and `ElectrodeSurvey` are a related electrode-survey variant of the montage.
 
+### The electrode identifier: one electrode against the other lead's contact 3
+
+From the white paper (UC202012929dEN, "Electrode Identifier", pages 3-5) and this participant's own
+62 recordings (read from the live database 2026-10-05).
+
+- **What it is for:** which electrode on one lead carries the most signal, stimulation off. It needs
+  both leads implanted. In the clinic, not at home.
+- **How it is wired:** each channel is ONE electrode on the surveyed lead against ONE reference
+  electrode on the OPPOSITE lead; every channel of a run shares that reference. On RCS08 the left
+  lead's electrodes are referenced to right contact 3 (contact 11) and the right lead's to left
+  contact 3. **So no channel is one of the 6 within-lead sensing pairs, and each channel's voltage
+  mixes both brain sides** (left GPi and right medial thalamus): never pool it with, or match it like,
+  a within-lead recording (§7.13 of CLAUDE.md, decision 202).
+- **How it is recorded:** all electrodes of one lead at once, about 20 s at 250 samples/s; the
+  other side is a separate run. On SenSight leads the clinician picks "Levels" (the 4 rings) or
+  "Segments" (the 6 split electrodes 1a-c, 2a-c); both means two runs, one after the other.
+- **The device's own PSD:** the tablet transforms each channel's 20 s trace; bins 0.98 Hz wide,
+  centres 0 to 96.68 Hz, in µVp. It then ranks the electrodes at one chosen frequency: 3 green dots
+  at 80 % or more of the strongest electrode, 2 white dots at 40-80 %, 1 white dot below 40 %
+  (relative to that run's strongest, so a ranking compares electrodes within one run only).
+- **What the export keeps:** the time-domain traces of every run in the session
+  (`BrainSenseSurveysTimeDomain[].ElectrodeIdentifier`), but the PSD of the most recent run only
+  (`BrainSenseSurveys[].ElectrodeIdentifier`). On RCS08, 44 of the 62 runs carry a device PSD.
+- **What RCS08 has:** 62 runs on 14 visit days (2025-07-16 to 2026-09-25): 32 ring runs (4
+  channels, 16 per side) and 30 segment runs (6 channels, 15 per side), 20-21 s each. Ingested as
+  `MedtronicElectrodeIdentifier`; the PSD attaches to its run only when exactly one run carries its
+  channel, otherwise it is kept with its run unknown (decision 443).
+
 ### What each product is for
 
 - **Indefinite Streaming is the only product that records all six contacts at once, with
@@ -497,9 +525,30 @@ simultaneous voltage-trace recording.** The PI stated this explicitly.
 
 - The target is the **on-demand stream's selected-band power reading**, paired one-to-one with
   **its own voltage trace** through the shared `FirstPacketDateTime`, with the channel set used to
-  disambiguate. It is **not** the chronic record, which is a different product with a different
-  normalisation and a different range: the chronic reading reached 10,660 and even the invalid
-  sentinel, while the in-clinic reading tops out near 3,014.
+  disambiguate. It is **not** the chronic record, which is a different product (a 10-minute
+  average of the programmed 5 Hz band) whose relation to the streaming reading is **not settled**:
+  the chronic reading reached 10,660 and even the invalid sentinel, while the in-clinic reading tops
+  out near 3,014, but that compares ranges recorded at different times and says nothing about units.
+  **What is known (2026-10-23, decision 503):** no Medtronic document in this repository and no
+  paper found states whether the chronic value averages the same power samples as streaming or with
+  what gain. One published report does show that clinicians, "per manufacturer guidance", type the
+  device's adaptive LFP thresholds straight from the chronic record (the 25th and 75th percentiles
+  of daytime chronic power; thresholds 25-3160 in device units), and that thresholds taken from
+  in-clinic streaming "proved too high" in the one patient without a chronic record, which the
+  authors put down to streaming catching a different state, not to units (Busch et al. 2025, npj
+  Parkinson's Disease 11:264, doi:10.1038/s41531-025-01124-7). So the chronic value is on the scale
+  the device's thresholds are set in. **The Medtronic-authored ADAPT-PD methods paper** (Stanslaski
+  et al. 2024, npj Parkinson's Disease 10:174, doi:10.1038/s41531-024-00772-5, "Device
+  description") describes ONE feedback quantity, "LFP Power integrated over a 5 Hz band", computed by
+  "taking the fast Fourier transform of the time series data and averaging it every 100 ms", which
+  the comparator checks against the LFP thresholds; Streaming "displays LFP power in a selected 5
+  Hz-wide frequency band" with the thresholds drawn on it, and Timeline is used "to record, monitor,
+  and visualize the aDBS LFP control signal", "stored as 10 min averages", with the device's own
+  share of time below, between and above the same thresholds. **Reading: the chronic value is the
+  streaming power quantity averaged over 10 minutes, on the same scale** (documented by the system
+  description, not by a measurement; no recording takes both at once). It still differs in
+  averaging (10 min against 100 ms to 1.2 s), so its spread is narrower and its level reflects home
+  states the clinic does not see; a value can be compared with streaming LSB, never matched to it.
 - **A tolerant time window admits non-simultaneous pairs and destroys the correlation.** A ±10 s
   window pairs a voltage segment with a power reading from a different moment; when the power
   spikes but the matched voltage is from a calm moment, the resulting inversions collapse the fit.

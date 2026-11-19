@@ -15,6 +15,8 @@ counts stay on the row as information.
 
 Values, not shapes: which cells pass, which reason names which missing half, and that the gate
 and the screen give the same sentences.
+
+Merged here 2026-10-05: test_harmonic_warning.py (each under its own heading below).
 """
 import numpy as np
 import pandas as pd
@@ -22,43 +24,28 @@ import pytest
 
 from StimOptimizer import pipeline as PL
 from StimOptimizer.routines import lfp_evidence as EV
-from StimOptimizer.routines import lfp_response as LR
 from StimOptimizer.routines import pain_relationship as PR
 from StimOptimizer.routines import stage_gate as GATE
+from StimOptimizer.tests import _helpers as H
+import ast
+import inspect
+
+from StimOptimizer import bravo_service as BS
+from StimOptimizer import titration_plan as TP
 
 
 # --- fixtures: a real ResponseResult per band, a stub evidence cell -------------------------------
-def _Res(responds, slope_p, sep_d, slope):
-    return LR.ResponseResult(responds=responds, reason="fixture", direction_ok=responds,
-                             separation_d=sep_d, slope_per_mA=slope, slope_p=slope_p)
+_Res = H.stub_result
 
 
-CENTRES = [float(c) for c in range(10, 28)]                # 18 bands, 10..27 Hz
+CENTRES = H.CENTRES
+COND = "adaptive_band_passes_lfp_response"
 
 
-class _Ev:
-    def __init__(self, amps=(1.6, 4.0)):
-        self.amplitude_mA = np.array(amps, float)
-        self.era = np.array(["a", "b"])[:len(amps)]
-        self.cluster = np.arange(len(amps))
-        # each band's power array carries its own centre, so a stub response function can tell
-        # which band it was handed whatever order the caller asks in
-        self.band_power = {(c, 5.0): np.full(len(amps), c) for c in CENTRES}
-
-    def power_for(self, c, w):
-        return self.band_power[(float(c), float(w))]
+_Ev = H.BandStubEvidence
 
 
-def _fn_negative_at(centres_negative, *, slope_p=0.001):
-    """Every band responds on capture; only `centres_negative` carry a significant NEGATIVE
-    era-blocked slope, the rest a significant POSITIVE one. The band is read off its power
-    array's first value (the fixtures fill each band's array with its centre)."""
-    neg = {float(c) for c in centres_negative}
-
-    def fn(power, amp, era=None, cluster=None):
-        c = float(np.asarray(power).ravel()[0])
-        return _Res(True, slope_p, 1.2, -0.2 if c in neg else +0.2)
-    return fn
+_fn_negative_at = H.fn_negative_at
 
 
 # --- the rule itself -------------------------------------------------------------------------------
@@ -231,13 +218,12 @@ def test_the_summary_names_the_score_the_stamp_and_every_contacts_bands():
 
 # --- the gate applies the same rule and the same sentences --------------------------------------
 def test_the_gate_passes_a_side_on_one_qualifying_band_and_names_it():
-    from StimOptimizer.tests.test_review_2026_09_12_gate_sides import _frozen, COND
     ev = GATE.LfpEvidence(amplitude_mA=np.array([1.0, 3.0] * 30, float),
                           band_power={(c, 5.0): np.full(60, c) for c in CENTRES},
                           era=np.tile(["a", "b"], 30), cluster=np.arange(60), hemisphere="Left")
     ev.channel = "ch"
     fn = _fn_negative_at([24.0])
-    c = GATE.evaluate_gate(_frozen("Left"), lfp=ev, band_centers=CENTRES, band_width_hz=5.0,
+    c = GATE.evaluate_gate(H.frozen(H.setting("Left")), lfp=ev, band_centers=CENTRES, band_width_hz=5.0,
                            pain_positive_by_channel={"ch": {24.0}},
                            response_fn=fn).condition(COND)
     assert c.passed is True, c.detail
@@ -247,14 +233,13 @@ def test_the_gate_passes_a_side_on_one_qualifying_band_and_names_it():
 
 
 def test_the_gate_and_the_screen_refuse_with_the_same_words():
-    from StimOptimizer.tests.test_review_2026_09_12_gate_sides import _frozen, COND
     ev = GATE.LfpEvidence(amplitude_mA=np.array([1.0, 3.0] * 30, float),
                           band_power={(c, 5.0): np.full(60, c) for c in CENTRES},
                           era=np.tile(["a", "b"], 30), cluster=np.arange(60), hemisphere="Left")
     ev.channel = "ch"
     screen, _ = EV.screen_cells({("ch", "Left", 55.0): ev}, response_fn=_fn_negative_at([24.0]),
                                 pain_positive_by_channel={"ch": {12.0}})
-    c = GATE.evaluate_gate(_frozen("Left"), lfp=ev, band_centers=CENTRES, band_width_hz=5.0,
+    c = GATE.evaluate_gate(H.frozen(H.setting("Left")), lfp=ev, band_centers=CENTRES, band_width_hz=5.0,
                            pain_positive_by_channel={"ch": {12.0}},
                            response_fn=_fn_negative_at([24.0])).condition(COND)
     assert c.passed is False
@@ -280,3 +265,118 @@ def test_live_evidence_threads_the_mapping_to_the_screen(monkeypatch):
     le = PL.live_evidence(object(), pain_positive_by_channel={"ch": {24.0}})
     assert seen["pain"] == {"ch": {24.0}}
     assert le.selected_key == ("ch", "Left", 55.0)
+
+
+# ================================================================================================
+# From test_harmonic_warning.py (merged here 2026-10-05).
+# The harmonic rule on the readiness screen is a WARNING, never a refusal (the PI, 2026-09-21:
+# "put a warning for the harmonic rule, but don't make it blocking").
+#
+# Decision 199 left the titration card's harmonic rule (a band centre within 2.5 Hz of a folded
+# multiple of the rate, or its 1/2, 1/4 or 3/4 sub-harmonic, carries a folded multiple of the
+# stimulation rate -- advisory, never a claim that the band measures the stimulator rather than the
+# brain, the PI's correction of 2026-09-06; decision 146) as information beside each row and asked
+# the PI whether the screen should apply it. His ruling: warn. So a row that is usable ONLY through
+# qualifying bands sitting on a stimulator harmonic carries a warning sentence and a flag, the
+# screen's summary counts such rows and says whether the selected best is one of them, and
+# `deployable` is never changed by any of it.
+#
+# FIXED 2026-09-25: `harmonic_avoidance` (`titration_plan.py`, which this all rests on) used to fold
+# only |250 - rate|, missing every higher multiple of the rate; it now calls
+# `Biomarkers.routines.analytics.harmonic_landings_hz`, one home for the fold. The examples below use
+# 20.5 Hz where they once used 24.5 Hz, because 24.5 Hz now correctly catches 55 Hz's and 145 Hz's
+# fifth-multiple landing (folded to 25 Hz) and is no longer a clear band at either rate.
+# ================================================================================================
+
+
+def test_usable_only_through_harmonic_bands_is_a_warning_not_a_refusal():
+    # 27.5 Hz is half of 55 Hz: the one qualifying band is on a harmonic.
+    h = TP.harmonic_warning(55.0, [27.5], usable=True)
+    assert h["only_through_harmonics"] is True
+    assert h["near_hz"] == [27.5] and h["clear_hz"] == []
+    assert "half the rate" in h["notes"]["27.5"]
+    w = h["warning"]
+    assert "only through" in w and "27.5" in w and "stimulator" in w
+    assert "usable" in w and "not" in w.lower()            # says it stays usable, not refused
+    assert "2026-09-21" in w                               # the ruling's date
+
+
+def test_a_clear_band_beside_a_harmonic_one_is_a_note_not_a_warning():
+    # 24.5 Hz was the example used here before 2026-09-25: the fix means it now catches the fifth
+    # multiple of 55 Hz (folded to 25 Hz), so it is no longer clear; 20.5 Hz genuinely is.
+    h = TP.harmonic_warning(55.0, [20.5, 27.5], usable=True)
+    assert h["only_through_harmonics"] is False
+    assert h["near_hz"] == [27.5] and h["clear_hz"] == [20.5]
+    assert h["warning"] is None
+    assert "20.5" in h["note"] and "clear" in h["note"]
+
+
+def test_a_cell_that_is_not_usable_gets_no_warning_and_no_false_clear_band():
+    """Caught live on RCS08 (rule 11): a refused cell whose qualifying bands all sit on a harmonic
+    was given the note "... Hz is clear" with no band named. The note must not claim a clear band
+    that does not exist."""
+    h = TP.harmonic_warning(55.0, [27.5], usable=False)
+    assert h["only_through_harmonics"] is False and h["warning"] is None
+    assert h["near_hz"] == [27.5] and h["clear_hz"] == []  # the information is still there
+    assert "is clear" not in h["note"]
+    assert "every qualifying band" in h["note"] and "27.5" in h["note"] and "not usable" in h["note"]
+
+
+def test_no_qualifying_band_and_two_genuinely_clear_centres_give_nothing():
+    # 145 Hz is no longer harmonic-free everywhere after the 2026-09-25 fix (its fifth and seventh
+    # multiples fold to 25 and 15 Hz), so this uses two centres that stay clear at that rate.
+    assert TP.harmonic_warning(55.0, [], usable=True)["warning"] is None
+    h = TP.harmonic_warning(145.0, [20.5, 21.5], usable=True)
+    assert h["near_hz"] == [] and h["only_through_harmonics"] is False and h["warning"] is None
+
+
+def test_the_row_fields_and_the_screen_summary():
+    # 20.5 Hz replaces the 24.5 Hz this test used before 2026-09-25: the fix means 24.5 Hz now
+    # catches 55 Hz's and 145 Hz's fifth-multiple landing (folded to 25 Hz), so it is no longer a
+    # clear band at either rate; 20.5 Hz genuinely is clear at both.
+    cells = [
+        {"rate_hz": 55.0, "qualifying_centers_hz": [27.5], "deployable": True, "channel": "A", "hemisphere": "Left"},
+        {"rate_hz": 55.0, "qualifying_centers_hz": [20.5, 27.5], "deployable": True, "channel": "B"},
+        {"rate_hz": 110.0, "qualifying_centers_hz": [27.5], "deployable": False, "channel": "C"},
+        {"rate_hz": 145.0, "qualifying_centers_hz": [20.5], "deployable": True, "channel": "D"},
+    ]
+    summary = BS.attach_harmonic_warnings(cells, selected={"channel": "A", "hemisphere": "Left", "rate_hz": 55.0})
+    by = {c["channel"]: c for c in cells}
+    # the row fields decision 199 added are unchanged in name and meaning
+    assert by["A"]["qualifying_near_stim_harmonic_hz"] == [27.5]
+    assert by["B"]["qualifying_clear_of_stim_harmonics_hz"] == [20.5]
+    assert by["C"]["qualifying_near_stim_harmonic_hz"] == [27.5]      # 110/4
+    # the new flag and sentence
+    assert by["A"]["harmonic_only"] is True and by["A"]["harmonic_warning"]
+    assert by["B"]["harmonic_only"] is False and by["B"]["harmonic_warning"] is None
+    assert by["C"]["harmonic_only"] is False                          # not usable: nothing to warn about
+    assert by["D"]["harmonic_only"] is False and by["D"]["harmonic_warning"] is None
+    # nothing touched `deployable`
+    assert [c["deployable"] for c in cells] == [True, True, False, True]
+    # the summary
+    assert summary["n_usable"] == 3
+    assert summary["n_usable_only_through_harmonics"] == 1
+    assert summary["cells_only_through_harmonics"] == [{"channel": "A", "hemisphere": "Left", "rate_hz": 55.0}]
+    assert summary["selected_only_through_harmonics"] is True
+    assert "1 of 3" in summary["sentence"] and "warning" in summary["sentence"].lower()
+    assert "best" in summary["sentence"]                              # names that the selected one is affected
+
+
+def test_the_summary_is_quiet_when_no_usable_cell_depends_on_a_harmonic():
+    cells = [{"rate_hz": 145.0, "qualifying_centers_hz": [20.5], "deployable": True, "channel": "D"}]
+    summary = BS.attach_harmonic_warnings(cells, selected=None)
+    assert summary["n_usable_only_through_harmonics"] == 0 and summary["sentence"] is None
+    assert summary["selected_only_through_harmonics"] is False
+
+
+def test_the_readiness_screen_never_reassigns_deployable_from_the_harmonic_information():
+    """Read off the source: inside the readiness assembly and the helper, `deployable` is read,
+    never written, so the warning cannot become a refusal by accident."""
+    for fn in (BS.closed_loop_readiness, BS.attach_harmonic_warnings):
+        src = inspect.getsource(fn)
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for t in node.targets:
+                    if isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant):
+                        assert t.slice.value != "deployable", "deployable is assigned in " + fn.__name__

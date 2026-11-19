@@ -242,3 +242,54 @@ def current(participant_uid):
     rec = _as_record(dict(zip(_COLS, row)))
     return {"available": True, "record": rec if rec["action"] == "chosen" else None,
             "reason": None}
+
+
+SIDES = ("Left", "Right")
+
+
+def _side_of(band_candidate):
+    """The sensing side of a band record: its own `hemisphere`, else the side its contact pair's name
+    carries ("ONE_THREE_LEFT"), else None."""
+    bc = band_candidate or {}
+    h = str(bc.get("hemisphere") or "").strip().capitalize()
+    if h in SIDES:
+        return h
+    name = str(bc.get("contact") or "").upper()
+    if name.endswith("LEFT"):
+        return "Left"
+    if name.endswith("RIGHT"):
+        return "Right"
+    return None
+
+
+def current_by_side(participant_uid, limit=500):
+    """`{"available", "by_side", "reason"}`: the band chosen on each side now (the PI, 2026-10-08:
+    with "2 independent controllers" each side senses its own band). `by_side` maps "Left" and
+    "Right" to the newest "chosen" row on that side since the last clear, or None. The same table
+    and rows as `current`, read differently; nothing new is written."""
+    empty = {s: None for s in SIDES}
+    conn, reason = _ensure_table()
+    if conn is None:
+        return {"available": False, "by_side": empty, "reason": reason}
+    sql = (f"SELECT {', '.join(_COLS)} FROM {TABLE} WHERE participant = %s "
+           f"ORDER BY id DESC LIMIT %s")
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_placeholder(conn, sql), [str(participant_uid), int(limit)])
+            rows = cur.fetchall()
+    except Exception as exc:                                     # noqa: BLE001
+        _log.warning("chosen band: could not read the bands by side for %s", participant_uid,
+                     exc_info=True)
+        return {"available": False, "by_side": empty,
+                "reason": f"the server could not read the record ({exc!r})"}
+    out = dict(empty)
+    for row in rows:
+        rec = _as_record(dict(zip(_COLS, row)))
+        if rec["action"] != "chosen":
+            break
+        side = _side_of(rec["band_candidate"])
+        if side and out[side] is None:
+            out[side] = rec
+        if all(out.values()):
+            break
+    return {"available": True, "by_side": out, "reason": None}

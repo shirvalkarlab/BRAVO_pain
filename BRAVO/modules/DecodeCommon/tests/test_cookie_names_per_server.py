@@ -18,16 +18,11 @@ sys.path.insert(0, str(BRAVO_ROOT))
 from BRAVO.cookie_names import cookie_names  # noqa: E402
 
 
-def test_with_no_suffix_the_cookie_names_are_djangos_own():
-    assert cookie_names({}) == ("sessionid", "csrftoken")
-
-
-def test_an_empty_or_blank_suffix_changes_nothing():
-    assert cookie_names({"BRAVO_COOKIE_SUFFIX": ""}) == ("sessionid", "csrftoken")
-    assert cookie_names({"BRAVO_COOKIE_SUFFIX": "  "}) == ("sessionid", "csrftoken")
-
-
-def test_a_suffix_is_added_to_both_cookie_names():
+def test_the_cookie_names_are_djangos_own_unless_a_non_blank_suffix_is_added_to_both():
+    """(Merged 2026-10-05 from `test_with_no_suffix_the_cookie_names_are_djangos_own`,
+    `test_an_empty_or_blank_suffix_changes_nothing` and `test_a_suffix_is_added_to_both_cookie_names`.)"""
+    for env in ({}, {"BRAVO_COOKIE_SUFFIX": ""}, {"BRAVO_COOKIE_SUFFIX": "  "}):
+        assert cookie_names(env) == ("sessionid", "csrftoken"), env
     assert cookie_names({"BRAVO_COOKIE_SUFFIX": "_js2"}) == ("sessionid_js2", "csrftoken_js2")
 
 

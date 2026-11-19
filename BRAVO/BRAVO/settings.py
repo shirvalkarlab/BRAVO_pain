@@ -89,6 +89,9 @@ SESSION_COOKIE_SAMESITE = "Lax"
 #SESSION_COOKIE_SECURE = True
 #CSRF_COOKIIE_HTTPONLY = True
 SESSION_COOKIE_AGE = 3600*1  # 1 hour
+# Every request starts the login's hour again, so it ends an hour after the last use, not an hour
+# after logging in (the PI, 2026-11-18: Recompute looked dead because the login had run out).
+SESSION_SAVE_EVERY_REQUEST = True
 # Each BRAVO's own login-cookie names (decision 374; why: BRAVO/cookie_names.py).
 from BRAVO.cookie_names import cookie_names as _cookie_names
 SESSION_COOKIE_NAME, CSRF_COOKIE_NAME = _cookie_names()

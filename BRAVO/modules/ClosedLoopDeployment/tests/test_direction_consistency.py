@@ -16,70 +16,45 @@ def _row(r, p=0.01, band_center_hz=12.5):
     return dict(pearson_r=r, p_selection_aware=p, band_center_hz=band_center_hz)
 
 
-def test_power_rises_with_current_and_higher_power_means_more_pain_so_raising_current_worsens_pain():
-    out = DC.implied_control_direction(_wv("band power rises as current rises"), _row(0.4))
-    assert out["cross_visit_pain_direction"] == "higher band power is associated with more pain"
-    assert out["implied_control_direction"] == (
-        "raising stimulation current on this contact is expected to worsen pain through this band")
+RISES, FALLS = "band power rises as current rises", "band power falls as current rises"
+WORSEN = "raising stimulation current on this contact is expected to worsen pain through this band"
+RELIEVE = "raising stimulation current on this contact is expected to relieve pain through this band"
+MORE = "higher band power is associated with more pain"
+LESS = "higher band power is associated with less pain"
+
+
+@pytest.mark.parametrize("within,r,pain_direction,implied", [
+    (RISES, 0.4, MORE, WORSEN),
+    (RISES, -0.5, LESS, RELIEVE),
+    (FALLS, 0.3, MORE, RELIEVE),
+    (FALLS, -0.2, LESS, WORSEN),
+], ids=["rises_more_pain_worsens", "rises_less_pain_relieves", "falls_more_pain_relieves",
+        "falls_less_pain_worsens"])
+def test_the_two_directions_combine_into_the_implied_control_direction(within, r, pain_direction,
+                                                                        implied):
+    out = DC.implied_control_direction(_wv(within), _row(r))
+    assert out["cross_visit_pain_direction"] == pain_direction
+    assert out["implied_control_direction"] == implied
     assert out["reason"] is None
 
 
-def test_power_rises_with_current_and_higher_power_means_less_pain_so_raising_current_relieves_pain():
-    out = DC.implied_control_direction(_wv("band power rises as current rises"), _row(-0.5))
-    assert out["cross_visit_pain_direction"] == "higher band power is associated with less pain"
-    assert out["implied_control_direction"] == (
-        "raising stimulation current on this contact is expected to relieve pain through this "
-        "band")
-
-
-def test_power_falls_with_current_and_higher_power_means_more_pain_so_raising_current_relieves_pain():
-    out = DC.implied_control_direction(_wv("band power falls as current rises"), _row(0.3))
-    assert out["implied_control_direction"] == (
-        "raising stimulation current on this contact is expected to relieve pain through this "
-        "band")
-
-
-def test_power_falls_with_current_and_higher_power_means_less_pain_so_raising_current_worsens_pain():
-    out = DC.implied_control_direction(_wv("band power falls as current rises"), _row(-0.2))
-    assert out["implied_control_direction"] == (
-        "raising stimulation current on this contact is expected to worsen pain through this band")
-
-
-def test_no_within_visit_movement_is_not_assessed_with_a_specific_reason():
-    out = DC.implied_control_direction(
-        _wv("no straight-line movement detected across the currents tested"), _row(0.4))
-    assert out["implied_control_direction"] == "not assessed"
-    assert "within-visit" in out["reason"]
+@pytest.mark.parametrize("wv,row,reason,check", [
     # the correlation is never even inspected once the within-visit link is missing
-    assert np.isnan(out["cross_visit_pain_correlation_r"])
-
-
-def test_within_visit_not_assessed_is_not_assessed():
-    out = DC.implied_control_direction(_wv("not assessed"), _row(0.4))
-    assert out["implied_control_direction"] == "not assessed"
-    assert "not assessed" in out["reason"]
-
-
-def test_no_correlation_row_is_not_assessed():
-    out = DC.implied_control_direction(_wv("band power rises as current rises"), None)
-    assert out["implied_control_direction"] == "not assessed"
-    assert "no cross-visit correlation" in out["reason"]
-
-
-def test_correlation_not_significant_is_not_assessed():
-    out = DC.implied_control_direction(_wv("band power rises as current rises"),
-                                       _row(0.6, p=0.34))
-    assert out["implied_control_direction"] == "not assessed"
-    assert "not statistically significant" in out["reason"]
+    (_wv("no straight-line movement detected across the currents tested"), _row(0.4), "within-visit",
+     lambda out: np.isnan(out["cross_visit_pain_correlation_r"])),
+    (_wv("not assessed"), _row(0.4), "not assessed", None),
+    (_wv(RISES), None, "no cross-visit correlation", None),
     # the correlation value itself is still reported, just not acted on
-    assert out["cross_visit_pain_correlation_r"] == 0.6
-
-
-def test_nan_correlation_is_not_assessed():
-    out = DC.implied_control_direction(_wv("band power rises as current rises"),
-                                       _row(float("nan"), p=0.01))
+    (_wv(RISES), _row(0.6, p=0.34), "not statistically significant",
+     lambda out: out["cross_visit_pain_correlation_r"] == 0.6),
+    (_wv(RISES), _row(float("nan"), p=0.01), "could not be computed", None),
+], ids=["no_within_visit_movement", "within_visit_not_assessed", "no_correlation_row",
+        "correlation_not_significant", "nan_correlation"])
+def test_a_missing_link_is_not_assessed_with_its_own_reason(wv, row, reason, check):
+    out = DC.implied_control_direction(wv, row)
     assert out["implied_control_direction"] == "not assessed"
-    assert "could not be computed" in out["reason"]
+    assert reason in out["reason"]
+    assert check is None or check(out)
 
 
 def test_empty_or_none_within_visit_dict_does_not_raise():

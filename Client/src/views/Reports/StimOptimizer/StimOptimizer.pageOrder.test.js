@@ -11,12 +11,9 @@
  */
 import "@testing-library/jest-dom";
 import { render as rtlRender } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 
 import response from "./__fixtures__/rcs08_stim_optimizer_two_stage.json";
+import { wrap } from "testUtils/render";
 
 jest.mock("react-router-dom", () => ({
   ...jest.requireActual("react-router-dom"),
@@ -50,12 +47,6 @@ jest.mock("database/useCachedResult", () => {
 
 // eslint-disable-next-line import/first
 import StimOptimizer from "./index";
-
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 
 describe("the page's order", () => {
   // PIN CHANGED 2026-09-26 (SPEC.md section 5.3): the order is the four sections' order.

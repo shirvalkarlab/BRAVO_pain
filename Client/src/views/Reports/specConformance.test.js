@@ -250,10 +250,8 @@ describe("D14 and D5: the refused ink only with ✕ or a ceiling line; no pastel
     const v = PAGE_FILES.map(rel).filter((f) => !allowed.includes(f)).flatMap((f) => codeLines(read(path.join(SRC, f)))
       .map((line, i) => ({ file: f, line: i + 1, text: line }))
       .filter((x) => /<Chip\b|<MDBadge\b|borderRadius:\s*["']?(999|9999|50%|1\d\d)/.test(x.text)
-        && !/ClinicSheetsSummaryButton/.test(x.file)
         && !/width:\s*\d{1,2},\s*height:\s*\d{1,2}/.test(x.text)));
-    // ClinicSheetsSummaryButton: the round knob of an on / off switch (50%), not a tag; a round
-    // swatch of at most 99 px square (a legend key's dot) is not a tag either
+    // a round swatch of at most 99 px square (a legend key's dot) is not a tag
     expect(report(v)).toBe("");
   });
 
@@ -478,7 +476,9 @@ describe("D13: 64 px between sections and a content column of at most 1,120 px",
 
   test("the Closed-Loop page's own sections are 64 px apart (MUI unit 8 x 8)", () => {
     const src = read(path.join(SRC, "views", "Reports", "ClosedLoopSim", "index.js"));
-    ["cl-decision", "cl-grid", "cl-rules", "cl-evidence", "cl-stability"].forEach((id) => {
+    // "cl-rules" left the list 2026-10-08: the device rule check moved into the decision card's
+    // Details (the PI: one panel, not two).
+    ["cl-decision", "cl-grid", "cl-evidence", "cl-stability"].forEach((id) => {
       expect({ id, gap: new RegExp(`id="${id}" mb=\\{8\\}`).test(src) }).toEqual({ id, gap: true });
     });
   });

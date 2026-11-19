@@ -855,3 +855,24 @@ def test_build_sensing_config_index_from_rows_basic():
     idx = bs._build_sensing_config_index_from_rows(rows)
     assert len(idx["RIGHT"]) == 1 and idx["RIGHT"][0][1] == "ZERO_THREE_RIGHT"
     assert len(idx["LEFT"])  == 1 and idx["LEFT"][0][1] == "ONE_THREE_LEFT"
+
+
+def test_a_montage_contact_whose_peak_is_zero_gives_no_modelled_point():
+    """Decision 510: a contact the survey reports with peak frequency 0 (no peak) and no configured
+    sensing frequency has no band to model, so the timeline gets no modelled point for it (it was
+    modelled at 3.9 Hz, the labeller's first bin); a contact with a real peak keeps its point at
+    that peak, and a configured sensing frequency still wins over either."""
+    AV = av
+    rng = np.random.default_rng(0)
+    data = rng.normal(0.0, 1.0, (750, 2))
+    rec = {"ChannelNames": ["ZERO_AND_TWO_LEFT", "ONE_AND_THREE_LEFT"], "Data": data,
+           "SamplingRate": 250.0, "StartTime": 1_760_000_000.0,
+           "Descriptor": {"MedtronicPSD": [{"PeakFrequencyInHertz": 0.0},
+                                           {"PeakFrequencyInHertz": 12.7}]}}
+    out = {}
+    AV._lsb_series_modeled_tiers(out, [rec], [], {})
+    got = {ch: (d["center_hz"], d["source"]) for ch, d in out.items()}
+    assert got == {"ONE_THREE_LEFT": ([12.7], ["psd_modeled"])}, got
+    out2 = {}
+    AV._lsb_series_modeled_tiers(out2, [rec], [], {"ZERO_TWO_LEFT": 24.41})
+    assert out2["ZERO_TWO_LEFT"]["center_hz"] == [24.4]

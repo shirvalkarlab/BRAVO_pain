@@ -32,9 +32,11 @@ from scipy.signal import savgol_filter
 try:
     from modules.DecodeCommon.representation import missing_per_sample as _missing_per_sample
     from modules.DecodeCommon import matching as _matching
+    from modules.DecodeCommon.representation import merge_chronic_repeats as _merge_chronic_repeats
 except ImportError:
     from DecodeCommon.representation import missing_per_sample as _missing_per_sample
     from DecodeCommon import matching as _matching
+    from DecodeCommon.representation import merge_chronic_repeats as _merge_chronic_repeats
 
 # THE CALENDAR DAY IS THE CALIFORNIA DAY (review B1, 2026-09-12). Every instant in this file is
 # tz-naive UTC by the time a "day" is read from it, and UTC midnight is 4-5 pm in California, so
@@ -408,6 +410,18 @@ def _concat_chronic(chronic, mad_k=None):
     chronic = [c for c in chronic if c is not None]
     if not chronic:
         raise ValueError("chronic must be a recording dict or a non-empty list of them.")
+    # Each chronic reading once (the PI, 2026-10-18, item 6a): every export carries the device's
+    # whole chronic log, so a caller joining raw recordings handed the same reading in once per
+    # export. Merged BEFORE the per-recording outlier rule, so a reading is judged once. Only the
+    # chronic log ("Source" chronic, the default); streaming band power converted to this shape
+    # is left as it is. The Biomarkers loader merges already, so there this changes nothing.
+    _ci = [i for i, c in enumerate(chronic) if str(c.get("Source", "chronic")) == "chronic"]
+    if _ci:
+        _merged, _ = _merge_chronic_repeats([chronic[i] for i in _ci])
+        chronic = list(chronic)
+        for i, c in zip(_ci, _merged):
+            chronic[i] = c
+        chronic.extend(_merged[len(_ci):])     # readings moved to their signal's lead (decision 488)
     times_list, datas_list, src_list, freq_list = [], [], [], []
     for c in chronic:
         t = np.asarray(c["Time"], dtype=float)
@@ -489,10 +503,11 @@ def bravo_powerdomain_to_chronic_like(recordings):
     Output dicts match the Chronic shape: {SamplingRate:-1, Time:(M,), Data:(M,2) [power, stim],
     ChannelNames:['<hemi> LFP', '<hemi> Amplitude']}.
 
-    SCALE NOTE: power-domain band power and the chronic ~10-min LFP power are on different scales
-    (different sensing band/averaging). By design these are concatenated in RAW device units (no
-    normalization), so the merged series mixes scales — interpret the combined threshold with that
-    in mind.
+    SCALE NOTE: power-domain band power and the chronic ~10-min LFP power are the same device
+    quantity on the same scale, the chronic one averaged over 10 minutes (decision 503; documented
+    by the device description, not measured). By design they are concatenated in RAW device units
+    (no normalization); their spreads differ (10 min against 0.5 s averaging), so interpret a
+    combined threshold with that in mind.
     """
     out = []
     for r in recordings or []:

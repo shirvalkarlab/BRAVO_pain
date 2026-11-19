@@ -13,11 +13,9 @@ import "@testing-library/jest-dom";
 import fs from "fs";
 import path from "path";
 import { render, screen, waitFor } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
 
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 import { SectionRevealedContext } from "views/Reports/paper/Section";
+import { wrap } from "testUtils/render";
 
 jest.mock("plotly.js-dist", () => require("./plotTestUtils").plotlyMock());
 jest.mock("database/session-control", () => ({ SessionController: { query: jest.fn() } }));
@@ -30,11 +28,6 @@ import { ControlAnalysesSection } from "./ControlAnalysesCard";
 const CHECKS = { page: "biomarkers", analyses: [{ key: "time_of_day", title: "Time of day and weekends",
   what: "Clock and weekend.", literature: [], n_runs: 0, snapshot: null }] };
 
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 const inFold = (opened) => wrap(
   <SectionRevealedContext.Provider value={opened}>
     <ControlAnalysesSection participantUid="U1" page="biomarkers" plain />

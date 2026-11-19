@@ -18,6 +18,7 @@ import pytest
 from StimOptimizer import bravo_service as BS
 from StimOptimizer.routines import lfp_response as LFP
 from StimOptimizer.routines import stage_gate as GATE
+from StimOptimizer.tests import _helpers as H
 
 
 def _frame():
@@ -105,14 +106,7 @@ def test_the_verdict_rows_equal_the_response_results_field_for_field():
 
 
 def _responding_lfp(n=120, seed=0):
-    rng = np.random.default_rng(seed)
-    amp = np.repeat([1.0, 3.0], n // 2)
-    freqs = np.arange(4.0, 40.0, 0.5)
-    mag = np.abs(rng.normal(1.0, 0.05, (n, freqs.size)))
-    sel = (freqs >= 13.0) & (freqs <= 17.0)
-    mag[:, sel] *= (np.exp(-0.9 * amp)[:, None] * 3.0)
-    return GATE.LfpEvidence(amplitude_mA=amp, magnitude=mag, freqs=freqs,
-                            era=np.tile(["a", "b"], n // 2), cluster=np.arange(n))
+    return H.responding_lfp(n=n, seed=seed, channel=None)
 
 
 def _frozen():

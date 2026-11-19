@@ -134,7 +134,24 @@ function Fact({ label, value }) {
   );
 }
 
-export default function BandStabilityPanel({ stability, cacheStatus, painScore }) {
+export default function BandStabilityPanel({ stability, cacheStatus, painScore, contactLabel = null,
+  noReport = false, loading = false, err = null }) {
+  // NO REPORT YET IS NOT "NOT TESTED" (the PI, 2026-11-18). While the report loads, the card used to
+  // print "Not tested ... no band assessed", which reads as a result. `noReport` is set by the page
+  // when it has no report at all; the four answers are drawn only once there is one.
+  if (noReport) {
+    return (
+      <Card sx={{ ...CARD, p: 3, height: "100%" }}>
+        <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>
+          Stability across stimulation states
+        </MDTypography>
+        <MDTypography data-testid="stability-waiting" sx={{ ...TYPE.lead, color: PAL.ink2, mt: 1 }}>
+          {loading ? "Testing the chosen band…"
+            : `No answer yet: the report for this band has not loaded${err ? ` (${err})` : ""}.`}
+        </MDTypography>
+      </Card>
+    );
+  }
   const s = stability || null;
   const answer = s && s.answer ? s.answer : "not tested";
 
@@ -142,7 +159,7 @@ export default function BandStabilityPanel({ stability, cacheStatus, painScore }
   // being about a different band than the one the rest of the page is discussing.
   const bandPhrase = (s && isNum(s.band_center_hz))
     ? `${fmtNum(s.band_center_hz, 1)} Hz centre, ${fmtNum(s.band_width_hz, 1)} Hz wide` +
-      (s.electrode ? `, on ${s.electrode}` : "")
+      (s.electrode ? `, on ${contactLabel ? contactLabel(s.electrode) : s.electrode}` : "")
     : "no band assessed";
 
   // WHEN, audit item P-03. Only printed once the test actually ran: a "not tested" answer has no

@@ -32,6 +32,7 @@ import MuiAlertDialog from "components/MuiAlertDialog";
 import OnePageLayout from "layouts/OnePage";
 
 import { SessionController } from "database/session-control";
+import { takeReturnPath } from "database/loginExpired";
 import { usePlatformContext, setContextState } from "context";
 import { dictionary } from "assets/translation";
 
@@ -56,7 +57,8 @@ export default function SignIn() {
 
   useEffect(() => {
     if (Object.keys(user).length > 0) {
-      navigate("/database", {replace: false});
+      // Back to the page an expired login was sent here from (loginExpired.js), else the default.
+      navigate(takeReturnPath() || "/database", {replace: true});
     }
   }, [user]);
 

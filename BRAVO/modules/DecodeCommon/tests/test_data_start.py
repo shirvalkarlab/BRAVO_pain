@@ -22,20 +22,19 @@ def test_measurements_before_the_start_are_dropped_and_no_start_drops_nothing():
     assert DS.keep_from(t, DS.NO_START).all()
 
 
-def test_the_setting_in_force_at_implant_is_kept_and_moved_to_the_implant_date():
+def test_the_setting_in_force_at_implant_is_kept_and_moved_to_the_implant_date_and_nothing_else_changes():
+    """(Merged 2026-10-05 with `test_clamping_with_no_start_or_nothing_before_it_changes_nothing`.)"""
     # four 'Past Therapy' snapshots 30 days apart, then the first clinic change two days after implant
     t = np.array([IMPLANT - 179 * 86400.0, IMPLANT - 149 * 86400.0, IMPLANT - 119 * 86400.0,
                   IMPLANT - 89 * 86400.0, IMPLANT + 2 * 86400.0])
     keep, new = DS.clamp_changes(t, IMPLANT)
     assert keep.tolist() == [False, False, False, True, True]
     assert new[3] == IMPLANT and new[4] == t[4]
-
-
-def test_clamping_with_no_start_or_nothing_before_it_changes_nothing():
+    # with no start, or nothing before it, clamping changes nothing
     t = np.array([IMPLANT + 10.0, IMPLANT + 20.0])
     for start in (DS.NO_START, IMPLANT):
         keep, new = DS.clamp_changes(t, start)
-        assert keep.all() and (new == t).all()
+        assert keep.all() and (new == t).all(), start
 
 
 def test_a_segment_is_cut_on_its_time_axis_and_one_wholly_before_is_gone():

@@ -16,7 +16,7 @@ import React, { useContext, useEffect, useRef } from "react";
 import PropTypes from "prop-types";
 import Plotly from "plotly.js-dist";
 
-import { PLOTLY_CONFIG, plotlyLayout } from "views/Reports/figureStyle";
+import { PLOTLY_CONFIG_WITH_TOOLBAR, plotlyLayout } from "views/Reports/figureStyle";
 import { SectionRevealedContext } from "views/Reports/paper/Section";
 
 export default function PlotlyChart({ spec, height, label }) {
@@ -27,10 +27,12 @@ export default function PlotlyChart({ spec, height, label }) {
   useEffect(() => {
     const el = ref.current;
     if (!revealed || !el || !spec) return;
-    const layout = plotlyLayout({ ...spec.layout, height, autosize: true });
+    // Drag to zoom, the toolbar on hover (pan, zoom, save as PNG), double-click back to the full view,
+    // as on the Biomarker Data Timeline (the PI, 2026-10-03).
+    const layout = plotlyLayout({ ...spec.layout, height, autosize: true, dragmode: "zoom" });
     // `drawn` is raised as the draw starts, so an unmount before it finishes still purges.
     drawn.current = el;
-    Promise.resolve(Plotly.react(el, spec.data, layout, { ...PLOTLY_CONFIG, doubleClick: false }))
+    Promise.resolve(Plotly.react(el, spec.data, layout, { ...PLOTLY_CONFIG_WITH_TOOLBAR, doubleClick: "reset+autosize" }))
       .catch(() => {});
   }, [revealed, spec, height]);
 

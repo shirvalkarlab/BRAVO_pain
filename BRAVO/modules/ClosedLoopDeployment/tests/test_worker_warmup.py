@@ -9,8 +9,9 @@ These tests hold that:
   1. after the warm-up, every numba loop a request uses is compiled for the argument types a real
      call passes, so the request itself compiles nothing;
   2. the controller loop and the robustness replay load from numba's on-disk cache in a second
-     process, with results identical to the bit (the design rule's filters stay uncached: their
-     summation calls itself, and a cached recursive function crashed the server, decision 269);
+     process, with results identical to the bit (the design rule's filters are cached on disk too
+     since 2026-10-02, when their summation stopped calling itself; that is tested in
+     test_design_rule_compiled_filter.py);
   3. asked for, the worker pool is started and the next joblib call reuses it rather than
      replacing it;
   4. R is started under the lock every R fit holds;

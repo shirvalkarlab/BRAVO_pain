@@ -177,27 +177,33 @@ function CollapsedGroup({ rows, state, title, note }) {
   );
 }
 
-export default function DeviceRuleLedger({ report }) {
+export default function DeviceRuleLedger({ report, bare = false }) {
+  // `bare` (the PI, 2026-10-08: one decision panel, not two): drawn inside the decision card's
+  // closed Details fold, with no card and no title of its own.
+  const Shell = bare ? MDBox : Card;
+  const shellSx = bare ? {} : { ...CARD, p: 3 };
+  const heading = bare ? null : (
+    <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Device rule check</MDTypography>);
   const { data, loading, err } = report || { data: null, loading: false, err: null };
 
   if (loading) {
     return (
-      <Card sx={{ ...CARD, p: 3 }}>
-        <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Device rule check</MDTypography>
+      <Shell sx={shellSx}>
+        {heading}
         <MDTypography sx={{ ...TYPE.lead, color: PAL.ink2, mt: 1 }}>Checking the device's rules…</MDTypography>
-      </Card>
+      </Shell>
     );
   }
   if (!data || !data.eligibility) {
     return (
-      <Card sx={{ ...CARD, p: 3 }}>
-        <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Device rule check</MDTypography>
+      <Shell sx={shellSx}>
+        {heading}
         <MDTypography sx={{ ...TYPE.lead, color: PAL.ink2, mt: 1, maxWidth: "68ch" }}>
           {`The device's rules have not been checked for this configuration${err ? ` (${err})` : ""}. `}
           They are checked for one sensing contact pair at one band, not for a participant, so a band
           has to be chosen before these rules mean anything.
         </MDTypography>
-      </Card>
+      </Shell>
     );
   }
 
@@ -251,8 +257,8 @@ export default function DeviceRuleLedger({ report }) {
     + advNoPredicate.length + advError.length + advOther.length;
 
   return (
-    <Card sx={{ ...CARD, p: 3 }}>
-      <MDTypography component="h2" sx={{ ...TYPE.title, ...WRAP.balance, color: PAL.ink }}>Device rule check</MDTypography>
+    <Shell sx={shellSx}>
+      {heading}
       <MDTypography data-testid="rule-counts" sx={{ ...TYPE.lead, color: PAL.ink, mt: 1 }}>
         <span style={{ color: failures.length ? PAL.failText : PAL.ink }}>
           <span aria-hidden="true" style={{ marginRight: 4 }}>{STATE.refused.glyph}</span>
@@ -399,6 +405,6 @@ export default function DeviceRuleLedger({ report }) {
             ? `counted by the server from the ${el.checked} rules checked, not listed one by one`
             : null} />
       </Fold>
-    </Card>
+    </Shell>
   );
 }

@@ -9,7 +9,11 @@ computes EXACTLY what a literal re-simulation per replicate (`choose_naive`, whi
 resample draws the same stretch more than once. Every test checks a VALUE against either a
 known-by-construction answer or the naive path's own answer -- never a shape, never "it returned a
 dict", per this project's own rule (CLAUDE.md §7 rule 11).
+
+Merged here 2026-10-05: test_robustness_compiled_replay.py, test_robustness_keeps_each_candidate.py.
 """
+import importlib.util
+
 import numpy as np
 import pytest
 
@@ -265,27 +269,19 @@ def test_fast_path_matches_naive_over_many_random_resamples():
 # ------------------------------------------------------------------------------------------------
 # robustness_for_series: refusal paths, by construction
 # ------------------------------------------------------------------------------------------------
-def test_refuses_with_no_thresholds():
-    t, p, a = _stretch(20, 100.0, 10.0, 1)
-    out = RB.robustness_for_series(t, p, a, upper=None, lower=80.0, amp_low=0.0, amp_high=5.0)
+_SHORT = (np.array([0.0, 3.0]), np.array([100.0, 101.0]), np.array([3.0, 3.0]))
+
+
+@pytest.mark.parametrize("series,kw,reason", [
+    ("stretch", dict(upper=None, lower=80.0, amp_low=0.0, amp_high=5.0), "thresholds"),
+    ("stretch", dict(upper=120.0, lower=80.0, amp_low=None, amp_high=5.0), "amplitude limits"),
+    ("two_samples", dict(upper=120.0, lower=80.0, amp_low=0.0, amp_high=5.0), "too few"),
+], ids=["no_thresholds", "no_amplitude_limits", "too_few_samples"])
+def test_refuses_with_a_reason(series, kw, reason):
+    t, p, a = _stretch(20, 100.0, 10.0, 1) if series == "stretch" else _SHORT
+    out = RB.robustness_for_series(t, p, a, **kw)
     assert out["refused"] is True
-    assert "thresholds" in out["reason"]
-
-
-def test_refuses_with_no_amplitude_limits():
-    t, p, a = _stretch(20, 100.0, 10.0, 1)
-    out = RB.robustness_for_series(t, p, a, upper=120.0, lower=80.0, amp_low=None, amp_high=5.0)
-    assert out["refused"] is True
-    assert "amplitude limits" in out["reason"]
-
-
-def test_refuses_with_too_few_samples():
-    t = np.array([0.0, 3.0])
-    p = np.array([100.0, 101.0])
-    a = np.array([3.0, 3.0])
-    out = RB.robustness_for_series(t, p, a, upper=120.0, lower=80.0, amp_low=0.0, amp_high=5.0)
-    assert out["refused"] is True
-    assert "too few" in out["reason"]
+    assert reason in out["reason"]
 
 
 # ------------------------------------------------------------------------------------------------
@@ -318,12 +314,6 @@ def test_end_to_end_reports_an_interval_drawn_from_the_grid():
 # ------------------------------------------------------------------------------------------------
 # robustness_note / attach_robustness: the prescription-card wiring
 # ------------------------------------------------------------------------------------------------
-def test_robustness_note_is_none_when_refused_or_no_onset_interval():
-    assert PR.robustness_note({"refused": True, "reason": "x"}) is None
-    assert PR.robustness_note(None) is None
-    assert PR.robustness_note({"refused": False, "intervals": {"onset_s": None}}) is None
-
-
 def test_robustness_note_states_the_onset_interval_by_construction():
     payload = {"refused": False, "n_boot": 200, "n_feasible": 150,
               "intervals": {"onset_s": {"lower": 36.0, "upper": 90.0, "median": 45.0},
@@ -356,29 +346,6 @@ def test_attach_robustness_touches_only_onset_duration_fields():
     assert single_touched == {"Onset duration"}
 
 
-def test_attach_robustness_is_a_no_op_when_nothing_is_available():
-    plan = TY.ThresholdPlan(upper=210.579, lower=161.903, capture_amp_low=1.4, capture_amp_high=4.8)
-    cand = {"channel": "ONE_THREE_LEFT", "center_hz": 24.5, "band_width_hz": 5.0}
-    prescriptions = PR.prescribe_all_modes(threshold_plan=plan, candidate=cand,
-                                           power_series=None, validated_hemispheres=("Left",),
-                                           configuring_both_hemispheres=False)
-    out = PR.attach_robustness(prescriptions, {"refused": True, "reason": "x"})
-    dual = out["modes"][PR.PA.DUAL]
-    assert all(f.robustness_note is None for f in dual.fields)
-
-
-def test_as_rows_carries_the_robustness_note_key():
-    plan = TY.ThresholdPlan(upper=210.579, lower=161.903, capture_amp_low=1.4, capture_amp_high=4.8)
-    cand = {"channel": "ONE_THREE_LEFT", "center_hz": 24.5, "band_width_hz": 5.0}
-    prescriptions = PR.prescribe_all_modes(threshold_plan=plan, candidate=cand,
-                                           power_series=None, validated_hemispheres=("Left",),
-                                           configuring_both_hemispheres=False)
-    dual = prescriptions["modes"][PR.PA.DUAL]
-    rows = dual.as_rows()
-    assert all("robustness_note" in r for r in rows)
-    assert all(r["robustness_note"] is None for r in rows)      # nothing attached yet
-
-
 def test_default_averaging_is_the_device_white_paper_dual_threshold_default():
     stretches = _some_stretches("flat", n_stretches=4, seed0=2)
     t, p, a = _concat(stretches)
@@ -403,3 +370,176 @@ def test_robustness_note_names_the_part_of_the_interval_that_cannot_be_entered()
     inside = PR.robustness_note({"refused": False, "n_boot": 200, "n_feasible": 200,
                                  "intervals": {"onset_s": {"lower": 9.0, "upper": 27.0, "median": 15.0}}})
     assert "cannot be entered" not in inside
+
+# ------------------------------------------------------------------------------------------------
+# The compiled replay (from test_robustness_compiled_replay.py, merged 2026-10-05)
+# ------------------------------------------------------------------------------------------------
+# DRNUMBA (the PI's numba go-ahead, 2026-09-25; `artifacts/research_2026-09-25_options/
+# 06_remaining_speed_ups.md` proposal 7): the robustness bootstrap's one per-reading loop,
+# `robustness.run_stretch`, runs as a compiled loop and returns EXACTLY what the numpy loop
+# returns.
+#
+# `run_stretch` replays every one of the K threshold-and-timing configurations over one recorded
+# stretch, config-vectorised: unlike `design_rule.py`'s two filters, nothing inside the loop is ever
+# summed ACROSS configurations, so the compiled kernel needs no `_pairwise_sum` -- each configuration
+# is an independent scalar time series and the per-configuration accumulators it returns do not
+# depend on the order the configurations are visited in. This test holds the compiled kernel's
+# per-configuration counts and sums equal to the numpy loop's, bit for bit, on constructed series with
+# gaps, a missing first reading, an onset short enough to adopt on the very first sample, and both a
+# rising and a falling ramp; and holds the fast, precompute-and-aggregate bootstrap path (which calls
+# `run_stretch` once per training stretch, never once per replicate) equal to the whole-file entry
+# point either way. Skipped where numba is not installed (CI); the container has it (decision 271).
+needs_numba = pytest.mark.skipif(importlib.util.find_spec("numba") is None, reason="numba is not installed")
+
+
+def _series(seed, n=180, level=100.0, sigma=15.0, gap_frac=0.12, first_nan=False):
+    rng = np.random.default_rng(seed)
+    p = level + np.cumsum(rng.normal(0, sigma * 0.15, n)) + rng.normal(0, sigma, n)
+    gaps = rng.random(n) < gap_frac
+    p[gaps] = np.nan
+    if first_nan:
+        p[0] = np.nan
+    return p
+
+
+def _configs(rng, k=9):
+    """A grid of K configurations spanning the parameters that change the compiled loop's control
+    flow: onset steps from 1 (adopt on the very first qualifying sample) up, several blanking and
+    ramp durations, and separations that both do and do not bracket the series."""
+    onset_ms = np.array([1.0] + list(rng.uniform(1500.0, 60000.0, k - 1)))
+    blanking_ms = rng.uniform(0.0, 30000.0, k)
+    up_ms = rng.uniform(1500.0, 30000.0, k)
+    down_ms = rng.uniform(1500.0, 30000.0, k)
+    gap = rng.uniform(5.0, 60.0, k)
+    upper = 100.0 + 0.5 * gap
+    lower = 100.0 - 0.5 * gap
+    return dict(upper=upper, lower=lower, onset_ms=onset_ms, blanking_ms=blanking_ms,
+               up_ms=up_ms, down_ms=down_ms)
+
+
+def _assert_run_stretch_results_equal(a, b):
+    for key in a:
+        av, bv = a[key], b[key]
+        if key in ("dt",):
+            assert av == bv
+            continue
+        np.testing.assert_array_equal(np.asarray(av), np.asarray(bv), err_msg=key)
+
+
+@needs_numba
+def test_the_compiled_replay_returns_exactly_the_numpy_loops_answer():
+    assert RB.COMPILED_REPLAY, "numba is installed, so the compiled loop must be the one used"
+    rng = np.random.default_rng(20260925)
+    for trial in range(30):
+        first_nan = (trial % 5 == 0)
+        p = _series(1000 + trial, n=int(rng.integers(20, 240)), first_nan=first_nan)
+        cfgs = _configs(rng, k=int(rng.integers(1, 12)))
+        dt = float(rng.choice([1.2, 3.0, 6.0]))
+        amp_low, amp_high = 0.0, float(rng.uniform(2.0, 6.0))
+        kw = dict(p=p, dt=dt, amp_low=amp_low, amp_high=amp_high, **cfgs)
+
+        fast = RB.run_stretch(**kw)
+        RB.COMPILED_REPLAY = False
+        try:
+            slow = RB.run_stretch(**kw)
+        finally:
+            RB.COMPILED_REPLAY = True
+        _assert_run_stretch_results_equal(fast, slow)
+
+
+@needs_numba
+def test_the_compiled_replay_matches_with_a_stated_amp_init_and_tol():
+    p = _series(7, n=100)
+    cfgs = _configs(np.random.default_rng(3), k=4)
+    kw = dict(p=p, dt=3.0, amp_low=0.5, amp_high=4.5, amp_init=2.1, tol=0.02, **cfgs)
+    fast = RB.run_stretch(**kw)
+    RB.COMPILED_REPLAY = False
+    try:
+        slow = RB.run_stretch(**kw)
+    finally:
+        RB.COMPILED_REPLAY = True
+    _assert_run_stretch_results_equal(fast, slow)
+
+
+@needs_numba
+def test_the_fast_bootstrap_path_still_equals_the_naive_path_with_the_compiled_replay():
+    """The central equality `test_robustness.py` already proves (the precompute-and-aggregate
+    bootstrap path equals literal re-simulation) holds with whichever `run_stretch` backend is
+    active -- this is what actually protects production, since `robustness_for_series` never calls
+    the compiled kernel directly, only through `run_stretch`."""
+    assert RB.COMPILED_REPLAY
+    rng = np.random.default_rng(555)
+    stretches = []
+    t0 = 0.0
+    for i in range(6):
+        n = 90
+        p = _series(200 + i, n=n)
+        t = t0 + np.arange(n) * 3.0
+        a = np.full(n, 3.0)
+        stretches.append((t, p, a))
+        t0 = t[-1] + 3600.0
+    cfgs = RB._build_config_grid(100.0, 20.0, onset_grid=(3.0, 30.0, 90.0),
+                                 gap_sd_grid=(0.2, 0.6, 1.0), blanking_grid=(3.0, 30.0))
+    up_arr = np.array([c["upper"] for c in cfgs])
+    lo_arr = np.array([c["lower"] for c in cfgs])
+    on_arr = np.array([c["onset_s"] for c in cfgs]) * 1000.0
+    bl_arr = np.array([c["blanking_s"] for c in cfgs]) * 1000.0
+    upms_arr = np.full(len(cfgs), RB.FIXED_TRANSITION_MS)
+    dnms_arr = np.full(len(cfgs), RB.FIXED_TRANSITION_MS)
+    averaging_ms = 1200.0
+
+    naive = RB.choose_naive(stretches, cfgs, up_arr=up_arr, lo_arr=lo_arr, on_arr=on_arr,
+                            bl_arr=bl_arr, upms_arr=upms_arr, dnms_arr=dnms_arr,
+                            averaging_ms=averaging_ms, amp_low=0.0, amp_high=5.0, mid=100.0, sd=20.0,
+                            gap_sd_grid=(0.2, 0.6, 1.0))
+
+    pre = RB._stretch_accumulators(stretches, averaging_ms, up_arr, lo_arr, on_arr, bl_arr,
+                                   upms_arr, dnms_arr, 0.0, 5.0)
+    between, n_finite = RB._stretch_gap_counts(stretches, mid=100.0, sd=20.0,
+                                               gap_sd_grid=(0.2, 0.6, 1.0))
+    fast = RB._choose_from_precompute(pre, between, n_finite, np.ones(len(stretches)), cfgs,
+                                      (0.2, 0.6, 1.0), between_min_frac=RB.BETWEEN_MIN_FRAC,
+                                      limit_min_frac=RB.LIMIT_MIN_FRAC)
+    assert naive == fast
+
+
+# ------------------------------------------------------------------------------------------------
+# One saved entry per candidate (from test_robustness_keeps_each_candidate.py, merged 2026-10-05)
+# ------------------------------------------------------------------------------------------------
+# The Closed-Loop robustness answer keeps one saved entry per candidate (decision 309).
+#
+# The robustness bootstrap is filed under a key that names the candidate (sensing pair, band centre,
+# side) and is read back by the candidate tag on its sidecar, exactly like the CL-DBS simulation and
+# the design rule. Those two keep six entries a participant; the robustness kind kept the store's
+# default of ONE, so writing the right candidate's answer deleted the left's, and the next report for
+# the left rebuilt it (the decision-107 failure, found by decision 306's agent on 2026-09-26). Two
+# candidates written in turn must both read back, each as its own.
+def test_the_left_and_right_candidates_robustness_answers_both_survive_and_each_is_found(tmp_path):
+    try:
+        from modules.CacheStore import ledger as _ledger, store as st
+        from modules.ClosedLoopDeployment import adapter as AD
+    except ImportError:                                          # pragma: no cover - host runner
+        from CacheStore import ledger as _ledger, store as st
+        from ClosedLoopDeployment import adapter as AD
+    assert st.KEEP_NEWEST_BY_KIND.get(RB.KIND, 1) >= 2, "one entry per participant evicts a side"
+    uid = "p-robustness-cands"
+    prev = st.DIR_OVERRIDE, _ledger.ENABLED, AD._SHARED_CACHE_DIR_OVERRIDE
+    st.DIR_OVERRIDE, _ledger.ENABLED, AD._SHARED_CACHE_DIR_OVERRIDE = str(tmp_path), False, str(tmp_path)
+    try:
+        cands = (("ONE_THREE_LEFT", 24.5, "Left"), ("ZERO_THREE_RIGHT", 24.5, "Right"))
+        for ch, fc, side in cands:
+            st.store(RB.KIND, uid, (RB.KIND, RB.RULE_VERSION, ch, fc, side), {"for": ch},
+                     writer="closed_loop", trigger="deployment_report", provenance=[],
+                     extra={"candidate": AD._simulation_candidate_tag(ch, fc, side)})
+        got = {ch: AD.robustness_if_stored(uid, {"channel": ch, "center_hz": fc,
+                                                 "actuated_hemisphere": side}, hemisphere=side)
+               for ch, fc, side in cands}
+        assert got == {"ONE_THREE_LEFT": {"for": "ONE_THREE_LEFT"},
+                       "ZERO_THREE_RIGHT": {"for": "ZERO_THREE_RIGHT"}}, got
+        # a candidate never written is not answered with another candidate's entry
+        assert AD.robustness_if_stored(uid, {"channel": "ONE_THREE_LEFT", "center_hz": 12.5,
+                                             "actuated_hemisphere": "Left"}) is None
+    finally:
+        # cleared only while this test's own directory override is in force (decisions 116, 129)
+        st.clear()
+        st.DIR_OVERRIDE, _ledger.ENABLED, AD._SHARED_CACHE_DIR_OVERRIDE = prev

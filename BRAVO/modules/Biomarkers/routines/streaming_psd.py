@@ -302,10 +302,27 @@ WELCH_MAX_SECONDS = 30.0
 # it invalidates the cache so PSDs are re-Welch'd.
 WELCH_MAX_MISSING_FRAC = 0.10
 
+# A sample at the recording rail, in microvolts (the PI, 2026-10-18, item 6d): a channel whose 30 s
+# window holds any finite sample at or above this, in absolute value, gives no spectrum for that
+# window -- the rule the heat maps' 3 s pieces have long applied, with its number
+# (`availability.PRO_LSB_SATURATION_UV`; a test, tests/test_welch_saturation.py, pins the two
+# equal, so neither can move alone). Per channel, as the 3 s route judges each channel's own piece.
+# Part of the spectrum caches' keys (bravo_service `_TD_SATURATION_VERSION`).
+WELCH_SATURATION_UV = 4000.0
+
+
+def _railed_rows(data, sat):
+    """(n_ch,) bool: the rows of `data` (n_ch, n) holding any finite sample with |x| >= `sat`."""
+    if not np.isfinite(sat):
+        return np.zeros(data.shape[0], dtype=bool)
+    with np.errstate(invalid="ignore"):
+        return np.any(np.abs(data) >= float(sat), axis=-1)
+
 
 def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
                            f_set=F_SET, max_seconds=WELCH_MAX_SECONDS,
-                           missing=None, max_missing_frac=WELCH_MAX_MISSING_FRAC):
+                           missing=None, max_missing_frac=WELCH_MAX_MISSING_FRAC,
+                           saturation_uv=WELCH_SATURATION_UV):
     """
     Compute one PSD epoch, shaped (1, len(chan_order), len(f_set)), from one streaming
     group. Signal-processing: 4th-order Butterworth high-pass at Wn=1/nyq, Welch nperseg=1024,
@@ -357,6 +374,10 @@ def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
             if miss.size and float(np.mean(miss > 0)) > float(max_missing_frac):
                 return np.full((1, len(chan_order), len(f_set)), np.nan)
 
+    # (a'') A channel with a sample at the recording rail in this window gives no spectrum
+    # (`WELCH_SATURATION_UV`, item 6d), judged on the raw window before filtering.
+    railed = _railed_rows(data, saturation_uv)
+
     data = filtfilt(b, a, data, axis=-1)
 
     # nperseg can't exceed the (possibly short) segment length; guard explicitly so Welch averages
@@ -364,6 +385,8 @@ def welch_psd_for_instance(channel_data, channel_names, fs, chan_order,
     nper = int(min(1024, data.shape[-1]))
     f, Pxx = welch(data, fs=fs, nperseg=max(nper, 8), axis=-1)  # (n_ch, F_welch)
     Pxx = np.array([np.interp(f_set, f, Pxx[i, :]) for i in range(Pxx.shape[0])])
+    if railed.any():
+        Pxx[railed[:Pxx.shape[0]], :] = np.nan
 
     psd = np.zeros((1, len(chan_order), len(f_set)))
     # (b) Place each channel by its LOCAL row index into the global chan_order slot.
@@ -399,7 +422,8 @@ WELCH_CENTERED_MIN_SECONDS = 10.0   # floor: clipped windows shorter than this a
 def welch_rating_centered(channel_data, channel_names, fs, chan_order, centers_s, *,
                           f_set=F_SET, win_s=WELCH_MAX_SECONDS,
                           min_s=WELCH_CENTERED_MIN_SECONDS,
-                          missing=None, max_missing_frac=WELCH_MAX_MISSING_FRAC):
+                          missing=None, max_missing_frac=WELCH_MAX_MISSING_FRAC,
+                          saturation_uv=WELCH_SATURATION_UV):
     """Welch one rating-centered window per entry in `centers_s`, for ONE streaming recording.
 
     Parameters
@@ -474,6 +498,19 @@ def welch_rating_centered(channel_data, channel_names, fs, chan_order, centers_s
             frac = np.where(dur_n > 0, win_missing / np.maximum(dur_n, 1), 0.0)
             kept_mask = kept_mask & (frac <= float(max_missing_frac))
 
+    # Saturation (item 6d): a channel with a sample at the recording rail inside a window gives no
+    # spectrum for that window (NaN); a window railed on every channel it would fill is dropped
+    # like an under-length one. Judged on the raw [lo, hi) span before filtering.
+    railed = {}
+    if np.isfinite(saturation_uv):
+        slot_rows = [li for li, nm in enumerate(channel_names) if nm in chan_order]
+        for gi in np.nonzero(kept_mask)[0]:
+            r = _railed_rows(data[:, lo[gi]:hi[gi]], saturation_uv)
+            if r.any():
+                railed[int(gi)] = r
+                if slot_rows and all(r[li] for li in slot_rows if li < r.size):
+                    kept_mask[gi] = False
+
     kept_idx = np.nonzero(kept_mask)[0]
     if kept_idx.size == 0:
         return (np.zeros((0, n_ch, len(f_set))), np.zeros((0,)), kept_mask)
@@ -523,6 +560,12 @@ def welch_rating_centered(channel_data, channel_names, fs, chan_order, centers_s
         for li, gslot in slot:
             psd[row_of[int(gi)], gslot, :] = np.interp(f_set, f, P[li, :])
         used[row_of[int(gi)]] = seg.shape[-1] / fs
+
+    for gi, r in railed.items():
+        if gi in row_of:
+            for li, gslot in slot:
+                if li < r.size and r[li]:
+                    psd[row_of[gi], gslot, :] = np.nan
 
     return psd, used, kept_mask
 

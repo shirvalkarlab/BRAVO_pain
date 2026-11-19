@@ -298,11 +298,14 @@ def queryAvailableAnalyses(participant_uid, request_type):
                                 for k in range(len(Description["Therapy"])):
                                     if Therapy["ChannelNames"][j].endswith("Stimulation"):
                                         if Therapy["ChannelNames"][j].replace(" Stimulation", "").endswith(Description["Therapy"][k]["Hemisphere"].upper()):
-                                            Description["Therapy"][k]["Amplitudes"] = [np.min(Therapy["Data"][:,j]), np.max(Therapy["Data"][:,j])]
+                                            # the device's own readings only: an empty place on the
+                                            # band-power grid holds NaN (decision 480 (e))
+                                            _ma = Therapy["Data"][:,j][np.isfinite(Therapy["Data"][:,j])]
+                                            Description["Therapy"][k]["Amplitudes"] = [np.min(_ma), np.max(_ma)] if len(_ma) else [0,0]
                                             Description["Therapy"][k]["UniqueAmplitudes"] = []
 
-                                            for z in np.unique(Therapy["Data"][:,j]):
-                                                if np.sum(Therapy["Data"][:,j] == z) > 20:
+                                            for z in np.unique(_ma):
+                                                if np.sum(_ma == z) > 20:
                                                     Description["Therapy"][k]["UniqueAmplitudes"].append(z)
 
                             break

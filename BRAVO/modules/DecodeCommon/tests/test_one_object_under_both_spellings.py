@@ -24,11 +24,17 @@ CASES = [
     ("Biomarkers", "routines.sweep_settings"),
     ("StimOptimizer", "routines.percept_adaptive"),
     ("DecodeCommon", "import_alias"),
+    # the store: a sandbox applied under one spelling must reach the copy a module holds under the
+    # other (was CacheStore/tests/test_one_store.py::test_both_import_spellings_are_one_module_object)
+    ("CacheStore", "store"),
+    ("CacheStore", "ledger"),
 ]
 
 
-def test_each_package_submodule_is_one_object_under_both_spellings():
+def test_each_package_and_submodule_is_one_object_under_both_spellings():
+    """(Merged 2026-10-05 with `test_the_package_itself_is_one_object`.)"""
     for pkg, sub in CASES:
+        assert importlib.import_module(pkg) is importlib.import_module("modules." + pkg), pkg
         a = importlib.import_module(f"{pkg}.{sub}")
         b = importlib.import_module(f"modules.{pkg}.{sub}")
         assert a is b, f"{pkg}.{sub}: two module objects ({a.__name__!r} and {b.__name__!r})"
@@ -43,8 +49,3 @@ def test_a_module_level_switch_is_one_switch():
         assert b.USE_POST_RAMP_MARGIN is (not before)
     finally:
         a.USE_POST_RAMP_MARGIN = before
-
-
-def test_the_package_itself_is_one_object():
-    for pkg, _ in CASES:
-        assert importlib.import_module(pkg) is importlib.import_module("modules." + pkg), pkg

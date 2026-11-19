@@ -11,20 +11,12 @@ import "@testing-library/jest-dom";
 import fs from "fs";
 import path from "path";
 import { render as rtlRender } from "@testing-library/react";
-import { ThemeProvider } from "@mui/material/styles";
-
-import theme from "assets/theme";
-import { PlatformContextProvider } from "context";
 
 import newResponse from "./__fixtures__/rcs08_stim_optimizer_2026-09-25.json";
 import DecisionStrip from "./DecisionStrip";
 import SensingEvidenceTable from "./SensingEvidenceTable";
+import { wrap } from "testUtils/render";
 
-const wrap = (ui) => (
-  <ThemeProvider theme={theme}>
-    <PlatformContextProvider initialStates={{ darkMode: false }}>{ui}</PlatformContextProvider>
-  </ThemeProvider>
-);
 const render = (ui) => rtlRender(wrap(ui));
 const src = (f) => fs.readFileSync(path.join(__dirname, f), "utf8");
 

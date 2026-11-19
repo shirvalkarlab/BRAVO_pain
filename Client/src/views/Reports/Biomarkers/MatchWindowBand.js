@@ -9,14 +9,14 @@
  * settings in force printed beside it ("Paired within ±15 min · each recording picks its nearest
  * report · high / low split: lowest and highest thirds ...") (the PI, 2026-09-26; the defaults since
  * decision 331, from `matchingDefaults.js`). Each control
- * carries one short sentence under it. The coverage sentence, the timing histogram and the high / low
+ * carries one short sentence under it, all shown or hidden by one switch at the top of the panel. The coverage sentence, the timing histogram and the high / low
  * preview follow every control at once. The heat maps and the all-band scan do NOT: a moved setting
  * leaves them on screen as computed, the heat maps say which setting changed, and the page's
  * Recompute rebuilds both (review of 2026-09-26).
  *
  * On screen: Biomarkers page, the matching section, under the heat maps.
  */
-import { useState } from "react";
+import { createContext, useContext, useState } from "react";
 import { Grid, Select, MenuItem, FormControl, Slider, TextField, ToggleButton, ToggleButtonGroup } from "@mui/material";
 
 import MDBox from "components/MDBox";
@@ -34,6 +34,47 @@ const NOTE_SX = { ...TYPE.body, color: T.ink3, display: "block", mt: 0.5 };
 // A small colour swatch beside a word (the colour is a mark, never the text's own colour).
 const SWATCH = { display: "inline-block", width: 10, height: 10, marginRight: 6 };
 const TOGGLE_SX = { "& .MuiToggleButton-root": { textTransform: "none", ...TYPE.body, py: 0.5, px: 1.25, lineHeight: 1.2 } };
+
+/**
+ * Whether the panel's explanations are shown. ONE switch at the top of the matching panel shows or
+ * hides every control's note at once (the PI, 2026-10-07: a "?" per control meant clicking each one).
+ */
+const NotesShown = createContext(false);
+
+/** A control's label, with its one-sentence note under it while the panel's switch shows notes. */
+export function ControlLabel({ children, note, noteTitle, labelSx }) {
+  const shown = useContext(NotesShown);
+  return (
+    <>
+      <MDTypography component="span" sx={{ ...LABEL_SX, ...(labelSx || {}) }}>
+        {children}
+      </MDTypography>
+      {note && shown ? (
+        <MDTypography component="span" sx={{ ...NOTE_SX, mt: 0, mb: 0.5 }} title={noteTitle}
+                      data-testid="control-note">
+          {note}
+        </MDTypography>
+      ) : null}
+    </>
+  );
+}
+
+/** The one switch: an arrow and "Show explanations" / "Hide explanations". */
+export function NotesSwitch({ shown, setShown }) {
+  return (
+    <MDBox component="button" type="button" onClick={() => setShown(!shown)} aria-expanded={shown}
+           data-testid="control-notes-switch"
+           sx={{ ...TYPE.body, fontFamily: "inherit", color: T.accent, background: "none", border: "none",
+             p: 0, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 0.75,
+             "&:focus-visible": FOCUS_RING }}>
+      <FoldArrow open={shown} />
+      {shown ? "Hide explanations" : "Show explanations"}
+    </MDBox>
+  );
+}
+
+/** Wraps ControlLabels outside the panel (tests) with the switch's state. */
+export const ControlNotesProvider = NotesShown.Provider;
 
 /** The three ways a report and its recordings are paired, in plain words (SPEC.md section 6). */
 export const DIRECTION_WORDS = {
@@ -89,6 +130,7 @@ export default function MatchWindowBand({
   // compact panel with every matching control, the extra options and the high / low split's own
   // controls. The panel stays MOUNTED while closed (hidden), so tests and search still read it.
   const [open, setOpen] = useState(!!defaultOpen);
+  const [notesShown, setNotesShown] = useState(false);
   const score = metricLabel || "pain";
   const twoCut = strategy === "tertile" || strategy === "percentile";
   const lowPct = strategy === "tertile" ? 33.3 : percentileLow;
@@ -102,7 +144,7 @@ export default function MatchWindowBand({
           {/* One clause per line (the PI, 2026-10-02). The first clause counts the match window set on
               the slider; the other two are the fixed 10 and 60 minute windows. */}
           <b style={{ fontWeight: 600 }}>
-            <span data-coverage-line="window" style={{ display: "block" }}>{`${coverage.n_within_window.toLocaleString()} of ${coverage.n_reports.toLocaleString()} ${score} reports have a band-power reading within ±${coverage.tolerance_min} min`}</span>
+            <span data-coverage-line="window" style={{ display: "block" }}>{`${coverage.n_within_window.toLocaleString()} of ${coverage.n_reports.toLocaleString()} ${score} reports${coverage.n_clinic > 0 ? ` (${coverage.n_clinic.toLocaleString()} from clinic sheets)` : ""} have a band-power reading within ±${coverage.tolerance_min} min`}</span>
             <span data-coverage-line="10" style={{ display: "block" }}>{`${coverage.n_within_10.toLocaleString()} within ±10 min`}</span>
             <span data-coverage-line="60" style={{ display: "block" }}>{`${coverage.n_within_60.toLocaleString()} within ±60 min`}</span>
           </b>
@@ -131,12 +173,14 @@ export default function MatchWindowBand({
       </MDBox>
       <MDBox id="matching-panel" hidden={!open} data-testid="matching-panel"
              sx={{ borderLeft: `2px solid ${T.accent}`, pl: 2, py: 1 }}>
+      <NotesShown.Provider value={notesShown}>
+      <MDBox mb={1}><NotesSwitch shown={notesShown} setShown={setNotesShown} /></MDBox>
       <Grid container spacing={2} alignItems="flex-start">
         {/* The match window: how far from a pain report a neural sample may sit and still carry its rating. */}
         <Grid item xs={12} md={5}>
-          <MDTypography component="span" sx={LABEL_SX}>
+          <ControlLabel note="How far from a report a reading may be and still carry its rating.">
             {"Match window"}
-          </MDTypography>
+          </ControlLabel>
           <MDBox display="flex" flexDirection="row" alignItems="center" gap={1.25}
                  sx={{ py: 0.5 }}>
             <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink, whiteSpace: "nowrap" }}>
@@ -159,16 +203,19 @@ export default function MatchWindowBand({
             />
             <MDTypography component="span" sx={{ ...TYPE.body, color: T.ink }}>{"min"}</MDTypography>
           </MDBox>
-          <MDTypography component="span" sx={NOTE_SX}>
-            {"How far from a report a reading may be and still carry its rating."}
-          </MDTypography>
         </Grid>
 
         {/* The split: which pain values count as high and which as low. */}
         <Grid item xs={12} sm={6} md={3}>
-          <MDTypography component="span" sx={LABEL_SX}>
+          <ControlLabel note={strategy === "tertile"
+              ? "Lowest and highest thirds of ratings; the middle third is left out."
+              : strategy === "percentile"
+                ? "Cuts at the two handles above the histogram; the middle is left out."
+                : strategy === "median"
+                  ? "Ratings above the median are high, the rest low."
+                  : "Split where the ratings fall into two clusters (kept for older results)."}>
             {"Split into high and low pain"}
-          </MDTypography>
+          </ControlLabel>
           <FormControl fullWidth size="small">
             <Select value={strategy} onChange={(e) => setStrategy(e.target.value)}
                     inputProps={{ "aria-label": "split rule" }} sx={{ ...TYPE.body, ...promptSelectSx }}>
@@ -189,35 +236,23 @@ export default function MatchWindowBand({
               </MDTypography>
             </MDBox>
           ) : null}
-          <MDTypography component="span" sx={NOTE_SX}>
-            {strategy === "tertile"
-              ? "Lowest and highest thirds of ratings; the middle third is left out."
-              : strategy === "percentile"
-                ? "Cuts at the two handles above the histogram; the middle is left out."
-                : strategy === "median"
-                  ? "Ratings above the median are high, the rest low."
-                  : "Split where the ratings fall into two clusters (kept for older results)."}
-          </MDTypography>
         </Grid>
 
         {/* The direction: which side of a report a sample may sit on. */}
         <Grid item xs={12} sm={6} md={4}>
-          <MDTypography component="span" sx={LABEL_SX}>
+          <ControlLabel note={matchDirection === "pro_first"
+              ? "Reports choose in time order; the most reports enter."
+              : matchDirection === "nearest"
+                ? "Readings choose; readings over a report's cap are dropped."
+                : "The closed-loop direction: the signal first, the rating after."}>
             {"Match direction"}
-          </MDTypography>
+          </ControlLabel>
           <ToggleButtonGroup value={matchDirection} exclusive size="small" aria-label="Match direction"
                              onChange={(e, v) => { if (v) setMatchDirection(v); }} sx={TOGGLE_SX}>
             <ToggleButton value="pro_first" title="Each pain report claims its closest readings on either side (in the all-band scan, up to the cap per report)">{DIRECTION_WORDS.pro_first}</ToggleButton>
             <ToggleButton value="nearest" title="Each reading pairs with the nearest pain report on either side">{DIRECTION_WORDS.nearest}</ToggleButton>
             <ToggleButton value="prior" title="Each reading pairs only with a pain report recorded after it (the closed-loop direction)">{DIRECTION_WORDS.prior}</ToggleButton>
           </ToggleButtonGroup>
-          <MDTypography component="span" sx={NOTE_SX}>
-            {matchDirection === "pro_first"
-              ? "Reports choose in time order; the most reports enter."
-              : matchDirection === "nearest"
-                ? "Readings choose; readings over a report's cap are dropped."
-                : "The closed-loop direction: the signal first, the rating after."}
-          </MDTypography>
         </Grid>
         {extraControls ? <Grid item xs={12} sm={6} md={4}>{extraControls}</Grid> : null}
       </Grid>
@@ -231,6 +266,7 @@ export default function MatchWindowBand({
           {binarization}
         </MDBox>
       ) : null}
+      </NotesShown.Provider>
       </MDBox>
     </MDBox>
   );

@@ -50,19 +50,27 @@ export const GRID_SETTING_KEYS = ["LabelMetric", "MatchToleranceMin", "MatchDire
  * the clinic-sheet switch, so this card asked for the sheets-off grid whatever the Biomarkers page
  * showed. Booleans are sent as "1" / "", as the Biomarkers page's own grid request reads them.
  */
-export function biomarkerGridSettings(participantUid) {
+export function biomarkerGridSettings(participantUid, painScore = null) {
   const s = loadMatchingRun(participantUid).settings || {};
   const out = {};
   GRID_SETTING_KEYS.forEach((k) => {
     if (s[k] === undefined || s[k] === null) return;
     out[k] = typeof s[k] === "boolean" ? (s[k] ? "1" : "") : s[k];
   });
-  if (s.LabelMetric) out.SweepMetric = s.LabelMetric;
+  // THE PAGE'S OWN PAIN SCORE, when it has one (the PI, 2026-10-04: "The band grid on the
+  // closed-loop module should update when a different pain score is selected in the dropdown").
+  // The matching and split settings stay the Biomarkers page's; only the score is the dropdown's.
+  const metric = painScore || s.LabelMetric;
+  if (metric) {
+    out.LabelMetric = metric;
+    out.SweepMetric = metric;
+  }
   return out;
 }
 
-export default function useBandSweepGrid({ participantUid, enabled = true }) {
-  const gridSettings = useMemo(() => biomarkerGridSettings(participantUid), [participantUid]);
+export default function useBandSweepGrid({ participantUid, painScore = null, enabled = true }) {
+  const gridSettings = useMemo(() => biomarkerGridSettings(participantUid, painScore),
+    [participantUid, painScore]);
   const settingsKey = JSON.stringify(gridSettings);
   const body = { ParticipantId: participantUid, Candidates: [], ...gridSettings };
 

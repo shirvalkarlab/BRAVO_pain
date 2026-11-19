@@ -30,6 +30,7 @@ import {
   settingsKey, subscribe,
 } from "database/resultCache";
 import { SessionController } from "database/session-control";
+import { isLoginExpired, sendToLogin } from "./loginExpired";
 
 /**
  * Ask the server for its boot token and hand it to the cache.
@@ -123,6 +124,9 @@ export function useCachedResult({ moduleKey, uid, settings, fetcher, enabled = t
         // `SessionController.displayError`, which reads the status to distinguish a session that
         // has expired from a server fault, and a bare message collapses those into one sentence.
         if (alive.current) { setErrRaw(e); setErr(String((e && e.message) || e)); }
+        // An expired login is not shown as a failure of this panel: it goes to the login screen,
+        // which brings the user back here afterwards (`loginExpired.js`, the PI 2026-11-18).
+        if (isLoginExpired(e)) sendToLogin();
         return null;
       })
       .finally(() => {

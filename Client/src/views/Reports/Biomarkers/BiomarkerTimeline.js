@@ -28,8 +28,8 @@ const C = {
 // The side colours on every page: left blue, right orange; the chronic log solid, the streaming
 // contacts a lighter tint of the same colour. The accent (region label text) is ink.
 const HEMI = {
-  Left:  { chronic: SIDE.left, stream: CATEGORICAL[4], accent: T.ink, region: "GPi" },
-  Right: { chronic: SIDE.right, stream: CATEGORICAL[1], accent: T.ink, region: "VIM" },
+  Left:  { chronic: SIDE.left, stream: CATEGORICAL[4], accent: T.ink },
+  Right: { chronic: SIDE.right, stream: CATEGORICAL[1], accent: T.ink },
 };
 function hemiColor(hemi, isChronic) {
   const h = HEMI[hemi];
@@ -128,6 +128,15 @@ function movingAverage(y, win = 3) {
     }
     return c ? s / c : null;
   });
+}
+
+/** The lead's stored name for one side ("Left GPe"), from the per-recording regions the server
+ *  sends; none written into the page (decision 467: RCS08's leads are GPe and MD Thal, which the
+ *  device's own list cannot name). Empty when the payload carries none. */
+export function regionForSide(recordedPowers, hemi) {
+  const want = String(hemi || "").toUpperCase();
+  const hit = (recordedPowers || []).find((p) => p && p.region && String(p.raw || "").toUpperCase().endsWith(want));
+  return hit ? hit.region : "";
 }
 
 function BiomarkerTimeline({ data, height }) {
@@ -572,7 +581,7 @@ function BiomarkerTimeline({ data, height }) {
           xref: `${xk} domain`, yref: "paper", x: 0, y: top + 0.012,
           xanchor: "left", yanchor: "bottom",
           // Sentence case at the section-title size (SPEC.md section 2.4; taste audit E8).
-          text: `<b>${String(hemi).charAt(0).toUpperCase()}${String(hemi).slice(1).toLowerCase()} hemisphere</b>  ·  ${HEMI[hemi].region}`,
+          text: `<b>${String(hemi).charAt(0).toUpperCase()}${String(hemi).slice(1).toLowerCase()} hemisphere</b>${regionForSide(data && data.recorded_powers, hemi) ? `  ·  ${regionForSide(data.recorded_powers, hemi)}` : ""}`,
           showarrow: false, font: { size: 18, color: accent },
         });
       }

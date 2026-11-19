@@ -173,3 +173,52 @@ export function withheldIfOtherBand(result, bc, kind = "report", want = null) {
     bandMismatch: mis,
   };
 }
+
+/**
+ * The cut-point the deployment summary is sent (decision 416). The summary needs one for its
+ * switching value, and the server takes the ROC's own default point (Youden, "next report" matching)
+ * when none is sent -- the same point the ROC panel starts on. So the summary is sent the ROC's
+ * cut-point only when the reader moved the ROC off its defaults, and only on the band it was chosen
+ * on; otherwise none, so choosing a band and the ROC answering later never change the summary's
+ * request. `bandKey` is `${contact}|${centre Hz}`.
+ */
+export function summaryCutpoint(cutpoint, bandKey) {
+  const own = cutpoint && cutpoint.forBand === bandKey && !cutpoint.isDefault
+    && cutpoint.threshold != null ? cutpoint : null;
+  return own ? { cutThr: own.threshold, matchDir: own.matchDir || "prior" }
+    : { cutThr: null, matchDir: "prior" };
+}
+
+/** The report's candidate for a chosen band, in one place: the page's report and simulation
+ *  requests, and the neighbour pre-compute (decision 425), so all three name the band alike. */
+export function reportCandidateFromBand(bc) {
+  if (!bc) return null;
+  return {
+    channel: bc.contact,
+    centerHz: bc.center_freq_hz,
+    bandWidthHz: bc.bandwidth_hz || 5.0,
+    sensingHemisphere: bc.hemisphere,
+    rateHz: bc.rate_hz,
+    pulseWidthUs: bc.pulse_width_us,
+    thresholdMode: bc.threshold_mode || "dual",
+  };
+}
+
+/** The three Background panels' request settings (the body minus the participant), in one place
+ *  for the panels and the pre-compute (decision 428), so the server's saved answers match. */
+const bandFields = (bc) => {
+  const b = bc || {};
+  return { Channel: b.contact, CenterHz: b.center_freq_hz == null ? null : Number(b.center_freq_hz),
+    BandWidthHz: Number(b.bandwidth_hz || 5.0) };
+};
+export function rocSettings(bc, matchDir, requestParams) {
+  return { ...bandFields(bc), MatchDirection: matchDir, ...requestParams };
+}
+export function eraSettings(bc, requestParams) {
+  return { ...bandFields(bc), ...requestParams };
+}
+export function lsbSettings(bc, cutpoint, requestParams) {
+  const cutThr = cutpoint ? cutpoint.threshold : null;
+  return { ...bandFields(bc), MatchDirection: cutpoint ? cutpoint.matchDir : "prior",
+    Cutpoint: cutThr == null ? null : Number(cutThr), ...requestParams };
+}

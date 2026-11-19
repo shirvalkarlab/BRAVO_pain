@@ -1399,6 +1399,15 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
 #: Dropping the exclusion here trades a wide, honest interval for a degenerate one; it is not a
 #: reason to drop it.
 #:
+#: TURNED OFF 2026-10-02 (the PI: "don't drop the first 3 weeks with the ME model"). Re-measured
+#: that day on the same band (L 1-3+, 24.5 Hz, NRS, 60-minute window) under the deployment
+#: summary's default matching (a report matched to recordings before it), the failure ran the
+#: other way: WITH the exclusion lme4 failed to converge (OR 2.39, 95% CI 2.378-2.392, p 0.0,
+#: 86 samples, 25 weekly eras); WITHOUT it the fit converged (OR 2.12, 0.75-5.99, p 0.156, 92
+#: samples, 27 eras). Under nearest-in-time matching both converge (0.86, 0.57-1.31, 261 samples
+#: with it; 0.84, 0.55-1.27, 271 without). The mechanism stays: `exclude_first_weeks` still drops
+#: weeks when a caller asks, and the payload still says how many.
+#:
 #: OPEN DECISION, deliberately not taken here. The window above is IMPLANT-anchored: three weeks
 #: from the first sample of the record. A DATA-anchored window — three weeks from the first sample
 #: the fit can use — would bind, and its cost is measured: n falls 84 -> 63, weekly eras 29 -> 24,
@@ -1415,7 +1424,12 @@ def deployment_roc(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
 #: whole record, because they answer different questions and the PI asked for the whole record
 #: everywhere else. Anything that widens this scope needs its own decision, not an inference from
 #: this one.
-VALIDATION_EXCLUDE_FIRST_WEEKS = 3
+VALIDATION_EXCLUDE_FIRST_WEEKS = 0
+
+#: The fewest samples the smaller pain group (high or low) may have before the mixed-effects model
+#: is fitted (the PI, 2026-10-03): about 10 per predictor in the smaller group, the usual rule for
+#: logistic regression (Peduzzi et al., J Clin Epidemiol 1996); the model has one predictor.
+MIXED_MODEL_MIN_PER_GROUP = 10
 
 
 def _elapsed_week_cluster(times, n):
@@ -2273,7 +2287,8 @@ def _rcs_hann(nonzero):
 
 def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
                             win_samples=None, step_samples=None,
-                            n_fft=TRANSFORM_N_FFT, maxf=TRANSFORM_MAX_FREQ_HZ, agg="median"):
+                            n_fft=TRANSFORM_N_FFT, maxf=TRANSFORM_MAX_FREQ_HZ, agg="median",
+                            each_center=False):
     """Transform-DSP band power (µV²) of a time-domain µV trace — the PRIMARY TD→LSB front end.
 
     This is the percept-spectral-repro "transform": per sliding sub-window, mean-detrend → rcs-Hann
@@ -2304,6 +2319,11 @@ def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
         Zero-pad / FFT length. The transform calibration assumes 256.
     maxf : float, default 96.68
         Keep only FFT bins ≤ maxf (the repo's percept_frequency_bins ceiling).
+    each_center : bool, default False
+        Vector centres only: sum each centre's band on its own, as a scalar call does, so entry i
+        equals ``td_transform_band_power(..., centers[i])`` exactly while the FFT is still shared
+        (decision 433). The one product over all centres at once rounds differently in the last
+        digit (340 of 1,352 live values differed).
     agg : {"median","mean","none"}, default "median"
         Across-window aggregation. The repo and the deployed sweep both use the median. "none" returns
         the PER-WINDOW band power without aggregating — shape (W,) for a scalar center, (W, C) for a
@@ -2351,7 +2371,10 @@ def td_transform_band_power(samples_uv, fs, center_hz, *, half_hz=2.5,
     # Band-mask matrix (C, Fb); one matmul → in-band summed power for every center at once.
     band = ((freqs[None, :] >= centers[:, None] - half_hz) &
             (freqs[None, :] <= centers[:, None] + half_hz)).astype(float)
-    pw = p2 @ band.T                                       # (W, C)
+    if each_center and centers.size > 1:
+        pw = np.concatenate([p2 @ band[i:i + 1].T for i in range(centers.size)], axis=1)
+    else:
+        pw = p2 @ band.T                                   # (W, C)
     if agg == "none":
         # per-window band power, no aggregation (sliding-window overlay / QC). (W,) scalar, (W,C) vector.
         return pw[:, 0] if scalar_in else pw
@@ -4344,7 +4367,8 @@ def _band_pain_auc_with_covariate_removed(d, *, covariate_column, shape, pain_co
     }
 
 
-def _partial_corr_report_bootstrap(x, y, cov, groups, *, shape, n_boot, seed, alpha, blas_threads=1):
+def _partial_corr_report_bootstrap_loop(x, y, cov, groups, *, shape, n_boot, seed, alpha,
+                                       blas_threads=1):
     """Interval on the partial correlation, resampling WHOLE PAIN REPORTS with replacement.
 
     The fits run on `blas_threads` linear-algebra threads (speed-up item 5, 2026-09-25): a
@@ -4377,6 +4401,74 @@ def _partial_corr_report_bootstrap(x, y, cov, groups, *, shape, n_boot, seed, al
     if len(vals) < BOOT_CI_VALID_FLOOR:
         return (None, None)
     v = np.asarray(vals, dtype=float)
+    return (float(np.percentile(v, 100.0 * alpha / 2.0)),
+            float(np.percentile(v, 100.0 * (1.0 - alpha / 2.0))))
+
+
+def _partial_corr_report_bootstrap(x, y, cov, groups, *, shape, n_boot, seed, alpha, blas_threads=1):
+    """Interval on the partial correlation, resampling WHOLE PAIN REPORTS with replacement.
+
+    VECTORISED for the straight-line shape (the PI, 2026-10-04, decision 422): a resample of whole
+    reports is a vector of counts, one per report, so every resample's two least-squares fits and
+    correlation come from per-report sums in one matrix product, instead of 500 fits on tens of
+    thousands of rows each. The resamples are the same draws from the same generator as before;
+    the order of the arithmetic differs, so the interval ends agree with the loop to about 1e-12
+    (the PI accepted agreement to six or seven digits for this change). The refusals are the same:
+    fewer than four rows, no spread in the covariate, or nothing left of either variable once the
+    covariate is taken out. Other shapes keep the loop (`_partial_corr_report_bootstrap_loop`)."""
+    if shape != "line":
+        return _partial_corr_report_bootstrap_loop(x, y, cov, groups, shape=shape, n_boot=n_boot,
+                                                   seed=seed, alpha=alpha,
+                                                   blas_threads=blas_threads)
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    c = np.asarray(cov, dtype=float)
+    groups = np.asarray(groups)
+    ids = np.unique(groups)
+    if ids.size < 2:
+        return (None, None)
+    rng = np.random.default_rng(int(seed))
+    pos = np.searchsorted(ids, groups)
+    B = int(n_boot)
+    counts = np.zeros((B, ids.size))
+    for b in range(B):                                 # the same draws, in the same order
+        pick = rng.choice(ids, size=ids.size, replace=True)
+        counts[b] = np.bincount(np.searchsorted(ids, pick), minlength=ids.size)
+    fin = np.isfinite(x) & np.isfinite(y) & np.isfinite(c)
+    if not fin.any():
+        return (None, None)
+    # per-report sums of the centred values (centred on the finite rows' means, to keep the
+    # products small and the subtractions below exact to the last few digits)
+    xm, ym, cm = x[fin].mean(), y[fin].mean(), c[fin].mean()
+    xs, ys, cs, g = x[fin] - xm, y[fin] - ym, c[fin] - cm, pos[fin]
+    def gsum(v):
+        return np.bincount(g, weights=v, minlength=ids.size)
+    G = np.stack([gsum(np.ones_like(xs)), gsum(xs), gsum(ys), gsum(cs), gsum(xs * xs),
+                  gsum(ys * ys), gsum(cs * cs), gsum(xs * cs), gsum(ys * cs), gsum(xs * ys)],
+                 axis=1)
+    S = counts @ G                                       # (B, 10): every resample's totals
+    n, sx, sy, sc, sxx, syy, scc, sxc, syc, sxy = S.T
+    with np.errstate(invalid="ignore", divide="ignore"):
+        Sxx = sxx - sx * sx / n
+        Syy = syy - sy * sy / n
+        Scc = scc - sc * sc / n
+        Sxc = sxc - sx * sc / n
+        Syc = syc - sy * sc / n
+        Sxy = sxy - sx * sy / n
+        rxx = Sxx - Sxc * Sxc / Scc                      # what is left of x once c is taken out
+        ryy = Syy - Syc * Syc / Scc
+        rxy = Sxy - Sxc * Syc / Scc
+        r = rxy / np.sqrt(rxx * ryy)
+        # a resample whose reports all share one current has no spread in it (the loop's exact
+        # zero, which centred sums reach only to rounding)
+        spread = Scc > 1e-12 * np.maximum(scc + sc * sc / n, 1e-300)
+        ok = ((n >= 4) & spread
+              & (np.sqrt(np.maximum(rxx, 0.0) / n) > 1e-10 * (np.sqrt(np.maximum(Sxx, 0.0) / n) + 1e-300))
+              & (np.sqrt(np.maximum(ryy, 0.0) / n) > 1e-10 * (np.sqrt(np.maximum(Syy, 0.0) / n) + 1e-300))
+              & np.isfinite(r))
+    v = r[ok]
+    if v.size < BOOT_CI_VALID_FLOOR:
+        return (None, None)
     return (float(np.percentile(v, 100.0 * alpha / 2.0)),
             float(np.percentile(v, 100.0 * (1.0 - alpha / 2.0))))
 
@@ -4594,7 +4686,8 @@ def read_band_pain_auc_from_export(auc_table, *, channel, center_hz, tol_hz=0.01
 def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_hz=5.0,
                               strategy="tertile", low_pct=33.3333, high_pct=66.6667,
                               pain_cutoff=None, cluster="era",
-                              exclude_first_weeks=VALIDATION_EXCLUDE_FIRST_WEEKS):
+                              exclude_first_weeks=VALIDATION_EXCLUDE_FIRST_WEEKS,
+                              current_removed=None):
     """Cluster-robust inference for ONE selected (channel, band) via a logistic MIXED-EFFECTS model
     (pymer4 -> R lme4 glmer): pain_high ~ band_power + (1 | session_cluster).
 
@@ -4602,6 +4695,10 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
     effect of band power (coef, OR, z, p) with the within-cluster correlation modelled explicitly —
     the honest 'is this band real?' number for clustered repeated measures. Degrades to
     {available: False, reason: ...} when pymer4/R is unavailable, so the sweep still works without R.
+
+    ``current_removed`` (decision 484): ``{"stream": settings stream or None, "hemisphere": side}``
+    adds ``rotation_current_removed``, the same rotation test with the current in force at each
+    sample as a covariate (`_band_rotation_current_removed`), a warning only. None leaves it out.
     """
     try:
         from pymer4.models import Lmer
@@ -4609,30 +4706,18 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
         return {"available": False, "reason": f"pymer4 unavailable: {e}"}
     if not td_detail:
         return {"available": False, "reason": "no detail"}
-    f = np.asarray(td_detail.get("f_set"), dtype=float)
-    psd = np.asarray(td_detail.get("psd"), dtype=float)
     labels = np.asarray(td_detail.get("labels"), dtype=float)
-    chans = td_detail.get("chan_order", [])
     times = td_detail.get("times")
-    # Resolve the channel index from the raw name (or the formatted short).
-    ci = None
-    for i, raw in enumerate(chans):
-        if raw == channel_raw or format_channel(raw)["short"] == channel_raw:
-            ci = i
-            break
-    if ci is None:
-        return {"available": False, "reason": f"channel {channel_raw} not found"}
-    w = float(band_width_hz)
-    bmask = (f >= center_hz - w / 2.0) & (f < center_hz + w / 2.0)
-    if not bmask.any():
-        return {"available": False, "reason": "empty band"}
-    with np.errstate(invalid="ignore", divide="ignore"):
-        sub = np.nanmean(psd[:, ci, bmask], axis=1)
-        bp = sub          # raw band power, as the pooled detail holds it (decision 204: no logarithm)
-    # PARITY (audit §6b): binarize on THIS CHANNEL's own labels, not the global pooled cut. The
-    # offline validated set (phase2) cuts the tertile on labels restricted to the rows where this
-    # channel's band power is finite; a global cut flips borderline samples high/low between the two
-    # and changes n / OR / p. _binarize_labels with an explicit channel mask reproduces phase2.
+    # THE AUC'S OWN FEATURE (the PI, 2026-10-03): the band power is read by the function
+    # `deployment_roc` calls, not by a second copy of its formula, and the pain metric comes in
+    # through the same pooled detail; so the model and the AUCs read one feature and one score.
+    feat = _band_feature_from_detail(td_detail, channel_raw, center_hz, band_width_hz)
+    if feat is None:
+        return {"available": False, "reason": f"channel {channel_raw} or its band was not found"}
+    bp = np.asarray(feat[0], dtype=float)
+    # The finite rows of THIS channel's band power: the rows the model can use. (The pain cut drawn
+    # on them alone, audit §6b's parity with the offline phase2 set, was replaced by the AUCs' cut
+    # on 2026-10-03, decision 406; see the cut below.)
     chan_finite = np.isfinite(bp)
 
     # THE DECLARED BURN-IN EXCLUSION (see VALIDATION_EXCLUDE_FIRST_WEEKS), applied HERE — before
@@ -4674,13 +4759,44 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
                            f"this channel and band; nothing is left to fit, which is reported "
                            f"rather than silently falling back to the full record")}
 
+    # THE AUC'S CUT (the PI, 2026-10-03): one score per pain report over every matched sample, as
+    # `deployment_roc` draws it, so the model and the AUCs keep the same samples (live, L 1-3+
+    # 24.5 Hz NRS: 92 against 118 before). It used to be this pair's samples, each counted, which
+    # let a report matched to many samples pull the cut its way. A caller's week exclusion still
+    # leaves those weeks out of the cut.
+    _rg_cut = (np.asarray(_rg_all) if _rg_all is not None and len(_rg_all) == len(bp)
+               else np.arange(len(bp)))
     y = _binarize_labels(labels, strategy=strategy, low_pct=low_pct, high_pct=high_pct,
-                         pain_cutoff=pain_cutoff, finite_mask=chan_finite)
+                         pain_cutoff=pain_cutoff, rating_group=_rg_cut,
+                         finite_mask=(keep_week if burn_in > 0 else None))
     # PARITY (audit §6a): cluster = integer ELAPSED-week index from the first sample (phase2),
     # not the ISO-calendar-week string. Elapsed-week buckets that straddle a Monday split across two
     # ISO weeks (and vice versa), giving a different random-intercept structure -> different SE/p/CI.
     cl = _cl_all
     m = np.isfinite(bp) & np.isfinite(y) & chan_finite
+    # TOO FEW IN THE SMALLER PAIN GROUP (the PI, 2026-10-03): about 10 per predictor in the smaller
+    # group is the usual rule for logistic regression (Peduzzi et al. 1996); one predictor here.
+    # Below it the fit can run away with no warning from lme4 (L 0-3+ 25.5 Hz Overall VAS, median
+    # split: 31 high, 7 low, OR 2.6e9, interval 0 to 2e22), so no odds ratio, interval or p.
+    n_high_m, n_low_m = int(np.sum(y[m] == 1)), int(np.sum(y[m] == 0))
+    if m.sum() >= 12 and n_high_m > 0 and n_low_m > 0 and min(n_high_m, n_low_m) < MIXED_MODEL_MIN_PER_GROUP:
+        smaller = "low" if n_low_m < n_high_m else "high"
+        n_clusters = int(len(np.unique(cl[m])))
+        return {
+            "available": True, "model": "glmer logistic (lme4 via pymer4)",
+            "formula": None, "n": int(m.sum()), "n_clusters": n_clusters,
+            "n_high": n_high_m, "n_low": n_low_m,
+            "excluded_first_weeks": burn_in, "n_excluded_burn_in": n_dropped_burn_in,
+            "n_weeks_before_exclusion": n_weeks_before,
+            "one_block_per_report": _one_block_summary(weeks=_one_week),
+            "coef": None, "odds_ratio": None, "or_lo": None, "or_hi": None, "z": None, "p": None,
+            "separation": False, "singular": False, "converged": None, "fit_warnings": [],
+            "too_few_in_smaller_group": True, "smaller_group": smaller,
+            "min_per_group": int(MIXED_MODEL_MIN_PER_GROUP),
+            "note": (f"Not fitted: {min(n_high_m, n_low_m)} {smaller}-pain samples, fewer than the "
+                     f"{int(MIXED_MODEL_MIN_PER_GROUP)} the model needs in its smaller group, so it gives "
+                     f"no odds ratio, interval or p."),
+        }
     if m.sum() < 12 or len(np.unique(y[m])) < 2:
         return {"available": False,
                 "reason": ("too few matched samples for a mixed model"
@@ -4696,6 +4812,18 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
                        "cluster": cl[m]})
     n_clusters = int(df["cluster"].nunique())
     formula = "pain_high ~ band_power + (1|cluster)" if n_clusters > 1 else "pain_high ~ band_power"
+    # BESIDE THE MODEL'S OWN p, THE EXACT ROTATION TEST OF THE SAME MODEL (decision 477; the PI,
+    # 2026-10-16: "show both"). On RCS08's layout the model's own p read <= 0.05 for 8.3 % of
+    # unrelated bands, the rotation test's for 4.95 %. Since decision 482 the band's verdict reads
+    # this p, not the model's (`bravo_service._band_decide_verdict`, `VERDICT_P_SOURCE`).
+    rotation = _band_rotation_test(df, _times_epoch_s(times)[m])
+    extra_cr = {}
+    if current_removed is not None:
+        from . import stim_current as _sc
+        _t_m = _times_epoch_s(times)[m]
+        _cur = _sc.current_in_force_at(_t_m, current_removed.get("stream"),
+                                       hemisphere=current_removed.get("hemisphere"))
+        extra_cr = {"rotation_current_removed": _band_rotation_current_removed(df, _t_m, _cur)}
     try:
         # The fit + the pandas<->R conversion it triggers must run with rpy2's converter active in
         # THIS thread (see _rpy2_converter_ctx). pymer4 populates .coefs/.ranef_var as plain pandas
@@ -4711,6 +4839,13 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
         p = float(row["P-val"]) if "P-val" in row else (float(row["Pr(>|z|)"]) if "Pr(>|z|)" in row else np.nan)
         z = float(row["Z-stat"]) if "Z-stat" in row else np.nan
         odds = float(row["OR"]) if "OR" in row else float(np.exp(est))
+        # DID THE FIT FINISH (the PI, 2026-10-02). lme4 says so in words that pymer4 keeps in
+        # `.warnings`; a fit that stopped short still hands back numbers, an interval a sliver wide
+        # and a p near zero (R 0-3+ 24.5 Hz NRS: OR 1.025, 1.023-1.028, p 3e-104), which the
+        # sign-off card read as VALIDATED. Such a fit reports no odds ratio, interval or p below.
+        fit_warnings = [str(w) for w in (getattr(mod, "warnings", None) or [])]
+        converged = not any(("failed to converge" in w.lower()) or ("unidentifiable" in w.lower())
+                            for w in fit_warnings)
         # OR confidence interval — pymer4 reports the Wald CI on the linear predictor scale as
         # '2.5_ci' / '97.5_ci'; exponentiate to OR space. Falls back to None if columns missing
         # (older pymer4) so the caller never crashes when the bounds aren't available.
@@ -4738,7 +4873,7 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
                 "one_block_per_report": _one_block_summary(weeks=_one_week),
                 "coef": _f(est), "odds_ratio": None,
                 "or_lo": None, "or_hi": None,
-                "z": None, "p": None,
+                "z": None, "p": None, "rotation": rotation, **extra_cr,
                 "separation": True, "singular": False,
                 "note": ("Complete/quasi-complete separation — band power separates high/low "
                          "pain perfectly at this window, so the logistic estimate is degenerate. "
@@ -4757,6 +4892,20 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
                 singular = bool(float(ranef["Var"].iloc[0]) < 1e-6)
         except Exception:
             pass
+        if not converged:
+            return {
+                "available": True, "model": "glmer logistic (lme4 via pymer4)",
+                "formula": formula, "n": int(m.sum()), "n_clusters": n_clusters,
+                "excluded_first_weeks": burn_in,
+                "n_excluded_burn_in": n_dropped_burn_in,
+                "n_weeks_before_exclusion": n_weeks_before,
+                "one_block_per_report": _one_block_summary(weeks=_one_week),
+                "coef": None, "odds_ratio": None, "or_lo": None, "or_hi": None,
+                "z": None, "p": None, "rotation": rotation, **extra_cr, "separation": False, "singular": singular,
+                "converged": False, "fit_warnings": fit_warnings,
+                "note": ("The mixed-effects fit did not converge (lme4's words are in "
+                         "fit_warnings), so it gives no odds ratio, interval or p."),
+            }
         return {
             "available": True, "model": "glmer logistic (lme4 via pymer4)",
             "formula": formula, "n": int(m.sum()), "n_clusters": n_clusters,
@@ -4771,11 +4920,92 @@ def band_mixedmodel_inference(td_detail, channel_raw, center_hz, *, band_width_h
             "coef": _f(est), "odds_ratio": _f(odds),
             "or_lo": _f(or_lo) if or_lo is not None else None,
             "or_hi": _f(or_hi) if or_hi is not None else None,
-            "z": _f(z), "p": _f(p), "separation": False, "singular": singular,
+            "z": _f(z), "p": _f(p), "rotation": rotation, **extra_cr, "separation": False, "singular": singular,
+            "converged": True, "fit_warnings": fit_warnings,
             "note": "Random intercept per weekly era; band power z-scored. Exploratory inference.",
         }
     except Exception as e:
         return {"available": False, "reason": f"glmer fit failed: {e}"}
+
+
+def _band_rotation_test(df, t_rows):
+    """The exact rotation test of the band's mixed model (`routines/mixed_model_shuffle.py`,
+    decision 477): the model without band power fitted once in lme4, then pain (with its weeks)
+    slid along band power in time by every possible number of samples, each order scored by the
+    same statistic. Smallest possible p 1 / n. Never raises: a failure is reported."""
+    try:
+        try:
+            from modules.Biomarkers.routines import mixed_model_shuffle as MS
+        except ImportError:                                        # pragma: no cover - host spelling
+            from Biomarkers.routines import mixed_model_shuffle as MS
+        y = df["pain_high"].to_numpy(float)
+        x = df["band_power"].to_numpy(float)
+        cl = df["cluster"].to_numpy()
+        if len(np.unique(cl)) < 2:
+            return {"available": False, "reason": "every sample is in one week"}
+        if not np.all(np.isfinite(t_rows)):
+            return {"available": False, "reason": "a sample has no time, so it cannot be put in order"}
+        null, converged, warns = MS.null_fit_lme4(y, cl)
+        if not converged:
+            return {"available": False, "fit_warnings": warns,
+                    "reason": "the model without band power did not converge"}
+        out = MS.shuffle_test(null, x, order=t_rows)
+        return {"available": True, "p": _f(out["p"]), "z": _f(out["z"]),
+                "n_orders": int(out["n_orders"]), "p_floor": _f(out["p_floor"]),
+                "how": ("exact rotation test: the pain ratings, with their weeks, slid along band "
+                        "power in time by every possible number of samples")}
+    except Exception as e:                                         # noqa: BLE001
+        return {"available": False, "reason": f"rotation test failed: {e}"}
+
+
+def _band_rotation_current_removed(df, t_rows, current):
+    """The band's rotation test (`_band_rotation_test`) with the current in force at each sample as
+    a covariate of the model without band power: lme4 fits pain on the current with the week as a
+    random intercept, band power is residualized on the same (decision 477's Smith residualizing),
+    and every rotation is scored. A WARNING ONLY (decision 484): ``warning`` when p > 0.05 or it
+    could not be assessed (no current: decision 9); a constant current holds, saying so. Samples
+    with no known current are left out and counted. Never raises."""
+    cur = np.asarray(current, float)
+    base = {"available": False, "status": "not assessed", "warning": True, "p": None,
+            "n_orders": 0, "n_samples": int(len(df)), "n_samples_without_current": 0,
+            "n_distinct_currents": 0, "what": CURRENT_REMOVED_CHECK_WHAT}
+    try:
+        has = np.isfinite(cur)
+        base["n_samples_without_current"] = int((~has).sum())
+        if not has.any():
+            return dict(base, words="not assessed: no sample carries a current on this band's side")
+        nd = int(np.unique(np.round(cur[has], 6)).size)
+        base["n_distinct_currents"] = nd
+        if nd < 2:
+            return dict(base, available=True, status="constant current", warning=False,
+                        words="the current was constant on every sample, so there is nothing to "
+                              "take out; the plain answer stands")
+        try:
+            from modules.Biomarkers.routines import mixed_model_shuffle as MS
+        except ImportError:                                        # pragma: no cover - host spelling
+            from Biomarkers.routines import mixed_model_shuffle as MS
+        d = df[has]
+        cl = d["cluster"].to_numpy()
+        if len(np.unique(cl)) < 2:
+            return dict(base, words="not assessed: every sample with a current is in one week")
+        # one named column beyond the intercept lme4 adds itself (`null_fit_lme4` pairs names with
+        # columns, so the intercept is not passed)
+        null, converged, warns = MS.null_fit_lme4(d["pain_high"].to_numpy(float), cl,
+                                                  X0=cur[has][:, None], names=["current"])
+        if null.X0.shape[1] != 2:
+            return dict(base, words="not assessed: the current did not enter the model")
+        if not converged:
+            return dict(base, fit_warnings=warns,
+                        words="not assessed: the model of pain on the current did not converge")
+        out = MS.shuffle_test(null, d["band_power"].to_numpy(float), order=np.asarray(t_rows)[has])
+        p = _f(out["p"])
+        return dict(base, available=True, status="warning" if p > 0.05 else "holds",
+                    warning=bool(p > 0.05), p=p, z=_f(out["z"]), n_orders=int(out["n_orders"]),
+                    p_floor=_f(out["p_floor"]),
+                    words=("holds with the current taken out" if p <= 0.05 else
+                           f"warning: with the current taken out, the rotation p is {p:.3g}"))
+    except Exception as e:                                         # noqa: BLE001
+        return dict(base, words=f"not assessed: it raised {e!r}")
 
 
 #: Declared equivalence margin for the stim-stability verdict, on the log-odds-ratio scale.
@@ -5815,6 +6045,10 @@ def _sweep_blank(reason, *, n_reports=0):
 #: different method. This is also why every existing test of `band_time_sweep_from_power`'s
 #: outlier behaviour still passes unchanged: none of them pass one of these six real channel
 #: names under RCS08's uid, so they all still exercise the MAD path exactly as before.
+#:
+#: NO LONGER READ BY THE SWEEP (2026-10-03, decision 410): every contact of every participant is
+#: now judged by its own 7-MAD-above bound (`chunk_upper_bounds`). Kept as the measured record of
+#: decision 94; the paragraphs above describe the rule it served until then.
 BAND_SWEEP_LSB_CEILINGS = {
   "2e3c75c00d7f4f37b53a048d195f11da": {      # RCS08 (decision 94; measured on its own record)
     "ZERO_THREE_RIGHT": {8.5: 5229.9, 9.5: 4623.2, 10.5: 3875.9, 11.5: 3210.1, 12.5: 2397.3,
@@ -5867,6 +6101,51 @@ def band_sweep_lsb_ceiling(participant_uid, channel, centre_hz):
     if not table:
         return None
     return table.get(round(float(centre_hz), 1))
+
+
+#: The rule for single 3 s chunks of recording, before they are averaged, everywhere in the project
+#: (the PI, 2026-10-03, decision 410, replacing decision 408's 3 MAD on both sides): a chunk's value
+#: at a band is dropped only when it sits MORE THAN 7 median absolute deviations ABOVE this
+#: contact's own median at that band. Nothing is dropped for being low. Every other outlier rule on
+#: the plate stays at `OUTLIER_N_MAD` (5, the 2026-08-30 decision).
+CHUNK_N_MAD = 7.0
+
+
+def chunk_upper_bounds(raw_cache, centers_hz, n_mad=None, family="td"):
+    """Per band, the highest single-chunk band power that is kept: median + n_mad x MAD of this
+    contact's own 3 s chunk values at that band (every usable chunk of the contact, the population
+    the old 99.5% ceilings were built from). Median and MAD are `stats_utils.mad_outlier_flags`'s:
+    raw values, MAD unscaled; a value is dropped when v - median > n_mad x MAD (strict), and
+    nothing is dropped when the MAD is zero or fewer than 4 values exist (bound infinite).
+    Returns one bound per entry of `centers_hz`.
+
+    `family="psd"` builds the bound from this contact's own device PSD snapshots instead (the PI,
+    2026-10-03, decision 411): a rating with no voltage trace in its window is answered from them,
+    and they are a different measurement on their own scale, so they are judged against their own
+    values, never against the TD chunks' bound. PSD snapshots carry no quality gate (`ok`); every
+    finite value counts."""
+    from . import availability as _av
+    n_mad = float(CHUNK_N_MAD if n_mad is None else n_mad)
+    cc = np.atleast_1d(np.asarray(raw_cache.get("centers_hz") or [], dtype=float))
+    centers = np.atleast_1d(np.asarray(centers_hz, dtype=float))
+    hi = np.full(centers.size, np.inf)
+    if cc.size == 0 or centers.size == 0:
+        return hi
+    if family not in ("td", "psd"):
+        raise ValueError(f"family must be 'td' or 'psd', got {family!r}")
+    fam = raw_cache.get(family) or {}
+    mat = _av._lsb_family_mat(fam, cc.size)
+    ok = np.atleast_1d(np.asarray(fam.get("ok") or [], dtype=bool))
+    if mat.shape[0] == 0:
+        return hi
+    if ok.size == mat.shape[0]:
+        mat = mat[ok]
+    for j, c in enumerate(centers):
+        col = mat[:, int(np.argmin(np.abs(cc - c)))]
+        _flags, info = mad_outlier_flags(col, n_mad=n_mad, scale="raw")
+        if info.get("skipped") is None and info.get("median") is not None:
+            hi[j] = info["median"] + n_mad * info["mad"]
+    return hi
 
 
 #: The sentence that travels with the device-spectrum mark wherever it is reported. Written once so
@@ -6086,7 +6365,9 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
                                metric_key=None, metric_label=None,
                                tile_seconds=None, requested_seconds=None, chunk_exclusion=None,
                                from_device_spectrum=None, from_clinic_sheet=None,
-                               covariate=None, covariate_label=None):
+                               covariate=None, covariate_label=None,
+                               current_removed_check=False, by_recording_source=True,
+                               report_times_s=None, recent_check=None):
     """The whole grid: for every band centre and every length of signal averaged into one
     measurement, how well that band's power tracks the chosen pain score.
 
@@ -6117,6 +6398,28 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     descriptively"). A covariate that is absent, constant, or usable on too few reports is refused
     with a reason under ``covariate_adjustment`` rather than published as an adjustment that found
     nothing -- those are different answers.
+
+    ``current_removed_check`` (decision 484) adds, on every band row's chosen cell, the link with
+    the covariate taken out as a straight line, its interval and a rotation p
+    (`_current_removed_check`), as a WARNING only: it moves no answer and draws on its own random
+    numbers, so no other number moves either.
+
+    ``report_times_s`` (wave 2, C6; one UTC time per pain report, in the order of the pain scores):
+    every best correlation row gains ``daily_swing: {"report_hours": ...}``, the hours of day
+    (California local time) of the reports its chosen cell used (`daily_swing.report_hours`), for
+    the caller to complete with the chronic log's daily profile. A warning only: it draws no random
+    number and moves no other number. None (the neutral setting) skips it.
+
+    ``recent_check`` (wave 2, C8; ``{"cut": time_split.cut_block(...), "report_times_s": one UTC time
+    per pain report}``): every best correlation row gains ``recent_check``, its link with pain on its
+    own chosen cell's reports filed after the request's one cut (`time_split.recent_check`), each
+    row on its own generator, so no other number moves. A warning only; the caller appends its text
+    to `why` (`time_split.append_to_rows`). None (the neutral setting) skips it.
+
+    ``by_recording_source=False`` leaves out ``correlation_by_recording_source`` (each cell split into
+    its TD-read and PSD-read reports): the TD-only and PSD-only grids (wave 2, C4) hold one source
+    each, so the split has nothing to split there. It runs last, on its own generators, so leaving it
+    out moves no other number.
     """
     rng = np.random.default_rng(int(seed))
     tile_s = float(sweep_tile_seconds() if tile_seconds is None else tile_seconds)
@@ -6166,7 +6469,7 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     outlier_rule = "none"
     if chunk_exclusion:
         n_excluded = int(chunk_exclusion.get("n_chunk_band_values_excluded") or 0)
-        outlier_rule = "historical_99p5_ceiling_per_chunk"
+        outlier_rule = "7_mad_above_per_chunk"
     elif n_mad > 0:
         # Applied separately for each band centre and each length of signal, because band powers
         # differ by orders of magnitude between bands and a threshold pooled across bands would be
@@ -6276,7 +6579,10 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         band_width_hz=band_width_hz, n_boot=int(n_boot), rng=rng,
         power_feature=power_feature, channel=channel,
         corr_adjusted=corr_adj, corr_adjusted_n=corr_adj_n,
-        covariate_label=cov_block.get("label"))
+        covariate_label=cov_block.get("label"),
+        current_check=({"cov": (np.full(P, np.nan) if cov is None or cov.size != P else cov),
+                        "seed": int(seed), "n_boot": int(n_boot)}
+                       if current_removed_check else None))
     best_auc_rows = _best_rows_auc(
         auc, auc_pos, auc_neg, X, y_bin, centers, kept_req, delivered, tiles, auc_null,
         band_width_hz=band_width_hz, n_boot=int(n_boot), rng=rng,
@@ -6295,6 +6601,13 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
     # selectable and exportable.
     _apply_family_wise_correction(best_corr_rows)
     _apply_family_wise_correction(best_auc_rows)
+    if report_times_s is not None:
+        # wave 2, C6: the hours of day of each row's own reports, a warning only (no random number)
+        _attach_report_hours(best_corr_rows, X, pain, kept_req, report_times_s)
+    if recent_check is not None:
+        # wave 2, C8: the recent-reports check, a warning only (its own generators)
+        _attach_recent_check(best_corr_rows, X, pain, kept_req, recent_check, seed=int(seed),
+                             n_boot=int(n_boot))
 
     # The headline row for each band centre names ONE cell -- the length of signal that won. The
     # mark has to travel with it, or a reader who never looks at the grid itself would see a
@@ -6314,8 +6627,9 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         _r.pop("_grid_center_index", None)
     # P-19: each cell on its TD-read and PSD-read reports alone. After every use of the shared
     # generator, and on its own generators, so no number above can move.
-    by_source = _correlation_by_recording_source(X, pain, from_device_spectrum,
-                                                 n_boot=int(n_boot), seed=int(seed))
+    by_source = (_correlation_by_recording_source(X, pain, from_device_spectrum,
+                                                  n_boot=int(n_boot), seed=int(seed))
+                 if by_recording_source else None)
     # The count of shuffles the correlation reference really ran: every other slide of the pain
     # scores once (decision 315), not the number asked for.
     n_slides = int(corr_null.get("n_used") or 0)
@@ -6378,7 +6692,7 @@ def band_time_sweep_from_power(power_by_seconds, pain_scores, *, center_freqs_hz
         "clinic_sheet_n_grid_auc": [[int(v) for v in row] for row in sheet_n_auc],
         "n_pain_reports_from_clinic_sheet": n_sheet_reports,
         "device_spectrum_axis_note": DEVICE_SPECTRUM_AXIS_NOTE,
-        "correlation_by_recording_source": by_source,
+        **({"correlation_by_recording_source": by_source} if by_recording_source else {}),
         "best_correlation_rows": best_corr_rows,
         # Does the shuffle null run on the family the circled cells were chosen from? Measured on
         # every build, for both grids (panel A item 3; `RECONCILIATION_F8.md` on the older search).
@@ -6744,10 +7058,10 @@ def _sweep_notes(requested, delivered, tiles, tile_s, n_times, n_centers, n_mad,
     notes.append(f"The {n_times * n_centers} cells ({n_times} lengths x {n_centers} centres, "
                  f"{BAND_TIME_SWEEP_WIDTH_HZ:g} Hz wide, 1 Hz apart) overlap heavily and are not "
                  f"independent.")
-    if outlier_rule == "historical_99p5_ceiling_per_chunk":
-        notes.append(f"{n_excluded} single {tile_s:g} s pieces above this contact's fixed historical "
-                     f"ceiling (top 0.5% of its own record, per band) were dropped before averaging "
-                     f"and replaced by the next clean piece, so every cell keeps its row's count.")
+    if outlier_rule == "7_mad_above_per_chunk":
+        notes.append(f"{n_excluded} single {tile_s:g} s pieces more than {CHUNK_N_MAD:g} median absolute "
+                     f"deviations above this contact's own median (per band) were dropped before "
+                     f"averaging and replaced by the next clean piece, so every cell keeps its row's count.")
     elif n_mad > 0:
         notes.append(f"{n_excluded} measurements were excluded as outliers ({n_mad:g} median "
                      f"absolute deviations on the {o_scale} scale), per band and length.")
@@ -6852,7 +7166,8 @@ def _interval_block_length(y_used):
 
 def _best_rows_correlation(corr, corr_n, X, pain, centers, requested, delivered, tiles, null,
                            *, band_width_hz, n_boot, rng, power_feature, channel,
-                           corr_adjusted=None, corr_adjusted_n=None, covariate_label=None):
+                           corr_adjusted=None, corr_adjusted_n=None, covariate_label=None,
+                           current_check=None):
     """One row per band centre: the strongest correlation any length of signal produced for that
     band, which length produced it, and how to read it.
 
@@ -6975,8 +7290,147 @@ def _best_rows_correlation(corr, corr_n, X, pain, centers, requested, delivered,
                                  observed=r_obs, shuffled_p95=shuf_p95),
                 r_obs, boot_lo, boot_hi, float(delivered[t]), int(T), shuf_p95),
         })
+        if current_check is not None:
+            # A WARNING ONLY (decision 484): its own generator, one per band centre, so neither
+            # the shared one nor any number above moves.
+            row["current_removed_check"] = _current_removed_check(
+                x, y, current_check["cov"], r_plain=r_obs, n_boot=current_check["n_boot"],
+                rng=np.random.default_rng([int(current_check["seed"]), 484, int(c)]))
         rows.append(row)
     return rows
+
+
+def _attach_report_hours(rows, X, pain, requested, report_times_s):
+    """``daily_swing: {"report_hours": ...}`` on each best correlation row (wave 2, C6): the hours
+    of day of the reports its chosen cell (its band, at the length of signal it names) correlated,
+    those with both a band-power value and a pain score. In place; nothing else is read or moved."""
+    from . import daily_swing as _ds
+    rt = np.asarray(report_times_s, dtype=float)
+    y = np.asarray(pain, dtype=float)
+    if rt.size != X.shape[1]:
+        return
+    req = [float(v) for v in requested]
+    for c, row in enumerate(rows or []):
+        if not isinstance(row, dict):
+            continue
+        s = row.get("integration_seconds_requested")
+        if s is None or float(s) not in req:
+            row["daily_swing"] = {"report_hours": _ds.report_hours([])}
+            continue
+        x = X[req.index(float(s)), :, c]
+        m = np.isfinite(x) & np.isfinite(y)
+        row["daily_swing"] = {"report_hours": _ds.report_hours(rt[m])}
+
+
+def _attach_recent_check(rows, X, pain, requested, recent, *, seed, n_boot):
+    """``recent_check`` on each best correlation row (wave 2, C8): the row's chosen cell (its band, at
+    the length of signal it names) read again on its reports after the cut (`time_split.
+    recent_check`), on a generator of its own per band centre. In place; nothing else is read or
+    moved. A row with no chosen length (nothing measured) gets none."""
+    from . import time_split as _ts
+    rt = np.asarray(recent.get("report_times_s"), dtype=float)
+    y = np.asarray(pain, dtype=float)
+    if rt.size != X.shape[1]:
+        return
+    req = [float(v) for v in requested]
+    for c, row in enumerate(rows or []):
+        if not isinstance(row, dict):
+            continue
+        s = row.get("integration_seconds_requested")
+        if s is None or float(s) not in req or row.get("pearson_r") is None:
+            continue
+        x = X[req.index(float(s)), :, c]
+        row["recent_check"] = _ts.recent_check(
+            x, y, rt, recent.get("cut"), r_all=row.get("pearson_r"), n_boot=n_boot,
+            rng=np.random.default_rng([int(seed), 8, int(c)]))
+
+
+#: The words beside the current-removed check, wherever it is printed (decision 484).
+CURRENT_REMOVED_CHECK_WHAT = (
+    "the link to pain with the stimulation current on the band's own side, read at each report's "
+    "own recording, taken out of both band power and pain as a straight line; a warning only, it "
+    "changes no answer")
+
+
+def _current_removed_check(x, y, cov, *, r_plain, n_boot, rng):
+    """The chosen cell's link to pain with the current taken out, as a warning (decision 484).
+
+    The straight-line fit on the current (decisions 241, 242) is taken out of both band power and
+    pain (`stats_utils._residualize`) on the rows with all three; the partial r is the correlation
+    of what is left. Its interval: whole blocks of consecutive reports resampled, the block length
+    the headline interval uses (decision 183), the partial r recomputed in each resample. Its p: the
+    pain remainder slid along the band-power remainder by every other number of reports (the exact
+    rotation test, decision 315), two-sided, smallest p 1 / n. ``status``: "holds" (interval wholly
+    on the plain r's side of zero and p <= 0.05), "warning" (either fails), "constant current" (one
+    current on every row: nothing to take out, so the plain answer stands, no warning), "not
+    assessed" (no current, or fewer than 8 rows: a warning, decision 9)."""
+    from .stats_utils import _residualize
+    blank = {"available": False, "status": "not assessed", "warning": True, "partial_r": None,
+             "partial_r_low": None, "partial_r_high": None, "p_rotation": None, "n_rotations": 0,
+             "n_pain_reports": 0, "n_distinct_currents": 0, "what": CURRENT_REMOVED_CHECK_WHAT}
+    x = np.asarray(x, float); y = np.asarray(y, float)
+    c = np.asarray(cov, float) if cov is not None else np.full(x.size, np.nan)
+    m = np.isfinite(x) & np.isfinite(y) & np.isfinite(c)
+    n = int(m.sum())
+    blank["n_pain_reports"] = n
+    if n == 0:
+        return dict(blank, words="not assessed: no report carries a current on this band's side")
+    nd = int(np.unique(np.round(c[m], 6)).size)
+    blank["n_distinct_currents"] = nd
+    if nd < 2:
+        return dict(blank, available=True, status="constant current", warning=False,
+                    words="the current was constant on every report, so there is nothing to take "
+                          "out; the plain answer stands")
+    if n < 8:
+        return dict(blank, words=f"not assessed: {n} reports carry a current, fewer than 8")
+    xm, ym, cm = x[m], y[m], c[m]
+    xr, yr = _residualize(xm, cm), _residualize(ym, cm)
+
+    def _r(a, b):
+        a = a - a.mean(); b = b - b.mean()
+        d = np.sqrt((a * a).sum() * (b * b).sum())
+        return float((a * b).sum() / d) if d > 0 else np.nan
+    r0 = _r(xr, yr)
+    if not np.isfinite(r0):
+        return dict(blank, words="not assessed: nothing of band power or pain is left once the "
+                                 "current is taken out")
+    # rotation null, exact: every other shift once
+    from .stats_utils import rotations
+    R = rotations(n, n - 1, rng)
+    Yr = yr[R]
+    Yc = Yr - Yr.mean(axis=1, keepdims=True)
+    xc = xr - xr.mean()
+    rk = (Yc @ xc) / np.sqrt((Yc * Yc).sum(axis=1) * float((xc * xc).sum()))
+    p = float((int(np.sum(np.abs(rk) >= abs(r0))) + 1) / (R.shape[0] + 1))
+    # interval: block resampling of whole reports; partial r from the three pairwise correlations
+    # of each resample (the same number as residualizing within it on a straight line)
+    block = _interval_block_length(ym)
+    picks = block_bootstrap_picks(n, block, int(n_boot), rng)
+    def _rows_r(A, B):
+        A = A - A.mean(axis=1, keepdims=True); B = B - B.mean(axis=1, keepdims=True)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return (A * B).sum(axis=1) / np.sqrt((A * A).sum(axis=1) * (B * B).sum(axis=1))
+    xb, yb, cb = xm[picks], ym[picks], cm[picks]
+    rxy, rxc, ryc = _rows_r(xb, yb), _rows_r(xb, cb), _rows_r(yb, cb)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        pr = (rxy - rxc * ryc) / np.sqrt((1 - rxc ** 2) * (1 - ryc ** 2))
+    lo, hi, n_res = _percentile_interval(pr)
+    same_side = (lo is not None and hi is not None
+                 and ((r_plain > 0 and lo > 0) or (r_plain < 0 and hi < 0)))
+    holds = bool(same_side and p <= 0.05)
+    why = []
+    if not same_side:
+        why.append("its interval reaches the other side of zero" if lo is not None
+                   else "no interval could be formed")
+    if p > 0.05:
+        why.append(f"its rotation p is {p:.3g}")
+    return {"available": True, "status": "holds" if holds else "warning", "warning": not holds,
+            "partial_r": r0, "partial_r_low": lo, "partial_r_high": hi,
+            "interval_block_length": int(block), "n_resamples_used": int(n_res),
+            "p_rotation": p, "n_rotations": int(R.shape[0]), "n_pain_reports": n,
+            "n_distinct_currents": nd, "what": CURRENT_REMOVED_CHECK_WHAT,
+            "words": ("holds with the current taken out" if holds else
+                      "warning: with the current taken out, " + " and ".join(why))}
 
 
 def _best_rows_auc(auc, auc_pos, auc_neg, X, y_bin, centers, requested, delivered, tiles, null,

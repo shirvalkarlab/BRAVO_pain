@@ -31,13 +31,14 @@ import MDButton from "components/MDButton";
 import MDTypography from "components/MDTypography";
 
 import PAL from "views/Reports/ClosedLoopSim/palette";
+import { fmtDateTime } from "views/Reports/dates";
 
 function whenText(ts) {
   if (!ts) return null;
   const secs = Math.max(0, Math.round((Date.now() - ts) / 1000));
   if (secs < 45) return "a moment ago";
   if (secs < 5400) return `${Math.round(secs / 60)} min ago`;
-  return new Date(ts).toLocaleString();
+  return fmtDateTime(ts);
 }
 
 export default function RecomputeBar({

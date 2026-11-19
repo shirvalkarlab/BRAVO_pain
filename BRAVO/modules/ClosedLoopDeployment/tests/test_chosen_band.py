@@ -156,3 +156,52 @@ def test_with_no_database_a_save_says_so_rather_than_raising():
         assert CB.clear(UID, chosen_by="a")["saved"] is False
     finally:
         CB.CONNECTION_FACTORY, CB._ready = prev
+
+
+# ONE BAND PER SIDE (the PI, 2026-10-08: "2 independent controllers" senses on both sides, so Band
+# selection takes one band on the left and one on the right). The same append-only table: the band
+# on a side is the newest "chosen" row on that side since the last clear. `current` is unchanged
+# (the newest row, the band ticked last), so everything that reads one band reads what it did.
+
+def test_by_side_keeps_the_newest_band_on_each_side(db):
+    CB.choose(UID, _band("ONE_THREE_LEFT", 22.5), chosen_by="a", source="grid")
+    CB.choose(UID, _band("EIGHT_ELEVEN_RIGHT", 18.5), chosen_by="a", source="grid")
+    CB.choose(UID, _band("ONE_THREE_LEFT", 24.5), chosen_by="b", source="grid")
+    out = CB.current_by_side(UID)
+    assert out["available"] is True
+    assert out["by_side"]["Left"]["band_candidate"]["center_freq_hz"] == 24.5
+    assert out["by_side"]["Right"]["band_candidate"]["contact"] == "EIGHT_ELEVEN_RIGHT"
+    assert out["by_side"]["Right"]["band_candidate"]["center_freq_hz"] == 18.5
+    # `current` is still the band ticked last
+    assert CB.current(UID)["record"]["band_candidate"]["center_freq_hz"] == 24.5
+
+
+def test_by_side_reads_the_side_from_the_band_record_before_the_contact_name(db):
+    CB.choose(UID, dict(_band("ZERO_TWO_X", 20.5), hemisphere="Right"), chosen_by="a", source="grid")
+    assert CB.current_by_side(UID)["by_side"] == {
+        "Left": None, "Right": CB.current(UID)["record"]}
+
+
+def test_by_side_stops_at_a_clear(db):
+    CB.choose(UID, _band("EIGHT_ELEVEN_RIGHT", 18.5), chosen_by="a", source="grid")
+    CB.clear(UID, chosen_by="a")
+    CB.choose(UID, _band("ONE_THREE_LEFT", 24.5), chosen_by="a", source="grid")
+    by = CB.current_by_side(UID)["by_side"]
+    assert by["Right"] is None, "a band chosen before the clear is not current"
+    assert by["Left"]["band_candidate"]["center_freq_hz"] == 24.5
+
+
+def test_by_side_a_band_with_no_side_is_left_out(db):
+    CB.choose(UID, _band("SOMEWHERE", 20.5), chosen_by="a", source="grid")
+    assert CB.current_by_side(UID)["by_side"] == {"Left": None, "Right": None}
+
+
+def test_by_side_with_no_database_says_so():
+    prev = (CB.CONNECTION_FACTORY, CB._ready)
+    CB.CONNECTION_FACTORY, CB._ready = (lambda: None), False
+    try:
+        out = CB.current_by_side(UID)
+        assert out["available"] is False and out["reason"]
+        assert out["by_side"] == {"Left": None, "Right": None}
+    finally:
+        CB.CONNECTION_FACTORY, CB._ready = prev

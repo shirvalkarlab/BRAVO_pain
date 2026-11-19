@@ -80,9 +80,22 @@ function bridgeComparison(br, deployed) {
   return `${parts.join("")}.`;
 }
 
+/** The threshold streams' check of the PSD->LSB route, one line, from the served payload
+ *  (decision 447): measured LSB ÷ the LSB the bridge predicts, median per source. */
+export function thresholdCheckLine(tc) {
+  if (!tc) return null;
+  if (!tc.available) return `No threshold check: ${tc.reason || "not available"}`;
+  const parts = Object.entries(tc.by_source || {})
+    .filter(([, v]) => v && v.n > 0)
+    .sort((a, b) => b[1].n - a[1].n)
+    .map(([src, v]) => `${fmt(v.median_ratio, 2)} (${src}, n=${v.n})`);
+  return `Checked on ${tc.n_streams} threshold streams: measured ÷ predicted LSB ${parts.join(", ")}`;
+}
+
 function CalibrationInEffectPanel({ participantUid }) {
   const blocksRef = useRef(null);
   const bridgeRef = useRef(null);
+  const thresholdRef = useRef(null);
 
   // The endpoint takes the participant and nothing else: the tables are a property of the
   // participant, and only a new table or a new constant can change the answer.
@@ -190,9 +203,41 @@ function CalibrationInEffectPanel({ participantUid }) {
     Plotly.react(gd, traces, layout, PLOTLY_CONFIG_WITH_TOOLBAR);
   }, [data]);  // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ---- (3) the threshold streams: measured LSB against the LSB predicted from a device spectrum ----
+  const tc = raw ? raw.threshold_check : null;
+  useEffect(() => {
+    const gd = thresholdRef.current;
+    const rows = tc && tc.available ? (tc.rows || []) : [];
+    if (!gd || !rows.length) { if (gd) Plotly.purge(gd); return; }
+    const sources = Object.keys(tc.by_source || {});
+    const SYMBOL = { "signal check": "circle", montage: "diamond", "run unknown": "square" };
+    const traces = sources.map((src) => {
+      const pts = rows.filter((r) => r.predicted_lsb && r.predicted_lsb[src] != null && r.measured_lsb != null);
+      return { x: pts.map((r) => r.predicted_lsb[src]), y: pts.map((r) => r.measured_lsb),
+        type: "scatter", mode: "markers", name: `${src} (${pts.length})`,
+        marker: { color: pts.map((r) => SIDE_INK[r.side === "LEFT" ? "Left" : "Right"]), size: 6,
+          symbol: SYMBOL[src] || "circle", opacity: 0.8 },
+        text: pts.map((r) => `${contactLabel(r.channel)} · ${fmt(r.center_hz, 1)} Hz`),
+        hovertemplate: `%{text}<br>predicted %{x:.0f} LSB (${src}) · measured %{y:.0f} LSB<extra></extra>` };
+    });
+    const all = rows.flatMap((r) => [r.measured_lsb, ...Object.values(r.predicted_lsb || {})])
+      .filter((v) => v != null && Number.isFinite(v));
+    const top = Math.max(...all) * 1.04;
+    traces.push({ x: [0, top], y: [0, top], type: "scatter", mode: "lines", name: "measured = predicted",
+      line: { color: T.ink, width: 1.5 }, hoverinfo: "name" });
+    const layout = plotlyLayout({
+      margin: { l: 60, r: 110, t: 8, b: 44 }, height: 280,
+      xaxis: { title: { text: "predicted from the device's PSD (LSB)" }, rangemode: "tozero" },
+      yaxis: { title: { text: "threshold stream, measured (LSB)" }, rangemode: "tozero" },
+      annotations: [directLabel(top, top, "measured = predicted")],
+    });
+    Plotly.react(gd, traces, layout, PLOTLY_CONFIG_WITH_TOOLBAR);
+  }, [raw]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => () => {
     if (blocksRef.current) Plotly.purge(blocksRef.current);
     if (bridgeRef.current) Plotly.purge(bridgeRef.current);
+    if (thresholdRef.current) Plotly.purge(thresholdRef.current);
   }, []);
 
   const nBlocks = tr && tr.blocks ? tr.blocks.length : 0;
@@ -242,6 +287,12 @@ function CalibrationInEffectPanel({ participantUid }) {
                 <b style={{ color: T.ink, fontWeight: 600 }}>PSD (the device's 30 s snapshot) → device units: </b>
                 {`1 device-µV² = ${fmt(deployed.bridge_lsb_per_device_uv2, 2)} LSB, the bridge constant (composed).`}
               </MDTypography>
+              {tc ? (
+                <MDTypography variant="button" display="block" data-testid="threshold-check-status"
+                  sx={{ ...TYPE.body, color: T.ink2 }}>
+                  {thresholdCheckLine(tc)}
+                </MDTypography>
+              ) : null}
             </MDBox>
 
             <Fold show="Constant fit and use"
@@ -304,6 +355,22 @@ function CalibrationInEffectPanel({ participantUid }) {
                 </MDTypography>
                 <div ref={bridgeRef} style={{ width: "100%" }} />
               </MDBox>
+
+              {/* 3) THE THRESHOLD STREAMS (decision 447) */}
+              {tc && tc.available ? (
+                <MDBox mt={1.2} pt={1} sx={{ borderTop: `1px solid ${RULE}` }}>
+                  <MDTypography variant="caption" sx={HEAD}>
+                    Threshold streams against the PSD route
+                  </MDTypography>
+                  <MDTypography variant="caption" sx={LINE}>
+                    {"Each threshold stream's median LSB, as the device read it while thresholds were set, "
+                      + "against the LSB the bridge constant predicts from a device PSD of the same session "
+                      + "and contact pair at the stream's sensing frequency. Current was being stepped, so "
+                      + "single streams scatter; the medians test the constant."}
+                  </MDTypography>
+                  <div ref={thresholdRef} style={{ width: "100%" }} />
+                </MDBox>
+              ) : null}
 
               <MDTypography variant="caption" sx={{ ...LINE, mt: 1 }}>
                 {`Where these are used: the Biomarkers timeline's modeled points (○ TD × ${fmt(deployed.k, 2)}, `

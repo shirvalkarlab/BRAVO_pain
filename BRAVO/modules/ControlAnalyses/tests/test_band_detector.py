@@ -86,14 +86,6 @@ def test_the_adjusted_reading_is_judged_against_its_own_rotations():
     assert abs(r["bands"]["null_p50"] - float(np.percentile(plain, 50))) < 1e-12
 
 
-def test_research_score_is_never_folded():
-    # the band's relationship with pain reverses halfway: a model trained on one half predicts the
-    # other half the wrong way round, and that must read as a NEGATIVE score, not a positive one
-    X, y, c, d = _record(n=200, signal=3.0, seed=5, flip_half=True, n_bands=1)
-    r = BD.research_reading(X, y, c, d, n_folds=2, n_perm=0, n_boot=200, adjust=False)
-    assert r["bands"]["rho"] < -0.2, r["bands"]
-
-
 def _drifting_record(n=200, seed=21):
     """Pain falls steadily over the record; the band carries nothing. Each held-out block's
     training rows then have a different average pain from the block itself."""
@@ -105,22 +97,20 @@ def _drifting_record(n=200, seed=21):
     return X, y, c, _days(n)
 
 
-def test_research_a_drifting_pain_score_does_not_read_as_a_backwards_band():
+def test_a_drifting_pain_score_does_not_read_as_a_backwards_band_in_either_version():
+    """(Merged 2026-10-05 from `test_research_a_drifting_pain_score_does_not_read_as_a_backwards_band`
+    and `test_device_a_drifting_pain_score_does_not_read_as_a_backwards_band`.)"""
     # Pooling held-out predictions across blocks mixes each block's own training mean into the
     # ranking: an early (high-pain) block is predicted from later, lower-pain rows and vice versa,
     # so a band with no relationship ranks pain BACKWARDS. The score is taken within each block.
     X, y, c, d = _drifting_record()
     r = BD.research_reading(X, y, c, d, n_perm=0, n_boot=200, adjust=False)
-    assert abs(r["bands"]["rho"]) < 0.25, r["bands"]
-
-
-def test_device_a_drifting_pain_score_does_not_read_as_a_backwards_band():
-    X, y, c, d = _drifting_record()
+    assert abs(r["bands"]["rho"]) < 0.25, ("research", r["bands"])
     lo_c, hi_c = np.percentile(y, [100 / 3, 200 / 3])
     y01 = np.where(y <= lo_c, 0.0, np.where(y >= hi_c, 1.0, np.nan))
     r = BD.device_reading(X[:, 0] - 0.5, X[:, 0] + 0.5, X[:, 0], y01, c, d, n_perm=0, n_boot=200,
                           adjust=False)
-    assert r["band"]["auc"] is None or abs(r["band"]["auc"] - 0.5) < 0.2, r["band"]
+    assert r["band"]["auc"] is None or abs(r["band"]["auc"] - 0.5) < 0.2, ("device", r["band"])
 
 
 def test_research_too_few_rows_is_a_reason_not_a_number():
@@ -176,13 +166,20 @@ def test_device_current_taken_out_removes_a_pure_confound():
     assert adj["p"] > 0.05
 
 
-def test_device_score_is_never_folded():
+def test_neither_version_folds_a_band_whose_relationship_reverses():
+    """The band's relationship with pain reverses halfway: a model trained on one half predicts the
+    other half the wrong way round, and that must read as a NEGATIVE score (research) or an area
+    under 0.5 (device), not a positive one. (Merged 2026-10-05 from
+    `test_research_score_is_never_folded` and `test_device_score_is_never_folded`.)"""
+    X, y, c, d = _record(n=200, signal=3.0, seed=5, flip_half=True, n_bands=1)
+    r = BD.research_reading(X, y, c, d, n_folds=2, n_perm=0, n_boot=200, adjust=False)
+    assert r["bands"]["rho"] < -0.2, ("research", r["bands"])
     X, y, c, d = _record(n=200, signal=3.0, seed=14, flip_half=True, n_bands=1)
     lo_c, hi_c = np.percentile(y, [100 / 3, 200 / 3])
     y01 = np.where(y <= lo_c, 0.0, np.where(y >= hi_c, 1.0, np.nan))
     r = BD.device_reading(X[:, 0] - 0.5, X[:, 0] + 0.5, X[:, 0], y01, c, d, n_folds=2, n_perm=0,
                           n_boot=200, adjust=False)
-    assert r["band"]["auc"] < 0.4, r["band"]
+    assert r["band"]["auc"] < 0.4, ("device", r["band"])
 
 
 # ---- the device's own timing ------------------------------------------------------------------
@@ -331,29 +328,25 @@ def test_both_versions_are_registered_on_the_biomarkers_page():
         assert "clinic-sheet" in RG.ANALYSES[k]["what"]
 
 
-def test_the_within_block_area_has_one_home():
+def test_the_within_block_area_and_the_rotations_each_have_one_home():
     """Decision 310 moved the band detector's within-block area into `confound_diagnostic`, which
-    now scores the pre-build check the same way; the detector calls it rather than keep a copy."""
+    now scores the pre-build check the same way; the detector calls it rather than keep a copy.
+    Decision 315 moved every chance test that shuffles the pain ratings onto the band detector's
+    rotations, and moved the rotations to `stats_utils`; the detector names them, it keeps no copy.
+    (Merged 2026-10-05 from `test_the_within_block_area_has_one_home` and
+    `test_the_rotations_have_one_home`.)"""
+    import inspect
     try:
         from modules.Biomarkers.routines import confound_diagnostic as CD
-    except ImportError:                                        # host spelling
-        from Biomarkers.routines import confound_diagnostic as CD
-    assert BD.auc_within_blocks is CD.auc_within_blocks
-    import inspect
-    assert "def auc_within_blocks" not in inspect.getsource(BD)
-
-
-def test_the_rotations_have_one_home():
-    """Decision 315 moved every chance test that shuffles the pain ratings onto the band detector's
-    rotations, and moved the rotations to `stats_utils`; the detector names them, it keeps no copy."""
-    try:
         from modules.Biomarkers.routines import stats_utils as SU
     except ImportError:                                        # host spelling
+        from Biomarkers.routines import confound_diagnostic as CD
         from Biomarkers.routines import stats_utils as SU
+    src = inspect.getsource(BD)
+    assert BD.auc_within_blocks is CD.auc_within_blocks
+    assert "def auc_within_blocks" not in src
     assert BD.rotations is SU.rotations
     assert BD.rotation_null_words is SU.rotation_null_words
     assert BD.EXACT_ROTATIONS_MAX == SU.EXACT_ROTATIONS_MAX
-    import inspect
-    src = inspect.getsource(BD)
     assert "def rotations" not in src and "def rotation_null_words" not in src
     assert not hasattr(SU, "circular_block_perm_matrix")
