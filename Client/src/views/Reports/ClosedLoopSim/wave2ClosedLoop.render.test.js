@@ -76,7 +76,7 @@ describe("Band selection: Source, Current out, Later 30% and q on each band", ()
 
   it("the key names both q's apart, the footnote gives each pair's family, the cut date is printed", () => {
     mount();
-    expect(text('[data-testid="band-grid-key"]')).toMatch(/^fdr: this grid's own allowance for its 22 bands \(grid q\)/);
+    expect(text('[data-testid="band-grid-key"]')).toMatch(/^fdr: this grid's own q for its 22 bands \(grid q\)/);
     expect(text('[data-testid="band-grid-key"]')).not.toMatch(/corrected/);
     expect(text('[data-testid="band-grid-family"]')).toBe(
       "q: corrected within each pair: L 0⁻3⁺ across 22 bands; R 0⁻3⁺ across 22 bands, by the deciding source's p");

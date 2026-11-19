@@ -675,6 +675,50 @@ def _build_grid_through_biomarkers(participant_uid, rd):
                                                      BandTimeSweep="1"))
 
 
+#: Off by default: under a caller's own store root (every test sandbox) no run is started, because
+#: the launched process would write to the production store, where that sandbox never reads. A
+#: test that checks the wiring sets it True and stands in for `_launch_stability_through_biomarkers`.
+STABILITY_LAUNCH_UNDER_OVERRIDE_ROOT = False
+
+
+def _start_stability_run_for_grid(participant_uid, rd, payload):
+    """Start the "Same" column's answer for the grid this page shows, when none is stored (the PI,
+    2026-11-18). Never raises; says what happened.
+
+    Why: on RCS08 the column read "not tested" on every row. The NRS grid on screen had been built
+    by the other-scores precompute (decision 435's loop rebuilt it a minute after new recordings
+    arrived), and a precompute never starts stability runs; only the Biomarkers page did, when it
+    served that grid. The Closed-Loop page read the grid without asking for its answer, so the
+    column stayed empty until someone opened Biomarkers on that score. This asks through the same
+    launcher, with its guards: an answer already stored, a run inside its 10-minute cooldown."""
+    if _SHARED_CACHE_DIR_OVERRIDE is not None and not STABILITY_LAUNCH_UNDER_OVERRIDE_ROOT:
+        return {"launched": False, "store_key": None,
+                "reason": ("the store is pointed at a caller's own root, so a run started here "
+                           "would write where nothing reads it")}
+    try:
+        return _launch_stability_through_biomarkers(participant_uid, rd, payload)
+    except Exception as exc:                                     # noqa: BLE001 - never fatal
+        _log.warning("closed-loop: starting the stability run raised for %s", participant_uid,
+                     exc_info=True)
+        return {"launched": False, "store_key": None,
+                "reason": f"the stability run could not be started ({exc!r})"}
+
+
+def _launch_stability_through_biomarkers(participant_uid, rd, payload):
+    """The Biomarkers launcher, with the points and key of the grid as stored (the same arguments
+    its served-grid path passes). Its own function so a test can stand in for it; needs Django."""
+    try:
+        from Biomarkers import bravo_service as _bio
+    except ImportError:                                          # pragma: no cover
+        from modules.Biomarkers import bravo_service as _bio
+    return _bio.launch_stability_grid_in_background(
+        participant_uid, dict(rd),
+        sweep_key=((payload or {}).get("sweep_key") or {}).get("signature_key"),
+        points=_bio.stability_grid_points((payload or {}).get("band_time_sweep")),
+        band_width_hz=float((payload or {}).get("band_width_hz")
+                            or _bio.analytics.BAND_TIME_SWEEP_WIDTH_HZ))
+
+
 def stored_current_adjusted_grid(participant_uid, request_data=None, *, consumer="closed_loop"):
     """The newest stored grid built WITH the current taken out, under the request's settings, or
     ``{"available": False, "reason": ...}``. READ-ONLY: it never builds (panel C item 6).
@@ -921,6 +965,12 @@ def band_sweep_grid_for_closed_loop(participant_uid, request_data=None, *, consu
             new_sweep[key] = new_rows
         out_sweeps[channel] = new_sweep
 
+    # NO ANSWER STORED FOR THIS GRID: ask for one (2026-11-18, `_start_stability_run_for_grid`).
+    # The rows still read "not tested" on this read; the next read after the run lands fills them.
+    stability_background = None
+    if not any_stability and _grid_key:
+        stability_background = _start_stability_run_for_grid(participant_uid, rd, payload)
+
     # THE CORRECTION ACROSS THE BAND CHOICES (wave 2, C9; a label and warning only): each band's q
     # over every band the device's sensing rule allows with today's contacts, on this choosing view,
     # put on here and never stored. `BRAVO_FAMILY_CORRECTION=0` skips it.
@@ -947,7 +997,9 @@ def band_sweep_grid_for_closed_loop(participant_uid, request_data=None, *, consu
             # How many rows got their answer from the stored grid rather than from the row itself.
             # Reported so a reader can tell "the background job has run" from "the request computed
             # it inline", which are different things with different freshness.
-            "cross_setting_stability_from_store": stability_from_store}
+            "cross_setting_stability_from_store": stability_from_store,
+            **({"stability_background": stability_background}
+               if stability_background is not None else {})}
 
 
 def shared_cache_stats():

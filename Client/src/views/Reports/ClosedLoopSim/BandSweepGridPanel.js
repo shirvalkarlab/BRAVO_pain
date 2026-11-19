@@ -180,12 +180,20 @@ function FamilyWiseMark({ significant, q }) {
       </Tooltip>
     );
   }
+  // The q itself is printed (the PI, 2026-11-18): a bare "–" on every row of RCS08 read as an empty
+  // column, when it was 22 answers of "not clear" with q from 0.09 to 0.96. "✓" marks q < 0.05.
+  const qText = q != null ? fmtNum(q, 2) : "";
   return (
     <Tooltip title={significant
       ? `still clear after allowing for this grid's 22 bands${words ? `: ${words}` : ""}`
       : `not clear after allowing for this grid's 22 bands${words ? `: ${words}` : ""}; still selectable; this is a label, not a check that can refuse`}>
-      <span>{significant ? <ShapeMark glyph="✓" label="still clear after allowing for this grid's 22 bands" />
-        : <ShapeMark glyph="–" label="not clear after allowing for this grid's 22 bands" />}</span>
+      <span data-testid="fdr-cell" aria-label={significant
+        ? `grid q ${qText}, still clear after allowing for this grid's 22 bands`
+        : `grid q ${qText}, not clear after allowing for this grid's 22 bands`}
+        style={{ ...TYPE.body, color: significant ? PAL.ink : PAL.ink3, fontWeight: significant ? 600 : 400,
+          whiteSpace: "nowrap" }}>
+        {significant ? `✓${qText}` : (qText || "–")}
+      </span>
     </Tooltip>
   );
 }
@@ -525,7 +533,7 @@ function SideColumn({ side, channels, sweeps, refused, chosen, active, offNote, 
       ) : null}
       {channels.length ? (
         <MDBox sx={{ display: "grid",
-          gridTemplateColumns: "48px minmax(40px,1fr) minmax(40px,1fr) 34px 34px 44px 34px 34px 84px 32px",
+          gridTemplateColumns: "48px minmax(40px,1fr) minmax(40px,1fr) 44px 34px 44px 34px 34px 84px 32px",
           columnGap: "3px", rowGap: "2px", alignItems: "center", overflowX: "auto" }}>
           <MDTypography variant="caption" sx={{ ...HEAD, justifyContent: "flex-end" }}>Hz</MDTypography>
           <MDTypography variant="caption" title="correlation with pain, by the source that decides" sx={HEAD}>r</MDTypography>
@@ -700,8 +708,8 @@ function BandSweepGridPanel({ grid, participantUid, committed, committedBySide, 
       </MDBox>
 
       <MDTypography data-testid="band-grid-key" sx={{ ...TYPE.body, color: PAL.ink2, mt: 2 }}>
-        {"fdr: this grid's own allowance for its 22 bands (grid q) · Same: same at every setting · "
-          + "✓ passes · – does not · ✕ differs across settings · ? unknown · ○ not tested"}
+        {"fdr: this grid's own q for its 22 bands (grid q), ✓ below 0.05 · Same: same at every setting · "
+          + "✓ same · ✕ differs across settings · ? unknown · ○ not tested"}
       </MDTypography>
       <MDTypography data-testid="band-grid-key-wave2" sx={{ ...TYPE.body, color: PAL.ink2, mt: 0.5 }}>
         {"Source: Home = home record (chronic log) decides, TD = TD decides · Current out: link with the "

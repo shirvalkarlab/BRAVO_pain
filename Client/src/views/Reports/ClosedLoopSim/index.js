@@ -829,7 +829,8 @@ function ClosedLoopSim() {
             <MDBox id="cl-stability" mb={8}>
               <BandStabilityPanel stability={report?.data?.band_stability}
                 cacheStatus={report?.data?.cache_status}
-                painScore={report?.data?.pain_score} contactLabel={contactLabel} />
+                painScore={report?.data?.pain_score} contactLabel={contactLabel}
+                noReport={!report?.data} loading={!!report?.loading} err={report?.err || null} />
             </MDBox>
 
             {/* BACKGROUND, folded (SPEC section 5.2 item 7): how band power moves with current,
