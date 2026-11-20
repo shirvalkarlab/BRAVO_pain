@@ -1,3 +1,12 @@
+# Linked stimulation comparisons — accepted November 20, 2026 UTC
+
+The hosted **All Data Streams → Stim Program Boxplots** view now supports
+cross-metric selection. Authenticated browser checks selected a ranked box and
+a survey point, compared the resulting fourth-slot scores with each metric’s
+saved observations, and cleared the selection. The same checks verified the
+original ranking in each destination chart. The release also passed the isolated
+image checks and the five automated code-release checks.
+
 # Verified late neural imports — live acceptance passed November 10, 2026 UTC
 
 [PR #26](https://github.com/shirvalkarlab/BRAVO_pain/pull/26) adds guarded admission

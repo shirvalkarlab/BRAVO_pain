@@ -33,6 +33,13 @@ settings retain their recorded status.
 
 ## Rankings and counts
 
+Click a ranked box, a survey point, or **Compare** on its settings card. The
+fourth position on each other selected metric shows the same setting in the
+same loop mode. Each chart uses its own eligible surveys, including when the
+setting has fewer than five for that metric. A setting with no eligible scores
+has a zero count and an empty plot position. Choose another setting to replace
+the comparison, or choose **Clear comparison** to empty the fourth positions.
+
 For each available metric, the tab shows up to three open-loop and three
 closed-loop programs with at least **five nonmissing assigned surveys** each.
 Programs are ordered by their observed median: lower for pain scores and higher

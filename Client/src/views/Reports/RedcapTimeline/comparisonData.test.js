@@ -311,7 +311,7 @@ test('split mode comparisons preserve every score/reference slot while only surv
   expect(plot.layout.xaxis.tickvals).toEqual([0,3]);expect(plot.layout.xaxis.range).toEqual([-0.65,3.65]);
   expect(plot.programs.map(program=>program.title)).toEqual(['CL 1','Reviewed CL']);
   expect(plot.traces.filter(trace=>trace.type==='box').map(trace=>trace.y)).toEqual([cl.points.map(p=>p.value),cl.points.map(p=>p.value)]);
-  for(const box of plot.traces.filter(trace=>trace.type==='box')) {expect(box.hoverinfo).toBe('skip');expect(box.hovertemplate).toBeUndefined();}
+  for(const box of plot.traces.filter(trace=>trace.type==='box')) {expect(box.hoverinfo).toBe(box.meta?'none':'skip');expect(box.hovertemplate).toBeUndefined();}
   expect(plot.traces[1].hovertemplate).toContain('Mode: Single threshold direct');
   expect(plot.traces[1].hovertemplate).toContain('L C+2-');expect(plot.traces[1].hovertemplate).toContain('R C+9-10-');
   expect(plot.traces[1].hovertemplate).not.toContain('Continuous');

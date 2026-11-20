@@ -119,7 +119,7 @@ export default function RedcapTimeline() {
           </Card>;
         })}
       </Stack>}</>}
-      {query.data && view === "stimulation" && <StimulationPrograms participant={participant_uid} comparison={query.data.comparisons?.stimulation} metrics={shown} />}
+      {query.data && view === "stimulation" && <StimulationPrograms key={participant_uid} participant={participant_uid} comparison={query.data.comparisons?.stimulation} metrics={shown} />}
       {query.data && view === "medications" && <Medications comparison={query.data.comparisons?.medications} metrics={shown} today={defaults.end} phases={phases} />}
       {query.data && view === "settings" && <StimProgramSettings key={participant_uid} participant={participant_uid} phases={phases} homeTransitions={transitions} observations={query.data.stimulation?.settings_observations || EMPTY} unknownIntervals={unknownIntervals} />}
       {view === "summary" && <MultimodalSummary key={participant_uid} participant={participant_uid} redcap={query.data || EMPTY_OBJECT} revision={revision} />}
