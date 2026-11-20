@@ -3,7 +3,7 @@ import Plotly from 'plotly.js-dist';
 import {escapeText} from './data';
 import {COMPARISON_HOVER_FONT_SIZE} from './comparisonData';
 
-export default function ComparisonChart({plot,label}) {
+export default function ComparisonChart({plot,label,onProgramClick}) {
   const ref=useRef(null),container=useRef(null);
   const [width,setWidth]=useState(0);
   const narrow=width>0&&width<700;
@@ -40,9 +40,18 @@ export default function ComparisonChart({plot,label}) {
       // remain in the chart-local trial legend when mobile header space is tight.
       if(narrow) layout.annotations=[];
     }
-    Plotly.react(ref.current,plot.traces,{paper_bgcolor:'transparent',plot_bgcolor:'transparent',font:{family:'Roboto, sans-serif',size:16,color:'#344767'},
+    const node=ref.current;
+    Plotly.react(node,plot.traces,{paper_bgcolor:'transparent',plot_bgcolor:'transparent',font:{family:'Roboto, sans-serif',size:16,color:'#344767'},
       hoverlabel:{font:{size:COMPARISON_HOVER_FONT_SIZE}},showlegend:false,...layout},{responsive:true,displaylogo:false,scrollZoom:false,modeBarButtonsToRemove:['lasso2d','select2d']});
-  },[plot,visible,width]);
+    if(onProgramClick) {
+      const handleClick=event=>{
+        const id=event.points[0]?.data.meta?.programId;
+        if(id) onProgramClick(id);
+      };
+      node.on('plotly_click',handleClick);
+      return ()=>node.removeListener?.('plotly_click',handleClick);
+    }
+  },[plot,visible,width,onProgramClick]);
   useEffect(()=>{
     if(!visible||typeof ResizeObserver==='undefined') return;
     const node=ref.current;let frame;

@@ -245,14 +245,17 @@ export function stimulationPlot(metric,open,closed,reference=null,currentReferen
     ...(options.mode!=='open_loop'?[
       ...closed.map((condition,i)=>({condition,position:i+closedStart,title:`CL ${i+1}`})),
       ...(current?[{condition:current,position:closedStart+3,title:'Reviewed CL'}]:[])]:[])];
+  if(options.comparisonProgram) slots.push({condition:options.comparisonProgram,position:3,title:options.comparisonTitle});
   const populated=slots.filter(slot=>finitePoints(slot.condition).length>0);
   const plot=conditionPlot(metric,populated.map(slot=>slot.condition));
   const positions=populated.map(slot=>slot.position);
   plot.traces=plot.traces.map((trace,i)=>{
-    const moved={...trace,x:trace.x.map(value=>value+positions[Math.floor(i/2)]-Math.floor(i/2))};
+    const slot=populated[Math.floor(i/2)];
+    const selectable=options.mode && slot.position<3;
+    const moved={...trace,...(selectable?{meta:{programId:slot.condition.id}}:{}),x:trace.x.map(value=>value+positions[Math.floor(i/2)]-Math.floor(i/2))};
     // Plotly box hover produces several quartile labels. Only survey dots own a
     // hover target, yielding one detailed settings tooltip under closest mode.
-    if(trace.type==='box') {delete moved.hovertemplate;return {...moved,hoverinfo:'skip'};}
+    if(trace.type==='box') {delete moved.hovertemplate;return {...moved,hoverinfo:selectable?'none':'skip'};}
     return {...moved,hovertemplate:`<b>${tooltipText(metric.label)}: %{customdata[1]:.1f}</b><br>%{customdata[0]} Pacific<br>${stimulationSummary(populated[Math.floor(i/2)].condition,options.participant)}<extra></extra>`};
   });
   plot.fitWidth=true;

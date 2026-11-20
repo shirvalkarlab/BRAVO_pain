@@ -138,3 +138,25 @@ test.each(['stimulation','medication'])('responsive %s charts retain dimensions 
     Object.assign(global,{ResizeObserver:originals.resize,requestAnimationFrame:originals.request,cancelAnimationFrame:originals.cancel});Plotly.Plots=originals.plots;
   }
 });
+
+test('ranked box and point clicks select their program and listeners are removed on redraw',()=>{
+  const selected=jest.fn(),listeners=new Map(),element=document.createElement('div'),root=createRoot(element);
+  Plotly.react.mockImplementation(node=>{
+    node.on=(name,callback)=>listeners.set(name,callback);
+    node.removeListener=(name,callback)=>{if(listeners.get(name)===callback) listeners.delete(name);};
+  });
+  const plot={traces:[],layout:{}};
+  try {
+    act(()=>root.render(<ComparisonChart plot={plot} label="Open loop" onProgramClick={selected}/>));
+    const click=listeners.get('plotly_click');
+    for(const type of ['box','scatter']) click({points:[{data:{type,meta:{programId:'program A'}}}]});
+    click({points:[{data:{type:'box'}}]});
+    click({points:[]});
+    expect(selected.mock.calls).toEqual([['program A'],['program A']]);
+    act(()=>root.render(<ComparisonChart plot={plot} label="Other"/>));
+    expect(listeners.size).toBe(0);
+  } finally {
+    act(()=>root.unmount());
+    Plotly.react.mockReset();
+  }
+});

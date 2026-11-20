@@ -9,6 +9,7 @@ let root,element;
 beforeEach(()=>{global.IS_REACT_ACT_ENVIRONMENT=true;element=document.createElement('div');document.body.appendChild(element);root=createRoot(element);});
 afterEach(()=>{act(()=>root.unmount());element.remove();});
 const render=component=>act(async()=>root.render(component));
+const clickButton=label=>act(async()=>[...element.querySelectorAll('button')].find(button=>(button.getAttribute('aria-label') || button.textContent)===label).click());
 const plot=label=>JSON.parse(element.querySelector(`[data-plot="${label}"]`).textContent);
 const points=Array.from({length:5},(_,i)=>({time:1735758000+i*86400,value:i+1}));
 const selected={key:'nrs',label:'Overall NRS',range:[0,10]};
@@ -67,9 +68,11 @@ test('fixed finalized OL reference renders independently of metric ranking and l
   const finalized_open_loop={available:true,id:'a',mode:'open_loop',settings:[],source:{title:'Latest home settings',url:'https://docs.google.com/spreadsheets/d/example',range:'Home programs!B2:C5'}};
   const metric={...selected,conditions:[condition('a',2)],top:{open_loop:['a'],closed_loop:[]}};
   await render(<StimulationPrograms comparison={{available:true,metrics:[metric],finalized_open_loop}} metrics={[selected]}/>);
+  expect(plot('Overall NRS open loop program comparison').layout.xaxis.tickvals).toEqual([0]);
+  await clickButton('Compare finalized OL');
   const chart=plot('Overall NRS open loop program comparison');
   expect(chart.layout.xaxis.tickvals).toEqual([0,3]);expect(chart.traces.filter(t=>t.type==='box')).toHaveLength(2);
-  expect(element.textContent).toContain('always shown in the fourth open-loop position');
+  expect(element.textContent).toContain('Clear comparison');
   expect(element.querySelector('a').getAttribute('href')).toBe(finalized_open_loop.source.url);
   expect(element.textContent).toContain('Home programs!B2:C5');
   expect(element.querySelectorAll('section[aria-label$=" settings"]')).toHaveLength(2);
@@ -82,8 +85,9 @@ test('current CL is independently visible with source provenance even when no me
   const current_closed_loop={available:true,id:'cl',mode:'closed_loop',settings:[],source:{url:'https://docs.google.com/spreadsheets/d/example',title:'Current home settings',range:'Home!D2:E5'}};
   const metric={...selected,conditions:[],top:{}};
   await render(<StimulationPrograms comparison={{available:true,metrics:[metric],current_closed_loop}} metrics={[selected]}/>);
+  await clickButton('Compare reviewed CL reference');
   expect(plot('Overall NRS closed loop program comparison').layout.xaxis.tickvals).toEqual([3]);
-  expect(element.textContent).toContain('fourth closed-loop position');expect(element.textContent).toContain('Home!D2:E5');
+  expect(element.textContent).toContain('Clear comparison');expect(element.textContent).toContain('Home!D2:E5');
   expect(element.querySelector('a').textContent).toBe('Current home settings');
   await render(<StimulationPrograms comparison={{available:true,metrics:[metric],current_closed_loop:{...current_closed_loop,source:undefined}}} metrics={[selected]}/>);
   expect(element.textContent).toContain('reviewed home-program settings');expect(element.textContent).toContain('No eligible surveys');
@@ -108,6 +112,7 @@ test('program cards expose details only when supplied rows exist, including home
  const source={available:true,id:'reference',mode:'open_loop',settings:[],home_settings:{group:[{label:'Group',value:'GroupIdDef.GROUP_C'}],left:[{label:'Frequency',value:'55 Hz'}],right:[]}};
  const comparison={available:true,metrics:[{...selected,conditions:[],top:{}}],finalized_open_loop:source};
  await render(<StimulationPrograms comparison={comparison} metrics={[selected]}/>);
+ await clickButton('Compare finalized OL');
  const details=element.querySelector('details');expect(details).not.toBeNull();expect(details.textContent).toContain('Group: Group C');expect(details.textContent).toContain('Left · Frequency: 55 Hz');
  await act(async()=>details.querySelector('summary').click());expect(details.open).toBe(true);
  await render(<StimulationPrograms comparison={{...comparison,finalized_open_loop:{...source,home_settings:undefined}}} metrics={[selected]}/>);
@@ -157,8 +162,32 @@ test('historical CL references remain readable and dated while source labels are
  const current_closed_loop={available:true,id:'historic',mode:'closed_loop',settings:[{label:'Frequency',value:'55 Hz'}],source:{as_of:'2025-01-02'}};
  const metric={...selected,conditions:[],top:{},provenance:{eligible:0,assigned:0,reasons:{'long_source_reason_<untrusted>':2}}};
  await render(<StimulationPrograms comparison={{available:true,metrics:[metric],current_closed_loop}} metrics={[selected]}/>);
- expect(element.textContent).toContain('Reviewed CL reference');expect(element.textContent).not.toContain('Current CL is');
+ await clickButton('Compare reviewed CL reference');
+ expect(element.textContent).toContain('Compare reviewed CL reference');expect(element.textContent).not.toContain('Current CL is');
  expect(element.textContent).toContain('Reviewed source as of 2025-01-02');expect(element.textContent).toContain('later settings and continuous delivery are not established');
  expect(element.textContent).toContain('long source reason <untrusted>: 2');expect(element.querySelector('untrusted')).toBeNull();
  expect(plot('Overall NRS closed loop program comparison').programs[0].title).toBe('Reviewed CL');
+});
+
+
+test('a ranked setting links other metrics by program and mode using each metric’s own scores',async()=>{
+  const source={...selected,conditions:[condition('a',2),condition('b',3,'closed_loop')],top:{open_loop:['a'],closed_loop:['b']}};
+  const sparse={...condition('a',9),points:[{time:points[0].time,value:9}],count:1};
+  const target={...selected,key:'second',label:'Second',conditions:[condition('c',4),sparse],top:{open_loop:['c']}};
+  const empty={...selected,key:'empty',label:'Empty',conditions:[],top:{}};
+  const metrics=[source,target,empty];
+  await render(<StimulationPrograms comparison={{available:true,metrics}} metrics={metrics}/>);
+  const other=()=>plot('Second open loop program comparison');
+  expect(other().layout.xaxis.tickvals).toEqual([0]);
+  await clickButton('Compare OL 1 for Overall NRS');
+  expect(other().layout.xaxis.tickvals).toEqual([0,3]);
+  expect(other().programs.map(p=>p.condition.id)).toEqual(['c','a']);
+  expect(other().traces[2]).toMatchObject({type:'box',x:[3],y:[9]});
+  expect(plot('Empty open loop program comparison').programs[0].condition).toMatchObject({count:0,median:null,points:[]});
+  expect(plot('Overall NRS open loop program comparison').layout.xaxis.tickvals).toEqual([0]);
+  await clickButton('Compare CL 1 for Overall NRS');
+  expect(other().layout.xaxis.tickvals).toEqual([0]);
+  expect(plot('Second closed loop program comparison').programs[0].condition.id).toBe('b');
+  await clickButton('Clear comparison');
+  expect(element.querySelector('[data-plot="Second closed loop program comparison"]')).toBeNull();
 });
